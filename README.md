@@ -3,6 +3,7 @@
 A collection of useful MongoDB related scripts and command tips
 
 * SSL commands
+* FIPS testing
 * BIC commands
 * Kerberos tips
 * Storage scripts
