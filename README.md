@@ -2,6 +2,7 @@
 
 A collection of useful MongoDB related scripts and command tips
 
+* Network tool tips
 * SSL commands
 * FIPS testing
 * BIC commands
