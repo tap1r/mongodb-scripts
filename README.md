@@ -12,3 +12,4 @@ A collection of useful MongoDB related scripts and command tips
 * Sweet32 protection in Ops Manager (Java)
 * Using _fsyncLock()_ for atomic backups
 * LDAP tips
+* Roll your own SRV records
