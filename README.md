@@ -1,6 +1,6 @@
-# mongodb-scripts
+# README
 
-A collection of useful MongoDB related scripts and command tips
+## A collection of useful MongoDB related scripts and command tips
 
 * [Network tool tips](Tool%20tips.md)
 * [SSL commands](SSL%20commands.md)
