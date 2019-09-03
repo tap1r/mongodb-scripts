@@ -93,7 +93,7 @@
   -or-
 
   ```bash
-  openssl pkcs12 -export -in cert.pem -out cert.p12 -name "My Certificate" -certfile othercerts.pem
+  openssl pkcs12 -export -in cert.pem -out cert.p12 -name "My Certificate bundle" -certfile CA.pem
   ```
 
 * **DER (_`PKCS#1`_) to PEM (_`PKCS#1`_) format**
@@ -130,90 +130,100 @@
 
 ## **Reading certificate attributes and validation testing**
 
-### PEM file test
+### PEM file tests
 
-* **Get certificate dump from PEM file**
+* **Get full certificate dump from PEM file**
 
   ```bash
   openssl x509 -in cert.pem -text -noout
   ```
 
-* **Verify CA**
+* **Get certificate attribute vitals from PEM file**
 
   ```bash
-  openssl verify -CAfile CA.pem ClientCert.pem
-  openssl verify -CAfile CA.pem ServerCert.pem
+  openssl x509 -in cert.pem -noout -subject -issuer -serial -dates -fingerprint -purpose
   ```
 
-* **Verify CA chain from PEM files**
-
-  ```bash
-  openssl verify -CAfile RootCert.pem -untrusted Intermediate.pem ClientCert.pem
-  openssl verify -CAfile RootCert.pem -untrusted Intermediate.pem ServerCert.pem
-  ```
-
-### TLS server test
-
-* **Get certificate dump from TLS server**
-
-  ```bash
-  openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -text
-  ```
-
-* **Get certificate issuer from TLS server**
-
-  ```bash
-  openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -noout -subject -issuer -serial -dates -fingerprint -purpose
-  ```
-
-* **Get certificate EKU, CN & SAN attributes**
+* **Get certificate SAN attributes from PEM file**
 
   ```bash
   openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -noout -text | grep DNS:
   ```
 
-* **Get certificate purpose from PEM file**
+### TLS server tests
+
+* **Get full certificate dump from TLS server**
+
+  ```bash
+  openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -text
+  ```
+
+* **Get certificate attribute vitals from TLS server**
+
+  ```bash
+  openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -noout -subject -issuer -serial -dates -fingerprint -purpose
+  ```
+
+* **Get certificate SAN attributes from TLS server**
+
+  ```bash
+  openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -noout -text | grep DNS:
+  ```
+
+### Certificate validation tests
+
+* **Verify the certificate against the CA**
+
+  ```bash
+  openssl verify -CAfile ca.pem cert.pem
+  ```
+
+* **Verify CA root chain from PEM files**
+
+  ```bash
+  openssl verify -CAfile RootCA.pem -untrusted IntermediateCA.pem cert.pem
+  ```
+
+## **Cipher handshaking tests against TLS server**
+
+* **_NMAP_ script**
+
+  ```bash
+  nmap --script +ssl-enum-ciphers -Pn host.mongodb.net -p 27017
+  ```
+
+* **s_client _bash_ script**
+
+  ```bash
+  #!/bin/bash
+  for v in ssl2 ssl3 tls1 tls1_1 tls1_2 tls1_3; do
+    for c in $(openssl ciphers 'ALL:eNULL' | tr ':' ' '); do
+      openssl s_client -connect host.mongodb.net:27017 \
+        -cipher $c -$v < /dev/null > /dev/null 2>&1 && echo -e "$v:\t$c"
+    done
+  done
+  ```
+
+## **x509 _clusterauth_ and client authentication**
+
+* **Validate client certificate purpose from PEM file**
+
+  ```bash
+  openssl verify -verbose -CAfile CA.pem -purpose sslclient ClientCert.pem
+  ```
+
+* **Validate server certificate purpose from PEM file**
+
+  ```bash
+  openssl verify -verbose -CAfile CA.pem -purpose sslserver ServerCert.pem
+  ```
+
+* **Validate _clusterauth_ certificate purpose from PEM file**
 
   ```bash
   openssl verify -verbose -CAfile CA.pem -purpose sslclient ClientCert.pem
   openssl verify -verbose -CAfile CA.pem -purpose sslserver ServerCert.pem
   ```
-
-* **Verify CA**
-
-  ```bash
-  TBA
-  ```
-
-* **Verify CA chain from PEM files**
-
-  ```bash
-  TBA
-  ```
-
-## **Cipher tests against TLS server**
-
-* **_NMAP_ script**
-
-```bash
-nmap --script +ssl-enum-ciphers -Pn host.mongodb.net -p 27017
-```
-
-* **s_client _bash_ script**
-
-```bash
-#!/bin/bash
-for v in ssl2 ssl3 tls1 tls1_1 tls1_2 tls1_3; do
-  for c in $(openssl ciphers 'ALL:eNULL' | tr ':' ' '); do
-    openssl s_client -connect host.mongodb.net:27017 \
-      -cipher $c -$v < /dev/null > /dev/null 2>&1 && echo -e "$v:\t$c"
-  done
-done
-```
-
-## **x509 _clusterauth_ and client authentication**
-
-TBA
 
 ## **_SChannel_ (Windows) tests**
 
@@ -245,7 +255,7 @@ TBA
   "Enabled"=dword:00000001
   ```
 
-* **Cipher test suites**
+* **Test cipher suites**
 
   PowerShell 5.1
 
