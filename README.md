@@ -6,7 +6,7 @@ A collection of useful MongoDB related scripts and command tips
 * SSL commands
 * FIPS testing
 * BIC commands
-* Kerberos tips
+* Kerberos commands
 * Storage scripts
 * VM ballooning detection
 * Sweet32 protection in Ops Manager (Java)
