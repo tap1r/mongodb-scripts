@@ -7,3 +7,4 @@ A collection of useful MongoDB related scripts and command tips
 * Kerberos tips
 * Storage scripts
 * VM ballooning detection
+* Sweet32 protection in Ops Manager (Java)
