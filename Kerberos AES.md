@@ -12,13 +12,14 @@ In the _`krb5.conf`_ file, add the following snippet:
     default_tgs_enctypes = aes256-cts-hmac-sha1-96
 ```
 
-Next, fire up _`ktutil`_. We're going to perform a trick to force _`ktutil`_ to use the right salt. When _`ktutil`_ generates a _keytab_ entry, it uses the principal as the salt. But if we generate an entry using a hex encoded key, _`ktutil`_ doesn't need to salt it. Substitute the example values as appropriate for your environment.  The steps are:
+Using _`ktutil`_ we're going to perform a trick to force _`ktutil`_ to use the right salt. When _`ktutil`_ generates a _keytab_ entry, it uses the _principal_ as the _salt_.  However if we generate an entry using a hex encoded key, _`ktutil`_ doesn't need to salt it.  Substitute the example values as appropriate for your environment.  The steps are:
 
 1. Generate a key using the UPN, with the Active Directory domain (REALM) following the '@' capitalised
-1. Dump the resulting key into hex
-1. Re-import the key as a new entry using the _servicePrincipalName_ as the principal
+2. Dump the resulting key into hex
+3. Re-import the key as a new entry using the _servicePrincipalName_ as the principal
 
 ```bash
+$ ktutil
 ktutil:  add_entry -password -p mongodb/host.mongodb.com@MONGODB.COM -e aes256-cts-hmac-sha1-96 -k <KVNO>
 Password for mongodb/host.mongodb.com@MONGODB.COM:
 ktutil:  list -k
