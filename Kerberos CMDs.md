@@ -2,7 +2,7 @@
 
 ## Environmental config params (suggested tests to add kerberos diagnostic_mdiag_ info)
 
-* getenvvars: _`KRB5CCNAME_`, _`KRB5_KTNAME`_, _`KRB5_CONFIG`_, _`KRB5_TRACE`_ and _`KRB5_CLIENT_KTNAME`_
+* getenvvars: _`KRB5CCNAME`_, _`KRB5_KTNAME`_, _`KRB5_CONFIG`_, _`KRB5_TRACE`_ and _`KRB5_CLIENT_KTNAME`_
 * Report the current active contexts with "_`klist -Al`_"
 * If "_`KRB5_CONFIG`_" is defined, get the _`krb5.conf`_ contents
 * If "_`KRB5_TRACE`_" is defined, get the _`ktrace.log`_ contents
