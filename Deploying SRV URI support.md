@@ -2,10 +2,10 @@
 
 ## Deploying a test _named_ for SRV support - or OnPrem install
 
-- Dervive the replicat set topology from the  _`rs.conf()`_ results or a _`db.isMaster()`_ driver SDAM call
+- Derive the replicat set topology from the  _`rs.conf()`_ command or a _`db.isMaster()`_ driver SDAM call (via the _`isMaster.hosts`_ and _`isMaster.setName`_ documents)
 - Take input on domain name, and replica set parameters
 
-### Install some dependancies
+### Install some dependencies
 
 ```bash
 rpm install named
