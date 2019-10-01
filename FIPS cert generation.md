@@ -40,7 +40,7 @@ $ env OPENSSL_FIPS=1 openssl md5 message.txt
 Error setting digest md5
 140062425388872:error:060800A3:digital envelope routines:EVP_DigestInit_ex:disabled for fips:digest.c:251:
 
-$ env OPENSSL_FIPS=1 openssl sha1 message.txt 
+$ env OPENSSL_FIPS=1 openssl sha1 message.txt
 SHA1(message.txt)= 9f5080758dbf71537cc44a4d8cb67564f2ad938a
 ```
 
