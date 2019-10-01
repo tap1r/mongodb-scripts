@@ -94,7 +94,7 @@ The _mongod_ service: Principal set with _`+ok_as_delegate`_
 
 ### Testing
 
-#### Init credentials
+#### Acquire (_`kinit`_) credentials
 
 ```bash
 kinit -kt mongosqld.keytab mongosql/bi-connector.example.com
@@ -102,13 +102,13 @@ kinit -kt mongodb.keytab mongodb/db-host.example.com
 kinit user@EXAMPLE.COM
 ```
 
-#### Perform S4U2Self
+#### Perform the _S4U2Self_ function
 
 ```bash
 kvno -U user mongosql/bi-connector.example.com
 ```
 
-#### Perform S4U2Proxy
+#### Perform the _S4U2Proxy_ function
 
 ```bash
 kvno -k mongosqld.keytab -U user -P mongosql/bi-connector.example.com mongodb/db-host.example.com

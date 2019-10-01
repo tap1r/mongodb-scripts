@@ -2,8 +2,10 @@
 
 ## Deploying a test _named_ for SRV support - or OnPrem install
 
-- Use topology via driver SDAM to extract rs.conf()
-- Take input on domain name, and repl params
+- Dervive the replicat set topology from the  _`rs.conf()`_ results or a _`db.isMaster()`_ driver SDAM call
+- Take input on domain name, and replica set parameters
+
+### Install some dependancies
 
 ```bash
 rpm install named
@@ -34,7 +36,7 @@ update add _mongodb._tcp.tapir-vwwps.mongodb.net 86400 SRV 0 0 27017 tapir-shard
 send
 ```
 
-What is should look like:
+### What the DNS records should look like
 
 ```bash
 $ nslookup -type=TXT tapir-vwwps.mongodb.net

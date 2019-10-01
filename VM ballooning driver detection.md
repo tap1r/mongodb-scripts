@@ -12,7 +12,7 @@ lsmod | grep "vbox\|hv\|xen\|vmxnet\|vmhgfs\|vmmemctl\|vmware_balloon"
 
 ## VM ballooning
 
-```text
+```bash
 cat /proc/hyperv/balloon /proc/virtio/balloon /proc/vmware/balloon /proc/xen/balloon
 ```
 

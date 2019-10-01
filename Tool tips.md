@@ -13,7 +13,7 @@ ls -l /proc/`pgrep -n mongod`/fd
 
 ps -o user= -p $(pgrep -n mongod)
 
-su -s /bin/bash - mongod -c "mongod ..."
+su -s /bin/bash - mongod -c "mongod +startup_options"
 
 su -s /bin/bash - `ps -o user= -p $(pgrep -n mongod)` -c "whoami"
 su - $(ps -o user= -p $(pgrep -n mongod)) -c "whoami"
@@ -23,7 +23,7 @@ su - $(ps -o user= -p $(pgrep -n mongod)) -c "whoami"
 
 * **Packet captures**
 
-Capture _intersting_ traffic related to the SDAM routines:
+Capture _interesting_ traffic related to the SDAM routines and Kerberos:
 
 ```bash
 sudo tcpdump -s 0 port 27017 or port 53 or port 88 -w /tmp/mongodb.pcap
