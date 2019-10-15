@@ -22,16 +22,22 @@ su - $(ps -o user= -p $(pgrep -n mongod)) -c "whoami"
 ## Network behaviour
 
 * **Packet captures**
+Capture _interesting_ traffic related to the SDAM routines (the MongoDB _wireprotocol_ + DNS) and Kerberos:
+  * Using _tcpdump_ for *nix
 
-Capture _interesting_ traffic related to the SDAM routines and Kerberos:
+    ```bash
+    sudo tcpdump -s 0 tcp port 27017 or port 53 or port 88 -w /tmp/mongodb.pcap
+    ```
 
-```bash
-sudo tcpdump -s 0 port 27017 or port 53 or port 88 -w /tmp/mongodb.pcap
-```
+  * Using a _wireshark_ (for Windows) capture filter
+
+    ```bash
+    tcp port 27017 || port 53 || port 88
+    ```
 
 * **Socket stats**
 
-```bash
-lsof
-netstat -a
-```
+  ```bash
+  lsof
+  netstat -a
+  ```
