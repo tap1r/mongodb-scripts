@@ -1,5 +1,37 @@
 # Tips and tricks
 
+## Install some useful dependencies (match for your OS)
+
+* OSX
+
+  ```bash
+  brew install proctools
+  brew install openssl
+  brew install nmap
+  brew install tcpdump
+  brew install lsof
+  ```
+
+* Fedora/Red Hat/CentOS
+  
+  ```bash
+  yum install proctools
+  yum install openssl
+  yum install nmap
+  yum install tcpdump
+  yum install lsof
+  ```
+
+* Ubuntu/Debian APT
+  
+  ```bash
+  apt-get install procps
+  apt-get install openssl
+  apt-get install nmap
+  apt-get install tcpdump
+  apt-get install lsof
+  ```
+
 ## Proc handling
 
 ```bash
