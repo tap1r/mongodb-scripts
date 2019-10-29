@@ -128,6 +128,17 @@
   openssl pkcs12 -in cert.p12 -nocerts -nodes -out cert.pem
   ```
 
+## Atlas CA
+
+Acquire the Digicert Root ([DigiCert Global Root CA](https://dl.cacerts.digicert.com/DigiCertGlobalRootCA.crt)) and Intermediate CA ([DigiCert SHA2 Secure Server CA](https://dl.cacerts.digicert.com/DigiCertSHA2SecureServerCA.crt)) certificates employed by Atlas.
+
+Convert Digicert DER to PEM for convinience:
+
+```bash
+openssl x509 -inform der -in DigiCertGlobalRootCA.crt -out DigiCertGlobalRootCA.pem
+openssl x509 -inform der -in DigiCertSHA2SecureServerCA.crt -out DigiCertSHA2SecureServerCA.pem
+```
+
 ## **Reading certificate attributes and validation testing**
 
 ### PEM file tests
@@ -172,10 +183,16 @@
 
 ### Certificate validation tests
 
-* **Verify the certificate against the CA**
+* **Verify a certificate PEM against the CA**
 
   ```bash
   openssl verify -CAfile ca.pem cert.pem
+  ```
+
+* **Verify the server certificate against the CA via TLS**
+
+  ```bash
+  openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -text | openssl verify -CAfile ca.pem
   ```
 
 * **Verify CA root chain from PEM files**
@@ -186,13 +203,13 @@
 
 ## **Cipher handshaking tests against TLS server**
 
-* **_NMAP_ script**
+* **_nmap_ script**
 
   ```bash
   nmap --script +ssl-enum-ciphers -Pn host.mongodb.net -p 27017
   ```
 
-* **s_client _bash_ script**
+* **_s_client_ bash script**
 
   ```bash
   #!/bin/bash
