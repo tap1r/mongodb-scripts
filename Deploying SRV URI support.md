@@ -8,11 +8,11 @@
 ### Install some dependencies
 
 ```bash
-rpm install named
+rpm install nsupdate
 ```
 
 ```text
-_SRV
+SRV
 TXT
 TSSIG considerations?
 ```
@@ -24,7 +24,21 @@ CNAME records (optional)
 TXT record
 SRV records
 
-## Publish with _nsupdate_
+## Publish A and optional CNAME records with _nsupdate_ (if required)
+
+```bash
+$ nsupdate
+prereq nxdomain mongodb.net
+update add tapir-shard-00-00-vwwps.mongodb.net. 86400 a 192.0.2.100
+update add tapir-shard-00-01-vwwps.mongodb.net. 86400 a 192.0.2.101
+update add tapir-shard-00-02-vwwps.mongodb.net. 86400 a 192.0.2.102
+update add node0.mongodb.net. 3600 cname tapir-shard-00-00-vwwps.mongodb.net.
+update add node1.mongodb.net. 3600 cname tapir-shard-00-01-vwwps.mongodb.net.
+update add node2.mongodb.net. 3600 cname tapir-shard-00-02-vwwps.mongodb.net.
+send
+```
+
+## Publish _SRV_ and _TXT_ records with _nsupdate_
 
 ```bash
 $ nsupdate
@@ -36,54 +50,14 @@ update add _mongodb._tcp.tapir-vwwps.mongodb.net 86400 SRV 0 0 27017 tapir-shard
 send
 ```
 
-### What the DNS records should look like
+## What the DNS records should look like
 
 ```bash
-$ nslookup -debug -type=TXT tapir-vwwps.mongodb.net
-Server:		1.1.1.1
-Address:	1.1.1.1#53
+$ dig +short _mongodb._tcp.tapir-vwwps.mongodb.net SRV
+0 0 27017 tapir-shard-00-01-vwwps.mongodb.net.
+0 0 27017 tapir-shard-00-02-vwwps.mongodb.net.
+0 0 27017 tapir-shard-00-00-vwwps.mongodb.net.
 
-------------
-    QUESTIONS:
-	tapir-vwwps.mongodb.net, type = TXT, class = IN
-    ANSWERS:
-    ->  tapir-vwwps.mongodb.net
-	text = "authSource=admin&replicaSet=Tapir-shard-0"
-	ttl = 60
-    AUTHORITY RECORDS:
-    ADDITIONAL RECORDS:
-------------
-Non-authoritative answer:
-tapir-vwwps.mongodb.net	text = "authSource=admin&replicaSet=Tapir-shard-0"
-
-Authoritative answers can be found from:
-```
-
-```bash
-$ nslookup -debug -type=SRV _mongodb._tcp.tapir-vwwps.mongodb.net
-Server:		1.1.1.1
-Address:	1.1.1.1#53
-
-------------
-    QUESTIONS:
-	_mongodb._tcp.tapir-vwwps.mongodb.net, type = SRV, class = IN
-    ANSWERS:
-    ->  _mongodb._tcp.tapir-vwwps.mongodb.net
-	service = 0 0 27017 tapir-shard-00-00-vwwps.mongodb.net.
-	ttl = 60
-    ->  _mongodb._tcp.tapir-vwwps.mongodb.net
-	service = 0 0 27017 tapir-shard-00-01-vwwps.mongodb.net.
-	ttl = 60
-    ->  _mongodb._tcp.tapir-vwwps.mongodb.net
-	service = 0 0 27017 tapir-shard-00-02-vwwps.mongodb.net.
-	ttl = 60
-    AUTHORITY RECORDS:
-    ADDITIONAL RECORDS:
-------------
-Non-authoritative answer:
-_mongodb._tcp.tapir-vwwps.mongodb.net	service = 0 0 27017 tapir-shard-00-00-vwwps.mongodb.net.
-_mongodb._tcp.tapir-vwwps.mongodb.net	service = 0 0 27017 tapir-shard-00-01-vwwps.mongodb.net.
-_mongodb._tcp.tapir-vwwps.mongodb.net	service = 0 0 27017 tapir-shard-00-02-vwwps.mongodb.net.
-
-Authoritative answers can be found from:
+$ dig +short tapir-vwwps.mongodb.net TXT
+"authSource=admin&replicaSet=Tapir-shard-0"
 ```
