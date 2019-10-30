@@ -309,6 +309,91 @@ openssl x509 -inform der -in DigiCertSHA2SecureServerCA.crt -out DigiCertSHA2Sec
          200 OK
   ```
 
+  ```powershell
+  add - type @ "
+  using System.Net;
+  using System.Security.Cryptography.X509Certificates;
+  public class TrustAllCertsPolicy: ICertificatePolicy {
+      public bool CheckValidationResult(
+          ServicePoint srvPoint, X509Certificate certificate,
+          WebRequest request, int certificateProblem) {
+          return true;
+      }
+  }
+  "@
+  $AllProtocols = [System.Net.SecurityProtocolType]
+  'Ssl3,Tls,Tls11,Tls12' [System.Net.ServicePointManager]::SecurityProtocol = $AllProtocols[System.Net.ServicePointManager]::CertificatePolicy = New - Object TrustAllCertsPolicy
+  ```
+
+  ```powershell
+  function Test - ServerSSLSupport {
+      [CmdletBinding()]
+      param(
+          [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+          [ValidateNotNullOrEmpty()]
+          [string] $HostName,
+          [UInt16] $Port = 443
+      )
+      process {
+          $RetValue = New - Object psobject - Property @ {
+              Host = $HostName
+              Port = $Port
+              SSLv2 = $false
+              SSLv3 = $false
+              TLSv1_0 = $false
+              TLSv1_1 = $false
+              TLSv1_2 = $false
+              KeyExhange = $null
+              HashAlgorithm = $null
+          }“
+          ssl2”, “ssl3”, “tls”, “tls11”, “tls12” | % {
+              $TcpClient = New - Object Net.Sockets.TcpClient
+              $TcpClient.Connect($RetValue.Host, $RetValue.Port)
+              $SslStream = New - Object Net.Security.SslStream $TcpClient.GetStream()
+              $SslStream.ReadTimeout = 15000
+              $SslStream.WriteTimeout = 15000
+              try {
+                  $SslStream.AuthenticateAsClient($RetValue.Host, $null, $_, $false)
+                  $RetValue.KeyExhange = $SslStream.KeyExchangeAlgorithm
+                  $RetValue.HashAlgorithm = $SslStream.HashAlgorithm
+                  $status = $true
+              } catch {
+                  $status = $false
+              }
+              switch ($_) {
+                  “
+                  ssl2” {
+                      $RetValue.SSLv2 = $status
+                  }“
+                  ssl3” {
+                      $RetValue.SSLv3 = $status
+                  }“
+                  tls” {
+                      $RetValue.TLSv1_0 = $status
+                  }“
+                  tls11” {
+                      $RetValue.TLSv1_1 = $status
+                  }“
+                  tls12” {
+                      $RetValue.TLSv1_2 = $status
+                  }
+              }
+
+              #
+              dispose objects to prevent memory leaks# $TcpClient.Dispose()# $SslStream.Dispose()
+          }
+          $RetValue“ From“ + $TcpClient.client.LocalEndPoint.address.IPAddressToString + ”to $hostname“ + $TcpClient.client.RemoteEndPoint.address.IPAddressToString + ’: ’+$TcpClient.client.RemoteEndPoint.port
+          $SslStream | gm | ? {
+              $_.MemberType - match‘ Property’
+          } | Select - Object Name | % {
+              $_.Name + ’: ‘+$sslStream.($_.name)
+          }
+      }
+  }
+
+  Test - ServerSSLSupport yourwebserver.com
+  ```
+
 ## **_SecureTransport_ (OSX) tests**
 
 <https://developer.apple.com/library/archive/samplecode/sc1236/Introduction/Intro.html>
