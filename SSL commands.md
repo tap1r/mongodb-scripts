@@ -132,7 +132,7 @@
 
 Acquire the Digicert Root ([DigiCert Global Root CA](https://dl.cacerts.digicert.com/DigiCertGlobalRootCA.crt)) and Intermediate CA ([DigiCert SHA2 Secure Server CA](https://dl.cacerts.digicert.com/DigiCertSHA2SecureServerCA.crt)) certificates employed by Atlas.
 
-Convert Digicert DER to PEM for convinience:
+Convert Digicert DER to PEM for convenience:
 
 ```bash
 openssl x509 -inform der -in DigiCertGlobalRootCA.crt -out DigiCertGlobalRootCA.pem
