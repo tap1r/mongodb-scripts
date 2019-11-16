@@ -5,6 +5,7 @@
 * [Atomic backups using _fsyncLock()_](fsyncLock.md)
 * BI Connector commands
 * [Command tool tips](Tool%20tips.md)
+* [DB Storage tools](DB%20Storage%20tools.md)
 * [FIPS enablement](FIPS%20cert%20generation.md)
 * [Kerberos commands](Kerberos%20CMDs.md)
 * [Kerberos MIT/AD interoperability](Kerberos%20AES.md)
@@ -13,4 +14,3 @@
 * [SSL commands](SSL%20commands.md)
 * [Sweet32 protection in Ops Manager (Java)](Sweet32.md)
 * [VM ballooning detection](VM%20ballooning%20driver%20detection.md)
-* WiredTiger Storage scripts
