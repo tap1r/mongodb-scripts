@@ -1,6 +1,8 @@
-# README
+# mongodb-scripts
 
-## A collection of useful MongoDB related scripts and command tips
+A collection of useful MongoDB related scripts and command tips.
+
+## Table of Contents
 
 * [Atomic backups using _fsyncLock()_](fsyncLock.md)
 * BI Connector commands
