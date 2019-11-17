@@ -12,7 +12,7 @@ The [dbstats.js](src/dbstats.js) script provides a basic tabular report of DB in
 * Free blocks (reclaimable space)
 * Compression
 
-### Usage
+### Using _dbstats.js_
 
 Sample syntax to run against on the _mongo_ shell:
 
@@ -118,7 +118,7 @@ This script is designed to enumerate the _`.wt`_ files in the _`$dbPath`_ and pr
 
 TBA: [wtfrag.py](src/wtfrag.py)
 
-### Usage
+### Using _wtfrag.py_
 
 ```bash
 ./wtfrag.py
