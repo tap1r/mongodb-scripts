@@ -16,7 +16,7 @@
 ### Export _keytab_ from Windows
 
 ```bash
-ktpass -princ mongodb/host.mongodb.org@MONGODB.ORG -mapuser mongodb_svc@MONGODB.ORG -pass ****** -out mongodb.keytab -crypto all -ptype KRB5_NT_PRINCIPAL
+ktpass /princ mongodb/host.mongodb.org@MONGODB.ORG /mapuser mongodb_svc@MONGODB.ORG /pass - /out mongodb.keytab /crypto all /ptype KRB5_NT_PRINCIPAL
 ```
 
 ### Export _keytab_ from Linux
