@@ -68,7 +68,7 @@
       distinguished_name=req_dn\n\
       [req_dn]\n\
       [my_ext]\n\
-      subjectAltName=DNS.1:*.mongodb.com,DNS.2:*.mongodb.net,IP.1:127.0.0.1,IP.2:192.0.2.1\n\
+      subjectAltName=DNS.1:*.mongodb.com,DNS.2:*.mongodb.net,IP.1:127.0.0.1,IP.2:::1,IP.3:192.0.2.1\n\
       extendedKeyUsage=serverAuth,clientAuth") \
     -keyout private.key \
     -out server.crt
@@ -300,7 +300,6 @@ openssl x509 -inform der -in DigiCertSHA2SecureServerCA.crt -out DigiCertSHA2Sec
   StatusCode StatusDescription
   ---------- -----------------
          200 OK
-
 
   PS C:\Program Files\PowerShell\6-preview> Invoke-WebRequest https://microsoft.github.io | ft Status*
 
