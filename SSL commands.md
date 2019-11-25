@@ -28,7 +28,7 @@
 * **_mlaunch_ tips for _clusterauth_**
 
   ```bash
-  mlaunch init --replicaset --hostname localhost --sslMode preferSSL --sslCAFile /tmp/server.pk8 --sslPEMKeyFile /tmp/server.pk8 --sslClusterFile /tmp/server.pk8 --sslClientCertificate /tmp/server.pk8 --auth
+  mlaunch init --replicaset --hostname localhost --sslMode preferSSL --sslCAFile server.pk8 --sslPEMKeyFile server.pk8 --sslClusterFile server.pk8 --sslClientCertificate server.pk8 --auth
   ```
 
 * **FIPS compliance**
