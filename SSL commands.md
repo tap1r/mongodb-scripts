@@ -78,9 +78,48 @@
   openssl x509 -in server.pk8 -noout -subject -purpose -text | grep "subject=\|X509v3\ Subject\ Alternative\ Name:\|DNS:\|IP\ Address:\|X509v3\ Extended\ Key\ Usage:\|TLS\ Web\ Server\ Authentication\|TLS\ Web\ Client\ Authentication"
   ```
 
-* **Elliptic curve (EC) ciphers**
+* **Elliptic curve (EC) ciphers with FIPS compliance (PKCS#8 format)**
 
-  <https://www.guyrutenberg.com/2013/12/28/creating-self-signed-ecdsa-ssl-certificate-using-openssl/>
+  ```bash
+  openssl req \
+   -x509 \
+   -newkey ec:<(openssl ecparam -name secp521r1) \
+   -nodes \
+   -days 3650 \
+   -keyout private.key \
+   -out server.crt \
+   -subj "/C=US/ST=New York/L=New York/O=MongoDB, Inc./OU=Technical Services/CN=*.mongodb.com"
+
+  cat server.crt private.key > server.pk8
+  openssl x509 -in server.pk8 -noout -subject
+  ```
+
+* **Elliptic curve (EC) ciphers with FIPS compliance (PKCS#8 format) with SAN and EKU attributes**
+
+  ```bash
+  openssl req \
+   -x509 \
+   -newkey ec:<(openssl ecparam -name secp521r1) \
+   -nodes \
+   -days 3650 \
+   -keyout private.key \
+   -out server.crt \
+   -subj "/C=US/ST=New York/L=New York/O=MongoDB, Inc./OU=Technical Services/CN=*.mongodb.com" \
+    -extensions my_ext \
+    -config <(printf "\
+      [req]\n\
+      distinguished_name=req_dn\n\
+      [req_dn]\n\
+      [my_ext]\n\
+      subjectAltName=DNS.1:*.mongodb.com,DNS.2:*.mongodb.net,IP.1:127.0.0.1,IP.2:::1,IP.3:192.0.2.1\n\
+      extendedKeyUsage=serverAuth,clientAuth") \
+    -keyout private.key \
+    -out server.crt
+
+  cat server.crt private.key > server.pk8
+
+  openssl x509 -in server.pk8 -noout -subject -purpose -text | grep "subject=\|X509v3\ Subject\ Alternative\ Name:\|DNS:\|IP\ Address:\|X509v3\ Extended\ Key\ Usage:\|TLS\ Web\ Server\ Authentication\|TLS\ Web\ Client\ Authentication"
+  ```
 
 ## **Certificate format conversion**
 
@@ -158,7 +197,7 @@ openssl x509 -inform der -in DigiCertSHA2SecureServerCA.crt -out DigiCertSHA2Sec
 * **Get certificate SAN attributes from PEM file**
 
   ```bash
-  openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -noout -text | grep DNS:
+  openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -noout -text | grep "subject=\|X509v3\ Subject\ Alternative\ Name:\|DNS:\|IP\ Address:\|X509v3\ Extended\ Key\ Usage:\|TLS\ Web\ Server\ Authentication\|TLS\ Web\ Client\ Authentication"
   ```
 
 ### TLS server tests
@@ -178,7 +217,7 @@ openssl x509 -inform der -in DigiCertSHA2SecureServerCA.crt -out DigiCertSHA2Sec
 * **Get certificate SAN attributes from TLS server**
 
   ```bash
-  openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -noout -text | grep DNS:
+  openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -noout -text | grep "subject=\|X509v3\ Subject\ Alternative\ Name:\|DNS:\|IP\ Address:\|X509v3\ Extended\ Key\ Usage:\|TLS\ Web\ Server\ Authentication\|TLS\ Web\ Client\ Authentication"
   ```
 
 ### Certificate validation tests
