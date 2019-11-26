@@ -78,7 +78,7 @@
   openssl x509 -in server.pk8 -noout -subject -purpose -text | grep "subject=\|X509v3\ Subject\ Alternative\ Name:\|DNS:\|IP\ Address:\|X509v3\ Extended\ Key\ Usage:\|TLS\ Web\ Server\ Authentication\|TLS\ Web\ Client\ Authentication"
   ```
 
-* **Elliptic curve (EC) ciphers with FIPS compliance (PKCS#8 format)**
+* **Elliptic curve ciphers (ECC) with FIPS compliance (PKCS#8 format)**
 
   ```bash
   openssl req \
@@ -94,7 +94,7 @@
   openssl x509 -in server.pk8 -noout -subject
   ```
 
-* **Elliptic curve (EC) ciphers with FIPS compliance (PKCS#8 format) with SAN and EKU attributes**
+* **Elliptic curve ciphers (ECC) with FIPS compliance (PKCS#8 format) with SAN and EKU attributes**
 
   ```bash
   openssl req \
@@ -132,7 +132,7 @@
   -or-
 
   ```bash
-  openssl pkcs12 -export -in cert.pem -out cert.p12 -name "My Certificate bundle" -certfile CA.pem
+  openssl pkcs12 -export -in cert.pem -out cert.p12 -name "My Certificate bundle" -certfile ca.pem
   ```
 
 * **DER (_`PKCS#1`_) to PEM (_`PKCS#1`_) format**
@@ -197,7 +197,7 @@ openssl x509 -inform der -in DigiCertSHA2SecureServerCA.crt -out DigiCertSHA2Sec
 * **Get certificate SAN and EKU attributes from PEM file**
 
   ```bash
-  openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -noout -text | grep "subject=\|X509v3\ Subject\ Alternative\ Name:\|DNS:\|IP\ Address:\|X509v3\ Extended\ Key\ Usage:\|TLS\ Web\ Server\ Authentication\|TLS\ Web\ Client\ Authentication"
+  openssl x509 -in cert.pem -noout -text | grep "subject=\|X509v3\ Subject\ Alternative\ Name:\|DNS:\|IP\ Address:\|X509v3\ Extended\ Key\ Usage:\|TLS\ Web\ Server\ Authentication\|TLS\ Web\ Client\ Authentication"
   ```
 
 ### TLS server tests
@@ -265,20 +265,20 @@ openssl x509 -inform der -in DigiCertSHA2SecureServerCA.crt -out DigiCertSHA2Sec
 * **Validate client certificate purpose from PEM file**
 
   ```bash
-  openssl verify -verbose -CAfile CA.pem -purpose sslclient ClientCert.pem
+  openssl verify -verbose -CAfile ca.pem -purpose sslclient ClientCert.pem
   ```
 
 * **Validate server certificate purpose from PEM file**
 
   ```bash
-  openssl verify -verbose -CAfile CA.pem -purpose sslserver ServerCert.pem
+  openssl verify -verbose -CAfile ca.pem -purpose sslserver ServerCert.pem
   ```
 
 * **Validate _clusterauth_ certificate purpose from PEM file**
 
   ```bash
-  openssl verify -verbose -CAfile CA.pem -purpose sslclient ClientCert.pem
-  openssl verify -verbose -CAfile CA.pem -purpose sslserver ServerCert.pem
+  openssl verify -verbose -CAfile ca.pem -purpose sslclient ClientCert.pem
+  openssl verify -verbose -CAfile ca.pem -purpose sslserver ServerCert.pem
   ```
 
 ## **_SChannel_ (Windows) tests**
