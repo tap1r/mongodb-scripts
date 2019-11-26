@@ -194,7 +194,7 @@ openssl x509 -inform der -in DigiCertSHA2SecureServerCA.crt -out DigiCertSHA2Sec
   openssl x509 -in cert.pem -noout -subject -issuer -serial -dates -fingerprint -purpose
   ```
 
-* **Get certificate SAN attributes from PEM file**
+* **Get certificate SAN and EKU attributes from PEM file**
 
   ```bash
   openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -noout -text | grep "subject=\|X509v3\ Subject\ Alternative\ Name:\|DNS:\|IP\ Address:\|X509v3\ Extended\ Key\ Usage:\|TLS\ Web\ Server\ Authentication\|TLS\ Web\ Client\ Authentication"
@@ -214,7 +214,7 @@ openssl x509 -inform der -in DigiCertSHA2SecureServerCA.crt -out DigiCertSHA2Sec
   openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -noout -subject -issuer -serial -dates -fingerprint -purpose
   ```
 
-* **Get certificate SAN attributes from TLS server**
+* **Get certificate SAN and EKU attributes from TLS server**
 
   ```bash
   openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -noout -text | grep "subject=\|X509v3\ Subject\ Alternative\ Name:\|DNS:\|IP\ Address:\|X509v3\ Extended\ Key\ Usage:\|TLS\ Web\ Server\ Authentication\|TLS\ Web\ Client\ Authentication"
