@@ -30,6 +30,8 @@ db.collection.aggregate(agg)
 
 ## Measuring real-time _oplog_ churn
 
+The [oplogchurn.js](src/oplogchurn.js) script provides a metric of real-time oplog churn by measuring over the most recent interval, as opposed to over the entire oplog:
+
 ### Using _oplogchurn.js_
 
 Sample syntax to run against on the _mongo_ shell:
