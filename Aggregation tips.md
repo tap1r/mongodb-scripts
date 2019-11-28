@@ -43,15 +43,15 @@ mongo [+options] --quiet oplogchurn.js
 ### Sample output
 
 ```text
--------------------------------------------------------------------------------------------
-Start time:				1574924633.044
-End time:				1574921033.044
-Interval:				1 Hr(s)
-Avg oplog compression ratio:		6.51:1
-Doc count:				360
-Total Ops size:				38.82KB
-Estimated total Ops size on disk:	5.96KB
--------------------------------------------------------------------------------------------
-Estimated current oplog churn:		5.96 KB/Hr
--------------------------------------------------------------------------------------------
+==================================================
+Start time:                         1574926639.139
+End time:                           1574923039.139
+Interval:                                   1hr(s)
+Avg oplog compression ratio:                6.51:1
+Doc count:                                     360
+Total Ops size:                            0.04 MB
+Estimated total Ops size on disk:          0.01 MB
+--------------------------------------------------
+Estimated current oplog churn:          0.01 MB/hr
+==================================================
 ```
