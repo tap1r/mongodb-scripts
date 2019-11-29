@@ -60,7 +60,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
    - _`--plugin_dir=/usr/local/lib/mysql/plugin/`_ (C-auth-plugin installation directory)
    - _`-vv`_ (verbosity)
    - _`--addr 0.0.0.0:3307`_
-   - _`--sslAllowInvalidCertificates`_ (Self-signed certificates are assumed, remove for PKI/Atlas use if desired)
+   - _`--sslAllowInvalidCertificates`_ ([self-signed certificates](SSL%20commands.md#generating-common-use-certificates) are assumed, remove for PKI/Atlas use if desired)
 
 ### MySQL connection strings
 
