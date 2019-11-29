@@ -74,7 +74,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
 ### _mysql_ connection string
 
    ```bash
-   mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=DISABLED
+   mysql --host {bi_host} --port 3307 --protocol tcp --ssl-mode=DISABLED
    ```
 
 ## Usecase permutation (+SSL -auth)
@@ -88,7 +88,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
 ### _mysql_ connection string
 
    ```bash
-   mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=REQUIRED --ssl-ca mongodb.pk8
+   mysql --host {bi_host} --port 3307 --protocol tcp --ssl-mode=REQUIRED --ssl-ca mongodb.pk8
    ```
 
 ## Usecase permutation (-SSL +auth)
@@ -96,13 +96,13 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
 ### _mongosqld_ startup parameters
 
    ```bash
-   mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-authenticationSource admin -u {user} -p {passwd} -vv
+   mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-authenticationSource admin -vv -u {user} -p {passwd}
    ```
 
 ### _mysql_ connection string
 
    ```bash
-   mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=DISABLED --default-auth=mongosql_auth --plugin_dir=/usr/local/lib/mysql/plugin/ -u {bi_user} -p
+   mysql --host {bi_host} --port 3307 --protocol tcp --ssl-mode=DISABLED --default-auth=mongosql_auth --plugin_dir=/usr/local/lib/mysql/plugin/ -u {bi_user} -p
    ```
 
 ## Usecase permutation (+SSL +auth)
@@ -110,19 +110,19 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
 ### _mongosqld_ startup parameters
 
    ```bash
-   mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --mongo-sslCAFile=mongodb.pk8 --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd} -vv
+   mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --mongo-sslCAFile=mongodb.pk8 --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -vv -u {user} -p {passwd}
    ```
 
 ### _mysql_ connection string
 
    ```bash
-   mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=REQUIRED --ssl-ca mongodb.pk8 --default-auth=mongosql_auth --plugin_dir=/usr/local/lib/mysql/plugin/ -u {bi_user} -p
+   mysql --host {bi_host} --port 3307 --protocol tcp --ssl-mode=REQUIRED --ssl-ca mongodb.pk8 --default-auth=mongosql_auth --plugin_dir=/usr/local/lib/mysql/plugin/ -u {bi_user} -p
    ```
 
    -or-
 
    ```bash
-   mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=REQUIRED --ssl-ca mongodb.pk8 --enable-cleartext-plugin -u {bi_user} -p
+   mysql --host {bi_host} --port 3307 --protocol tcp --ssl-mode=REQUIRED --ssl-ca mongodb.pk8 --enable-cleartext-plugin -u {bi_user} -p
    ```
 
 ## Atlas usecase (on-prem `mongosqld`) permutation (+SSL +auth)
@@ -130,19 +130,19 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
 ### _mongosqld_ startup parameters
 
    ```bash
-   mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd} -vv
+   mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -vv -u {user} -p {passwd}
    ```
 
 ### _mysql_ connection string
 
    ```bash
-   mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=REQUIRED --ssl-ca mongodb.pk8 --default-auth=mongosql_auth --plugin_dir=/usr/local/lib/mysql/plugin/ -u {bi_user} -p
+   mysql --host {bi_host} --port 3307 --protocol tcp --ssl-mode=REQUIRED --ssl-ca mongodb.pk8 --default-auth=mongosql_auth --plugin_dir=/usr/local/lib/mysql/plugin/ -u {bi_user} -p
    ```
 
    -or-
 
    ```bash
-   mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=REQUIRED --ssl-ca mongodb.pk8 --enable-cleartext-plugin -u {bi_user} -p
+   mysql --host {bi_host} --port 3307 --protocol tcp --ssl-mode=REQUIRED --ssl-ca mongodb.pk8 --enable-cleartext-plugin -u {bi_user} -p
    ```
 
 ## BIC read preferences
@@ -154,22 +154,20 @@ To change from the default _Primary_ preference, add either of the following to 
 --mongo-uri {host}/?connect=direct&readPreference=secondaryPreferred
 ```
 
-## Legacy sampling modes
+## Sampling modes
+
+### Read sampler
+
+(default)
 
 ### Persistent sampler (legacy shared schema)
 
-```bash
-mongosqld --addr 0.0.0.0:3307 --sampleMode=write --sampleSource=drdl --mongo-uri {uri} --auth --mongo-ssl --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd} -vv
-```
-
-### Read sampler (default)
-
-```bash
-mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd} -vv
+```text
+--sampleMode=write --sampleSource=drdl
 ```
 
 ### Using DRDL schema file
 
 ```bash
-mongosqld --schema schema.drdl --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL -u={user} -u={passwd} -vv
+--schema schema.drdl
 ```
