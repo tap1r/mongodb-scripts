@@ -62,106 +62,74 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
    - _`--plugin_dir=/usr/local/lib/mysql/plugin/`_ (C-auth-plugin installation directory)
    - _`-vv`_ (verbosity)
    - _`--addr 0.0.0.0:3307`_
-   - _`--sslAllowInvalidCertificates`_ ([self-signed certificates](SSL%20commands.md#generating-common-use-certificates) are assumed, remove for PKI/Atlas use if desired)
+   - _`--sslAllowInvalidCertificates`_ ([self-signed certificates](SSL%20commands.md#generating-common-use-certificates) are assumed, remove for PKI/Atlas usecase if desired)
 
 ## Connection strings (-SSL -auth)
 
 ### _mongosqld_
 
 ```bash
-mongosqld ...
-```
-
-### _mongodrdl_
-
-```bash
-mongodrdl ...
+mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd} -vv
 ```
 
 ### _mysql_
 
 ```bash
-mysql --host {bi_host} --protocol tcp --port 3307
+mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=DISABLED
 ```
 
 ## Connection strings (+SSL -auth)
+
+### _mongosqld_
+
+```bash
+mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd} -vv
+```
+
+### _mysql_
 
 ```bash
 mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=REQUIRED --ssl-ca mongodb.pk8 --enable-cleartext-plugin -u {bi_user} -p
 ```
 
+## Connection strings (-SSL +auth)
+
 ### _mongosqld_
 
 ```bash
-mongosqld ...
-```
-
-### _mongodrdl_
-
-```bash
-mongodrdl ...
+mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd} -vv
 ```
 
 ### _mysql_
-
-```bash
-mysql ...
-```
-
-## Connection strings (-SSL +auth)
 
 ```bash
 mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=DISABLED --default-auth=mongosql_auth --plugin_dir=/usr/local/lib/mysql/plugin/ -u {bi_user} -p
 ```
 
-```bash
-mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=DISABLED --default-auth=mongosql_auth -u {bi_user} -p
-```
-
-### _mongosqld_
+-or-
 
 ```bash
-mongosqld ...
-```
-
-### _mongodrdl_
-
-```bash
-mongodrdl ...
-```
-
-### _mysql_
-
-```bash
-mysql ...
+mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=DISABLED --enable-cleartext-plugin -u {bi_user} -p
 ```
 
 ## Connection strings (+SSL +auth)
 
-```bash
-mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=DISABLED --default-auth=mongosql_auth --plugin_dir=/usr/local/lib/mysql/plugin/ -u {bi_user} -p
-```
-
-```bash
-mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=DISABLED --default-auth=mongosql_auth -u {bi_user} -p
-```
-
 ### _mongosqld_
 
 ```bash
-mongosqld ...
-```
-
-### _mongodrdl_
-
-```bash
-mongodrdl ...
+mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd} -vv
 ```
 
 ### _mysql_
 
 ```bash
-mysql ...
+mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=REQUIRED --ssl-ca mongodb.pk8 --default-auth=mongosql_auth --plugin_dir=/usr/local/lib/mysql/plugin/ -u {bi_user} -p
+```
+
+-or-
+
+```bash
+mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=REQUIRED --ssl-ca mongodb.pk8 --enable-cleartext-plugin -u {bi_user} -p
 ```
 
 ## BIC read preferences
@@ -181,19 +149,19 @@ mongosqld --addr 0.0.0.0:3307 --mongo-uri={srv} --auth --mongo-ssl --sslAllowInv
 
 ## Legacy sampling modes
 
-### Persistent sampler (shared schema)
+### Persistent sampler (legacy shared schema)
 
 ```bash
 mongosqld --addr 0.0.0.0:3307 --sampleMode=write --sampleSource=drdl --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd} -vv
 ```
 
-### Read sampler
+### Read sampler (default)
 
 ```bash
 mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd} -vv
 ```
 
-### DRDL
+### Using DRDL schema file
 
 ```bash
 mongosqld --schema schema.drdl --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL -u={user} -u={passwd} -vv
