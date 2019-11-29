@@ -1,12 +1,12 @@
 # BI Connector reproductions (valid for v2.13.1)
 
-This guide aims to provide startup string combinatations for BIC reproduction testing.  Each grouping provides consistent parameters to each of the BIC applications and tools for more common use cases.
+This guide aims to provide startup options for BIC reproduction testing.  Each grouping provides consistent parameters to each of the BIC applications and tools for more common use cases.
 
 ## Procedures
 
 Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongodrdl`_ based on known use case permutations.
 
-1. Determine the usecase permutation from the parameter combinations:
+1. Determine the use case permutation from the parameter combinations:
 
    - Authentication & SSL
      - No SSL + no _auth_ (_`sslMode=disabled`_)
@@ -20,9 +20,10 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
      - Direct Connect
 
    - Sampling options
-     - No sampling / DRDL schema
-     - Sampling
-     - Shared schema
+     - Standalone sampling mode (default)
+     - DRDL schema mode
+     - Auto schema mode
+     - Custom schema mode
 
 2. Select one sub-template from the three template types (_auth/ssl_ + _options_ + _sampling_) to create the desired permutations
 
@@ -63,7 +64,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
    - _`-vv`_ (verbosity)
    - _`--addr 0.0.0.0:3307`_ (bind IP)
 
-## Usecase permutation (-SSL -auth)
+## Use case permutation (-SSL -auth)
 
 ### _mongosqld_ startup parameters
 
@@ -77,7 +78,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
    mysql --host {bi_host} --port 3307 --protocol tcp --ssl-mode=DISABLED
    ```
 
-## Usecase permutation (+SSL -auth)
+## Use case permutation (+SSL -auth)
 
 ### _mongosqld_ startup parameters
 
@@ -91,7 +92,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
    mysql --host {bi_host} --port 3307 --protocol tcp --ssl-mode=REQUIRED --ssl-ca mongodb.pk8
    ```
 
-## Usecase permutation (-SSL +auth)
+## Use case permutation (-SSL +auth)
 
 ### _mongosqld_ startup parameters
 
@@ -105,7 +106,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
    mysql --host {bi_host} --port 3307 --protocol tcp --ssl-mode=DISABLED --default-auth=mongosql_auth --plugin_dir=/usr/local/lib/mysql/plugin/ -u {bi_user} -p
    ```
 
-## Usecase permutation (+SSL +auth)
+## Use case permutation (+SSL +auth)
 
 ### _mongosqld_ startup parameters
 
@@ -131,7 +132,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
    mysql --host {bi_host} --port 3307 --protocol tcp --ssl-mode=REQUIRED --ssl-ca mongodb.pk8 --enable-cleartext-plugin -u {bi_user} -p
    ```
 
-## BIC read preferences
+## Read preferences
 
 To change from the default _Primary_ preference, add either of the following to the _`mongosqld`_ startup parameters:
 
