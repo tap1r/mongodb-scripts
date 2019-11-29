@@ -46,6 +46,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
 
    - _`{host}`_ (_`db1.example.net:27017`_ format)
    - _`{uri}`_ (_`mongodb://db1.example.net,db2.example.net:27017/?replicaSet=rs0`_ format)
+   - _`{srv}`_ (_`mongodb+srv://srv.example.net/`_ format)
    - _`{bi_user}`_ (end user)
    - _`{bi_passwd}`_
    - _`{admin_user}`_ (sampling user)
@@ -88,9 +89,9 @@ mongosqld --addr 0.0.0.0:3307 --mongo-uri={uri} --auth --mongo-ssl --sslAllowInv
 
 ## BIC read preferences
 
-```bash
---mongo-uri {uri}?readPreference=secondaryPreferred
---mongo-uri {host}?connect=direct&readPreference=secondaryPreferred
+```text
+--mongo-uri {uri|srv}&readPreference=secondaryPreferred
+--mongo-uri {host}/?connect=direct&readPreference=secondaryPreferred
 ```
 
 ## Baseline startup commands
