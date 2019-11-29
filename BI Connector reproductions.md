@@ -1,8 +1,10 @@
-# BIC string combinator
+# BI Connector reproductions
+
+This guide aims to provide startup string combinatations for BIC reproduction testing.  Each grouping provides consistent parameters to each of the BIC applications and tools for more common use cases.
 
 ## Procedures
 
-Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongodrdl`_ based on known use case permutations
+Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongodrdl`_ based on known use case permutations.
 
 1. Determine the usecase permutation from the parameter combinations:
 
@@ -40,7 +42,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
      - Sampling
      - Shared schema
 
-3. Substitue for the given parameters in the use case template where required:
+3. Substitute for the given parameters in the use case template where required:
 
    - _`{host}`_ (_`db1.example.net:27017`_ format)
    - _`{uri}`_ (_`mongodb://db1.example.net,db2.example.net:27017/?replicaSet=rs0`_ format)
@@ -81,13 +83,13 @@ mysql --host {host} --protocol tcp --port 3307 --ssl-mode=DISABLED --default-aut
 ## _`mongosqld`_ connecting to Atlas
 
 ```bash
-mongosqld --addr 0.0.0.0:3307 --mongo-uri={uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd}
+mongosqld --addr 0.0.0.0:3307 --mongo-uri={uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd} -vv
 ```
 
 ## BIC read preferences
 
 ```bash
---mongo-uri {uri}&readPreference=secondary
+--mongo-uri {uri}?readPreference=secondaryPreferred
 --mongo-uri {host}?connect=direct&readPreference=secondaryPreferred
 ```
 
@@ -99,7 +101,7 @@ mongosqld --addr 0.0.0.0:3307 --sampleMode=write --sampleSource=drdl --mongo-uri
 
 ## Legacy sampling modes
 
-### Persistent sampler
+### Persistent sampler (shared schema)
 
 ```bash
 mongosqld --addr 0.0.0.0:3307 --sampleMode=write --sampleSource=drdl --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd}
@@ -108,17 +110,11 @@ mongosqld --addr 0.0.0.0:3307 --sampleMode=write --sampleSource=drdl --mongo-uri
 ### Read sampler
 
 ```bash
-mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd}
+mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd} -vv
 ```
 
-### [Sampling]
+### DRDL
 
 ```bash
-mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL -u={user} -u={passwd} -vv
-```
-
-### [DRDL]
-
-```bash
-mongosqld --schema schema.drdl --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL
+mongosqld --schema schema.drdl --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL -u={user} -u={passwd} -vv
 ```
