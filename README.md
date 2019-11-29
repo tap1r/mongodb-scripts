@@ -6,7 +6,7 @@ A collection of useful MongoDB related scripts and command tips.
 
 * [Aggregation tips](Aggregation%20tips.md)
 * [Atomic backups using _fsyncLock()_](fsyncLock.md)
-* BI Connector commands
+* [BI Connector reproductions](BI%20Connector%20reproductions.md)
 * [Command tool tips](Tool%20tips.md)
 * Driver kerberos testing framework
 * [DB Storage tools](DB%20Storage%20tools.md)
