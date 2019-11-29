@@ -1,4 +1,4 @@
-# BI Connector reproductions
+# BI Connector reproductions (valid for v2.13.1)
 
 This guide aims to provide startup string combinatations for BIC reproduction testing.  Each grouping provides consistent parameters to each of the BIC applications and tools for more common use cases.
 
@@ -122,21 +122,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
    -or-
 
    ```bash
-   mysql --host {bi_host} --port 3307 --protocol tcp --ssl-mode=REQUIRED --ssl-ca mongodb.pk8 --enable-cleartext-plugin -u {bi_user} -p
-   ```
-
-## Atlas usecase (on-prem `mongosqld`) permutation (+SSL +auth)
-
-### _mongosqld_ startup parameters
-
-   ```bash
-   mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -vv -u {user} -p {passwd}
-   ```
-
-### _mysql_ connection string
-
-   ```bash
-   mysql --host {bi_host} --port 3307 --protocol tcp --ssl-mode=REQUIRED --ssl-ca mongodb.pk8 --default-auth=mongosql_auth --plugin_dir=/usr/local/lib/mysql/plugin/ -u {bi_user} -p
+   mysql --host {bi_host} --port 3307 --protocol tcp --ssl-mode=DISABLED --default-auth=mongosql_auth --plugin_dir=/usr/local/lib/mysql/plugin/ -u {bi_user} -p
    ```
 
    -or-
@@ -156,18 +142,22 @@ To change from the default _Primary_ preference, add either of the following to 
 
 ## Sampling modes
 
-### Read sampler
+To change from the default _standalone schema mode_, add either of the following to the _`mongosqld`_ startup parameters:
 
-(default)
-
-### Persistent sampler (legacy shared schema)
-
-```text
---sampleMode=write --sampleSource=drdl
-```
-
-### Using DRDL schema file
+### DRDL schema file
 
 ```bash
 --schema schema.drdl
+```
+
+### Auto schema mode
+
+```text
+--schemaMode auto --schemaSource schemaDb --schemaRefreshIntervalSecs 3600
+```
+
+### Custom Schema mode
+
+```text
+--schemaMode custom --schemaSource schemaDb
 ```
