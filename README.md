@@ -8,6 +8,7 @@ A collection of useful MongoDB related scripts and command tips.
 * [Atomic backups using _fsyncLock()_](fsyncLock.md)
 * BI Connector commands
 * [Command tool tips](Tool%20tips.md)
+* Driver kerberos testing framework
 * [DB Storage tools](DB%20Storage%20tools.md)
 * [FIPS enablement](FIPS%20cert%20generation.md)
 * [Kerberos commands](Kerberos%20CMDs.md)
