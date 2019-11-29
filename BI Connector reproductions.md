@@ -61,7 +61,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
    - _`--mongo-authenticationSource admin`_ (_authdb_)
    - _`--plugin_dir=/usr/local/lib/mysql/plugin/`_ (C-auth-plugin installation directory)
    - _`-vv`_ (verbosity)
-   - _`--addr 0.0.0.0:3307`_
+   - _`--addr 0.0.0.0:3307`_ (bind IP)
    - _`--sslAllowInvalidCertificates`_ ([self-signed certificates](SSL%20commands.md#generating-common-use-certificates) are assumed, remove for PKI/Atlas usecase if desired)
 
 ## Connection strings (-SSL -auth)
@@ -69,7 +69,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
 ### _mongosqld_
 
 ```bash
-mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd} -vv
+mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} -vv
 ```
 
 ### _mysql_
@@ -83,13 +83,13 @@ mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=DISABLED
 ### _mongosqld_
 
 ```bash
-mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd} -vv
+mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL -vv
 ```
 
 ### _mysql_
 
 ```bash
-mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=REQUIRED --ssl-ca mongodb.pk8 --enable-cleartext-plugin -u {bi_user} -p
+mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=REQUIRED --ssl-ca mongodb.pk8
 ```
 
 ## Connection strings (-SSL +auth)
@@ -97,19 +97,13 @@ mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=REQUIRED --ssl-ca m
 ### _mongosqld_
 
 ```bash
-mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --sslAllowInvalidCertificates --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -u {user} -p {passwd} -vv
+mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-authenticationSource admin -u {user} -p {passwd} -vv
 ```
 
 ### _mysql_
 
 ```bash
 mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=DISABLED --default-auth=mongosql_auth --plugin_dir=/usr/local/lib/mysql/plugin/ -u {bi_user} -p
-```
-
--or-
-
-```bash
-mysql --host {bi_host} --protocol tcp --port 3307 --ssl-mode=DISABLED --enable-cleartext-plugin -u {bi_user} -p
 ```
 
 ## Connection strings (+SSL +auth)
