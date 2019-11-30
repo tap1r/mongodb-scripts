@@ -4,7 +4,8 @@
 
 ```javascript
 // 1 day offset example
-var agg = [{
+var agg = [
+    {
        $lookup: {
             from: "any",
             pipeline: [ { $collStats: {} } ],
