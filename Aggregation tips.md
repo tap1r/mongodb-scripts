@@ -3,24 +3,23 @@
 ## (Pre-4.2) dynamic variables: using _current time_ to fetch the latest x days
 
 ```javascript
-// 1 day offset
-var offsetms = 24 * 3600 * 1000
+// 1 day offset example
 var agg = [{
-       $lookup:{
+       $lookup: {
             from: "any",
             pipeline: [ { $collStats: {} } ],
             as: "time"
         }
     },{
-        $unwind:'$time'
+        $unwind: '$time'
     },{
         $addFields: { "now": "$time.localTime" }
     },{
         $project: { "time": 0 }
     },{
-        $match:{
+        $match: {
             $expr: {
-                $gte: [ "$isodate", { $subtract: [ "$now", offsetms ] } ]
+                $gte: [ "$isodate", { $subtract: [ "$now", 24 * 3600 * 1000 ] } ]
             }
         }
     }
