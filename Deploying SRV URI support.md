@@ -1,6 +1,6 @@
 # Roll your own SRV resource records for _`mongodb+srv://`_ protocol support
 
-## Deploying a test _`named`_ for SRV support - or OnPrem installation
+## Deploying a test `named` for *SRV* record support - or OnPrem installation
 
 - Derive the replicat set topology from the  _`rs.conf()`_ command or a _`db.isMaster()`_ driver SDAM call (via the _`isMaster.hosts`_ and _`isMaster.setName`_ documents)
 - Take input on domain name, and replica set parameters
@@ -19,12 +19,12 @@ TSSIG considerations?
 
 ## Anatomy of DNS records and limitations
 
-A records
-CNAME records (optional)
-TXT record
-SRV records
+*A* records
+*CNAME* records (optional)
+*TXT* record
+*SRV* records
 
-## Publish A and optional CNAME records with _nsupdate_ (if required)
+## Publish *A* and optional *CNAME* records with `nsupdate` (if required)
 
 ```bash
 $ nsupdate
@@ -38,7 +38,7 @@ update add node2.mongodb.net. 3600 cname tapir-shard-00-02-vwwps.mongodb.net.
 send
 ```
 
-## Publish _SRV_ and _TXT_ records with _nsupdate_
+## Publish *SRV* and *TXT* records with `nsupdate`
 
 ```bash
 $ nsupdate
