@@ -53,11 +53,26 @@ send
 ## What the DNS records should look like
 
 ```bash
+$ dig +short tapir-vwwps.mongodb.net TXT
+"authSource=admin&replicaSet=Tapir-shard-0"
+
 $ dig +short _mongodb._tcp.tapir-vwwps.mongodb.net SRV
 0 0 27017 tapir-shard-00-01-vwwps.mongodb.net.
 0 0 27017 tapir-shard-00-02-vwwps.mongodb.net.
 0 0 27017 tapir-shard-00-00-vwwps.mongodb.net.
 
-$ dig +short tapir-vwwps.mongodb.net TXT
-"authSource=admin&replicaSet=Tapir-shard-0"
+$ dig +short tapir-shard-00-01-vwwps.mongodb.net. A
+mtm-0-26-shard-00-01-yf1oj.mongodb.net.
+ec2-34-194-201-110.compute-1.amazonaws.com.
+34.194.201.110
+
+$ dig +short tapir-shard-00-02-vwwps.mongodb.net. A
+mtm-0-26-shard-00-02-yf1oj.mongodb.net.
+ec2-52-200-205-74.compute-1.amazonaws.com.
+52.200.205.74
+
+$ dig +short tapir-shard-00-00-vwwps.mongodb.net. A
+mtm-0-26-shard-00-00-yf1oj.mongodb.net.
+ec2-34-202-120-213.compute-1.amazonaws.com.
+34.202.120.213
 ```
