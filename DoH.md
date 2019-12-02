@@ -7,7 +7,7 @@ A cheat sheet to install DoH support on OSX.
 Add `cloudflared` via `brew`
 
 ```bash
-brew install cloudflared
+brew install cloudflare/cloudflare/cloudflared
 ```
 
 Create the default config YAML
