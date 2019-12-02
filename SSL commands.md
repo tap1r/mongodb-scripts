@@ -153,7 +153,7 @@
 
      ```bash
      openssl pkcs8 -nocrypt -topk8 -v2 aes-256-cbc -in cert.pem -out cert.key
-      ```
+     ```
 
   2. Recombine the existing certificate _`cert.crt`_ with the new key _`cert.key`_ to create a new _`pk8`_ bundle
 
