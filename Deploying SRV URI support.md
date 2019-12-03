@@ -52,6 +52,8 @@ send
 
 ## What the DNS records should look like
 
+Use this [srvatlas.sh](src/srvatlas.sh) script, or manaully lookup the records:
+
 ```bash
 $ dig +short tapir-vwwps.mongodb.net TXT
 "authSource=admin&replicaSet=Tapir-shard-0"
