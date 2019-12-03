@@ -52,7 +52,30 @@ send
 
 ## What the DNS records should look like
 
-Use this [srvatlas.sh](src/srvatlas.sh) script, or manaully lookup the records:
+Use this [srvatlas.sh](src/srvatlas.sh) script (example usage):
+
+```bash
+$ ./srvatlas.sh tapir-vwwps.mongodb.net
+Validating Atlas SRV records for tapir-vwwps.mongodb.net
+TXT resource record:	"authSource=admin&replicaSet=Tapir-shard-0"
+SRV resource record: tapir-shard-00-00-vwwps.mongodb.net.
+Resolves to CNAME/A record:
+mtm-0-26-shard-00-00-yf1oj.mongodb.net.
+ec2-34-202-120-213.compute-1.amazonaws.com.
+34.202.120.213
+SRV resource record: tapir-shard-00-01-vwwps.mongodb.net.
+Resolves to CNAME/A record:
+mtm-0-26-shard-00-01-yf1oj.mongodb.net.
+ec2-34-194-201-110.compute-1.amazonaws.com.
+34.194.201.110
+SRV resource record: tapir-shard-00-02-vwwps.mongodb.net.
+Resolves to CNAME/A record:
+mtm-0-26-shard-00-02-yf1oj.mongodb.net.
+ec2-52-200-205-74.compute-1.amazonaws.com.
+52.200.205.74
+```
+
+Or manaully lookup the records:
 
 ```bash
 $ dig +short tapir-vwwps.mongodb.net TXT
