@@ -49,12 +49,16 @@ su -s /bin/bash - mongod -c "mongod +startup_options"
 
 su -s /bin/bash - `ps -o user= -p $(pgrep -n mongod)` -c "whoami"
 su - $(ps -o user= -p $(pgrep -n mongod)) -c "whoami"
+
+sudo kill -SIGUSR1 $(ps -p $(pgrep mongosd) -o pid=)
 ```
 
 ## Network behaviour
 
 * **Packet captures**
-Capture _interesting_ traffic related to the SDAM routines (the MongoDB _wireprotocol_ + DNS) and Kerberos:
+
+  Capture _interesting_ traffic related to the SDAM routines (the MongoDB _wireprotocol_ + DNS) and Kerberos:
+
   * Using _tcpdump_ for *nix
 
     ```bash

@@ -40,7 +40,9 @@ String.prototype.padEnd = function padEnd(targetLength, padString) {
 // Helper classes
 
 class ScaleFactor {
-    // Scale formatting preferences
+    /*
+     * Scale formatting preferences
+     */
     constructor(unit) {
         // default to MB
         switch (unit) {
