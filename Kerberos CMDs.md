@@ -1,6 +1,6 @@
 # Kerberos command tips
 
-## Environmental config params (suggested tests to add kerberos diagnostic_mdiag_ info)
+## Environmental config params (suggested tests to add to kerberos diagnostic _mdiag_ info)
 
 * getenvvars: _`KRB5CCNAME`_, _`KRB5_KTNAME`_, _`KRB5_CONFIG`_, _`KRB5_TRACE`_ and _`KRB5_CLIENT_KTNAME`_
 * Report the current active contexts with "_`klist -Al`_"
