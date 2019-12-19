@@ -17,7 +17,7 @@ A collection of useful MongoDB related scripts and command tips.
 * [Kerberos MIT/AD interoperability](Kerberos%20AES.md)
 * [LDAP anon bindings](LDAP%20anon%20bindings.md)
 * [Roll your own SRV records](Deploying%20SRV%20URI%20support.md)
-* Split-Horizon Topology testing
+* [Split-Horizon Topology testing](Split-Horizon.md)
 * [Sweet32 protection in Ops Manager (Java)](Sweet32.md)
 * [TLS/SSL commands](SSL%20commands.md)
 * [VM ballooning detection](VM%20ballooning%20driver%20detection.md)
