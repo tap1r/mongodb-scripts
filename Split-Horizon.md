@@ -16,6 +16,10 @@ sudo sysctl -w net.inet.ip.forwarding=1
 sudo sysctl -w net.inet6.ip6.forwarding=1
 ```
 
+OSX: Disable the firewall
+
+## Verification
+
 Display your current port forwarding rules:
 
 ```bash
@@ -42,7 +46,7 @@ mlaunch init --replicaset --nodes=3 --sslMode preferSSL --sslCAFile mongodb.pk8 
 
 ### Ensure correct hostname resolution
 
-Modify _`/etc/hosts`_ if required, using "_`host1`_" at the external PAT name
+Modify _`/etc/hosts`_ if required, using "_`host1`_" at the external PAT bound hostname
 
 ### Update the replica set topology
 
@@ -56,16 +60,34 @@ mongo mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=repl
 
 Add the split-horizon topology definitions
 
+```javascript
+var config = rs.conf();
+config.version += 1;
+config.members[0].horizons = {};
+config.members[0].horizons.host1 = "host1:37017";
+config.members[1].horizons = {};
+config.members[1].horizons.host1 = "host1:37018";
+config.members[2].horizons = {};
+config.members[2].horizons.host1 = "host1:37019";
+rs.reconfig(config);
+```
+
 ## Testing
+
+First validate the SNI header by inspecting the returned SSL subject/SAN attributes.  Using the [TLS Server tests](https://github.com/tap1r/mongodb-scripts/blob/master/SSL%20commands.md#tls-server-tests) as a basis, we can fomulate this command:
+
+```bash
+openssl s_client -connect host1:27017 < /dev/null | openssl x509 -noout -text | grep "subject=\|Subject:\|X509v3\ Subject\ Alternative\ Name:\|DNS:\|X509v3\ Extended\ Key\ Usage:"
+```
 
 Connect to the native port
 
 ```bash
-mongo mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=replset&ssl=true --eval 'db.isMaster()["hosts"]'
+mongo "mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=replset&ssl=true" --sslCAFile mongodb.pk8 --eval 'db.isMaster()["hosts"]'
 ```
 
 Connect to the translated port
 
 ```bash
-mongo mongodb://host1:37017,host1:37018,host1:37019/?replicaSet=replset&ssl=true --eval 'db.isMaster()["hosts"]'
+mongo "mongodb://host1:37017,host1:37018,host1:37019/?replicaSet=replset&ssl=true" --sslCAFile mongodb.pk8 --eval 'db.isMaster()["hosts"]'
 ```
