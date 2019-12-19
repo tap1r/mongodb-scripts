@@ -1,10 +1,8 @@
 # Split-Horizon Topology testing
 
-A quick reproduction for split-horizon testing on OSX
+A simple reproduction for split-horizon testing.  We simulate a port forwarding topology use case using port address translation (PAT).
 
 ## Installation
-
-### Simulate a port forwarding topology use case
 
 Add PAT rules (taken from <https://salferrarello.com/mac-pfctl-port-forwarding/>), and enable kernel IP forwarding
 
@@ -24,6 +22,8 @@ Display your current port forwarding rules:
 sudo pfctl -s nat
 ```
 
+## Uninstallation
+
 Remove all rules and forwarding
 
 ```bash
@@ -32,13 +32,17 @@ sudo sysctl -w net.inet.ip.forwarding=0
 sudo sysctl -w net.inet6.ip6.forwarding=0
 ```
 
-### Build a replica set
+## Build a replica set
 
-Start with a standard deployment with TLS enabled (required for split-horizon support)
+Start with a standard deployment with TLS enabled (required for split-horizon support), here using the _`mongodb.pk8`_ certificate (see [sample certificates](SSL%20commands.md#generating-common-use-certificates))
 
 ```bash
 mlaunch init --replicaset --nodes=3 --sslMode preferSSL --sslCAFile mongodb.pk8 --sslPEMKeyFile mongodb.pk8 --sslAllowConnectionsWithoutCertificates
 ```
+
+### Ensure correct hostname resolution
+
+Modify _`/etc/hosts`_ if required, using "_`host1`_" at the external PAT name
 
 ### Update the replica set topology
 
@@ -47,25 +51,21 @@ As reported by _`db.isMaster()`_
 Connect without SSL:
 
 ```bash
-mongo mongodb://host1:27017/?replicaSet=replset
+mongo mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=replset
 ```
 
-...
-
-### Ensure correct hostname resolution
-
-Modify _`/etc/hosts`_ if required
+Add the split-horizon topology definitions
 
 ## Testing
 
 Connect to the native port
 
 ```bash
-mongo mongodb://host1:27017/?replicaSet=replset&ssl=true --eval 'db.isMaster()'
+mongo mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=replset&ssl=true --eval 'db.isMaster()'
 ```
 
 Connect to the translated port
 
 ```bash
-mongo mongodb://host1:37017/?replicaSet=replset&ssl=true --eval 'db.isMaster()'
+mongo mongodb://host1:37017,host1:37018,host1:37019/?replicaSet=replset&ssl=true --eval 'db.isMaster()'
 ```
