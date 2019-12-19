@@ -26,6 +26,18 @@ Display your current port forwarding rules:
 sudo pfctl -s nat
 ```
 
+Scan for listening ports
+
+```bash
+nmap -sT -p 27017-27019,37017-37019 localhost host1
+```
+
+Validate the SNI header by inspecting the returned SSL subject/SAN attributes.  Using the [TLS Server tests](https://github.com/tap1r/mongodb-scripts/blob/master/SSL%20commands.md#tls-server-tests) as a basis, we can fomulate this command:
+
+```bash
+openssl s_client -connect host1:27017 < /dev/null | openssl x509 -noout -text | grep "subject=\|Subject:\|X509v3\ Subject\ Alternative\ Name:\|DNS:\|X509v3\ Extended\ Key\ Usage:"
+```
+
 ## Uninstallation
 
 Remove all rules and forwarding
@@ -74,20 +86,14 @@ rs.reconfig(config);
 
 ## Testing
 
-First validate the SNI header by inspecting the returned SSL subject/SAN attributes.  Using the [TLS Server tests](https://github.com/tap1r/mongodb-scripts/blob/master/SSL%20commands.md#tls-server-tests) as a basis, we can fomulate this command:
-
-```bash
-openssl s_client -connect host1:27017 < /dev/null | openssl x509 -noout -text | grep "subject=\|Subject:\|X509v3\ Subject\ Alternative\ Name:\|DNS:\|X509v3\ Extended\ Key\ Usage:"
-```
-
 Connect to the native port
 
 ```bash
-mongo "mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=replset&ssl=true" --sslCAFile mongodb.pk8 --eval 'db.isMaster()["hosts"]'
+mongo "mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=replset" --tlsCAFile mongodb.pk8 --tls --eval 'db.isMaster()["hosts"]'
 ```
 
 Connect to the translated port
 
 ```bash
-mongo "mongodb://host1:37017,host1:37018,host1:37019/?replicaSet=replset&ssl=true" --sslCAFile mongodb.pk8 --eval 'db.isMaster()["hosts"]'
+mongo "mongodb://host1:37017,host1:37018,host1:37019/?replicaSet=replset" --tlsCAFile mongodb.pk8 --tls --eval 'db.isMaster()["hosts"]'
 ```
