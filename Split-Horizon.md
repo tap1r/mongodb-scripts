@@ -37,17 +37,35 @@ sudo sysctl -w net.inet6.ip6.forwarding=0
 Start with a standard deployment with TLS enabled (required for split-horizon support)
 
 ```bash
-mlaunch init --replicaset --nodes=3 --ssl
+mlaunch init --replicaset --nodes=3 --sslMode preferSSL --sslCAFile mongodb.pk8 --sslPEMKeyFile mongodb.pk8 --sslAllowConnectionsWithoutCertificates
 ```
 
-## Update the replica set topology
+### Update the replica set topology
 
 As reported by _`db.isMaster()`_
 
+Connect without SSL:
+
+```bash
+mongo mongodb://host1:27017/?replicaSet=replset
+```
+
 ...
+
+### Ensure correct hostname resolution
+
+Modify _`/etc/hosts`_ if required
 
 ## Testing
 
+Connect to the native port
+
 ```bash
-mongo mongodb://host1:37017/?replicaSet=rs0&ssl=true
+mongo mongodb://host1:27017/?replicaSet=replset&ssl=true --eval 'db.isMaster()'
+```
+
+Connect to the translated port
+
+```bash
+mongo mongodb://host1:37017/?replicaSet=replset&ssl=true --eval 'db.isMaster()'
 ```
