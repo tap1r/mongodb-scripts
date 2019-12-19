@@ -61,11 +61,11 @@ Add the split-horizon topology definitions
 Connect to the native port
 
 ```bash
-mongo mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=replset&ssl=true --eval 'db.isMaster()'
+mongo mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=replset&ssl=true --eval 'db.isMaster()["hosts"]'
 ```
 
 Connect to the translated port
 
 ```bash
-mongo mongodb://host1:37017,host1:37018,host1:37019/?replicaSet=replset&ssl=true --eval 'db.isMaster()'
+mongo mongodb://host1:37017,host1:37018,host1:37019/?replicaSet=replset&ssl=true --eval 'db.isMaster()["hosts"]'
 ```
