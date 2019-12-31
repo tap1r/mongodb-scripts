@@ -8,7 +8,7 @@
  *  Save mdblib.js to local directory
  */
 
-load('mdblib.js')
+load('mdblib.js');
 
 /*
  * Formatting preferences
@@ -25,8 +25,8 @@ var docs = 0;
 //
 const hrs = 1 // set interval
 const d = new Date();
-const t1 = d.getTime()/1000;
-const t2 = d.setHours(d.getHours() - hrs)/1000;
+const t1 = d.getTime() / 1000;
+const t2 = d.setHours(d.getHours() - hrs) / 1000;
 const agg = [ { $match: { ts: { $gte: Timestamp(t2, 1), $lte: Timestamp(t1, 1) } } }, { $project: { _id: 0 } } ]
 
 /*
