@@ -8,7 +8,7 @@
  *  Save mdblib.js to local directory
  */
 
-load('mdblib.js')
+load('mdblib.js');
 
 // Global defaults
 
