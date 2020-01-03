@@ -16,7 +16,7 @@
 ### Export _keytab_ from Windows
 
 ```bash
-ktpass /princ mongodb/host.mongodb.org@MONGODB.ORG /mapuser mongodb_svc@MONGODB.ORG /pass - /out mongodb.keytab /crypto all /ptype KRB5_NT_PRINCIPAL
+ktpass /princ mongodb/host.mongodb.org@MONGODB.ORG /mapuser mongodb_svc@MONGODB.ORG /pass - /out mongodb.keytab /crypto all /ptype KRB5_NT_PRINCIPAL -setpass
 ```
 
 ### Export _keytab_ from Linux
@@ -150,6 +150,6 @@ get-aduser -Identity mongosql_service -Properties * | select -Property servicePr
 
 From: <https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-kile/3affa503-59b5-47b6-92aa-ec4b9cf04982>
 
-If Delegate is set to TRUE, the client sets the FORWARDABLE option in the TGS request. When the client receives a forwardable ticket, it puts the ticket in a KRB_CRED structure ([RFC4120] section 3.6). The client does not forward the ticket unless the TGT is marked OK-AS-DELEGATE ([RFC4120] section 2.8).
+If Delegate is set to _`TRUE`_, the client sets the _`FORWARDABLE`_ option in the TGS request. When the client receives a forwardable ticket, it puts the ticket in a _`KRB_CRED`_ structure ([RFC4120] section 3.6). The client does not forward the ticket unless the TGT is marked _`OK-AS-DELEGATE`_ ([RFC4120] section 2.8).
 
 <https://web.mit.edu/kerberos/krb5-devel/doc/appdev/gssapi.html#constrained-delegation-s4u>
