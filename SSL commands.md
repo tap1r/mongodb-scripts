@@ -169,7 +169,7 @@
 
 ## Atlas CA (new LetsEncrypt CA)
 
-Acquire the ([TrustID X3 root CA](https://www.identrust.com/dst-root-ca-x3)) and [Intermediate LetsEncrypt X3 cross signed CA](https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem.txt)) certificates employed by Atlas.
+Acquire the [TrustID X3 root CA](https://www.identrust.com/dst-root-ca-x3) and [Intermediate LetsEncrypt X3 cross signed CA](https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem.txt) certificates employed by Atlas.
 
 ## Atlas CA (legacy DigiCert CA)
 
