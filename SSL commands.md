@@ -167,7 +167,11 @@
   openssl pkcs12 -in cert.p12 -nocerts -nodes -out cert.pem
   ```
 
-## Atlas CA
+## Atlas CA (new LetsEncrypt CA)
+
+Acquire the ([TrustID X3 root CA](https://www.identrust.com/dst-root-ca-x3)) and [Intermediate LetsEncrypt X3 cross signed CA](https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem.txt)) certificates employed by Atlas.
+
+## Atlas CA (legacy DigiCert CA)
 
 Acquire the Digicert Root ([DigiCert Global Root CA](https://dl.cacerts.digicert.com/DigiCertGlobalRootCA.crt)) and Intermediate CA ([DigiCert SHA2 Secure Server CA](https://dl.cacerts.digicert.com/DigiCertSHA2SecureServerCA.crt)) certificates employed by Atlas.
 
