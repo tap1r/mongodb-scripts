@@ -50,7 +50,7 @@ su -s /bin/bash - mongod -c "mongod +startup_options"
 su -s /bin/bash - `ps -o user= -p $(pgrep -n mongod)` -c "whoami"
 su - $(ps -o user= -p $(pgrep -n mongod)) -c "whoami"
 
-sudo kill -SIGUSR1 $(ps -p $(pgrep mongosd) -o pid=)
+sudo kill -SIGUSR1 $(ps -p $(pgrep mongod) -o pid=)
 ```
 
 ## Network behaviour
