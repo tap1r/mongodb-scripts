@@ -171,6 +171,13 @@
 
 Acquire the [TrustID X3 root CA](https://www.identrust.com/dst-root-ca-x3) and [Intermediate LetsEncrypt X3 cross signed CA](https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem.txt) certificates employed by Atlas.
 
+Import to the Java keystore (JKS) for Java driver support:
+
+```bash
+keytool -importcert -file lets-encrypt-x3-cross-signed.pem -keystore /path/to/keystore.jks -alias "Let's Eencrypt X3"
+keytool -importcert -file trustid-x3-root.pem -keystore /path/to/keystore.jks -alias "TrustID X3 Root"
+```
+
 ## Atlas CA (legacy DigiCert CA)
 
 Acquire the Digicert Root ([DigiCert Global Root CA](https://dl.cacerts.digicert.com/DigiCertGlobalRootCA.crt)) and Intermediate CA ([DigiCert SHA2 Secure Server CA](https://dl.cacerts.digicert.com/DigiCertSHA2SecureServerCA.crt)) certificates employed by Atlas.
