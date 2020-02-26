@@ -86,14 +86,26 @@ rs.reconfig(config);
 
 ## Testing
 
-Connect to the native port
+Connect to the native port:
 
 ```bash
-mongo "mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=replset" --tlsCAFile mongodb.pk8 --tls --eval 'db.isMaster()["hosts"]'
+mongo "mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=replset" --sslCAFile mongodb.pk8 --ssl --eval 'db.isMaster()["hosts"]'
 ```
 
-Connect to the translated port
+The SDAM topology should appear as:
 
-```bash
-mongo "mongodb://external:37017,external:37018,external:37019/?replicaSet=replset" --tlsCAFile mongodb.pk8 --tls --eval 'db.isMaster()["hosts"]'
+```javascript
+[ "localhost:27017", "localhost:27018", "localhost:27019" ]
+```
+
+Connect to the translated port:
+
+```json
+mongo "mongodb://external:37017,external:37018,external:37019/?replicaSet=replset" --sslCAFile mongodb.pk8 --ssl --eval 'db.isMaster()["hosts"]'
+```
+
+The SDAM topology should appear as:
+
+```json
+[ "external:37017", "external:37018", "external:37019" ]
 ```
