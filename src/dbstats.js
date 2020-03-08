@@ -35,6 +35,7 @@ var getStats = function () {
      *  Gather DB stats
      */
     dbPath = { dataSize: 0, storageSize: 0, objects: 0, indexSize: 0, freeBlocks: 0, compression: 0 };
+    rs.slaveOk();
     db.getMongo().getDBNames().forEach(function (dbName) {
         database = { name: "", dataSize: 0, storageSize: 0, objects: 0, indexSize: 0, freeBlocks: 0, compression: 0 };
         dbStats = db.getSiblingDB(dbName).stats();
