@@ -14,7 +14,7 @@ var agg = [
             as: "time"
         }
     },{
-        $unwind: '$time'
+        $unwind: "$time"
     },{
         $addFields: { "now": "$time.localTime" }
     },{
