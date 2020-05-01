@@ -33,6 +33,7 @@ const agg = [ { $match: { ts: { $gte: Timestamp(t2, 1), $lte: Timestamp(t1, 1) }
  * main
  */
 
+rs.slaveOk();
 db = db.getSiblingDB('local');
 const oplog = db.oplog.rs.aggregate(agg)
 oplog.forEach(function (op) {
