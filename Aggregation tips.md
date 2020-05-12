@@ -6,6 +6,7 @@
 // 1 day offset example
 var dbName = 'database';
 var collName = 'collection';
+var options = { allowDiskUse: true };
 var agg = [
     {
        $lookup: {
