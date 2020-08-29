@@ -1,6 +1,6 @@
 # Useful aggregation pipelines
 
-## (Pre-4.2) dynamic variables: using _current time_ to fetch the latest x days
+## (Pre-4.2) dynamic variables: using _current time_ to fetch the latest _n_ days
 
 ```javascript
 // 1 day offset example
@@ -12,23 +12,23 @@ var agg = [
        $lookup: {
             from: "any",
             pipeline: [ { $collStats: {} } ],
-            as: "time"
+            as: "__time"
         }
     },{
-        $unwind: "$time"
+        $unwind: "$__time"
     },{
-        $addFields: { "now": "$time.localTime" }
+        $addFields: { "__now": "$__time.localTime" }
     },{
         $project: { "time": 0 }
     },{
         $match: {
             $expr: {
-                $gte: [ "$isodate", { $subtract: [ "$now", 24 * 3600 * 1000 ] } ]
+                $gte: [ "$isodate", { $subtract: [ "__$now", 24 * 3600 * 1000 ] } ]
             }
         }
     }
 ];
-db.getSiblingDB(dbName).getCollection(collName).aggregate(agg, options);
+db.getSiblingDB(dbName).getCollection(collName).aggregate(agg,options);
 ```
 
 ## Measuring real-time _oplog_ churn
@@ -37,7 +37,7 @@ The [oplogchurn.js](src/oplogchurn.js) script provides a metric of real-time opl
 
 ### Using _oplogchurn.js_
 
-Sample syntax to run against on the _mongo_ shell:
+Sample syntax to run against the _mongo_ shell:
 
 ```bash
 mongo [+options] --quiet oplogchurn.js
@@ -115,7 +115,7 @@ var agg = [
         }
     }
 ];
-db.getSiblingDB(dbName).getCollection(collName).aggregate(agg, options).pretty();
+db.getSiblingDB(dbName).getCollection(collName).aggregate(agg,options).pretty();
 ```
 
 ### Sample schema output
