@@ -55,13 +55,11 @@ var getStats = function () {
             collection.dataSize = collStats.size;
             collection.storageSize = collStats.wiredTiger['block-manager']['file size in bytes'];
             collection.freeBlocks = collStats.wiredTiger['block-manager']['file bytes available for reuse'];
-            collection.compression = collection.dataSize / (collection.storageSize - collection.freeBlocks)
-            // printjson(collection);
+            collection.compression = collection.dataSize / (collection.storageSize - collection.freeBlocks);
             printCollection();
             database.freeBlocks += collection.freeBlocks;
         })
         database.compression = database.dataSize / (database.storageSize - database.freeBlocks);
-        // printjson(database);
         printDb();
         dbPath.dataSize += database.dataSize;
         dbPath.storageSize += database.storageSize;
@@ -91,7 +89,7 @@ var fmtRatio = function (metric) {
     /*
      *  Pretty format ratio
      */
-    return (metric).toFixed(scale.precision) + ':1'
+    return (metric).toFixed(scale.precision) + ':1';
 };
 
 var printHeader = function () {
