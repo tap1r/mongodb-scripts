@@ -1,7 +1,7 @@
 /*
  *  mdblib.js
- * description: Mongo shell helper functions
- *  created by: luke.prochazka@mongodb.com
+ *  Description: Mongo shell helper functions
+ *  Created by: luke.prochazka@mongodb.com
  */
 
 /*
@@ -12,7 +12,7 @@
  */
 
 String.prototype.padStart = function padStart(targetLength, padString) {
-    targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0;
+    targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
     padString = String(typeof padString !== 'undefined' ? padString : ' ');
     if (this.length >= targetLength) {
         return String(this);
