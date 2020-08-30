@@ -1,13 +1,14 @@
 /*
- * DB storage stats uber script
- * created by luke.prochazka@mongodb.com
+ *  dbstats.js
+ *  Description: DB storage stats uber script
+ *  Created by: luke.prochazka@mongodb.com
  */
 
 // Usage: "mongo [+connection options] --quiet dbstats.js"
 
 /*
- *  Load helper lib (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
- *  Save mdblib.js to local directory
+ *  Load helper library (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
+ *  Save mdblib.js to the local directory for the mongo shell to read
  */
 
 load('mdblib.js');
