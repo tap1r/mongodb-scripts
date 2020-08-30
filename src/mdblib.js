@@ -1,7 +1,7 @@
 /*
  *  mdblib.js
- *  Mongo shell helper functions
- *  created by luke.prochazka@mongodb.com
+ * description: Mongo shell helper functions
+ *  created by: luke.prochazka@mongodb.com
  */
 
 /*
