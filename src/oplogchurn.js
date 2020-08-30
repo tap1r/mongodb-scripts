@@ -24,7 +24,7 @@ const rowHeader = 35;
 // Global defaults
 var total = 0;
 var docs = 0;
-//
+
 const hrs = 1; // set interval
 const d = new Date();
 const t1 = d.getTime() / 1000;
@@ -49,15 +49,15 @@ const freeBlocks = stats.wiredTiger['block-manager']['file bytes available for r
 const ratio = (stats.size / (stats.storageSize - freeBlocks)).toFixed(2);
 // Print results
 print('='.repeat(termWidth));
-print("Start time:".padEnd(rowHeader), (t1).toString().padStart(columnWidth));
-print("End time:".padEnd(rowHeader), (t2).toString().padStart(columnWidth));
-print("Interval:".padEnd(rowHeader), (hrs + "hr(s)").padStart(columnWidth));
-print("Avg oplog compression ratio:".padEnd(rowHeader), (ratio + ":1").padStart(columnWidth));
-print("Doc count:".padEnd(rowHeader), docs.toString().padStart(columnWidth));
-print("Total Ops size:".padEnd(rowHeader), ((total/scale.factor).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
-print("Estimated total Ops size on disk:".padEnd(rowHeader), ((total/(scale.factor*ratio)).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
+print('Start time:'.padEnd(rowHeader), (t1).toString().padStart(columnWidth));
+print('End time:'.padEnd(rowHeader), (t2).toString().padStart(columnWidth));
+print('Interval:'.padEnd(rowHeader), (hrs + 'hr(s)').padStart(columnWidth));
+print('Avg oplog compression ratio:'.padEnd(rowHeader), (ratio + ':1').padStart(columnWidth));
+print('Doc count:'.padEnd(rowHeader), docs.toString().padStart(columnWidth));
+print('Total Ops size:'.padEnd(rowHeader), ((total / scale.factor).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
+print('Estimated total Ops size on disk:'.padEnd(rowHeader), ((total / (scale.factor * ratio)).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
 print('-'.repeat(termWidth));
-print("Estimated current oplog churn:".padEnd(rowHeader), ((total/(scale.factor*ratio*hrs)).toFixed(2) + ' ' + scale.unit + "/hr").padStart(columnWidth));
+print('Estimated current oplog churn:'.padEnd(rowHeader), ((total / (scale.factor * ratio * hrs)).toFixed(2) + ' ' + scale.unit + '/hr').padStart(columnWidth));
 print('='.repeat(termWidth));
 
 // EOF
