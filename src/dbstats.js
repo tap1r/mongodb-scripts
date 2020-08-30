@@ -1,7 +1,9 @@
-// DB storage stats uber script
-// - created by luke.prochazka@mongodb.com
+/*
+ * DB storage stats uber script
+ * created by luke.prochazka@mongodb.com
+ */
 
-// Usage: "mongo [+options] --quiet dbstats.js"
+// Usage: "mongo [+connection options] --quiet dbstats.js"
 
 /*
  *  Load helper lib (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
@@ -68,7 +70,6 @@ var getStats = function () {
         dbPath.freeBlocks += database.freeBlocks;
     })
     dbPath.compression = dbPath.dataSize / (dbPath.storageSize - dbPath.freeBlocks);
-    // printjson(dbPath);
     printDbPath();
 };
 
