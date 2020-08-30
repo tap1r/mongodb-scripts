@@ -19,11 +19,11 @@ var agg = [
     },{
         $addFields: { "__now": "$__time.localTime" }
     },{
-        $project: { "time": 0 }
+        $project: { "__time": 0 }
     },{
         $match: {
             $expr: {
-                $gte: [ "$isodate", { $subtract: [ "__$now", 24 * 3600 * 1000 ] } ]
+                $gte: [ "$isodate", { $subtract: [ "$__now", 24 * 3600 * 1000 ] } ]
             }
         }
     }
@@ -40,7 +40,7 @@ The [oplogchurn.js](src/oplogchurn.js) script provides a metric of real-time opl
 Sample syntax to run against the _mongo_ shell:
 
 ```bash
-mongo [+options] --quiet oplogchurn.js
+mongo [+connection options] --quiet oplogchurn.js
 ```
 
 ### Sample output
