@@ -1,7 +1,7 @@
 /*
- * oplogchurn.js
- * description: oplog churn rate script
- * created by: luke.prochazka@mongodb.com
+ *  oplogchurn.js
+ *  Description: oplog churn rate script
+ *  Created by: luke.prochazka@mongodb.com
  */
 
 // Usage: "mongo [+connection options] --quiet oplogchurn.js"
