@@ -17,7 +17,7 @@ The [dbstats.js](src/dbstats.js) script provides a basic tabular report of DB in
 Sample syntax to run against on the _mongo_ shell:
 
 ```bash
-mongo [+options] --quiet dbstats.js
+mongo [+connection options] --quiet dbstats.js
 ```
 
 ### Sample output
