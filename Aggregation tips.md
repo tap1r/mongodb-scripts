@@ -1,31 +1,33 @@
 # Useful aggregation pipelines
 
-## (Pre-4.2) dynamic variables: using _current time_ to fetch the latest _n_ days
+## (Pre-4.2) dynamic variables: using _current time_ to fetch the latest _n_ days (difference from the _isodate_ field)
 
 ```javascript
-// 1 day offset example
 var dbName = 'database';
 var collName = 'collection';
+var offset = 1 * (24 * 3600 * 1000); // 1 day offset in milliseconds
 var options = { allowDiskUse: true };
 var agg = [
     {
        $lookup: {
             from: "any",
-            pipeline: [ { $collStats: {} } ],
-            as: "__time"
+            pipeline: [
+                    { $collStats: {} },
+                    { $replaceRoot: { newRoot: { "localTime": "$localTime" } } }
+                ],
+            as: "__now"
         }
     },{
-        $unwind: "$__time"
-    },{
-        $addFields: { "__now": "$__time.localTime" }
-    },{
-        $project: { "__time": 0 }
+        $addFields: { "__now": { $arrayElemAt: [ "$__now", 0 ] } }
     },{
         $match: {
             $expr: {
-                $gte: [ "$isodate", { $subtract: [ "$__now", 24 * 3600 * 1000 ] } ]
+                // $gte: [ "$isodate", { $subtract: [ "$__now", offset ] } ]
+                $gte: [ "$isodate", { $subtract: [ "$__now.localTime", offset ] } ]
             }
         }
+    },{
+        $project: { "__now": 0 }
     }
 ];
 db.getSiblingDB(dbName).getCollection(collName).aggregate(agg,options);
