@@ -5,7 +5,7 @@
 ```javascript
 var dbName = 'database';
 var collName = 'collection';
-var offset = 1 * (24 * 3600 * 1000); // 1 day offset in milliseconds
+var offset = 1 * (24 * 3600 * 1000); // 1 day (in milliseconds)
 var options = { allowDiskUse: true };
 var agg = [
     {
@@ -22,7 +22,6 @@ var agg = [
     },{
         $match: {
             $expr: {
-                // $gte: [ "$isodate", { $subtract: [ "$__now", offset ] } ]
                 $gte: [ "$isodate", { $subtract: [ "$__now.localTime", offset ] } ]
             }
         }
