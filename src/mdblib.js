@@ -57,8 +57,21 @@ class ScaleFactor {
             case 'TB': return { name: "terabytes", unit: "TB", symbol: "T", factor: Math.pow(1024, 4), precision: 2, pctPoint: 1 };
             case 'PB': return { name: "petabytes", unit: "PB", symbol: "P", factor: Math.pow(1024, 5), precision: 2, pctPoint: 1 };
             case 'EB': return { name: "exabytes", unit: "EB", symbol: "E", factor: Math.pow(1024, 6), precision: 2, pctPoint: 1 };
+            case 'ZB': return { name: "zettabytes", unit: "ZB", symbol: "Z", factor: Math.pow(1024, 7), precision: 2, pctPoint: 1 };
+            case 'YB': return { name: "yottabytes", unit: "YB", symbol: "Y", factor: Math.pow(1024, 8), precision: 2, pctPoint: 1 };
             default: return { name: "megabytes", unit: "MB", symbol: "M", factor: Math.pow(1024, 2), precision: 2, pctPoint: 1 };
         }
+    }
+}
+
+class AutoFactor {
+    /*
+     * Determine scaling automatically
+     */
+    constructor(metric) {
+        // default to MB                                              
+        const scale = (Math.log(metric) / Math.log(1024)) | 0;
+        return (metric / Math.pow(1024, scale)).toFixed(2) + ['B', 'kB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'][scale];
     }
 }
 
