@@ -79,7 +79,7 @@ class AutoFactor {
  *  Versioned helper commands
  */
 
-switch (db.version().match(/^[0-9]+\.[0-9]+/)[0]) {
+switch (version().match(/^[0-9]+\.[0-9]+/)[0]) {
     case "4.4":
         slaveOk = rs.secondaryOk;
         break;
