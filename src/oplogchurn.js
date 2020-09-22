@@ -23,6 +23,7 @@ const columnWidth = 14;
 const rowHeader = 35;
 
 // Global defaults
+
 var total = 0;
 var docs = 0;
 
@@ -36,7 +37,7 @@ const agg = [ { $match: { ts: { $gte: Timestamp(t2, 1), $lte: Timestamp(t1, 1) }
  * main
  */
 
-rs.slaveOk();
+slaveOk();
 db = db.getSiblingDB('local');
 const oplog = db.oplog.rs.aggregate(agg);
 oplog.forEach(function (op) {

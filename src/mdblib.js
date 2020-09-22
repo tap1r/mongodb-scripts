@@ -26,8 +26,8 @@ String.prototype.padStart = function padStart(targetLength, padString) {
 };
 
 String.prototype.padEnd = function padEnd(targetLength, padString) {
-    targetLength = targetLength >> 0; //floor if number or convert non-number to 0;
-    padString = String((typeof padString !== 'undefined' ? padString : ' '));
+    targetLength = targetLength >> 0; // floor if number or convert non-number to 0;
+    padString = String(typeof padString !== 'undefined' ? padString : ' ');
     if (this.length > targetLength) {
         return String(this);
     } else {
@@ -69,10 +69,22 @@ class AutoFactor {
      * Determine scaling automatically
      */
     constructor(metric) {
-        // default to MB                                              
+        //                                          
         const scale = (Math.log(metric) / Math.log(1024)) | 0;
         return (metric / Math.pow(1024, scale)).toFixed(2) + ['B', 'kB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'][scale];
     }
+}
+
+/*
+ *  Versioned helper commands
+ */
+
+switch (db.version().match(/^[0-9]+\.[0-9]+/)[0]) {
+    case "4.4":
+        slaveOk = rs.secondaryOk;
+        break;
+    default:
+        slaveOk = rs.slaveOk;
 }
 
 // EOF
