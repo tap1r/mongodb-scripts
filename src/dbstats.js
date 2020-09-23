@@ -47,9 +47,9 @@ var getStats = function () {
         database.storageSize = dbStats.storageSize;
         database.indexSize = dbStats.indexSize;
         printHeader();
-        db.getSiblingDB(dbName).getCollectionNames().forEach(function (collName) {
+        db.getSiblingDB(dbName).getCollectionInfos({ type: "collection" }, true).forEach(function (collDoc) {
             collection = { name: "", dataSize: 0, storageSize: 0, objects: 0, freeBlocks: 0, compression: 0 };
-            collStats = db.getSiblingDB(dbName).getCollection(collName).stats();
+            collStats = db.getSiblingDB(dbName).getCollection(collDoc.name).stats();
             collection.name = collStats.ns.substr(collStats.ns.indexOf('.') + 1);
             collection.objects = collStats.count;
             collection.dataSize = collStats.size;
