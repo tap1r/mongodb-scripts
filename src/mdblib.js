@@ -69,9 +69,9 @@ class AutoFactor {
      * Determine scaling automatically
      */
     constructor(metric) {
-        //                                          
-        const scale = (Math.log(metric) / Math.log(1024)) | 0;
-        return (metric / Math.pow(1024, scale)).toFixed(2) + ['B', 'kB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'][scale];
+        //
+        let scale = Math.floor(Math.log2(metric) / 10);
+        return (metric / Math.pow(1024, scale)).toFixed(2) + ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'][scale];
     }
 }
 
