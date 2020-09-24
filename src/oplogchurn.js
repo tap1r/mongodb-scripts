@@ -41,8 +41,7 @@ slaveOk();
 db = db.getSiblingDB('local');
 const oplog = db.oplog.rs.aggregate(agg);
 oplog.forEach(function (op) {
-    var msg = Object.bsonsize(op);
-    total += msg;
+    total += Object.bsonsize(op);
     docs++;
 });
 //
