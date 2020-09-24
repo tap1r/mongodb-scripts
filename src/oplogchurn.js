@@ -17,21 +17,23 @@ load('mdblib.js');
  * Formatting preferences
  */
 
-const scale = new ScaleFactor(); // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB'
-const termWidth = 50;
-const columnWidth = 14;
-const rowHeader = 35;
+const scale = new ScaleFactor(); // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
+let termWidth = 60;
+let columnWidth = 24;
+let rowHeader = 35;
 
 // Global defaults
 
 var total = 0;
 var docs = 0;
 
-const hrs = 1; // set interval
-const d = new Date();
-const t1 = d.getTime() / 1000;
-const t2 = d.setHours(d.getHours() - hrs) / 1000;
-const agg = [ { $match: { ts: { $gte: Timestamp(t2, 1), $lte: Timestamp(t1, 1) } } }, { $project: { _id: 0 } } ];
+let hrs = 1; // set interval
+let d = new Date();
+let t2 = d.getTime() / 1000;
+let d2 = d.toISOString();
+let t1 = d.setHours(d.getHours() - hrs) / 1000;
+let d1 = d.toISOString();
+let agg = [ { $match: { ts: { $gte: Timestamp(t1, 1), $lte: Timestamp(t2, 1) } } }, { $project: { _id: 0 } } ];
 
 /*
  * main
@@ -39,20 +41,20 @@ const agg = [ { $match: { ts: { $gte: Timestamp(t2, 1), $lte: Timestamp(t1, 1) }
 
 slaveOk();
 db = db.getSiblingDB('local');
-const oplog = db.oplog.rs.aggregate(agg);
+let oplog = db.oplog.rs.aggregate(agg);
 oplog.forEach(function (op) {
     total += Object.bsonsize(op);
     docs++;
 });
 //
-const stats = db.oplog.rs.stats();
-const freeBlocks = stats.wiredTiger['block-manager']['file bytes available for reuse'];
-const ratio = (stats.size / (stats.storageSize - freeBlocks)).toFixed(2);
+let stats = db.oplog.rs.stats();
+let freeBlocks = stats.wiredTiger['block-manager']['file bytes available for reuse'];
+let ratio = (stats.size / (stats.storageSize - freeBlocks)).toFixed(2);
 // Print results
 print('='.repeat(termWidth));
-print('Start time:'.padEnd(rowHeader), (t1).toString().padStart(columnWidth));
-print('End time:'.padEnd(rowHeader), (t2).toString().padStart(columnWidth));
-print('Interval:'.padEnd(rowHeader), (hrs + 'hr(s)').padStart(columnWidth));
+print('Start time:'.padEnd(rowHeader), d1.padStart(columnWidth));
+print('End time:'.padEnd(rowHeader), d2.padStart(columnWidth));
+print('Interval:'.padEnd(rowHeader), (hrs + ' hr(s)').padStart(columnWidth));
 print('Avg oplog compression ratio:'.padEnd(rowHeader), (ratio + ':1').padStart(columnWidth));
 print('Doc count:'.padEnd(rowHeader), docs.toString().padStart(columnWidth));
 print('Total Ops size:'.padEnd(rowHeader), ((total / scale.factor).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
