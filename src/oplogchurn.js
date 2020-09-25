@@ -18,9 +18,9 @@ load('mdblib.js');
  */
 
 const scale = new ScaleFactor(); // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
-let termWidth = 60;
-let columnWidth = 24;
-let rowHeader = 35;
+let termWidth = 80;
+let columnWidth = 35;
+let rowHeader = 44;
 
 // Global defaults
 
@@ -55,10 +55,10 @@ print('='.repeat(termWidth));
 print('Start time:'.padEnd(rowHeader), d1.padStart(columnWidth));
 print('End time:'.padEnd(rowHeader), d2.padStart(columnWidth));
 print('Interval:'.padEnd(rowHeader), (hrs + ' hr(s)').padStart(columnWidth));
-print('Avg oplog compression ratio:'.padEnd(rowHeader), (ratio + ':1').padStart(columnWidth));
+print('Total oplog average compression ratio:'.padEnd(rowHeader), (ratio + ':1').padStart(columnWidth));
 print('Doc count:'.padEnd(rowHeader), docs.toString().padStart(columnWidth));
-print('Total Ops size:'.padEnd(rowHeader), ((total / scale.factor).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
-print('Estimated total Ops size on disk:'.padEnd(rowHeader), ((total / (scale.factor * ratio)).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
+print('Interval Ops combined object size:'.padEnd(rowHeader), ((total / scale.factor).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
+print('Estimated interval Ops combined disk size:'.padEnd(rowHeader), ((total / (scale.factor * ratio)).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
 print('-'.repeat(termWidth));
 print('Estimated current oplog churn:'.padEnd(rowHeader), ((total / (scale.factor * ratio * hrs)).toFixed(2) + ' ' + scale.unit + '/hr').padStart(columnWidth));
 print('='.repeat(termWidth));
