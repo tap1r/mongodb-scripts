@@ -42,7 +42,7 @@ let agg = [ { $match: { ts: { $gte: Timestamp(t1, 1), $lte: Timestamp(t2, 1) } }
 slaveOk();
 db = db.getSiblingDB('local');
 let oplog = db.oplog.rs.aggregate(agg);
-oplog.forEach(function (op) {
+oplog.forEach((op) => {
     total += Object.bsonsize(op);
     docs++;
 });

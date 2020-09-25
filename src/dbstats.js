@@ -25,9 +25,9 @@ var collection = {}, database = {}, dbPath = {};
  */
 
 const scale = new ScaleFactor(); // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
-const termWidth = 120;
-const columnWidth = 16;
-const rowHeader = 27;
+let termWidth = 120;
+let columnWidth = 16;
+let rowHeader = 27;
 
 /*
  * main
@@ -38,7 +38,7 @@ var getStats = function () {
      *  Gather DB stats
      */
     dbPath = { dataSize: 0, storageSize: 0, objects: 0, indexSize: 0, freeBlocks: 0, compression: 0 };
-    db.getMongo().getDBNames().forEach(function (dbName) {
+    db.getMongo().getDBNames().forEach((dbName) => {
         database = { name: "", dataSize: 0, storageSize: 0, objects: 0, indexSize: 0, freeBlocks: 0, compression: 0 };
         dbStats = db.getSiblingDB(dbName).stats();
         database.name = dbStats.db;
@@ -47,7 +47,7 @@ var getStats = function () {
         database.storageSize = dbStats.storageSize;
         database.indexSize = dbStats.indexSize;
         printHeader();
-        db.getSiblingDB(dbName).getCollectionInfos({ type: "collection" }, true).forEach(function (collDoc) {
+        db.getSiblingDB(dbName).getCollectionInfos({ type: "collection" }, true).forEach((collDoc) => {
             collection = { name: "", dataSize: 0, storageSize: 0, objects: 0, freeBlocks: 0, compression: 0 };
             collStats = db.getSiblingDB(dbName).getCollection(collDoc.name).stats();
             collection.name = collStats.ns.substr(collStats.ns.indexOf('.') + 1);
