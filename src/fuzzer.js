@@ -10,13 +10,13 @@
 
 let dbName = 'database';
 let collName = 'collection';
-let x = 6; // number of doc by order of magnitude
+let x = 5; // number of doc by order of magnitude
 var fuzzer = {
-  _id: "", // default to server generation
-  types: false,
-  mode: "random", // random, bell, bimodal
-  range: "max", // min, max, %
-  sparsity: 100, //
+    _id: "", // default to server generation
+    types: false,
+    mode: "random", // random, bell, bimodal
+    range: "max", // min, max, %
+    sparsity: 100, //
 };
 
 // global defaults
@@ -47,8 +47,8 @@ function genDoc() {
         "date": new ISODate(),
         "timestamp": new Timestamp(),
         "null": null,
-        "int32": { "$numberInt": "2147483647" },
-        "int64": NumberLong("9223372036854775807"),
+        "int32": NumberInt(_rand() * 2 ** 32),
+        "int64": NumberLong(_rand() * 2 ** 64),
         "float": 92233720368.54775807,
         "decimal128": NumberDecimal(50.0005),
         "regex": /\/[0-9a-f]*\//,
