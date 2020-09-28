@@ -11,7 +11,8 @@
 let dbName = 'database', collName = 'collection';
 let dropPref = true; // drop collection prior to generating data
 let x = 5; // number of doc by order of magnitude
-let totalDocs = _rand() * 10 ** x;
+let totalDocs = Math.ceil(Math.random() * 10 ** x);
+print('Generating:', totalDocs, 'total documents');
 var fuzzer = {
     _id: "", // default to server generation
     types: false,
@@ -27,14 +28,16 @@ var indexes = {
 
 // global defaults
 
-var i = 0, batch = 0, batchSize = 1000, doc = {};
+var i = 0, iter = 0, batch = 0, batchSize = 1000, doc = {};
 if (totalDocs < batchSize) {
     var iter = 1;
     var batchSize = totalDocs;
 } else {
-    var iter = totalDocs / batchSize;
+    var iter = Math.floor(totalDocs / batchSize);
 }
-let residual = Math.floor(totalDocs % 1000);
+let residual = Math.floor(totalDocs % batchSize);
+
+print('Number batches:', iter, 'plus', residual, 'remainder documents');
 
 /*
  * main
@@ -47,7 +50,7 @@ function dropNS(dropPref) {
 function getRandomIntInclusive(min, max) {
     min = Math.ceil(min);
     max = Math.floor(max);
-    return Math.floor(_rand() * (max - min + 1) + min); //The maximum is inclusive and the minimum is inclusive 
+    return Math.floor(Math.random() * (max - min + 1) + min); //The maximum is inclusive and the minimum is inclusive 
 }
 
 function genDoc() {
@@ -66,25 +69,23 @@ function genDoc() {
         "date": new ISODate(),
         "timestamp": new Timestamp(),
         "null": null,
-        "int32": NumberInt(Math.floor(_rand() * ( 2 ** 32 - 1))),
-        "int64": NumberLong(Math.floor(_rand() * ( 2 ** 63 - 1))),
-        "double": _rand() * (2 ** 63 -1),
-        "decimal128": NumberDecimal(_rand() * 2 ** 128),
+        "int32": NumberInt(Math.floor(Math.random() * ( 2 ** 32 - 1))),
+        "int64": NumberLong(Math.floor(Math.random() * ( 2 ** 63 - 1))),
+        "double": Math.random() * (2 ** 63 - 1),
+        "decimal128": NumberDecimal(Math.random() * 2 ** 128),
         "regex": /\/[0-9a-f]*\//,
         "binary": BinData(0, "TW9uZ29EQg=="),
-        "uuid": BinData(4, "abcdef12abcd1234abcdabcdef123456"),
+        "uuid": UUID(),
         "md5": BinData(5, "TW9uZ29EQg=="),
         "fle": BinData(6, "TW9uZ29EQg=="),
         "position": {
             "type": "Point",
                 "coordinates": [
-                    +((_rand() * 360) - 180).toFixed(4),
-                    +((_rand() * 180) - 90).toFixed(4)
+                    +((Math.random() * 360) - 180).toFixed(4),
+                    +((Math.random() * 180) - 90).toFixed(4)
                 ]
         },
-        "random": _rand(),
-        "MinKey": { $minKey: 1 },
-        "MaxKey": { $maxKey: 1 }
+        "random": +(totalDocs * Math.random()).toFixed(4)
     };
 }
 
@@ -92,6 +93,7 @@ dropNS(dropPref);
 
 // generate and bulk write the docs
 while (i < iter) {
+    print('Processing batch', (i + 1), 'of', iter, '(' + batchSize, 'documents)');
     var bulk = db.getSiblingDB(dbName).getCollection(collName).initializeUnorderedBulkOp();
     while (batch < batchSize) {
         bulk.insert(genDoc());
@@ -102,6 +104,7 @@ while (i < iter) {
     ++i;
 }
 if (residual) {
+    print('Processing remainder batch of', residual, 'documents');
     var bulk = db.getSiblingDB(dbName).getCollection(collName).initializeUnorderedBulkOp();
     while (batch < residual) {
         bulk.insert(genDoc());
@@ -110,10 +113,14 @@ if (residual) {
     bulk.execute();
 }
 
+print('Building indexes');
+
 // create indexes
 db.getSiblingDB(dbName).getCollection(collName).createIndex({ "position": "2dsphere" });
 db.getSiblingDB(dbName).getCollection(collName).createIndex({ "oid": 1} , { unique: true });
 db.getSiblingDB(dbName).getCollection(collName).createIndex({ "timestamp": 1 });
 db.getSiblingDB(dbName).getCollection(collName).createIndex({ "random": 1 });
+
+print('Complete');
 
 // EOF
