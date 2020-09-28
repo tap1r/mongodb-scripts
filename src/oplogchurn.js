@@ -33,7 +33,15 @@ let t2 = d.getTime() / 1000;
 let d2 = d.toISOString();
 let t1 = d.setHours(d.getHours() - hrs) / 1000;
 let d1 = d.toISOString();
-let agg = [ { $match: { ts: { $gte: Timestamp(t1, 1), $lte: Timestamp(t2, 1) } } }, { $project: { _id: 0 } } ];
+let agg = [{
+    $match: { ts: {
+                $gte: Timestamp(t1, 1),
+                $lte: Timestamp(t2, 1)
+            }
+        }
+    },{
+    $project: { _id: 0 }
+}];
 
 /*
  * main
@@ -55,12 +63,16 @@ print('='.repeat(termWidth));
 print('Start time:'.padEnd(rowHeader), d1.padStart(columnWidth));
 print('End time:'.padEnd(rowHeader), d2.padStart(columnWidth));
 print('Interval:'.padEnd(rowHeader), (hrs + ' hr(s)').padStart(columnWidth));
-print('Total oplog average compression ratio:'.padEnd(rowHeader), (ratio + ':1').padStart(columnWidth));
+print('Total oplog average compression ratio:'.padEnd(rowHeader),
+ (ratio + ':1').padStart(columnWidth));
 print('Doc count:'.padEnd(rowHeader), docs.toString().padStart(columnWidth));
-print('Interval Ops combined object size:'.padEnd(rowHeader), ((total / scale.factor).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
-print('Estimated interval Ops combined disk size:'.padEnd(rowHeader), ((total / (scale.factor * ratio)).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
+print('Interval Ops combined object size:'.padEnd(rowHeader),
+ ((total / scale.factor).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
+print('Estimated interval Ops combined disk size:'.padEnd(rowHeader),
+ ((total / (scale.factor * ratio)).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
 print('-'.repeat(termWidth));
-print('Estimated current oplog churn:'.padEnd(rowHeader), ((total / (scale.factor * ratio * hrs)).toFixed(2) + ' ' + scale.unit + '/hr').padStart(columnWidth));
+print('Estimated current oplog churn:'.padEnd(rowHeader),
+ ((total / (scale.factor * ratio * hrs)).toFixed(2) + ' ' + scale.unit + '/hr').padStart(columnWidth));
 print('='.repeat(termWidth));
 
 // EOF
