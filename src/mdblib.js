@@ -71,7 +71,7 @@ class AutoFactor {
     constructor(metric) {
         //
         let scale = Math.floor(Math.log2(metric) / 10);
-        return (metric / Math.pow(1024, scale)).toFixed(2) + ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'][scale];
+        return (metric / 1024 ** scale).toFixed(2) + ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'][scale];
     }
 }
 
