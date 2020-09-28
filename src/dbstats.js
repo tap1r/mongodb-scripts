@@ -15,9 +15,6 @@ load('mdblib.js');
 
 // Global defaults
 
-var getStats = () => { }, printHeader = () => { };
-var fmtUnit = () => { }, fmtUPct = () => { }, fmtRatio = () => { };
-var printCollection = () => { }, printDb = () => { }, printDbPath = () => { };
 var collection = {}, database = {}, dbPath = {};
 
 /*
@@ -33,7 +30,7 @@ let rowHeader = 32;
  * main
  */
 
-var getStats = () => {
+const getStats = () => {
     /*
      *  Gather DB stats
      */
@@ -71,25 +68,25 @@ var getStats = () => {
     printDbPath();
 };
 
-var fmtUnit = (metric) =>
+const fmtUnit = (metric) =>
     /*
      *  Pretty format unit
      */
     (metric / scale.factor).toFixed(scale.precision) + ' ' + scale.unit;
 
-var fmtPct = (numerator, denominator) =>
+const fmtPct = (numerator, denominator) =>
     /*
      *  Pretty format percentage
      */
     (numerator / denominator * 100).toFixed(scale.pctPoint) + '%';
 
-var fmtRatio = (metric) =>
+const fmtRatio = (metric) =>
     /*
      *  Pretty format ratio
      */
     (metric).toFixed(scale.precision) + ':1';
 
-var printHeader = () => {
+const printHeader = () => {
     /*
      *  Print table header
      */
@@ -102,7 +99,7 @@ var printHeader = () => {
     );
 };
 
-var printCollection = () => {
+const printCollection = () => {
     /*
      *  Print collection level stats
      */
@@ -117,7 +114,7 @@ var printCollection = () => {
     );
 };
 
-var printDb = () => {
+const printDb = () => {
     /*
      *  Print DB level rollup stats
      */
@@ -145,7 +142,7 @@ var printDb = () => {
     print('='.repeat(termWidth));
 };
 
-var printDbPath = () => {
+const printDbPath = () => {
     /*
      *  Print total rollup stats
      */
