@@ -26,7 +26,6 @@ let rowHeader = 44;
 
 var total = 0;
 var docs = 0;
-
 let hrs = 1; // set interval
 let d = new Date();
 let t2 = d.getTime() / 1000;
