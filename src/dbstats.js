@@ -22,15 +22,13 @@ var collection = {}, database = {}, dbPath = {};
  */
 
 const scale = new ScaleFactor(); // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
-let termWidth = 120;
-let columnWidth = 15;
-let rowHeader = 32;
+let termWidth = 120, columnWidth = 15, rowHeader = 32;
 
 /*
  * main
  */
 
-const getStats = () => {
+function getStats() {
     /*
      *  Gather DB stats
      */
@@ -66,27 +64,30 @@ const getStats = () => {
     });
     dbPath.compression = dbPath.dataSize / (dbPath.storageSize - dbPath.freeBlocks);
     printDbPath();
-};
+}
 
-const fmtUnit = (metric) =>
+function fmtUnit(metric) {
     /*
      *  Pretty format unit
      */
-    (metric / scale.factor).toFixed(scale.precision) + ' ' + scale.unit;
+    return (metric / scale.factor).toFixed(scale.precision) + ' ' + scale.unit;
+}
 
-const fmtPct = (numerator, denominator) =>
+function fmtPct(numerator, denominator) {
     /*
      *  Pretty format percentage
      */
-    (numerator / denominator * 100).toFixed(scale.pctPoint) + '%';
+    return (numerator / denominator * 100).toFixed(scale.pctPoint) + '%';
+}
 
-const fmtRatio = (metric) =>
+function fmtRatio(metric) {
     /*
      *  Pretty format ratio
      */
-    (metric).toFixed(scale.precision) + ':1';
+    return (metric).toFixed(scale.precision) + ':1';
+}
 
-const printHeader = () => {
+function printHeader() {
     /*
      *  Print table header
      */
@@ -97,9 +98,9 @@ const printHeader = () => {
         'Size on disk'.padStart(columnWidth), 'Object count'.padStart(columnWidth),
         'Free blocks (reuse)'.padStart(columnWidth + 8), 'Compression'.padStart(columnWidth)
     );
-};
+}
 
-const printCollection = () => {
+function printCollection() {
     /*
      *  Print collection level stats
      */
@@ -112,9 +113,9 @@ const printCollection = () => {
             ('(' + fmtPct(collection.freeBlocks, collection.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
         fmtRatio(collection.compression).padStart(columnWidth)
     );
-};
+}
 
-const printDb = () => {
+function printDb() {
     /*
      *  Print DB level rollup stats
      */
@@ -140,9 +141,9 @@ const printDb = () => {
         fmtRatio(database.compression).padStart(columnWidth)
     );
     print('='.repeat(termWidth));
-};
+}
 
-const printDbPath = () => {
+function printDbPath() {
     /*
      *  Print total rollup stats
      */
@@ -173,7 +174,7 @@ const printDbPath = () => {
         fmtRatio(dbPath.compression).padStart(columnWidth)
     );
     print('='.repeat(termWidth));
-};
+}
 
 slaveOk();
 getStats();

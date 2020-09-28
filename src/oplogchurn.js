@@ -14,24 +14,19 @@
 load('mdblib.js');
 
 /*
- * Formatting preferences
+ * Global defaults
  */
 
-const scale = new ScaleFactor(); // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
-let termWidth = 80;
-let columnWidth = 35;
-let rowHeader = 44;
-
-// Global defaults
-
-var total = 0;
-var docs = 0;
+// user defined parameters
 let hrs = 1; // set interval
+
+// init vars
+var total = 0, docs = 0;
 let d = new Date();
-let t2 = d.getTime() / 1000;
-let d2 = d.toISOString();
-let t1 = d.setHours(d.getHours() - hrs) / 1000;
-let d1 = d.toISOString();
+let t2 = d.getTime() / 1000; // end timestamp
+let d2 = d.toISOString(); // end datetime
+let t1 = d.setHours(d.getHours() - hrs) / 1000; // start timestampe
+let d1 = d.toISOString(); // start datetime
 let agg = [{
     $match: { ts: {
                 $gte: Timestamp(t1, 1),
@@ -42,18 +37,23 @@ let agg = [{
     $project: { _id: 0 }
 }];
 
+// Formatting preferences
+const scale = new ScaleFactor(); // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
+let termWidth = 80, columnWidth = 35, rowHeader = 44;
+
 /*
  * main
  */
 
+// Measure interval stats
 slaveOk();
 db = db.getSiblingDB('local');
 let oplog = db.oplog.rs.aggregate(agg);
 oplog.forEach((op) => {
     total += Object.bsonsize(op);
-    docs++;
+    ++docs;
 });
-//
+//  Get oplog stats
 let stats = db.oplog.rs.stats();
 let freeBlocks = stats.wiredTiger['block-manager']['file bytes available for reuse'];
 let ratio = (stats.size / (stats.storageSize - freeBlocks)).toFixed(2);
@@ -63,15 +63,16 @@ print('Start time:'.padEnd(rowHeader), d1.padStart(columnWidth));
 print('End time:'.padEnd(rowHeader), d2.padStart(columnWidth));
 print('Interval:'.padEnd(rowHeader), (hrs + ' hr(s)').padStart(columnWidth));
 print('Total oplog average compression ratio:'.padEnd(rowHeader),
- (ratio + ':1').padStart(columnWidth));
-print('Doc count:'.padEnd(rowHeader), docs.toString().padStart(columnWidth));
+    (ratio + ':1').padStart(columnWidth));
+print('Interval document count:'.padEnd(rowHeader),
+    docs.toString().padStart(columnWidth));
 print('Interval Ops combined object size:'.padEnd(rowHeader),
- ((total / scale.factor).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
+    ((total / scale.factor).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
 print('Estimated interval Ops combined disk size:'.padEnd(rowHeader),
- ((total / (scale.factor * ratio)).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
+    ((total / (scale.factor * ratio)).toFixed(2) + ' ' + scale.unit).padStart(columnWidth));
 print('-'.repeat(termWidth));
 print('Estimated current oplog churn:'.padEnd(rowHeader),
- ((total / (scale.factor * ratio * hrs)).toFixed(2) + ' ' + scale.unit + '/hr').padStart(columnWidth));
+    ((total / (scale.factor * ratio * hrs)).toFixed(2) + ' ' + scale.unit + '/hr').padStart(columnWidth));
 print('='.repeat(termWidth));
 
 // EOF
