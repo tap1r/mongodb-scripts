@@ -14,12 +14,13 @@ let x = 5; // number of doc by order of magnitude
 let totalDocs = Math.ceil(Math.random() * 10 ** x);
 let days = 365; // date range
 var fuzzer = {
-    _id: "", // default to server generation
-    vary_types: false,
+    _id: '', // default to server generation
+    vary_types: false, // fuzz value types
+    nests: 0, // how many nested layers
     mode: "random", // random, bell, bimodal
     range: "max", // min, max, %
     cardinality: 1, //
-    sparsity: 0, //
+    sparsity: 0 // 0 - 100%
 };
 var indexes = [
     // createIndex options document
@@ -60,24 +61,38 @@ function getRandomNumber(min, max) {
 function getRandomInteger(min, max) {
     var min = Math.ceil(min);
     var max = Math.floor(max);
-    return Math.floor(Math.random() * (max - min + 1) + min); // The maximum is inclusive and the minimum is inclusive 
+    return Math.floor(Math.random() * (max - min) + min);
 }
 
 function genHexString(len) {
-    let output = '';
+    let res = '';
     for (let i = 0; i < len; ++i) {
-        output += (Math.floor(Math.random() * 16)).toString(16);
+        res += (Math.floor(Math.random() * 16)).toString(16);
     }
-    return output;
+    return res;
 }
 
 function genRandomString(len) {
-    let result = '';
+    let res = '';
     let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     for (let i = 0; i < len; ++i) {
-       result += chars.charAt(Math.floor(Math.random() * chars.length));
+       res += chars.charAt(Math.floor(Math.random() * chars.length));
     }
-    return result;
+    return res;
+}
+
+function genRandomChars(len) {
+    let res = '';
+    let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    for (let i = 0; i < len; ++i) {
+       res += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return res;
+}
+
+function genRandomCurrency() {
+    let symbol = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    return symbol.charAt(Math.floor(Math.random() * symbol.length));
 }
 
 function genDoc() {
@@ -86,9 +101,9 @@ function genDoc() {
      */
     return {
         // "oid": new ObjectId(),
-        "string": genRandomString(getRandomInteger(3,24)),
+        "string": genRandomString(getRandomInteger(6,24)),
         "object": {
-            "str": genRandomString(getRandomInteger(4,12)),
+            "str": genRandomChars(getRandomInteger(8,16)),
             "num": +getRandomNumber(-1 * 2 ** 12, 2 ** 12).toFixed(4),
             "oid": ObjectId()
         },
@@ -101,7 +116,7 @@ function genDoc() {
         "int64": NumberLong(getRandomNumber(-1 * 2 ** 63 - 1, 2 ** 63 - 1)),
         "double": getRandomNumber(-1 * 2 ** 12, 2 ** 12),
         "decimal128": NumberDecimal(getRandomNumber(-1 * 2 ** 127 - 1, 2 ** 127 - 1)),
-        "regex": /\/[0-9a-f]*\//,
+        "regex": /\/[0-9a-z]*\//,
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
         "md5": MD5(genHexString(32)),
