@@ -23,9 +23,9 @@ let hrs = 1; // set interval
 // init vars
 var total = 0, docs = 0;
 let d = new Date();
-let t2 = d.getTime() / 1000; // end timestamp
+let t2 = Math.floor(d.getTime() / 1000.0); // end timestamp
 let d2 = d.toISOString(); // end datetime
-let t1 = d.setHours(d.getHours() - hrs) / 1000; // start timestampe
+let t1 = Math.floor(d.setHours(d.getHours() - hrs) / 1000.0); // start timestamp
 let d1 = d.toISOString(); // start datetime
 let agg = [{
     $match: { ts: {
