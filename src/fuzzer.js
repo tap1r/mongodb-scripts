@@ -12,26 +12,29 @@ let dbName = 'database', collName = 'collection';
 let dropPref = true; // drop collection prior to generating data
 let x = 5; // number of doc by order of magnitude
 let totalDocs = Math.ceil(Math.random() * 10 ** x);
-print('Generating:', totalDocs, 'total documents');
+let days = 365; // date range
 var fuzzer = {
     _id: "", // default to server generation
-    types: false,
+    vary_types: false,
     mode: "random", // random, bell, bimodal
     range: "max", // min, max, %
     cardinality: 1, //
-    sparsity: 100, //
+    sparsity: 0, //
 };
 var indexes = [
     // createIndex options document
-    { "oid": { unique: true } },
+    // { "oid": { unique: true } },
+    { "date": 1 },
     { "location": "2dsphere" },
-    { "timestamp": 1 },
-    { "random": 1 }
+    { "random": 1 },
+    { "timestamp": 1 }
 ];
 
 // global defaults
 
-var i = 0, iter = 0, batch = 0, batchSize = 1000, doc = {};
+var iter = 0, batch = 0, batchSize = 1000, doc = {};
+let now = new Date().getTime();
+let timestamp = Math.floor(now/1000.0);
 if (totalDocs < batchSize) {
     var iter = 1;
     var batchSize = totalDocs;
@@ -55,9 +58,26 @@ function getRandomNumber(min, max) {
 }
 
 function getRandomInteger(min, max) {
-    min = Math.ceil(min);
-    max = Math.floor(max);
+    var min = Math.ceil(min);
+    var max = Math.floor(max);
     return Math.floor(Math.random() * (max - min + 1) + min); //The maximum is inclusive and the minimum is inclusive 
+}
+
+function genHexString(len) {
+    let output = '';
+    for (let i = 0; i < len; ++i) {
+        output += (Math.floor(Math.random() * 16)).toString(16);
+    }
+    return output;
+}
+
+function genRandomString(len) {
+    let result = '';
+    let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    for (let i = 0; i < len; ++i) {
+       result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
 }
 
 function genDoc() {
@@ -65,26 +85,27 @@ function genDoc() {
      * Generate pseudo-random doc values
      */
     return {
-        "oid": new ObjectId(),
-        "string": "abcdefg",
+        // "oid": new ObjectId(),
+        "string": genRandomString(getRandomInteger(3,24)),
         "object": {
-            "a": "b",
-            "x": "y"
+            "str": genRandomString(getRandomInteger(4,12)),
+            "num": +getRandomNumber(-1 * 2 ** 12, 2 ** 12).toFixed(4),
+            "oid": ObjectId()
         },
         "array": [ "element1", "element2" ],
-        "boolean": true,
-        "date": new ISODate(),
-        "timestamp": new Timestamp(),
+        "boolean": Math.random() < 0.5,
+        "date": new Date(now - (Math.random()*days*24*60*60*1000)),
+        "timestamp": new Timestamp(timestamp - (Math.random()*days*24*60*60), 1),
         "null": null,
         "int32": NumberInt(getRandomNumber(-1 * 2 ** 31 - 1, 2 ** 31 - 1)),
         "int64": NumberLong(getRandomNumber(-1 * 2 ** 63 - 1, 2 ** 63 - 1)),
         "double": getRandomNumber(-1 * 2 ** 12, 2 ** 12),
-        "decimal128": NumberDecimal(getRandomNumber(-1 * 2 ** 127 -1, 2 ** 127 -1)),
+        "decimal128": NumberDecimal(getRandomNumber(-1 * 2 ** 127 - 1, 2 ** 127 - 1)),
         "regex": /\/[0-9a-f]*\//,
-        "binary": BinData(0, "TW9uZ29EQg=="),
+        "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
-        "md5": MD5("34d5a8157bd743a382823b7d3cc9a670"),
-        "fle": BinData(6, "TW9uZ29EQg=="),
+        "md5": MD5(genHexString(32)),
+        "fle": BinData(6, UUID().base64()),
         "location": {
             "type": "Point",
                 "coordinates": [
@@ -99,7 +120,8 @@ function genDoc() {
 dropNS(dropPref);
 
 // generate and bulk write the docs
-while (i < iter) {
+print('Generating:', totalDocs, 'total documents');
+for (let i = 0; i < iter; ++i) {
     var bulk = db.getSiblingDB(dbName).getCollection(collName).initializeUnorderedBulkOp();
     while (batch < batchSize) {
         bulk.insert(genDoc());
@@ -107,8 +129,7 @@ while (i < iter) {
     }
     result = bulk.execute({ w: 1 });
     batch = 0;
-    ++i;
-    print('Processing batch', i, 'of', iter, '(' + result.nInserted, 'documents inserted)');
+    print('Processing batch', i + 1, 'of', iter, '(' + result.nInserted, 'documents inserted)');
 }
 
 if (residual) {
