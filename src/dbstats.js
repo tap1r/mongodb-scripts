@@ -149,7 +149,7 @@ function printDbPath() {
      */
     print('\n' + '='.repeat(termWidth));
     print('Rollup stats'.padEnd(rowHeader), 'Data size'.padStart(columnWidth),
-        'Size on disk'.padStart(columnWidth), 'Obj count'.padStart(columnWidth),
+        'Size on disk'.padStart(columnWidth), 'Object count'.padStart(columnWidth),
         'Free blocks (reuse)'.padStart(columnWidth + 8), 'Compression'.padStart(columnWidth)
     );
     print('-'.repeat(termWidth));
