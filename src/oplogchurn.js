@@ -47,14 +47,13 @@ let termWidth = 80, columnWidth = 35, rowHeader = 44;
 
 // Measure interval stats
 slaveOk();
-db = db.getSiblingDB('local');
-let oplog = db.oplog.rs.aggregate(agg);
-oplog.forEach((op) => {
+let oplog =  db.getSiblingDB('local').getCollection('oplog.rs');
+oplog.aggregate(agg).forEach((op) => {
     total += Object.bsonsize(op);
     ++docs;
 });
 //  Get oplog stats
-let stats = db.oplog.rs.stats();
+let stats = oplog.stats();
 let freeBlocks = stats.wiredTiger['block-manager']['file bytes available for reuse'];
 let ratio = (stats.size / (stats.storageSize - freeBlocks)).toFixed(2);
 // Print results
