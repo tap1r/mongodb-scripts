@@ -60,7 +60,7 @@ function getRandomNumber(min, max) {
 function getRandomInteger(min, max) {
     var min = Math.ceil(min);
     var max = Math.floor(max);
-    return Math.floor(Math.random() * (max - min + 1) + min); //The maximum is inclusive and the minimum is inclusive 
+    return Math.floor(Math.random() * (max - min + 1) + min); // The maximum is inclusive and the minimum is inclusive 
 }
 
 function genHexString(len) {
