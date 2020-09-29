@@ -20,11 +20,11 @@ var fuzzer = {
     range: "max", // min, max, %
     sparsity: 100, //
 };
-var indexes = {
-    "oid": { unique: true },
-    "position": "2dsphere",
-    "random": 1
-};
+var indexes = [
+    { "oid": { unique: true } },
+    { "position": "2dsphere" },
+    { "random": 1 }
+];
 
 // global defaults
 
@@ -47,7 +47,11 @@ function dropNS(dropPref) {
     return (dropPref ? db.getSiblingDB(dbName).getCollection(collName).drop() : print('Not dropping collection'));
 }
 
-function getRandomIntInclusive(min, max) {
+function getRandomNumber(min, max) {
+    return Math.random() * (max - min) + min;
+}
+
+function getRandomInteger(min, max) {
     min = Math.ceil(min);
     max = Math.floor(max);
     return Math.floor(Math.random() * (max - min + 1) + min); //The maximum is inclusive and the minimum is inclusive 
@@ -69,23 +73,24 @@ function genDoc() {
         "date": new ISODate(),
         "timestamp": new Timestamp(),
         "null": null,
-        "int32": NumberInt(Math.floor(Math.random() * ( 2 ** 32 - 1))),
-        "int64": NumberLong(Math.floor(Math.random() * ( 2 ** 63 - 1))),
-        "double": Math.random() * (2 ** 63 - 1),
-        "decimal128": NumberDecimal(Math.random() * 2 ** 128),
+        "int32": NumberInt(getRandomNumber(-1 * 2 ** 31 - 1, 2 ** 31 - 1)),
+        "int64": NumberLong(getRandomNumber(-1 * 2 ** 63 - 1, 2 ** 63 - 1)),
+        "double": getRandomNumber(-1 * 2 ** 12, 2 ** 12),
+        // "decimal128": NumberDecimal(Math.random() * (2 ** 127 -1)),
+        "decimal128": NumberDecimal(getRandomNumber(-1 * 2 ** 127 -1, 2 ** 127 -1)),
         "regex": /\/[0-9a-f]*\//,
         "binary": BinData(0, "TW9uZ29EQg=="),
         "uuid": UUID(),
-        "md5": BinData(5, "TW9uZ29EQg=="),
+        "md5": MD5("34d5a8157bd743a382823b7d3cc9a670"),
         "fle": BinData(6, "TW9uZ29EQg=="),
         "position": {
             "type": "Point",
                 "coordinates": [
-                    +((Math.random() * 360) - 180).toFixed(4),
-                    +((Math.random() * 180) - 90).toFixed(4)
+                    +getRandomNumber(-180, 180).toFixed(4),
+                    +getRandomNumber(-90, 90).toFixed(4)
                 ]
         },
-        "random": +(totalDocs * Math.random()).toFixed(4)
+        "random": +getRandomNumber(0, totalDocs).toFixed(4)
     };
 }
 
@@ -93,24 +98,25 @@ dropNS(dropPref);
 
 // generate and bulk write the docs
 while (i < iter) {
-    print('Processing batch', (i + 1), 'of', iter, '(' + batchSize, 'documents)');
     var bulk = db.getSiblingDB(dbName).getCollection(collName).initializeUnorderedBulkOp();
     while (batch < batchSize) {
         bulk.insert(genDoc());
         ++batch
     }
-    bulk.execute();
+    result = bulk.execute({ w: 1 });
     batch = 0;
     ++i;
+    print('Processing batch', i, 'of', iter, '(' + result.nInserted, 'documents inserted)');
 }
+
 if (residual) {
-    print('Processing remainder batch of', residual, 'documents');
     var bulk = db.getSiblingDB(dbName).getCollection(collName).initializeUnorderedBulkOp();
     while (batch < residual) {
         bulk.insert(genDoc());
         ++batch
     }
-    bulk.execute();
+    result = bulk.execute({ w: 1 });
+    print('Processing remainder batch,', result.nInserted, 'documents inserted');
 }
 
 print('Building indexes');
