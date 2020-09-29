@@ -18,11 +18,14 @@ var fuzzer = {
     types: false,
     mode: "random", // random, bell, bimodal
     range: "max", // min, max, %
+    cardinality: 1, //
     sparsity: 100, //
 };
 var indexes = [
+    // createIndex options document
     { "oid": { unique: true } },
-    { "position": "2dsphere" },
+    { "location": "2dsphere" },
+    { "timestamp": 1 },
     { "random": 1 }
 ];
 
@@ -76,14 +79,13 @@ function genDoc() {
         "int32": NumberInt(getRandomNumber(-1 * 2 ** 31 - 1, 2 ** 31 - 1)),
         "int64": NumberLong(getRandomNumber(-1 * 2 ** 63 - 1, 2 ** 63 - 1)),
         "double": getRandomNumber(-1 * 2 ** 12, 2 ** 12),
-        // "decimal128": NumberDecimal(Math.random() * (2 ** 127 -1)),
         "decimal128": NumberDecimal(getRandomNumber(-1 * 2 ** 127 -1, 2 ** 127 -1)),
         "regex": /\/[0-9a-f]*\//,
         "binary": BinData(0, "TW9uZ29EQg=="),
         "uuid": UUID(),
         "md5": MD5("34d5a8157bd743a382823b7d3cc9a670"),
         "fle": BinData(6, "TW9uZ29EQg=="),
-        "position": {
+        "location": {
             "type": "Point",
                 "coordinates": [
                     +getRandomNumber(-180, 180).toFixed(4),
@@ -122,10 +124,10 @@ if (residual) {
 print('Building indexes');
 
 // create indexes
-db.getSiblingDB(dbName).getCollection(collName).createIndex({ "position": "2dsphere" });
-db.getSiblingDB(dbName).getCollection(collName).createIndex({ "oid": 1} , { unique: true });
-db.getSiblingDB(dbName).getCollection(collName).createIndex({ "timestamp": 1 });
-db.getSiblingDB(dbName).getCollection(collName).createIndex({ "random": 1 });
+indexes.forEach((index) => {
+    printjson(index);
+    db.getSiblingDB(dbName).getCollection(collName).createIndex(index);
+})
 
 print('Complete');
 
