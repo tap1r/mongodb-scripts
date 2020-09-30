@@ -43,8 +43,6 @@ if (totalDocs < batchSize) {
 }
 let residual = Math.floor(totalDocs % batchSize);
 
-print('Number batches:', iter, 'plus', residual, 'remainder documents');
-
 /*
  * main
  */
@@ -128,13 +126,13 @@ function genDoc() {
                 ]
         },
         "random": +genRandomNumber(0, totalDocs).toFixed(4),
-        "symbol": genRandomSymbol(8)
+        "symbol": genRandomSymbol()
     };
 }
 
 dropNS(dropPref);
 // generate and bulk write the docs
-print('Generating:', totalDocs, 'total documents');
+print('Number of batches:', iter, 'plus', residual, 'remainder documents');
 for (let i = 0; i < iter; ++i) {
     var bulk = db.getSiblingDB(dbName).getCollection(collName).initializeUnorderedBulkOp();
     while (batch < batchSize) {
@@ -164,6 +162,6 @@ indexes.forEach((index) => {
     db.getSiblingDB(dbName).getCollection(collName).createIndex(index);
 })
 
-print('Complete');
+print('Completed generating:', totalDocs, 'total documents');
 
 // EOF
