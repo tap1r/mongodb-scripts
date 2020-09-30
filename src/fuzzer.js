@@ -10,8 +10,8 @@
 
 let dbName = 'database', collName = 'collection';
 let dropPref = true; // drop collection prior to generating data
-let x = 5; // number of doc by order of magnitude
-let totalDocs = Math.ceil(Math.random() * 10 ** x);
+let exp = 5; // number of doc by order of magnitude
+let totalDocs = Math.ceil(Math.random() * 10 ** exp);
 let days = 365; // date range
 var fuzzer = { // not in use
     _id: '', // default to server generation
@@ -92,6 +92,11 @@ function genRandomSymbol() {
     return symbol.charAt(Math.floor(Math.random() * symbol.length));
 }
 
+function genRandomCurrency() {
+    let symbol = [ '$', '€', '₡', '£', '₪', '₹', '¥', '₩', '₦', '₱zł', '₲', '฿', '₴', '₫' ];
+    return symbol[(Math.floor(Math.random() * symbol.length))];
+}
+
 function genDoc() {
     /*
      * Generate pseudo-random doc values
@@ -100,9 +105,9 @@ function genDoc() {
         // "_id": new ObjectId(),
         "string": genRandomString(getRandomInteger(6, 24)),
         "object": {
+            "oid": ObjectId(),
             "str": genRandomAlpha(getRandomInteger(8, 16)),
-            "num": +genRandomNumber(-1 * 2 ** 12, 2 ** 12).toFixed(4),
-            "oid": ObjectId()
+            "num": +genRandomNumber(-1 * 2 ** 12, 2 ** 12).toFixed(4)
         },
         "array": [ "element1", "element2" ],
         "boolean": Math.random() < 0.5,
@@ -126,7 +131,8 @@ function genDoc() {
                 ]
         },
         "random": +genRandomNumber(0, totalDocs).toFixed(4),
-        "symbol": genRandomSymbol()
+        "symbol": genRandomSymbol(),
+        "currency": genRandomCurrency()
     };
 }
 
@@ -162,6 +168,6 @@ indexes.forEach((index) => {
     db.getSiblingDB(dbName).getCollection(collName).createIndex(index);
 })
 
-print('Completed generating:', totalDocs, 'total documents');
+print('Completed generating:', totalDocs, 'documents in', dbName + '.' + collName);
 
 // EOF
