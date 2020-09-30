@@ -13,7 +13,7 @@ let dropPref = true; // drop collection prior to generating data
 let x = 5; // number of doc by order of magnitude
 let totalDocs = Math.ceil(Math.random() * 10 ** x);
 let days = 365; // date range
-var fuzzer = {
+var fuzzer = { // not in use
     _id: '', // default to server generation
     vary_types: false, // fuzz value types
     nests: 0, // how many nested layers
@@ -22,8 +22,7 @@ var fuzzer = {
     cardinality: 1, //
     sparsity: 0 // 0 - 100%
 };
-var indexes = [
-    // createIndex options document
+var indexes = [ // createIndex options document
     // { "oid": { unique: true } },
     { "date": 1 },
     { "location": "2dsphere" },
@@ -54,7 +53,7 @@ function dropNS(dropPref) {
     return (dropPref ? db.getSiblingDB(dbName).getCollection(collName).drop() : print('Not dropping collection'));
 }
 
-function getRandomNumber(min, max) {
+function genRandomNumber(min, max) {
     return Math.random() * (max - min) + min;
 }
 
@@ -81,7 +80,7 @@ function genRandomString(len) {
     return res;
 }
 
-function genRandomChars(len) {
+function genRandomAlpha(len) {
     let res = '';
     let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
     for (let i = 0; i < len; ++i) {
@@ -90,8 +89,8 @@ function genRandomChars(len) {
     return res;
 }
 
-function genRandomCurrency() {
-    let symbol = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+function genRandomSymbol() {
+    let symbol = '!#%&\'()+,-;=@[]^_`{}~¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ';
     return symbol.charAt(Math.floor(Math.random() * symbol.length));
 }
 
@@ -100,22 +99,22 @@ function genDoc() {
      * Generate pseudo-random doc values
      */
     return {
-        // "oid": new ObjectId(),
-        "string": genRandomString(getRandomInteger(6,24)),
+        // "_id": new ObjectId(),
+        "string": genRandomString(getRandomInteger(6, 24)),
         "object": {
-            "str": genRandomChars(getRandomInteger(8,16)),
-            "num": +getRandomNumber(-1 * 2 ** 12, 2 ** 12).toFixed(4),
+            "str": genRandomAlpha(getRandomInteger(8, 16)),
+            "num": +genRandomNumber(-1 * 2 ** 12, 2 ** 12).toFixed(4),
             "oid": ObjectId()
         },
         "array": [ "element1", "element2" ],
         "boolean": Math.random() < 0.5,
-        "date": new Date(now - (Math.random()*days*24*60*60*1000)),
-        "timestamp": new Timestamp(timestamp - (Math.random()*days*24*60*60), 1),
+        "date": new Date(now - (Math.random() * days * 24 * 60 * 60 * 1000)),
+        "timestamp": new Timestamp(timestamp - (Math.random() * days * 24 * 60 * 60), 1),
         "null": null,
-        "int32": NumberInt(getRandomNumber(-1 * 2 ** 31 - 1, 2 ** 31 - 1)),
-        "int64": NumberLong(getRandomNumber(-1 * 2 ** 63 - 1, 2 ** 63 - 1)),
-        "double": getRandomNumber(-1 * 2 ** 12, 2 ** 12),
-        "decimal128": NumberDecimal(getRandomNumber(-1 * 2 ** 127 - 1, 2 ** 127 - 1)),
+        "int32": NumberInt(genRandomNumber(-1 * 2 ** 31 - 1, 2 ** 31 - 1)),
+        "int64": NumberLong(genRandomNumber(-1 * 2 ** 63 - 1, 2 ** 63 - 1)),
+        "double": genRandomNumber(-1 * 2 ** 12, 2 ** 12),
+        "decimal128": NumberDecimal(genRandomNumber(-1 * 2 ** 127 - 1, 2 ** 127 - 1)),
         "regex": /\/[0-9a-z]*\//,
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
@@ -124,16 +123,16 @@ function genDoc() {
         "location": {
             "type": "Point",
                 "coordinates": [
-                    +getRandomNumber(-180, 180).toFixed(4),
-                    +getRandomNumber(-90, 90).toFixed(4)
+                    +genRandomNumber(-180, 180).toFixed(4),
+                    +genRandomNumber(-90, 90).toFixed(4)
                 ]
         },
-        "random": +getRandomNumber(0, totalDocs).toFixed(4)
+        "random": +genRandomNumber(0, totalDocs).toFixed(4),
+        "symbol": genRandomSymbol(8)
     };
 }
 
 dropNS(dropPref);
-
 // generate and bulk write the docs
 print('Generating:', totalDocs, 'total documents');
 for (let i = 0; i < iter; ++i) {
