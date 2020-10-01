@@ -41,6 +41,7 @@ if (totalDocs < batchSize) {
 } else {
     var iter = Math.floor(totalDocs / batchSize);
 }
+
 let residual = Math.floor(totalDocs % batchSize);
 
 /*
@@ -55,7 +56,7 @@ function genRandomNumber(min, max) {
     return Math.random() * (max - min) + min;
 }
 
-function getRandomInteger(min, max) {
+function genRandomInteger(min, max) {
     var min = Math.ceil(min);
     var max = Math.floor(max);
     return Math.floor(Math.random() * (max - min) + min);
@@ -103,10 +104,10 @@ function genDoc() {
      */
     return {
         // "_id": new ObjectId(),
-        "string": genRandomString(getRandomInteger(6, 24)),
+        "string": genRandomString(genRandomInteger(6, 24)),
         "object": {
             "oid": ObjectId(),
-            "str": genRandomAlpha(getRandomInteger(8, 16)),
+            "str": genRandomAlpha(genRandomInteger(8, 16)),
             "num": +genRandomNumber(-1 * 2 ** 12, 2 ** 12).toFixed(4)
         },
         "array": [ "element1", "element2" ],
@@ -141,20 +142,17 @@ dropNS(dropPref);
 print('Number of batches:', iter, 'plus', residual, 'remainder documents');
 for (let i = 0; i < iter; ++i) {
     var bulk = db.getSiblingDB(dbName).getCollection(collName).initializeUnorderedBulkOp();
-    while (batch < batchSize) {
+    for (let batch = 0; batch < batchSize; ++batch) {
         bulk.insert(genDoc());
-        ++batch
     }
     result = bulk.execute({ w: 1 });
-    batch = 0;
     print('Processing batch', i + 1, 'of', iter, '(' + result.nInserted, 'documents inserted)');
 }
 
 if (residual) {
     var bulk = db.getSiblingDB(dbName).getCollection(collName).initializeUnorderedBulkOp();
-    while (batch < residual) {
+    for (let batch = 0; batch < residual; ++batch) {
         bulk.insert(genDoc());
-        ++batch
     }
     result = bulk.execute({ w: 1 });
     print('Processing remainder batch,', result.nInserted, 'documents inserted');
@@ -168,6 +166,6 @@ indexes.forEach((index) => {
     db.getSiblingDB(dbName).getCollection(collName).createIndex(index);
 })
 
-print('Completed generating:', totalDocs, 'documents in', dbName + '.' + collName);
+print('Completed generating:', totalDocs, 'documents in "' + dbName + '.' + collName + '"');
 
 // EOF
