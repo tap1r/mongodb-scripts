@@ -56,9 +56,9 @@ function genRandomNumber(min, max) {
     return Math.random() * (max - min) + min;
 }
 
-function genRandomInteger(min, max) {
-    var min = Math.ceil(min);
-    var max = Math.floor(max);
+function genRandomInteger(minimum, maximum) {
+    let min = Math.ceil(minimum);
+    let max = Math.floor(maximum);
     return Math.floor(Math.random() * (max - min) + min);
 }
 
