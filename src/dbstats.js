@@ -41,10 +41,13 @@ function getStats() {
         database.dataSize = dbStats.dataSize;
         database.storageSize = dbStats.storageSize;
         database.indexSize = dbStats.indexSize;
+        // database.indexFree = dbStats.indexxxx; // not yet implemented
         printHeader();
         db.getSiblingDB(dbName).getCollectionInfos({ type: "collection" }, true).forEach((collDoc) => {
             collection = { name: "", dataSize: 0, storageSize: 0, objects: 0, freeBlocks: 0, compression: 0 };
             collStats = db.getSiblingDB(dbName).getCollection(collDoc.name).stats();
+            // indexStats = db.getSiblingDB(dbName).getCollection(collDoc.name).stats({ indexDetails : true }) // not yet implemented
+            // collection.indexFree = indexStats.wiredTiger['block-manager']['file bytes available for reuse']; // not yet implemented
             collection.name = collStats.ns.substr(collStats.ns.indexOf('.') + 1);
             collection.objects = collStats.count;
             collection.dataSize = collStats.size;
@@ -52,6 +55,7 @@ function getStats() {
             collection.freeBlocks = collStats.wiredTiger['block-manager']['file bytes available for reuse'];
             collection.compression = collection.dataSize / (collection.storageSize - collection.freeBlocks);
             printCollection();
+            // database.freeBlocks += collection.freeBlocks + collection.indexFree;
             database.freeBlocks += collection.freeBlocks;
         });
         database.compression = database.dataSize / (database.storageSize - database.freeBlocks);
@@ -60,6 +64,7 @@ function getStats() {
         dbPath.storageSize += database.storageSize;
         dbPath.objects += database.objects;
         dbPath.indexSize += database.indexSize;
+        // dbPath.indexFree += database.indexFree; // not yet implemented
         dbPath.freeBlocks += database.freeBlocks;
     });
     dbPath.compression = dbPath.dataSize / (dbPath.storageSize - dbPath.freeBlocks);
