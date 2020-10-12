@@ -10,9 +10,9 @@
 
 let dbName = 'database', collName = 'collection';
 let dropPref = true; // drop collection prior to generating data
-let exp = 5; // number of doc by order of magnitude
-let totalDocs = Math.ceil(Math.random() * 10 ** exp);
-let days = 365; // date range
+let exponent = 5; // number of doc by order of magnitude
+let totalDocs = Math.ceil(Math.random() * 10 ** exponent);
+let days = 365.25; // date range
 var fuzzer = { // not in use
     _id: '', // default to server generation
     vary_types: false, // fuzz value types
@@ -118,7 +118,7 @@ function genDoc() {
         "int32": NumberInt(genRandomNumber(-1 * 2 ** 31 - 1, 2 ** 31 - 1)),
         "int64": NumberLong(genRandomNumber(-1 * 2 ** 63 - 1, 2 ** 63 - 1)),
         "double": genRandomNumber(-1 * 2 ** 12, 2 ** 12),
-        "decimal128": NumberDecimal(genRandomNumber(-1 * 2 ** 127 - 1, 2 ** 127 - 1)),
+        "decimal128": NumberDecimal(genRandomNumber(-1 * 10 ** 6145, 10 ** 6145)),
         "regex": /\/[0-9a-z]*\//,
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
