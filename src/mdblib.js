@@ -50,16 +50,16 @@ class ScaleFactor {
     constructor(unit) {
         // default to MB
         switch (unit) {
-            case 'B': return { name: "bytes", unit: "B", symbol: "", factor: 1024 ** 0, precision: 0, pctPoint: 2 };
-            case 'KB': return { name: "kilobytes", unit: "KB", symbol: "k", factor: 1024 ** 1, precision: 2, pctPoint: 1 };
-            case 'MB': return { name: "megabytes", unit: "MB", symbol: "M", factor: 1024 ** 2, precision: 2, pctPoint: 1 };
-            case 'GB': return { name: "gigabytes", unit: "GB", symbol: "G", factor: 1024 ** 3, precision: 2, pctPoint: 1 };
-            case 'TB': return { name: "terabytes", unit: "TB", symbol: "T", factor: 1024 ** 4, precision: 2, pctPoint: 1 };
-            case 'PB': return { name: "petabytes", unit: "PB", symbol: "P", factor: 1024 ** 5, precision: 2, pctPoint: 1 };
-            case 'EB': return { name: "exabytes", unit: "EB", symbol: "E", factor: 1024 ** 6, precision: 2, pctPoint: 1 };
-            case 'ZB': return { name: "zettabytes", unit: "ZB", symbol: "Z", factor: 1024 ** 7, precision: 2, pctPoint: 1 };
-            case 'YB': return { name: "yottabytes", unit: "YB", symbol: "Y", factor: 1024 ** 8, precision: 2, pctPoint: 1 };
-            default: return { name: "megabytes", unit: "MB", symbol: "M", factor: 1024 ** 2, precision: 2, pctPoint: 1 };
+            case 'B': return { "name": "bytes", "unit": "B", "symbol": "", "factor": 1024 ** 0, "precision": 0, "pctPoint": 2 };
+            case 'KB': return { "name": "kilobytes", "unit": "KB", "symbol": "k", "factor": 1024 ** 1, "precision": 2, "pctPoint": 1 };
+            case 'MB': return { "name": "megabytes", "unit": "MB", "symbol": "M", "factor": 1024 ** 2, "precision": 2, "pctPoint": 1 };
+            case 'GB': return { "name": "gigabytes", "unit": "GB", "symbol": "G", "factor": 1024 ** 3, "precision": 2, "pctPoint": 1 };
+            case 'TB': return { "name": "terabytes", "unit": "TB", "symbol": "T", "factor": 1024 ** 4, "precision": 2, "pctPoint": 1 };
+            case 'PB': return { "name": "petabytes", "unit": "PB", "symbol": "P", "factor": 1024 ** 5, "precision": 2, "pctPoint": 1 };
+            case 'EB': return { "name": "exabytes", "unit": "EB", "symbol": "E", "factor": 1024 ** 6, "precision": 2, "pctPoint": 1 };
+            case 'ZB': return { "name": "zettabytes", "unit": "ZB", "symbol": "Z", "factor": 1024 ** 7, "precision": 2, "pctPoint": 1 };
+            case 'YB': return { "name": "yottabytes", "unit": "YB", "symbol": "Y", "factor": 1024 ** 8, "precision": 2, "pctPoint": 1 };
+            default: return { "name": "megabytes", "unit": "MB", "symbol": "M", "factor": 1024 ** 2, "precision": 2, "pctPoint": 1 };
         }
     }
 }
