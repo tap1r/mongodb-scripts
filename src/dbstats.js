@@ -15,7 +15,7 @@ load('mdblib.js');
 
 // Global defaults
 
-var dbPath, database, collection, dbStats, collStats, indexStats = {};
+var dbPath, database, collection, dbStats, collStats = {};
 
 /*
  * Formatting preferences
@@ -32,9 +32,9 @@ function getStats() {
     /*
      *  Gather DB stats
      */
-    dbPath = { "dataSize": 0, "storageSize": 0, "objects": 0, "indexSize": 0, "freeBlocks": 0, "indexFree": 0, "compression": 0 };
+    dbPath = { "name": "", "dataSize": 0, "storageSize": 0, "objects": 0, "freeBlocks": 0, "compression": 0, "indexSize": 0, "indexFree": 0 };
     db.getMongo().getDBNames().forEach((dbName) => {
-        database = { "name": "", "dataSize": 0, "storageSize": 0, "objects": 0, "indexSize": 0, "indexFree": 0, "freeBlocks": 0, "compression": 0 };
+        database = { "name": "", "dataSize": 0, "storageSize": 0, "objects": 0, "freeBlocks": 0, "compression": 0, "indexSize": 0, "indexFree": 0 };
         dbStats = db.getSiblingDB(dbName).stats();
         database.name = dbStats.db;
         database.objects = dbStats.objects;
@@ -43,15 +43,15 @@ function getStats() {
         database.indexSize = dbStats.indexSize;
         printHeader();
         db.getSiblingDB(dbName).getCollectionInfos({ "type": "collection" }, true).forEach((collDoc) => {
-            collection = { "name": "", "dataSize": 0, "storageSize": 0, "objects": 0, "freeBlocks": 0, "indexFree": 0, "compression": 0 };
+            collection = { "name": "", "dataSize": 0, "storageSize": 0, "objects": 0, "freeBlocks": 0, "compression": 0, "indexSize": 0, "indexFree": 0 };
             collStats = db.getSiblingDB(dbName).getCollection(collDoc.name).stats({ "indexDetails" : true });
             collection.name = collStats.ns.substr(collStats.ns.indexOf('.') + 1);
             collection.objects = collStats.count;
             collection.dataSize = collStats.size;
             collection.storageSize = collStats.wiredTiger['block-manager']['file size in bytes'];
             Object.keys(collStats['indexDetails']).forEach((indexName) => {
+                collection.indexSize += collStats['indexDetails'][indexName]['block-manager']['file size in bytes'];
                 collection.indexFree += collStats['indexDetails'][indexName]['block-manager']['file bytes available for reuse'];
-                // ["file size in bytes"]
             });
             collection.freeBlocks = collStats.wiredTiger['block-manager']['file bytes available for reuse'];
             collection.compression = collection.dataSize / (collection.storageSize - collection.freeBlocks);
