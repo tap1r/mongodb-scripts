@@ -15,7 +15,7 @@ load('mdblib.js');
 
 // Global defaults
 
-var collection = {}, database = {}, dbPath = {};
+var dbPath, database, collection, dbStats, collStats, indexStats = {};
 
 /*
  * Formatting preferences
@@ -32,31 +32,32 @@ function getStats() {
     /*
      *  Gather DB stats
      */
-    dbPath = { dataSize: 0, storageSize: 0, objects: 0, indexSize: 0, freeBlocks: 0, compression: 0 };
+    dbPath = { "dataSize": 0, "storageSize": 0, "objects": 0, "indexSize": 0, "freeBlocks": 0, "indexFree": 0, "compression": 0 };
     db.getMongo().getDBNames().forEach((dbName) => {
-        database = { name: "", dataSize: 0, storageSize: 0, objects: 0, indexSize: 0, freeBlocks: 0, compression: 0 };
+        database = { "name": "", "dataSize": 0, "storageSize": 0, "objects": 0, "indexSize": 0, "indexFree": 0, "freeBlocks": 0, "compression": 0 };
         dbStats = db.getSiblingDB(dbName).stats();
         database.name = dbStats.db;
         database.objects = dbStats.objects;
         database.dataSize = dbStats.dataSize;
         database.storageSize = dbStats.storageSize;
         database.indexSize = dbStats.indexSize;
-        // database.indexFree = dbStats.indexxxx; // not yet implemented
         printHeader();
-        db.getSiblingDB(dbName).getCollectionInfos({ type: "collection" }, true).forEach((collDoc) => {
-            collection = { name: "", dataSize: 0, storageSize: 0, objects: 0, freeBlocks: 0, compression: 0 };
-            collStats = db.getSiblingDB(dbName).getCollection(collDoc.name).stats();
-            // indexStats = db.getSiblingDB(dbName).getCollection(collDoc.name).stats({ indexDetails : true }) // not yet implemented
-            // collection.indexFree = indexStats.wiredTiger['block-manager']['file bytes available for reuse']; // not yet implemented
+        db.getSiblingDB(dbName).getCollectionInfos({ "type": "collection" }, true).forEach((collDoc) => {
+            collection = { "name": "", "dataSize": 0, "storageSize": 0, "objects": 0, "freeBlocks": 0, "indexFree": 0, "compression": 0 };
+            collStats = db.getSiblingDB(dbName).getCollection(collDoc.name).stats({ "indexDetails" : true });
             collection.name = collStats.ns.substr(collStats.ns.indexOf('.') + 1);
             collection.objects = collStats.count;
             collection.dataSize = collStats.size;
             collection.storageSize = collStats.wiredTiger['block-manager']['file size in bytes'];
+            Object.keys(collStats['indexDetails']).forEach((indexName) => {
+                collection.indexFree += collStats['indexDetails'][indexName]['block-manager']['file bytes available for reuse'];
+                // ["file size in bytes"]
+            });
             collection.freeBlocks = collStats.wiredTiger['block-manager']['file bytes available for reuse'];
             collection.compression = collection.dataSize / (collection.storageSize - collection.freeBlocks);
             printCollection();
-            // database.freeBlocks += collection.freeBlocks + collection.indexFree;
             database.freeBlocks += collection.freeBlocks;
+            database.indexFree += collection.indexFree;
         });
         database.compression = database.dataSize / (database.storageSize - database.freeBlocks);
         printDb();
@@ -64,7 +65,7 @@ function getStats() {
         dbPath.storageSize += database.storageSize;
         dbPath.objects += database.objects;
         dbPath.indexSize += database.indexSize;
-        // dbPath.indexFree += database.indexFree; // not yet implemented
+        dbPath.indexFree += database.indexFree;
         dbPath.freeBlocks += database.freeBlocks;
     });
     dbPath.compression = dbPath.dataSize / (dbPath.storageSize - dbPath.freeBlocks);
@@ -133,9 +134,12 @@ function printDb() {
             ('(' + fmtPct(database.freeBlocks, database.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
         fmtRatio(database.compression).padStart(columnWidth)
     );
-    print('DB Index size:'.padEnd(rowHeader),
+    print('DB Index subtotals'.padEnd(rowHeader),
+        fmtUnit(database.indexSize).padStart(columnWidth),
+        fmtUnit(database.indexSize).padStart(columnWidth),
         ''.padStart(columnWidth),
-        fmtUnit(database.indexSize).padStart(columnWidth)
+        (fmtUnit(database.indexFree).padStart(columnWidth) +
+            ('(' + fmtPct(database.indexFree, database.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
     );
     print('Subtotal:'.padEnd(rowHeader),
         fmtUnit(database.dataSize).padStart(columnWidth),
@@ -167,8 +171,11 @@ function printDbPath() {
         fmtRatio(dbPath.compression).padStart(columnWidth)
     );
     print('All indexes:'.padEnd(rowHeader),
+        fmtUnit(dbPath.indexSize).padStart(columnWidth),
+        fmtUnit(dbPath.indexSize).padStart(columnWidth),
         ''.padStart(columnWidth),
-        fmtUnit(dbPath.indexSize).padStart(columnWidth)
+        (fmtUnit(dbPath.indexFree) +
+            ('(' + fmtPct(dbPath.indexFree, dbPath.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
     );
     print('Total:'.padEnd(rowHeader),
         fmtUnit(dbPath.dataSize).padStart(columnWidth),
