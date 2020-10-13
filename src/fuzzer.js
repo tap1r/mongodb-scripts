@@ -115,8 +115,8 @@ function genDoc() {
         "date": new Date(now - (Math.random() * days * 24 * 60 * 60 * 1000)),
         "timestamp": new Timestamp(timestamp - (Math.random() * days * 24 * 60 * 60), 1),
         "null": null,
-        "int32": NumberInt(genRandomNumber(-1 * 2 ** 31 - 1, 2 ** 31 - 1)),
-        "int64": NumberLong(genRandomNumber(-1 * 2 ** 63 - 1, 2 ** 63 - 1)),
+        "int32": NumberInt(genRandomInteger(-1 * 2 ** 31 - 1, 2 ** 31 - 1)),
+        "int64": NumberLong(genRandomInteger(-1 * 2 ** 63 - 1, 2 ** 63 - 1)),
         "double": genRandomNumber(-1 * 2 ** 12, 2 ** 12),
         "decimal128": NumberDecimal(genRandomNumber(-1 * 10 ** 6145, 10 ** 6145)),
         "regex": /\/[0-9a-z]*\//,
@@ -133,7 +133,10 @@ function genDoc() {
         },
         "random": +genRandomNumber(0, totalDocs).toFixed(4),
         "symbol": genRandomSymbol(),
-        "price": genRandomCurrency() + genRandomNumber(0, 10 ** 6)
+        "unit": +genRandomNumber(0, 10 ** 6).toFixed(2),
+        "qty": NumberInt(genRandomInteger(0, 10 ** 4)),
+        // "currency": genRandomCurrency() + genRandomNumber(0, 10 ** 6).toFixed(2),
+        "price": genRandomCurrency() + genRandomNumber(0, 10 ** 4).toFixed(2)
     };
 }
 
