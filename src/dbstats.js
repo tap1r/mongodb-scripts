@@ -22,7 +22,7 @@ var dbPath, database, collection, dbStats, collStats = {};
  */
 
 const scale = new ScaleFactor(); // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
-let termWidth = 120, columnWidth = 15, rowHeader = 32;
+let termWidth = 124, columnWidth = 15, rowHeader = 36;
 
 /*
  * main
@@ -116,7 +116,8 @@ function printCollection() {
         fmtUnit(collection.storageSize).padStart(columnWidth),
         collection.objects.toString().padStart(columnWidth),
         (fmtUnit(collection.freeBlocks) +
-            ('(' + fmtPct(collection.freeBlocks, collection.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
+            ('(' + fmtPct(collection.freeBlocks,
+            collection.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
         fmtRatio(collection.compression).padStart(columnWidth)
     );
 }
@@ -126,64 +127,52 @@ function printDb() {
      *  Print DB level rollup stats
      */
     print('-'.repeat(termWidth));
-    print('Collection subtotals:'.padEnd(rowHeader),
+    print('Collections subtotal:'.padEnd(rowHeader),
         fmtUnit(database.dataSize).padStart(columnWidth),
         fmtUnit(database.storageSize).padStart(columnWidth),
         database.objects.toString().padStart(columnWidth),
         (fmtUnit(database.freeBlocks).padStart(columnWidth) +
-            ('(' + fmtPct(database.freeBlocks, database.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
+            ('(' + fmtPct(database.freeBlocks,
+            database.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
         fmtRatio(database.compression).padStart(columnWidth)
     );
-    print('DB Index subtotals'.padEnd(rowHeader),
-        fmtUnit(database.indexSize).padStart(columnWidth),
+    print('Indexes subtotal:'.padEnd(rowHeader),
+    ''.padStart(columnWidth),
         fmtUnit(database.indexSize).padStart(columnWidth),
         ''.padStart(columnWidth),
         (fmtUnit(database.indexFree).padStart(columnWidth) +
-            ('(' + fmtPct(database.indexFree, database.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
-    );
-    print('Subtotal:'.padEnd(rowHeader),
-        fmtUnit(database.dataSize).padStart(columnWidth),
-        fmtUnit(database.storageSize + database.indexSize).padStart(columnWidth),
-        database.objects.toString().padStart(columnWidth),
-        (fmtUnit(database.freeBlocks).padStart(columnWidth) +
-            ('(' + fmtPct(database.freeBlocks, database.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
-        fmtRatio(database.compression).padStart(columnWidth)
+            ('(' + fmtPct(database.indexFree,
+            database.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
     );
     print('='.repeat(termWidth));
 }
 
 function printDbPath() {
     /*
-     *  Print total rollup stats
+     *  Print total dbPath rollup stats
      */
     print('\n' + '='.repeat(termWidth));
-    print('Rollup stats'.padEnd(rowHeader), 'Data size'.padStart(columnWidth),
+    print('dbPath totals'.padEnd(rowHeader), 'Data size'.padStart(columnWidth),
         'Size on disk'.padStart(columnWidth), 'Object count'.padStart(columnWidth),
         'Free blocks (reuse)'.padStart(columnWidth + 8), 'Compression'.padStart(columnWidth)
     );
     print('-'.repeat(termWidth));
-    print('DB subtotals:'.padEnd(rowHeader),
+    print('All DBs:'.padEnd(rowHeader),
         fmtUnit(dbPath.dataSize).padStart(columnWidth),
         fmtUnit(dbPath.storageSize).padStart(columnWidth),
         dbPath.objects.toString().padStart(columnWidth),
         (fmtUnit(dbPath.freeBlocks) +
-            ('(' + fmtPct(dbPath.freeBlocks, dbPath.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
+            ('(' + fmtPct(dbPath.freeBlocks,
+            dbPath.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
         fmtRatio(dbPath.compression).padStart(columnWidth)
     );
     print('All indexes:'.padEnd(rowHeader),
-        fmtUnit(dbPath.indexSize).padStart(columnWidth),
+        ''.padStart(columnWidth),
         fmtUnit(dbPath.indexSize).padStart(columnWidth),
         ''.padStart(columnWidth),
         (fmtUnit(dbPath.indexFree) +
-            ('(' + fmtPct(dbPath.indexFree, dbPath.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
-    );
-    print('Total:'.padEnd(rowHeader),
-        fmtUnit(dbPath.dataSize).padStart(columnWidth),
-        fmtUnit(dbPath.storageSize + dbPath.indexSize).padStart(columnWidth),
-        dbPath.objects.toString().padStart(columnWidth),
-        (fmtUnit(dbPath.freeBlocks) +
-            ('(' + fmtPct(dbPath.freeBlocks, dbPath.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
-        fmtRatio(dbPath.compression).padStart(columnWidth)
+            ('(' + fmtPct(dbPath.indexFree,
+            dbPath.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
     );
     print('='.repeat(termWidth));
 }
