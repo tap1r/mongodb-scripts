@@ -18,22 +18,22 @@ load('mdblib.js');
 var dbPath, database, collection, dbStats, collStats = {};
 
 /*
- * Formatting preferences
+ *  Formatting preferences
  */
 
 const scale = new ScaleFactor(); // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
 let termWidth = 124, columnWidth = 15, rowHeader = 36;
 
 /*
- * main
+ *  main
  */
 
 function getStats() {
     /*
-     *  Gather DB stats
+     *  Gather DB stats (and print)
      */
     dbPath = { "name": "", "dataSize": 0, "storageSize": 0, "objects": 0, "freeBlocks": 0, "compression": 0, "indexSize": 0, "indexFree": 0 };
-    db.getMongo().getDBNames().forEach((dbName) => {
+    db.getMongo().getDBNames().map(dbName => {
         database = { "name": "", "dataSize": 0, "storageSize": 0, "objects": 0, "freeBlocks": 0, "compression": 0, "indexSize": 0, "indexFree": 0 };
         dbStats = db.getSiblingDB(dbName).stats();
         database.name = dbStats.db;
@@ -41,26 +41,33 @@ function getStats() {
         database.dataSize = dbStats.dataSize;
         database.storageSize = dbStats.storageSize;
         database.indexSize = dbStats.indexSize;
-        printHeader();
-        db.getSiblingDB(dbName).getCollectionInfos({ "type": "collection" }, true).forEach((collDoc) => {
+        printDbHeader(database.name);
+        printCollHeader();
+        db.getSiblingDB(dbName).getCollectionInfos({ "type": "collection" }, true).map(collInfo => {
             collection = { "name": "", "dataSize": 0, "storageSize": 0, "objects": 0, "freeBlocks": 0, "compression": 0, "indexSize": 0, "indexFree": 0 };
-            collStats = db.getSiblingDB(dbName).getCollection(collDoc.name).stats({ "indexDetails" : true });
+            collStats = db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ "indexDetails" : true });
             collection.name = collStats.ns.substr(collStats.ns.indexOf('.') + 1);
             collection.objects = collStats.count;
             collection.dataSize = collStats.size;
             collection.storageSize = collStats.wiredTiger['block-manager']['file size in bytes'];
-            Object.keys(collStats['indexDetails']).forEach((indexName) => {
+            Object.keys(collStats['indexDetails']).map(indexName => {
                 collection.indexSize += collStats['indexDetails'][indexName]['block-manager']['file size in bytes'];
                 collection.indexFree += collStats['indexDetails'][indexName]['block-manager']['file bytes available for reuse'];
             });
             collection.freeBlocks = collStats.wiredTiger['block-manager']['file bytes available for reuse'];
             collection.compression = collection.dataSize / (collection.storageSize - collection.freeBlocks);
-            printCollection();
+            printCollection(collection);
             database.freeBlocks += collection.freeBlocks;
             database.indexFree += collection.indexFree;
         });
+        printViewHeader();
+        db.getSiblingDB(dbName).getCollectionInfos({ "type": "view" }, true).map(viewInfo => {
+            // view = { "name": "" };
+            // view.name = viewInfo.name;
+            printView(viewInfo.name);
+        });
         database.compression = database.dataSize / (database.storageSize - database.freeBlocks);
-        printDb();
+        printDb(database);
         dbPath.dataSize += database.dataSize;
         dbPath.storageSize += database.storageSize;
         dbPath.objects += database.objects;
@@ -69,7 +76,7 @@ function getStats() {
         dbPath.freeBlocks += database.freeBlocks;
     });
     dbPath.compression = dbPath.dataSize / (dbPath.storageSize - dbPath.freeBlocks);
-    printDbPath();
+    printDbPath(dbPath);
 }
 
 function fmtUnit(metric) {
@@ -93,20 +100,35 @@ function fmtRatio(metric) {
     return (metric).toFixed(scale.precision) + ':1';
 }
 
-function printHeader() {
+function printDbHeader(databaseName) {
     /*
-     *  Print table header
+     *  Print DB table header
      */
+    print('\n');
     print('='.repeat(termWidth));
-    print('Database:', database.name);
+    print('Database:', databaseName);
+}
+
+function printCollHeader() {
+    /*
+     *  Print collection table header
+     */
     print('-'.repeat(termWidth));
-    print('Collection'.padEnd(rowHeader), 'Data size'.padStart(columnWidth),
+    print('Collection(s)'.padEnd(rowHeader), 'Data size'.padStart(columnWidth),
         'Size on disk'.padStart(columnWidth), 'Object count'.padStart(columnWidth),
         'Free blocks (reuse)'.padStart(columnWidth + 8), 'Compression'.padStart(columnWidth)
     );
 }
 
-function printCollection() {
+function printViewHeader() {
+    /*
+     *  Print view table header
+     */
+    print('-'.repeat(termWidth));
+    print('View(s)'.padEnd(rowHeader));
+}
+
+function printCollection(collection) {
     /*
      *  Print collection level stats
      */
@@ -122,7 +144,15 @@ function printCollection() {
     );
 }
 
-function printDb() {
+function printView(view) {
+    /*
+     *  Print view names
+     */
+    print('-'.repeat(termWidth));
+    print((' ' + view).padEnd(rowHeader));
+}
+
+function printDb(database) {
     /*
      *  Print DB level rollup stats
      */
@@ -147,7 +177,7 @@ function printDb() {
     print('='.repeat(termWidth));
 }
 
-function printDbPath() {
+function printDbPath(dbPath) {
     /*
      *  Print total dbPath rollup stats
      */
