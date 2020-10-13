@@ -133,7 +133,7 @@ function genDoc() {
         },
         "random": +genRandomNumber(0, totalDocs).toFixed(4),
         "symbol": genRandomSymbol(),
-        "price": genRandomCurrency() + NumberDecimal(genRandomNumber(0, 10 ** 6))
+        "price": genRandomCurrency() + genRandomNumber(0, 10 ** 6)
     };
 }
 
