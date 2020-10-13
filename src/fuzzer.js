@@ -20,7 +20,8 @@ var fuzzer = { // not in use
     mode: "random", // random, bell, bimodal
     range: "max", // min, max, %
     cardinality: 1, //
-    sparsity: 0 // 0 - 100%
+    sparsity: 0, // 0 - 100%
+    weighting: 50 // 0 - 100%
 };
 var indexes = [ // createIndex options document
     // { "oid": { unique: true } },
