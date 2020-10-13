@@ -45,7 +45,7 @@ String.prototype.padEnd = function padEnd(targetLength, padString) {
 
 class ScaleFactor {
     /*
-     * Scale formatting preferences
+     *  Scale formatting preferences
      */
     constructor(unit) {
         // default to MB
@@ -66,7 +66,7 @@ class ScaleFactor {
 
 class AutoFactor {
     /*
-     * Determine scaling automatically
+     *  Determine scaling automatically
      */
     constructor(metric) {
         //
