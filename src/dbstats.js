@@ -32,9 +32,15 @@ function getStats() {
     /*
      *  Gather DB stats (and print)
      */
-    dbPath = { "name": "", "dataSize": 0, "storageSize": 0, "objects": 0, "freeBlocks": 0, "compression": 0, "indexSize": 0, "indexFree": 0 };
+    dbPath = { name: "", dataSize: 0, storageSize: 0, objects: 0, freeBlocks: 0,
+            compression: function() { return this.dataSize / (this.storageSize - this.freeBlocks); },
+            indexSize: 0, indexFree: 0
+    };
     db.getMongo().getDBNames().map(dbName => {
-        database = { "name": "", "dataSize": 0, "storageSize": 0, "objects": 0, "freeBlocks": 0, "compression": 0, "indexSize": 0, "indexFree": 0 };
+        database = { name: "", dataSize: 0, storageSize: 0, objects: 0, freeBlocks: 0,
+                compression: function() { return this.dataSize / (this.storageSize - this.freeBlocks); },
+                indexSize: 0, indexFree: 0
+        };
         dbStats = db.getSiblingDB(dbName).stats();
         database.name = dbStats.db;
         database.objects = dbStats.objects;
@@ -43,9 +49,12 @@ function getStats() {
         database.indexSize = dbStats.indexSize;
         printDbHeader(database.name);
         printCollHeader();
-        db.getSiblingDB(dbName).getCollectionInfos({ "type": "collection" }, true).map(collInfo => {
-            collection = { "name": "", "dataSize": 0, "storageSize": 0, "objects": 0, "freeBlocks": 0, "compression": 0, "indexSize": 0, "indexFree": 0 };
-            collStats = db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ "indexDetails" : true });
+        db.getSiblingDB(dbName).getCollectionInfos({ type: "collection" }, true).map(collInfo => {
+            collection = { name: "", dataSize: 0, storageSize: 0, objects: 0, freeBlocks: 0,
+                compression: function() { return this.dataSize / (this.storageSize - this.freeBlocks); },
+                indexSize: 0, indexFree: 0
+            };
+            collStats = db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ indexDetails: true });
             collection.name = collStats.ns.substr(collStats.ns.indexOf('.') + 1);
             collection.objects = collStats.count;
             collection.dataSize = collStats.size;
@@ -55,18 +64,14 @@ function getStats() {
                 collection.indexFree += collStats['indexDetails'][indexName]['block-manager']['file bytes available for reuse'];
             });
             collection.freeBlocks = collStats.wiredTiger['block-manager']['file bytes available for reuse'];
-            collection.compression = collection.dataSize / (collection.storageSize - collection.freeBlocks);
             printCollection(collection);
             database.freeBlocks += collection.freeBlocks;
             database.indexFree += collection.indexFree;
         });
         printViewHeader();
-        db.getSiblingDB(dbName).getCollectionInfos({ "type": "view" }, true).map(viewInfo => {
-            // view = { "name": "" };
-            // view.name = viewInfo.name;
+        db.getSiblingDB(dbName).getCollectionInfos({ type: "view" }, true).map(viewInfo => {
             printView(viewInfo.name);
         });
-        database.compression = database.dataSize / (database.storageSize - database.freeBlocks);
         printDb(database);
         dbPath.dataSize += database.dataSize;
         dbPath.storageSize += database.storageSize;
@@ -75,7 +80,6 @@ function getStats() {
         dbPath.indexFree += database.indexFree;
         dbPath.freeBlocks += database.freeBlocks;
     });
-    dbPath.compression = dbPath.dataSize / (dbPath.storageSize - dbPath.freeBlocks);
     printDbPath(dbPath);
 }
 
@@ -140,7 +144,7 @@ function printCollection(collection) {
         (fmtUnit(collection.freeBlocks) +
             ('(' + fmtPct(collection.freeBlocks,
             collection.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
-        fmtRatio(collection.compression).padStart(columnWidth)
+        fmtRatio(collection.compression()).padStart(columnWidth)
     );
 }
 
@@ -164,7 +168,7 @@ function printDb(database) {
         (fmtUnit(database.freeBlocks).padStart(columnWidth) +
             ('(' + fmtPct(database.freeBlocks,
             database.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
-        fmtRatio(database.compression).padStart(columnWidth)
+        fmtRatio(database.compression()).padStart(columnWidth)
     );
     print('Indexes subtotal:'.padEnd(rowHeader),
     ''.padStart(columnWidth),
@@ -181,7 +185,8 @@ function printDbPath(dbPath) {
     /*
      *  Print total dbPath rollup stats
      */
-    print('\n' + '='.repeat(termWidth));
+    print('\n'),
+    print('='.repeat(termWidth));
     print('dbPath totals'.padEnd(rowHeader), 'Data size'.padStart(columnWidth),
         'Size on disk'.padStart(columnWidth), 'Object count'.padStart(columnWidth),
         'Free blocks (reuse)'.padStart(columnWidth + 8), 'Compression'.padStart(columnWidth)
@@ -194,7 +199,7 @@ function printDbPath(dbPath) {
         (fmtUnit(dbPath.freeBlocks) +
             ('(' + fmtPct(dbPath.freeBlocks,
             dbPath.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
-        fmtRatio(dbPath.compression).padStart(columnWidth)
+        fmtRatio(dbPath.compression()).padStart(columnWidth)
     );
     print('All indexes:'.padEnd(rowHeader),
         ''.padStart(columnWidth),
