@@ -94,7 +94,7 @@ function genRandomSymbol() {
 }
 
 function genRandomCurrency() {
-    let symbol = [ '$', '€', '₡', '£', '₪', '₹', '¥', '₩', '₦', '₱zł', '₲', '฿', '₴', '₫' ];
+    let symbol = ['$', '€', '₡', '£', '₪', '₹', '¥', '₩', '₦', '₱zł', '₲', '฿', '₴', '₫'];
     return symbol[(Math.floor(Math.random() * symbol.length))];
 }
 
@@ -133,7 +133,7 @@ function genDoc() {
         },
         "random": +genRandomNumber(0, totalDocs).toFixed(4),
         "symbol": genRandomSymbol(),
-        "currency": genRandomCurrency()
+        "price": genRandomCurrency() + NumberDecimal(genRandomNumber(0, 10 ** 6))
     };
 }
 
