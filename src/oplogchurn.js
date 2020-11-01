@@ -28,7 +28,7 @@ let d2 = d.toISOString(); // end datetime
 let t1 = Math.floor(d.setHours(d.getHours() - hrs) / 1000.0); // start timestamp
 let d1 = d.toISOString(); // start datetime
 let agg = [{
-    $match: { ts: {
+    $match: { "ts": {
                 $gte: Timestamp(t1, 1),
                 $lte: Timestamp(t2, 1)
             }
@@ -52,10 +52,12 @@ oplog.aggregate(agg).forEach((op) => {
     total += Object.bsonsize(op);
     ++docs;
 });
+
 // Get oplog stats
 let stats = oplog.stats();
 let freeBlocks = stats.wiredTiger['block-manager']['file bytes available for reuse'];
 let ratio = (stats.size / (stats.storageSize - freeBlocks)).toFixed(2);
+
 // Print results
 print('='.repeat(termWidth));
 print('Start time:'.padEnd(rowHeader), d1.padStart(columnWidth));
