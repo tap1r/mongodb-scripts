@@ -36,9 +36,10 @@ function getStats() {
     db.getMongo().getDBNames().map(dbName => {
         let dbStats = db.getSiblingDB(dbName).stats();
         database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, dbStats.indexSize);
+        let collections = db.getSiblingDB(dbName).getCollectionInfos({ type: "collection" }, true);
         printDbHeader(database.name);
-        printCollHeader();
-        db.getSiblingDB(dbName).getCollectionInfos({ type: "collection" }, true).map(collInfo => {
+        printCollHeader(collections.length);
+        collections.map(collInfo => {
             let collStats = db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ indexDetails: true });
             collection = new MetaStats(collInfo.name, collStats.size, collStats.wiredTiger['block-manager']['file size in bytes'],
                                         collStats.count, collStats.wiredTiger['block-manager']['file bytes available for reuse']);
@@ -50,8 +51,9 @@ function getStats() {
             database.blocksFree += collection.blocksFree;
             database.indexFree += collection.indexFree;
         });
-        printViewHeader();
-        db.getSiblingDB(dbName).getCollectionInfos({ type: "view" }, true).map(viewInfo => {
+        let views = db.getSiblingDB(dbName).getCollectionInfos({ type: "view" }, true);
+        printViewHeader(views.length);
+        views.map(viewInfo => {
             printView(viewInfo.name);
         });
         printDb(database);
@@ -92,7 +94,7 @@ function printDbHeader(databaseName) {
      */
     print('\n');
     print('='.repeat(termWidth));
-    print(('Database: ' + databaseName).padEnd(rowHeader),
+    print(('Database:' + databaseName).padEnd(rowHeader),
            'Data size'.padStart(columnWidth),
            'Compression'.padStart(columnWidth),
            'Size on disk'.padStart(columnWidth),
@@ -101,20 +103,20 @@ function printDbHeader(databaseName) {
     );
 }
 
-function printCollHeader() {
+function printCollHeader(collTotal = 0) {
     /*
      *  Print collection table header
      */
     print('-'.repeat(termWidth));
-    print('Collection(s)');
+    print(('Collection(s):\t' + collTotal).padEnd(rowHeader));
 }
 
-function printViewHeader() {
+function printViewHeader(viewTotal = 0) {
     /*
      *  Print view table header
      */
     print('-'.repeat(termWidth));
-    print('View(s)'.padEnd(rowHeader));
+    print(('View(s):\t' + viewTotal).padEnd(rowHeader));
 }
 
 function printCollection(collection) {
