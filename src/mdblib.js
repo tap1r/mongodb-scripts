@@ -75,6 +75,24 @@ class AutoFactor {
     }
 }
 
+class MetaStats {
+    /*
+     *  Storage metadata class
+     */
+    constructor() {
+        this.name = "";
+        this.dataSize = 0;
+        this.storageSize = 0;
+        this.objects = 0;
+        this.freeBlocks = 0;
+        this.indexSize =0;
+        this.indexFree = 0;
+        this.compression = function() {
+            return this.dataSize / (this.storageSize - this.freeBlocks);
+        }
+    }
+}
+
 /*
  *  Versioned helper commands
  */
