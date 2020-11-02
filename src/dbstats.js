@@ -15,7 +15,7 @@ load('mdblib.js');
 
 // Global defaults
 
-var dbPath, database, collection, dbStats, collStats = {};
+var dbPath, database, collection = {};
 
 /*
  *  Formatting preferences
@@ -34,7 +34,7 @@ function getStats() {
      */
     dbPath = new MetaStats(db.getMongo().host);
     db.getMongo().getDBNames().map(dbName => {
-        dbStats = db.getSiblingDB(dbName).stats();
+        let dbStats = db.getSiblingDB(dbName).stats();
         database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, dbStats.indexSize);
         printDbHeader(database.name);
         printCollHeader();
