@@ -32,19 +32,10 @@ function getStats() {
     /*
      *  Gather DB stats (and print)
      */
-    /* dbPath = { name: "", dataSize: 0, storageSize: 0, objects: 0, freeBlocks: 0,
-            compression: function() { return this.dataSize / (this.storageSize - this.freeBlocks); },
-            indexSize: 0, indexFree: 0
-    }; */
     dbPath = new MetaStats();
-    print(dbPath);
     db.getMongo().getDBNames().map(dbName => {
         dbStats = db.getSiblingDB(dbName).stats();
         database = new MetaStats();
-        /* database = { name: dbStats.db, dataSize: 0, storageSize: 0, objects: 0, freeBlocks: 0,
-                compression: function() { return this.dataSize / (this.storageSize - this.freeBlocks); },
-                indexSize: 0, indexFree: 0
-        }; */
         database.name = dbStats.db;
         database.objects = dbStats.objects;
         database.dataSize = dbStats.dataSize;
@@ -54,10 +45,6 @@ function getStats() {
         printCollHeader();
         db.getSiblingDB(dbName).getCollectionInfos({ type: "collection" }, true).map(collInfo => {
             collection = new MetaStats();
-            /* collection = { name: collInfo.name, dataSize: 0, storageSize: 0, objects: 0, freeBlocks: 0,
-                compression: function() { return this.dataSize / (this.storageSize - this.freeBlocks); },
-                indexSize: 0, indexFree: 0
-            }; */
             collStats = db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ indexDetails: true });
             /* Object.keys(db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ indexDetails: true })).map(collStats => {
                 // collection.name = collStats.ns.substr(collStats.ns.indexOf('.') + 1);
