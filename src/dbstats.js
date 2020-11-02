@@ -32,44 +32,22 @@ function getStats() {
     /*
      *  Gather DB stats (and print)
      */
-    dbPath = new MetaStats();
+    dbPath = new MetaStats(db.getMongo().host);
     db.getMongo().getDBNames().map(dbName => {
         dbStats = db.getSiblingDB(dbName).stats();
-        database = new MetaStats();
-        database.name = dbStats.db;
-        database.objects = dbStats.objects;
-        database.dataSize = dbStats.dataSize;
-        database.storageSize = dbStats.storageSize;
-        database.indexSize = dbStats.indexSize;
+        database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, dbStats.indexSize);
         printDbHeader(database.name);
         printCollHeader();
         db.getSiblingDB(dbName).getCollectionInfos({ type: "collection" }, true).map(collInfo => {
-            collection = new MetaStats();
-            collStats = db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ indexDetails: true });
-            /* Object.keys(db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ indexDetails: true })).map(collStats => {
-                // collection.name = collStats.ns.substr(collStats.ns.indexOf('.') + 1);
-                collection.name = collInfo.name;
-                collection.objects = collStats.count;
-                collection.dataSize = collStats.size;
-                collection.storageSize = collStats.wiredTiger['block-manager']['file size in bytes'];
-                Object.keys(collStats['indexDetails']).map(indexName => {
-                    collection.indexSize += collStats['indexDetails'][indexName]['block-manager']['file size in bytes'];
-                    collection.indexFree += collStats['indexDetails'][indexName]['block-manager']['file bytes available for reuse'];
-                });
-                collection.freeBlocks = collStats.wiredTiger['block-manager']['file bytes available for reuse'];
-            }); */
-            // collection.name = collStats.ns.substr(collStats.ns.indexOf('.') + 1);
-            collection.name = collInfo.name;
-            collection.objects = collStats.count;
-            collection.dataSize = collStats.size;
-            collection.storageSize = collStats.wiredTiger['block-manager']['file size in bytes'];
-            Object.keys(collStats['indexDetails']).map(indexName => {
-                collection.indexSize += collStats['indexDetails'][indexName]['block-manager']['file size in bytes'];
-                collection.indexFree += collStats['indexDetails'][indexName]['block-manager']['file bytes available for reuse'];
+            let collStats = db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ indexDetails: true });
+            collection = new MetaStats(collInfo.name, collStats.size, collStats.wiredTiger['block-manager']['file size in bytes'],
+                                        collStats.count, collStats.wiredTiger['block-manager']['file bytes available for reuse']);
+            Object.keys(collStats.indexDetails).map(indexName => {
+                collection.indexSize += collStats.indexDetails[indexName]['block-manager']['file size in bytes'];
+                collection.indexFree += collStats.indexDetails[indexName]['block-manager']['file bytes available for reuse'];
             });
-            collection.freeBlocks = collStats.wiredTiger['block-manager']['file bytes available for reuse'];
             printCollection(collection);
-            database.freeBlocks += collection.freeBlocks;
+            database.blocksFree += collection.blocksFree;
             database.indexFree += collection.indexFree;
         });
         printViewHeader();
@@ -82,7 +60,7 @@ function getStats() {
         dbPath.objects += database.objects;
         dbPath.indexSize += database.indexSize;
         dbPath.indexFree += database.indexFree;
-        dbPath.freeBlocks += database.freeBlocks;
+        dbPath.blocksFree += database.blocksFree;
     });
     printDbPath(dbPath);
 }
@@ -145,8 +123,8 @@ function printCollection(collection) {
         formatUnit(collection.dataSize).padStart(columnWidth),
         formatUnit(collection.storageSize).padStart(columnWidth),
         collection.objects.toString().padStart(columnWidth),
-        (formatUnit(collection.freeBlocks) +
-            ('(' + formatPct(collection.freeBlocks,
+        (formatUnit(collection.blocksFree) +
+            ('(' + formatPct(collection.blocksFree,
             collection.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
         formatRatio(collection.compression()).padStart(columnWidth)
     );
@@ -169,8 +147,8 @@ function printDb(database) {
         formatUnit(database.dataSize).padStart(columnWidth),
         formatUnit(database.storageSize).padStart(columnWidth),
         database.objects.toString().padStart(columnWidth),
-        (formatUnit(database.freeBlocks).padStart(columnWidth) +
-            ('(' + formatPct(database.freeBlocks,
+        (formatUnit(database.blocksFree).padStart(columnWidth) +
+            ('(' + formatPct(database.blocksFree,
             database.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
         formatRatio(database.compression()).padStart(columnWidth)
     );
@@ -200,8 +178,8 @@ function printDbPath(dbPath) {
         formatUnit(dbPath.dataSize).padStart(columnWidth),
         formatUnit(dbPath.storageSize).padStart(columnWidth),
         dbPath.objects.toString().padStart(columnWidth),
-        (formatUnit(dbPath.freeBlocks) +
-            ('(' + formatPct(dbPath.freeBlocks,
+        (formatUnit(dbPath.blocksFree) +
+            ('(' + formatPct(dbPath.blocksFree,
             dbPath.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
         formatRatio(dbPath.compression()).padStart(columnWidth)
     );
