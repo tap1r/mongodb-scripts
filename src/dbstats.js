@@ -15,8 +15,6 @@ load('mdblib.js');
 
 // Global defaults
 
-var dbPath, database, collection = {};
-
 /*
  *  Formatting preferences
  */
@@ -32,16 +30,16 @@ function getStats() {
     /*
      *  Gather DB stats (and print)
      */
-    dbPath = new MetaStats(db.getMongo().host);
+    let dbPath = new MetaStats(db.getMongo().host);
     db.getMongo().getDBNames().map(dbName => {
         let dbStats = db.getSiblingDB(dbName).stats();
-        database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, dbStats.indexSize);
+        let database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, dbStats.indexSize);
         let collections = db.getSiblingDB(dbName).getCollectionInfos({ type: "collection" }, true);
         printDbHeader(database.name);
         printCollHeader(collections.length);
         collections.map(collInfo => {
             let collStats = db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ indexDetails: true });
-            collection = new MetaStats(collInfo.name, collStats.size, collStats.wiredTiger['block-manager']['file size in bytes'],
+            let collection = new MetaStats(collInfo.name, collStats.size, collStats.wiredTiger['block-manager']['file size in bytes'],
                                         collStats.count, collStats.wiredTiger['block-manager']['file bytes available for reuse']);
             Object.keys(collStats.indexDetails).map(indexName => {
                 collection.indexSize += collStats.indexDetails[indexName]['block-manager']['file size in bytes'];
@@ -94,7 +92,7 @@ function printDbHeader(databaseName) {
      */
     print('\n');
     print('='.repeat(termWidth));
-    print(('Database:' + databaseName).padEnd(rowHeader),
+    print(('Database: ' + databaseName).padEnd(rowHeader),
            'Data size'.padStart(columnWidth),
            'Compression'.padStart(columnWidth),
            'Size on disk'.padStart(columnWidth),
@@ -129,8 +127,8 @@ function printCollection(collection) {
           formatRatio(collection.compression()).padStart(columnWidth),
           formatUnit(collection.storageSize).padStart(columnWidth),
           (formatUnit(collection.blocksFree) +
-            ('(' + formatPct(collection.blocksFree,
-            collection.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
+              ('(' + formatPct(collection.blocksFree,
+              collection.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
           collection.objects.toString().padStart(columnWidth)
     );
 }
@@ -153,8 +151,8 @@ function printDb(database) {
           formatRatio(database.compression()).padStart(columnWidth),
           formatUnit(database.storageSize).padStart(columnWidth),
           (formatUnit(database.blocksFree).padStart(columnWidth) +
-            ('(' + formatPct(database.blocksFree,
-            database.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
+              ('(' + formatPct(database.blocksFree,
+              database.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
           database.objects.toString().padStart(columnWidth)
     );
     print('Indexes subtotal:'.padEnd(rowHeader),
@@ -162,7 +160,7 @@ function printDb(database) {
           ''.padStart(columnWidth),
           formatUnit(database.indexSize).padStart(columnWidth),
           (formatUnit(database.indexFree).padStart(columnWidth) +
-            ('(' + formatPct(database.indexFree,
+              ('(' + formatPct(database.indexFree,
           database.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
     );
     print('='.repeat(termWidth));
@@ -187,8 +185,8 @@ function printDbPath(dbPath) {
           formatRatio(dbPath.compression()).padStart(columnWidth),
           formatUnit(dbPath.storageSize).padStart(columnWidth),
           (formatUnit(dbPath.blocksFree) +
-            ('(' + formatPct(dbPath.blocksFree,
-            dbPath.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
+              ('(' + formatPct(dbPath.blocksFree,
+              dbPath.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
           dbPath.objects.toString().padStart(columnWidth)
     );
     print('All indexes:'.padEnd(rowHeader),
@@ -196,7 +194,7 @@ function printDbPath(dbPath) {
           ''.padStart(columnWidth),
           formatUnit(dbPath.indexSize).padStart(columnWidth),
           (formatUnit(dbPath.indexFree) +
-            ('(' + formatPct(dbPath.indexFree,
+              ('(' + formatPct(dbPath.indexFree,
           dbPath.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
     );
     print('='.repeat(termWidth));
