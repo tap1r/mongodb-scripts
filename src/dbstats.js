@@ -92,9 +92,12 @@ function printDbHeader(databaseName) {
      */
     print('\n');
     print('='.repeat(termWidth));
-    print(('Database: ' + databaseName).padEnd(rowHeader), 'Data size'.padStart(columnWidth),
-        'Size on disk'.padStart(columnWidth), 'Object count'.padStart(columnWidth),
-        'Free blocks (reuse)'.padStart(columnWidth + 8), 'Compression'.padStart(columnWidth)
+    print(('Database: ' + databaseName).padEnd(rowHeader),
+           'Data size'.padStart(columnWidth),
+           'Compression'.padStart(columnWidth),
+           'Size on disk'.padStart(columnWidth),
+           'Free blocks (reuse)'.padStart(columnWidth + 8),
+           'Object count'.padStart(columnWidth)
     );
 }
 
@@ -120,13 +123,13 @@ function printCollection(collection) {
      */
     print('-'.repeat(termWidth));
     print((' ' + collection.name).padEnd(rowHeader),
-        formatUnit(collection.dataSize).padStart(columnWidth),
-        formatUnit(collection.storageSize).padStart(columnWidth),
-        collection.objects.toString().padStart(columnWidth),
-        (formatUnit(collection.blocksFree) +
+          formatUnit(collection.dataSize).padStart(columnWidth),
+          formatRatio(collection.compression()).padStart(columnWidth),
+          formatUnit(collection.storageSize).padStart(columnWidth),
+          (formatUnit(collection.blocksFree) +
             ('(' + formatPct(collection.blocksFree,
             collection.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
-        formatRatio(collection.compression()).padStart(columnWidth)
+          collection.objects.toString().padStart(columnWidth)
     );
 }
 
@@ -144,21 +147,21 @@ function printDb(database) {
      */
     print('-'.repeat(termWidth));
     print('Collections subtotal:'.padEnd(rowHeader),
-        formatUnit(database.dataSize).padStart(columnWidth),
-        formatUnit(database.storageSize).padStart(columnWidth),
-        database.objects.toString().padStart(columnWidth),
-        (formatUnit(database.blocksFree).padStart(columnWidth) +
+          formatUnit(database.dataSize).padStart(columnWidth),
+          formatRatio(database.compression()).padStart(columnWidth),
+          formatUnit(database.storageSize).padStart(columnWidth),
+          (formatUnit(database.blocksFree).padStart(columnWidth) +
             ('(' + formatPct(database.blocksFree,
             database.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
-        formatRatio(database.compression()).padStart(columnWidth)
+          database.objects.toString().padStart(columnWidth)
     );
     print('Indexes subtotal:'.padEnd(rowHeader),
-    ''.padStart(columnWidth),
-        formatUnit(database.indexSize).padStart(columnWidth),
-        ''.padStart(columnWidth),
-        (formatUnit(database.indexFree).padStart(columnWidth) +
+          ''.padStart(columnWidth),
+          ''.padStart(columnWidth),
+          formatUnit(database.indexSize).padStart(columnWidth),
+          (formatUnit(database.indexFree).padStart(columnWidth) +
             ('(' + formatPct(database.indexFree,
-            database.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
+          database.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
     );
     print('='.repeat(termWidth));
 }
@@ -169,27 +172,30 @@ function printDbPath(dbPath) {
      */
     print('\n'),
     print('='.repeat(termWidth));
-    print('dbPath totals'.padEnd(rowHeader), 'Data size'.padStart(columnWidth),
-        'Size on disk'.padStart(columnWidth), 'Object count'.padStart(columnWidth),
-        'Free blocks (reuse)'.padStart(columnWidth + 8), 'Compression'.padStart(columnWidth)
+    print('dbPath totals'.padEnd(rowHeader),
+          'Data size'.padStart(columnWidth),
+          'Compression'.padStart(columnWidth),
+          'Size on disk'.padStart(columnWidth),
+          'Free blocks (reuse)'.padStart(columnWidth + 8),
+          'Object count'.padStart(columnWidth)
     );
     print('-'.repeat(termWidth));
     print('All DBs:'.padEnd(rowHeader),
-        formatUnit(dbPath.dataSize).padStart(columnWidth),
-        formatUnit(dbPath.storageSize).padStart(columnWidth),
-        dbPath.objects.toString().padStart(columnWidth),
-        (formatUnit(dbPath.blocksFree) +
+          formatUnit(dbPath.dataSize).padStart(columnWidth),
+          formatRatio(dbPath.compression()).padStart(columnWidth),
+          formatUnit(dbPath.storageSize).padStart(columnWidth),
+          (formatUnit(dbPath.blocksFree) +
             ('(' + formatPct(dbPath.blocksFree,
             dbPath.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
-        formatRatio(dbPath.compression()).padStart(columnWidth)
+          dbPath.objects.toString().padStart(columnWidth)
     );
     print('All indexes:'.padEnd(rowHeader),
-        ''.padStart(columnWidth),
-        formatUnit(dbPath.indexSize).padStart(columnWidth),
-        ''.padStart(columnWidth),
-        (formatUnit(dbPath.indexFree) +
+          ''.padStart(columnWidth),
+          ''.padStart(columnWidth),
+          formatUnit(dbPath.indexSize).padStart(columnWidth),
+          (formatUnit(dbPath.indexFree) +
             ('(' + formatPct(dbPath.indexFree,
-            dbPath.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
+          dbPath.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
     );
     print('='.repeat(termWidth));
 }
