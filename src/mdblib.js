@@ -1,6 +1,6 @@
 /*
  *  mdblib.js
- *  Description: Mongo shell helper functions
+ *  Description: mongo shell helper functions
  *  Created by: luke.prochazka@mongodb.com
  */
 
@@ -62,14 +62,11 @@ class ScaleFactor {
             default: return { name: "megabytes", unit: "MB", symbol: "M", factor: 1024 ** 2, precision: 2, pctPoint: 1 };
         }
     }
-}
 
-class AutoFactor {
-    /*
-     *  Determine scaling automatically
-     */
-    constructor(metric) {
-        //
+    autoFactor(metric) {
+        /*
+         *  Determine scale factor automatically
+         */
         let scale = Math.floor(Math.log2(metric) / 10);
         return (metric / 1024 ** scale).toFixed(2) + ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'][scale];
     }
@@ -87,9 +84,11 @@ class MetaStats {
         this.blocksFree = blocksFree;
         this.indexSize = indexSize;
         this.indexFree = indexFree;
-        this.compression = () => {
-            return this.dataSize / (this.storageSize - this.blocksFree);
-        }
+        // this.compression = () => this.dataSize / (this.storageSize - this.blocksFree);
+    }
+
+    compression() {
+        return this.dataSize / (this.storageSize - this.blocksFree);
     }
 }
 
@@ -97,12 +96,16 @@ class MetaStats {
  *  Versioned helper commands
  */
 
-switch (version().match(/^[0-9]+\.[0-9]+/)[0]) {
-    case "4.4":
-        slaveOk = rs.secondaryOk;
-        break;
-    default:
-        slaveOk = rs.slaveOk;
+function serverVer() {
+    return +version().match(/^[0-9]+\.[0-9]+/);
+}
+
+slaveOk = () => {
+    if (serverVer() >= 4.4) {
+        return rs.secondaryOk();
+    } else {
+        return rs.slaveOk();
+    }
 }
 
 // EOF
