@@ -13,7 +13,7 @@ var agg = [
             from: "any",
             pipeline: [
                     { $collStats: {} },
-                    { $replaceRoot: { newRoot: { "localTime": "$localTime" } } }
+                    { $replaceRoot: { "newRoot": { "localTime": "$localTime" } } }
                 ],
             as: "__now"
         }
@@ -29,7 +29,7 @@ var agg = [
         $project: { "__now": 0 }
     }
 ];
-db.getSiblingDB(dbName).getCollection(collName).aggregate(agg,options);
+db.getSiblingDB(dbName).getCollection(collName).aggregate(agg, options);
 ```
 
 ## Measuring real-time _oplog_ churn
@@ -41,23 +41,23 @@ The [oplogchurn.js](src/oplogchurn.js) script provides a metric of real-time opl
 Sample syntax to run against the _mongo_ shell:
 
 ```bash
-mongo [+connection options] --quiet oplogchurn.js
+mongo [connection options] --quiet oplogchurn.js
 ```
 
 ### Sample output
 
 ```text
-==================================================
-Start time:                         1574926639.139
-End time:                           1574923039.139
-Interval:                                   1hr(s)
-Avg oplog compression ratio:                6.51:1
-Doc count:                                     360
-Total Ops size:                            0.04 MB
-Estimated total Ops size on disk:          0.01 MB
---------------------------------------------------
-Estimated current oplog churn:          0.01 MB/hr
-==================================================
+============================================================
+Start time:                         2020-11-16T00:12:39.117Z
+End time:                           2020-11-16T01:12:39.117Z
+Interval duration:                                   1 hr(s)
+Average oplog compression ratio:                      1.84:1
+Interval document count:                                 377
+Interval data size:                                  0.04 MB
+Estimated interval storage size:                     0.02 MB
+------------------------------------------------------------
+Estimated current oplog churn:                    0.02 MB/hr
+============================================================
 ```
 
 ## Schema analysis
@@ -65,33 +65,32 @@ Estimated current oplog churn:          0.01 MB/hr
 A aggregation pipeline to describe a collection _schema_ as inferred from a canonicalised document _shape_.
 
 ```javascript
-var dbName = 'database';
-var collName = 'collection';
+var dbName = 'database', collName = 'collection';
 var options = { allowDiskUse: true };
 var agg = [
     {
-        $sample: { size: 1000 }
+        $sample: { "size": 1000 }
     },{
         $group: {
-            _id: null,
-            __doc: { $mergeObjects: "$$ROOT" }
+            "_id": null,
+            "__doc": { $mergeObjects: "$$ROOT" }
         }
     },{
         $facet: {
             "Canonical (1D) shape (with most recent values)": [
                 {
                     $project: {
-                        _id: 0
+                        "_id": 0
                     }
                 },{
-                    $replaceRoot: { newRoot: { $mergeObjects: "$__doc" } }
+                    $replaceRoot: { "newRoot": { $mergeObjects: "$__doc" } }
                 }
             ],
             "Canonical (1D) shape with types": [
                 {
                     $project: {
-                        _id: 0,
-                        __doc: { $objectToArray: "$__doc" }
+                        "_id": 0,
+                        "__doc": { $objectToArray: "$__doc" }
                     }
                 },{
                     $unwind: "$__doc"
@@ -101,13 +100,13 @@ var agg = [
                     }
                 },{
                     $group: {
-                        _id: null,
+                        "_id": null,
                         "__doc": { $push: { "k": "$__doc.k", "v": "$__doc.v" } }
                     }
                 },{
                     $project: {
-                        _id: 0,
-                        __doc: { $arrayToObject: "$__doc" }
+                        "_id": 0,
+                        "__doc": { $arrayToObject: "$__doc" }
                     }
                 },{
                     $replaceRoot: { newRoot: { $mergeObjects: "$__doc" } }
@@ -116,7 +115,7 @@ var agg = [
         }
     }
 ];
-db.getSiblingDB(dbName).getCollection(collName).aggregate(agg,options).pretty();
+db.getSiblingDB(dbName).getCollection(collName).aggregate(agg, options).pretty();
 ```
 
 ### Sample schema output
