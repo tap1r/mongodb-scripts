@@ -28,12 +28,13 @@ let d2 = d.toISOString(); // end datetime
 let t1 = Math.floor(d.setHours(d.getHours() - hrs) / 1000.0); // start timestamp
 let d1 = d.toISOString(); // start datetime
 let agg = [{
-      $match: { "ts": {
-                $gte: Timestamp(t1, 1),
-                $lte: Timestamp(t2, 1)
+      $match: {
+            "ts": {
+                  $gte: Timestamp(t1, 1),
+                  $lte: Timestamp(t2, 1)
             }
-         }
-    },{
+      }
+},{
       $project: { "_id": 0 }
 }];
 
@@ -53,18 +54,19 @@ if (serverVer() >= 4.4) {
       // Use the v4.4 $bsonSize aggregation operator
       // print('Using the $bsonSize aggregation operator');
       oplog.aggregate([{
-                  $match: { "ts": {
-                              $gte: Timestamp(t1, 1),
-                              $lte: Timestamp(t2, 1)
-                        }
+            $match: {
+                  "ts": {
+                        $gte: Timestamp(t1, 1),
+                        $lte: Timestamp(t2, 1)
                   }
-            },{
-                  $project: { "_id": 0 }
-            },{
-                  $group: {
-                        "_id": null,
-                        "combined_object_size": { $sum: { $bsonSize: "$$ROOT" } },
-                        "total_documents": { $sum: 1 }
+            }
+      },{
+            $project: { "_id": 0 }
+      },{
+            $group: {
+                  "_id": null,
+                  "combined_object_size": { $sum: { $bsonSize: "$$ROOT" }},
+                  "total_documents": { $sum: 1 }
             }
       }]).map(churnInfo => {
             total = churnInfo.combined_object_size;
