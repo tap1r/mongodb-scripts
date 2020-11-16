@@ -1,10 +1,11 @@
 /*
- *  dbstats.js
+ *  Name: "dbstats.js"
+ *  Version = "0.1.0"
  *  Description: DB storage stats uber script
- *  Created by: luke.prochazka@mongodb.com
+ *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "mongo [+connection options] --quiet dbstats.js"
+// Usage: "mongo [connection options] --quiet dbstats.js"
 
 /*
  *  Load helper library (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
@@ -12,8 +13,6 @@
  */
 
 load('mdblib.js');
-
-// Global defaults
 
 /*
  *  Formatting preferences
@@ -30,8 +29,9 @@ function getStats() {
     /*
      *  Gather DB stats (and print)
      */
-    let dbPath = new MetaStats(db.getMongo().host);
-    db.getMongo().getDBNames().map(dbName => {
+    let dbNames = db.getMongo().getDBNames();
+    let dbPath = new MetaStats();
+    dbNames.map(dbName => {
         let dbStats = db.getSiblingDB(dbName).stats();
         let database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, dbStats.indexSize);
         let collections = db.getSiblingDB(dbName).getCollectionInfos({ type: "collection" }, true);
@@ -40,7 +40,7 @@ function getStats() {
         collections.map(collInfo => {
             let collStats = db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ indexDetails: true });
             let collection = new MetaStats(collInfo.name, collStats.size, collStats.wiredTiger['block-manager']['file size in bytes'],
-                                        collStats.count, collStats.wiredTiger['block-manager']['file bytes available for reuse']);
+                                           collStats.count, collStats.wiredTiger['block-manager']['file bytes available for reuse']);
             Object.keys(collStats.indexDetails).map(indexName => {
                 collection.indexSize += collStats.indexDetails[indexName]['block-manager']['file size in bytes'];
                 collection.indexFree += collStats.indexDetails[indexName]['block-manager']['file bytes available for reuse'];
@@ -198,6 +198,7 @@ function printDbPath(dbPath) {
           dbPath.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
     );
     print('='.repeat(termWidth));
+    print(dbPath.instance);
 }
 
 slaveOk();

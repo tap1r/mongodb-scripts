@@ -1,8 +1,9 @@
 #!/bin/bash
 #
-# srvatlas.sh
+# Name: "srvatlas.sh"
+# Version = "0.1.0"
 # Description: Atlas SRV record validator
-# Created by: luke.prochazka@mongodb.com
+# Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
 _domain="${1:?Usage: srv.sh atlas-srv-name}"
 _txt=$(dig +short $_domain TXT)

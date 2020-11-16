@@ -1,7 +1,8 @@
 /*
- *  fuzzer.js
+ *  Name: "fuzzer.js"
+ *  Version = "0.1.0"
  *  Description: Generate pseudo random test data, with some fuzzing capability
- *  Created by: luke.prochazka@mongodb.com
+ *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongo [connection options] --quiet fuzzer.js"
@@ -11,12 +12,12 @@
  */
 
 let dbName = 'database', collName = 'collection';
-var batchSize = 1000;
+var batchSize = 1000; // adjust only if exceeding the BSON cap under Bulk
 let dropPref = true; // drop collection prior to generating data
 let exponent = 4; // number of doc by order of magnitude
 let totalDocs = Math.ceil(genRandomNumber(1, 10) * 10 ** exponent);
 let days = 365.25; // date range
-var fuzzer = { // not in use
+let fuzzer = { // not in use
     _id: '', // default to server generation
     vary_types: false, // fuzz value types
     nests: 0, // how many nested layers
@@ -26,7 +27,7 @@ var fuzzer = { // not in use
     sparsity: 0, // 0 - 100%
     weighting: 50 // 0 - 100%
 };
-var indexes = [ // createIndex options document
+let indexes = [ // createIndex options document
     // { "oid": { unique: true } },
     { "date": 1 },
     { "location": "2dsphere" },
@@ -42,8 +43,8 @@ var iter = 0, batch = 0, totalBatches = 0, batchBsonSize = 0, wc = 1, doc = {};
 let now = new Date().getTime();
 let timestamp = Math.floor(now/1000.0);
 if (totalDocs < batchSize) {
-    var iter = 1;
-    var batchSize = totalDocs;
+    iter = 1;
+    batchSize = totalDocs;
 } else {
     var iter = Math.floor(totalDocs / batchSize);
 }
@@ -70,14 +71,14 @@ function dropNS(dropPref) {
     }
 }
 
-function genRandomNumber(min, max) {
+function genRandomNumber(min = 0, max = 1) {
     /*
      *  
      */
     return Math.random() * (max - min) + min;
 }
 
-function genRandomInteger(min, max) {
+function genRandomInteger(min = 0, max = 1) {
     /*
      *  
      */
@@ -87,7 +88,7 @@ function genRandomInteger(min, max) {
     return Math.floor(Math.random() * (max - min) + min);
 }
 
-function genHexString(len) {
+function genHexString(len = 1) {
     /*
      *  
      */
@@ -99,7 +100,7 @@ function genHexString(len) {
     return res;
 }
 
-function genRandomString(len) {
+function genRandomString(len = 1) {
     /*
      *  
      */
@@ -112,7 +113,7 @@ function genRandomString(len) {
     return res;
 }
 
-function genRandomAlpha(len) {
+function genRandomAlpha(len = 1) {
     /*
      *  
      */
@@ -175,7 +176,7 @@ function randomIntInclusivePareto(min, max, alpha = 1.161) {
         probabilities.push(1.0 / Math.pow(k, alpha));
     }
 
-    var disc = SJS.Discrete(probabilities); // discrete sampler, returns value in the [0...probabilities.length-1] range
+    let disc = SJS.Discrete(probabilities); // discrete sampler, returns value in the [0...probabilities.length-1] range
 
     return disc.draw() + min; // back to [min...max] interval
 }

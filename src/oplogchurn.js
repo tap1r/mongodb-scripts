@@ -1,7 +1,8 @@
 /*
- *  oplogchurn.js
+ *  Name: "oplogchurn.js"
+ *  Version = "0.1.0"
  *  Description: oplog churn rate script
- *  Created by: luke.prochazka@mongodb.com
+ *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongo [connection options] --quiet oplogchurn.js"
@@ -55,13 +56,13 @@ if (serverVer() >= 4.4) {
       agg.push({
             $group: {
                   "_id": null,
-                  "combined_object_size": { $sum: { $bsonSize: "$$ROOT" }},
-                  "total_documents": { $sum: 1 }
+                  "bson_data_size": { $sum: { $bsonSize: "$$ROOT" }},
+                  "document_count": { $sum: 1 }
             }
       });
       oplog.aggregate(agg).map(churnInfo => {
-            total = churnInfo.combined_object_size;
-            docs = churnInfo.total_documents;
+            total = churnInfo.bson_data_size;
+            docs = churnInfo.document_count;
       });
 } else {
       print('Warning: Using the legacy client side calculation technique');
@@ -77,6 +78,7 @@ let blocksFree = stats.wiredTiger['block-manager']['file bytes available for reu
 let ratio = (stats.size / (stats.storageSize - blocksFree)).toFixed(2);
 
 // Print results
+print('\n');
 print('='.repeat(termWidth));
 print('Start time:'.padEnd(rowHeader), d1.padStart(columnWidth));
 print('End time:'.padEnd(rowHeader), d2.padStart(columnWidth));
@@ -93,5 +95,6 @@ print('-'.repeat(termWidth));
 print('Estimated current oplog churn:'.padEnd(rowHeader),
       ((total / (scale.factor * ratio * hrs)).toFixed(2) + ' ' + scale.unit + '/hr').padStart(columnWidth));
 print('='.repeat(termWidth));
+print('\n');
 
 // EOF

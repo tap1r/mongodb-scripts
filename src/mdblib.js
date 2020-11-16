@@ -1,7 +1,8 @@
 /*
- *  mdblib.js
- *  Description: mongo shell helper functions
- *  Created by: luke.prochazka@mongodb.com
+ *  Name: "mdblib.js"
+ *  Version = "0.1.0"
+ *  Description: mongo shell helper library
+ *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 /*
@@ -77,6 +78,10 @@ class MetaStats {
      *  Storage metadata stats class
      */
     constructor(name = '', dataSize = 0, storageSize = 0 , objects = 0, blocksFree = 0, indexSize = 0, indexFree = 0) {
+        this.instance = db.isMaster().me;
+        this.hostname = db.hostInfo().system.hostname;
+        this.proc = db.serverStatus().process;
+        this.dbPath = db.serverCmdLineOpts().parsed.storage.dbPath;
         this.name = name;
         this.dataSize = dataSize;
         this.storageSize = storageSize;
@@ -84,11 +89,14 @@ class MetaStats {
         this.blocksFree = blocksFree;
         this.indexSize = indexSize;
         this.indexFree = indexFree;
-        // this.compression = () => this.dataSize / (this.storageSize - this.blocksFree);
     }
 
     compression() {
         return this.dataSize / (this.storageSize - this.blocksFree);
+    }
+
+    totalSize() {
+        return this.storageSize + this.indexSize;
     }
 }
 
