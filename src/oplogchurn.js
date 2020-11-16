@@ -4,7 +4,7 @@
  *  Created by: luke.prochazka@mongodb.com
  */
 
-// Usage: "mongo [+connection options] --quiet oplogchurn.js"
+// Usage: "mongo [connection options] --quiet oplogchurn.js"
 
 /*
  *  Load helper lib (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
@@ -33,8 +33,8 @@ let agg = [{
                   $gte: Timestamp(t1, 1),
                   $lte: Timestamp(t2, 1)
             }
-      }
-},{
+         }
+  },{
       $project: { "_id": 0 }
 }];
 
@@ -53,22 +53,14 @@ let oplog = db.getSiblingDB('local').getCollection('oplog.rs');
 if (serverVer() >= 4.4) {
       // Use the v4.4 $bsonSize aggregation operator
       // print('Using the $bsonSize aggregation operator');
-      oplog.aggregate([{
-            $match: {
-                  "ts": {
-                        $gte: Timestamp(t1, 1),
-                        $lte: Timestamp(t2, 1)
-                  }
-            }
-      },{
-            $project: { "_id": 0 }
-      },{
+      agg.push({
             $group: {
                   "_id": null,
                   "combined_object_size": { $sum: { $bsonSize: "$$ROOT" }},
                   "total_documents": { $sum: 1 }
             }
-      }]).map(churnInfo => {
+      });
+      oplog.aggregate(agg).map(churnInfo => {
             total = churnInfo.combined_object_size;
             docs = churnInfo.total_documents;
       });
