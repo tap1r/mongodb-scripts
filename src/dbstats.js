@@ -170,7 +170,7 @@ function printDbPath(dbPath) {
     /*
      *  Print total dbPath rollup stats
      */
-    print('\n'),
+    print('\n');
     print('='.repeat(termWidth));
     print('dbPath totals'.padEnd(rowHeader),
           'Data size'.padStart(columnWidth),
@@ -198,7 +198,9 @@ function printDbPath(dbPath) {
           dbPath.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
     );
     print('='.repeat(termWidth));
-    print(dbPath.instance);
+    print('Host:', dbPath.hostname, 'Type:', dbPath.proc, 'DbPath:', dbPath.dbPath);
+    print('='.repeat(termWidth));
+    print('\n');
 }
 
 slaveOk();
