@@ -12,13 +12,13 @@
  */
 
 let dbName = 'database', collName = 'collection';
-var batchSize = 1000; // adjust only if exceeding the BSON cap under Bulk
+// var batchSize = 1000; // adjust only if exceeding the BSON cap under Bulk
 let dropPref = true; // drop collection prior to generating data
-let exponent = 4; // number of doc by order of magnitude
+let exponent = 5; // number of doc by order of magnitude
 let totalDocs = Math.ceil(genRandomNumber(1, 10) * 10 ** exponent);
 let days = 365.25; // date range
 let fuzzer = { // not in use
-    _id: '', // default to server generation
+    _id: '', // default to server/bulk generation
     vary_types: false, // fuzz value types
     nests: 0, // how many nested layers
     distribution: "uniform", // uniform, normal, bimodal, pareto, exponent
@@ -27,7 +27,7 @@ let fuzzer = { // not in use
     sparsity: 0, // 0 - 100%
     weighting: 50 // 0 - 100%
 };
-let indexes = [ // createIndex options document
+let indexes = [ // createIndexes parameters
     // { "oid": { unique: true } },
     { "date": 1 },
     { "location": "2dsphere" },
@@ -39,14 +39,21 @@ let indexes = [ // createIndex options document
  *  global defaults
  */
 
-var iter = 0, batch = 0, totalBatches = 0, batchBsonSize = 0, wc = 1, doc = {};
+var iter = 0, batch = 0, totalBatches = 0, wc = 1, doc = {};
+const bsonMax = 16 * 1024 ** 2;
 let now = new Date().getTime();
 let timestamp = Math.floor(now/1000.0);
+let avgSize = Object.bsonsize(genDocument());
+print('\n');
+print('Estimated document size is', avgSize, 'BSON bytes');
+let batchSize = Math.floor(bsonMax * 0.85 / avgSize);
+print('Estimated optimal batch size', batchSize);
+
 if (totalDocs < batchSize) {
     iter = 1;
     batchSize = totalDocs;
 } else {
-    var iter = Math.floor(totalDocs / batchSize);
+    iter = Math.floor(totalDocs / batchSize);
 }
 
 let residual = Math.floor(totalDocs % batchSize);
@@ -57,7 +64,7 @@ let residual = Math.floor(totalDocs % batchSize);
 
 function dropNS(dropPref) {
     /*
-     *  
+     *  drop namespace
      */
     if (dropPref) {
         print('\n');
@@ -73,14 +80,14 @@ function dropNS(dropPref) {
 
 function genRandomNumber(min = 0, max = 1) {
     /*
-     *  
+     *  generate random number
      */
     return Math.random() * (max - min) + min;
 }
 
 function genRandomInteger(min = 0, max = 1) {
     /*
-     *  
+     *  generate random integer
      */
     min = Math.ceil(min);
     max = Math.floor(max);
@@ -90,7 +97,7 @@ function genRandomInteger(min = 0, max = 1) {
 
 function genHexString(len = 1) {
     /*
-     *  
+     *  generate hexadecimal string
      */
     let res = '';
     for (let i = 0; i < len; ++i) {
@@ -102,7 +109,7 @@ function genHexString(len = 1) {
 
 function genRandomString(len = 1) {
     /*
-     *  
+     *  generate random alpha-num string
      */
     let res = '';
     let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -115,7 +122,7 @@ function genRandomString(len = 1) {
 
 function genRandomAlpha(len = 1) {
     /*
-     *  
+     *  fetch random alpha character
      */
     let res = '';
     let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -128,7 +135,7 @@ function genRandomAlpha(len = 1) {
 
 function genRandomSymbol() {
     /*
-     *  
+     *  fetch random symbol
      */
     let symbol = '!#%&\'()+,-;=@[]^_`{}~¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ';
 
@@ -137,7 +144,7 @@ function genRandomSymbol() {
 
 function genRandomCurrency() {
     /*
-     *  
+     *  fetch random curreny symbol
      */
     let symbol = ['$', '€', '₡', '£', '₪', '₹', '¥', '₩', '₦', '₱zł', '₲', '฿', '₴', '₫'];
 
@@ -146,7 +153,7 @@ function genRandomCurrency() {
 
 function genArrayElements(len) {
     /*
-     *  
+     *  generate array of random strings
      */
     let array = [];
     for (let i = 0; i < len; ++i) {
@@ -201,6 +208,13 @@ function expoDistribution(lambda) {
     return -Math.log(1.0 - Math.random()) / lambda;
 }
 
+function genBenfordsRandomNumber(min, max) {
+    /*
+     *  generate a natural number
+     */
+    return Math.random() * (max - min) + min;
+}
+
 function genDocument() {
     /*
      *  generate pseudo-random key values
@@ -240,40 +254,46 @@ function genDocument() {
         "qty": NumberInt(genRandomInteger(0, 10 ** 4)),
         "currency": genRandomCurrency(),
         "price": +genRandomNumber(0, 10 ** 4).toFixed(2),
-        // "temperature": "-40oC"
+        "temperature": +normalDistribution(15, 10).toFixed(1) // + '°C'
     };
 }
 
 dropNS(dropPref);
 
 // generate and bulk write the docs
-residual > 0 ? totalBatches = iter + 1: totalBatches = iter;
+residual > 0 ? totalBatches = iter + 1 : totalBatches = iter;
 print('\n');
 print('Generating', totalDocs, 'documents in', totalBatches, 'batches');
 for (let i = 0; i < (iter + 1); ++i) {
     if (i === iter && residual > 0) {
         batchSize = residual;
     }
+
     var bulk = db.getSiblingDB(dbName).getCollection(collName).initializeUnorderedBulkOp();
-    batchBsonSize = 0;
     for (let batch = 0; batch < batchSize; ++batch) {
         doc = genDocument();
-        batchBsonSize += Object.bsonsize(doc);
         bulk.insert(doc);
     }
 
     var result = bulk.execute({ w: wc });
-    print('...processing batch', i + 1, 'of', totalBatches, '(' + result.nInserted, 'documents bulk inserted with', batchBsonSize, 'BSON bytes)');
+    print('...bulk inserting batch', i + 1, 'of', totalBatches,
+          '(' + result.nInserted, 'documents)');
 }
 
+print('\n');
+print('Completed generating:', totalDocs,
+      'documents in "' + dbName + '.' + collName + '"');
+print('\n');
+
 // create indexes
-print('\nBuilding indexes');
+print('\n');
+print('Building indexes:');
 indexes.forEach((index) => {
     printjson(index);
-    db.getSiblingDB(dbName).getCollection(collName).createIndex(index);
-})
+});
+db.getSiblingDB(dbName).getCollection(collName).createIndexes(indexes, {}, 1);
 print('\n');
-print('Completed generating:', totalDocs, 'documents in "' + dbName + '.' + collName + '"');
+print('Complete!');
 print('\n');
 
 // EOF
