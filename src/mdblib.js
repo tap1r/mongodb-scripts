@@ -63,13 +63,51 @@ class ScaleFactor {
             default: return { name: "megabytes", unit: "MB", symbol: "M", factor: 1024 ** 2, precision: 2, pctPoint: 1 };
         }
     }
+}
 
-    autoFactor(metric) {
-        /*
-         *  Determine scale factor automatically
-         */
-        let scale = Math.floor(Math.log2(metric) / 10);
-        return (metric / 1024 ** scale).toFixed(2) + ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'][scale];
+class AutoFactor {
+    /*
+     *  Determine scale factor automatically
+     */
+    constructor(input) {
+        this.B = this.metric("bytes", "B", "", 0, 0, 2);
+        this.KB = this.metric("kilobytes", "KB", "k", 1, 2, 1 );
+        this.MB = this.metric("megabytes", "MB", "M", 2, 2, 1 );
+        this.GB = this.metric("gigabytes", "GB", "G", 3, 2, 1 );
+        this.TB = this.metric("terabytes", "TB", "T", 4, 2, 1 );
+        this.PB = this.metric("petabytes", "PB", "P", 5, 2, 1 );
+        this.EB = this.metric("exabytes", "EB", "E", 6, 2, 1 );
+        this.ZB = this.metric("zettabytes", "ZB", "Z", 7, 2, 1 );
+        this.YB = this.metric("yottabytes", "YB", "Y", 8, 2, 1 );
+
+        if (typeof(input) == String) {
+            switch (input.toUpperCase()) {
+                case 'B': return this.B;
+                case 'KB': return this.KB;
+                case 'MB': return this.MB;
+                case 'GB': return this.GB;
+                case 'TB': return this.TB;
+                case 'PB': return this.PB;
+                case 'EB': return this.EB;
+                case 'ZB': return this.ZB;
+                case 'YB': return this.YB;
+                default: return this.MB;
+            }
+        } else if (typeof(input) == Number && input >= 0) {
+            let scale = Math.floor(Math.log2(input) / 10);
+            return (input / 1024 ** scale).toFixed(2) + [this.B, this.KB, this.MB, this.GB, this.TB, this.PB, this.EB, this.ZB, this.YB][scale];
+        } else {
+            print('Invalid parameter type');
+            return;
+        }
+    }
+
+    metric(name, unit, symbol, factor, precision, pctPoint) {
+        return { 'name': name, 'unit': unit, 'symbol': symbol, 'factor': 1024 ** factor, 'precision': precision, 'pctPoint': pctPoint };
+    }
+
+    static formatted(number) {
+        return (number / this.factor).toFixed(this.precision) + this.unit;
     }
 }
 
@@ -78,10 +116,10 @@ class MetaStats {
      *  Storage metadata stats class
      */
     constructor(name = '', dataSize = 0, storageSize = 0 , objects = 0, blocksFree = 0, indexSize = 0, indexFree = 0) {
-        this.instance = db.isMaster().me;
+        // this.instance = db.isMaster().me;
         this.hostname = db.hostInfo().system.hostname;
         this.proc = db.serverStatus().process;
-        this.dbPath = db.serverCmdLineOpts().parsed.storage.dbPath;
+        db.serverStatus().process === 'mongod' ? this.dbPath = db.serverCmdLineOpts().parsed.storage.dbPath : this.dbPath = 'none';
         this.name = name;
         this.dataSize = dataSize;
         this.storageSize = storageSize;
