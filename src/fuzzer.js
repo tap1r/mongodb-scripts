@@ -25,14 +25,14 @@ let exponent = 4; // number of doc by order of magnitude
 let totalDocs = Math.ceil(getRandomNumber(1, 10) * 10 ** exponent);
 let days = 365.25; // date range
 let fuzzer = { // not in use
-    _id: "", // default to server/bulk generation
-    vary_types: false, // fuzz value types
-    nests: 0, // how many nested layers
-    distribution: "uniform", // uniform, normal, bimodal, pareto, exponent
-    range: "max", // min, max, %
-    cardinality: 1, // experimental
-    sparsity: 0, // 0 - 100%
-    weighting: 50 // 0 - 100%
+    "_id": "", // default to server/bulk generation
+    "vary_types": false, // fuzz value types
+    "nests": 0, // how many nested layers
+    "distribution": "uniform", // uniform, normal, bimodal, pareto, exponent
+    "range": "max", // min, max, %
+    "cardinality": 1, // experimental
+    "sparsity": 0, // 0 - 100%
+    "weighting": 50 // 0 - 100%
 };
 let indexes = [ // createIndexes parameters
     // { "oid": { unique: true } },
