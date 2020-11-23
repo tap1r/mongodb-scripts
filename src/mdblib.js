@@ -164,4 +164,11 @@ slaveOk = () => {
     }
 }
 
+function _rnd() {
+    /*
+     * Use Math.random(); until something better comes along
+     */
+    return Math.random();
+}
+
 // EOF
