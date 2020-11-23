@@ -157,7 +157,7 @@ function shellVer() {
 }
 
 slaveOk = () => {
-    if (serverVer() >= 4.4) {
+    if (shellVer() >= 4.4) {
         return rs.secondaryOk();
     } else {
         return rs.slaveOk();
