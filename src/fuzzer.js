@@ -117,9 +117,9 @@ function genDocument() {
             "num": +getRandomNumber(-1 * 2 ** 12, 2 ** 12).toFixed(4)
         },
         "array": genArrayElements(getRandomIntInclusive(0, 10)),
-        "boolean": Math.random() < 0.5,
-        "date": new Date(now - (Math.random() * days * 24 * 60 * 60 * 1000)),
-        "timestamp": new Timestamp(timestamp - (Math.random() * days * 24 * 60 * 60), 1),
+        "boolean": _rnd() < 0.5,
+        "date": new Date(now - (_rnd() * days * 24 * 60 * 60 * 1000)),
+        "timestamp": new Timestamp(timestamp - (_rnd() * days * 24 * 60 * 60), 1),
         "null": null,
         "int32": NumberInt(getRandomIntInclusive(-1 * (2 ** 31) - 1, (2 ** 31) - 1)),
         "int64": NumberLong(getRandomIntInclusive(-1 * (2 ** 63) - 1, (2 ** 63) - 1)),
@@ -168,7 +168,7 @@ function getRandomNumber(min = 0, max = 1) {
     /*
      *  generate random number
      */
-    return Math.random() * (max - min) + min;
+    return _rnd() * (max - min) + min;
 }
 
 function getRandomInt(min = 0, max = 1) {
@@ -177,7 +177,7 @@ function getRandomInt(min = 0, max = 1) {
      */
     min = Math.ceil(min);
     max = Math.floor(max);
-    return Math.floor(Math.random() * (max - min) + min);
+    return Math.floor(_rnd() * (max - min) + min);
 }
 
 function getRandomIntInclusive(min = 0, max = 1) {
@@ -186,7 +186,7 @@ function getRandomIntInclusive(min = 0, max = 1) {
      */
     min = Math.ceil(min);
     max = Math.floor(max);
-    return Math.floor(Math.random() * (max - min + 1) + min);
+    return Math.floor(_rnd() * (max - min + 1) + min);
 }
 
 function genHexString(len = 1) {
@@ -195,7 +195,7 @@ function genHexString(len = 1) {
      */
     let res = '';
     for (let i = 0; i < len; ++i) {
-        res += (Math.floor(Math.random() * 16)).toString(16);
+        res += (Math.floor(_rnd() * 16)).toString(16);
     }
 
     return res;
@@ -208,7 +208,7 @@ function genRandomString(len = 1) {
     let res = '';
     let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     for (let i = 0; i < len; ++i) {
-       res += chars.charAt(Math.floor(Math.random() * chars.length));
+       res += chars.charAt(Math.floor(_rnd() * chars.length));
     }
 
     return res;
@@ -221,7 +221,7 @@ function genRandomAlpha(len = 1) {
     let res = '';
     let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
     for (let i = 0; i < len; ++i) {
-       res += chars.charAt(Math.floor(Math.random() * chars.length));
+       res += chars.charAt(Math.floor(_rnd() * chars.length));
     }
 
     return res;
@@ -232,7 +232,7 @@ function genRandomSymbol() {
      *  fetch random symbol
      */
     let symbol = '!#%&\'()+,-;=@[]^_`{}~¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ';
-    return symbol.charAt(Math.floor(Math.random() * symbol.length));
+    return symbol.charAt(Math.floor(_rnd() * symbol.length));
 }
 
 function genRandomCurrency() {
@@ -240,7 +240,7 @@ function genRandomCurrency() {
      *  fetch random curreny symbol
      */
     let symbol = ['$', '€', '₡', '£', '₪', '₹', '¥', '₩', '₦', '₱zł', '₲', '฿', '₴', '₫'];
-    return symbol[(Math.floor(Math.random() * symbol.length))];
+    return symbol[(Math.floor(_rnd() * symbol.length))];
 }
 
 function genArrayElements(len) {
@@ -260,7 +260,7 @@ function genRandomInclusivePareto(min, alpha = 1.161) {
      *  min is the lowest possible value that can be returned
      *  alpha controls the “shape” of the distribution
      */
-    let u = 1.0 - Math.random();
+    let u = 1.0 - _rnd();
     return min / Math.pow(u, 1.0 / alpha);
 }
 
@@ -283,8 +283,8 @@ function normalDistribution(mu, sigma) {
      *  mu = mean
      *  sigma = standard deviation
      */
-    let u = Math.random();
-    let v = Math.random();
+    let u = _rnd();
+    let v = _rnd();
     let x = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(Math.PI*2 * v);
     // let y = Math.sqrt(-2.0 * Math.log(u)) * Math.sin(Math.PI*2 * v);
     return x * sigma + mu;
@@ -294,14 +294,14 @@ function expnDistribution(lambda) {
     /*
      *  exponential distribution function
      */
-    return -Math.log(1.0 - Math.random()) / lambda;
+    return -Math.log(1.0 - _rnd()) / lambda;
 }
 
 function genBenfordsRandomNumber(min, max) {
     /*
      *  generate a natural number
      */
-    return Math.random() * (max - min) + min;
+    return _rnd() * (max - min) + min;
 }
 
 main();
