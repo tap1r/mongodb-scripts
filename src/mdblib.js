@@ -5,6 +5,12 @@
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
+ /*
+ *  Global defaults
+ */
+
+const bsonMax = 16 * 1024 ** 2;
+
 /*
  *  Helper functions, derived from:
  *  https://github.com/uxitten/polyfill/blob/master/string.polyfill.js
@@ -48,19 +54,19 @@ class ScaleFactor {
     /*
      *  Scale formatting preferences
      */
-    constructor(unit) {
+    constructor(unit = 'MB') {
         // default to MB
-        switch (unit) {
-            case 'B': return { name: "bytes", unit: "B", symbol: "", factor: 1024 ** 0, precision: 0, pctPoint: 2 };
-            case 'KB': return { name: "kilobytes", unit: "KB", symbol: "k", factor: 1024 ** 1, precision: 2, pctPoint: 1 };
-            case 'MB': return { name: "megabytes", unit: "MB", symbol: "M", factor: 1024 ** 2, precision: 2, pctPoint: 1 };
-            case 'GB': return { name: "gigabytes", unit: "GB", symbol: "G", factor: 1024 ** 3, precision: 2, pctPoint: 1 };
-            case 'TB': return { name: "terabytes", unit: "TB", symbol: "T", factor: 1024 ** 4, precision: 2, pctPoint: 1 };
-            case 'PB': return { name: "petabytes", unit: "PB", symbol: "P", factor: 1024 ** 5, precision: 2, pctPoint: 1 };
-            case 'EB': return { name: "exabytes", unit: "EB", symbol: "E", factor: 1024 ** 6, precision: 2, pctPoint: 1 };
-            case 'ZB': return { name: "zettabytes", unit: "ZB", symbol: "Z", factor: 1024 ** 7, precision: 2, pctPoint: 1 };
-            case 'YB': return { name: "yottabytes", unit: "YB", symbol: "Y", factor: 1024 ** 8, precision: 2, pctPoint: 1 };
-            default: return { name: "megabytes", unit: "MB", symbol: "M", factor: 1024 ** 2, precision: 2, pctPoint: 1 };
+        switch (unit.toUpperCase()) {
+            case 'B': return { "name": "bytes", "unit": "B", "symbol": "", "factor": 1024 ** 0, "precision": 0, "pctPoint": 2 };
+            case 'KB': return { "name": "kilobytes", "unit": "KB", "symbol": "k", "factor": 1024 ** 1, "precision": 2, "pctPoint": 1 };
+            case 'MB': return { "name": "megabytes", "unit": "MB", "symbol": "M", "factor": 1024 ** 2, "precision": 2, "pctPoint": 1 };
+            case 'GB': return { "name": "gigabytes", "unit": "GB", "symbol": "G", "factor": 1024 ** 3, "precision": 2, "pctPoint": 1 };
+            case 'TB': return { "name": "terabytes", "unit": "TB", "symbol": "T", "factor": 1024 ** 4, "precision": 2, "pctPoint": 1 };
+            case 'PB': return { "name": "petabytes", "unit": "PB", "symbol": "P", "factor": 1024 ** 5, "precision": 2, "pctPoint": 1 };
+            case 'EB': return { "name": "exabytes", "unit": "EB", "symbol": "E", "factor": 1024 ** 6, "precision": 2, "pctPoint": 1 };
+            case 'ZB': return { "name": "zettabytes", "unit": "ZB", "symbol": "Z", "factor": 1024 ** 7, "precision": 2, "pctPoint": 1 };
+            case 'YB': return { "name": "yottabytes", "unit": "YB", "symbol": "Y", "factor": 1024 ** 8, "precision": 2, "pctPoint": 1 };
+            default: return { "name": "megabytes", "unit": "MB", "symbol": "M", "factor": 1024 ** 2, "precision": 2, "pctPoint": 1 };
         }
     }
 }
@@ -70,17 +76,17 @@ class AutoFactor {
      *  Determine scale factor automatically
      */
     constructor(input) {
-        this.B = this.metric("bytes", "B", "", 0, 0, 2);
-        this.KB = this.metric("kilobytes", "KB", "k", 1, 2, 1 );
-        this.MB = this.metric("megabytes", "MB", "M", 2, 2, 1 );
-        this.GB = this.metric("gigabytes", "GB", "G", 3, 2, 1 );
-        this.TB = this.metric("terabytes", "TB", "T", 4, 2, 1 );
-        this.PB = this.metric("petabytes", "PB", "P", 5, 2, 1 );
-        this.EB = this.metric("exabytes", "EB", "E", 6, 2, 1 );
-        this.ZB = this.metric("zettabytes", "ZB", "Z", 7, 2, 1 );
-        this.YB = this.metric("yottabytes", "YB", "Y", 8, 2, 1 );
+        this.B = this.metric('bytes', 'B', '', 0, 0, 2);
+        this.KB = this.metric('kilobytes', 'KB', 'k', 1, 2, 1 );
+        this.MB = this.metric('megabytes', 'MB', 'M', 2, 2, 1 );
+        this.GB = this.metric('gigabytes', 'GB', 'G', 3, 2, 1 );
+        this.TB = this.metric('terabytes', 'TB', 'T', 4, 2, 1 );
+        this.PB = this.metric('petabytes', 'PB', 'P', 5, 2, 1 );
+        this.EB = this.metric('exabytes', 'EB', 'E', 6, 2, 1 );
+        this.ZB = this.metric('zettabytes', 'ZB', 'Z', 7, 2, 1 );
+        this.YB = this.metric('yottabytes', 'YB', 'Y', 8, 2, 1 );
 
-        if (typeof(input) == String) {
+        if (typeof(input) === String) {
             switch (input.toUpperCase()) {
                 case 'B': return this.B;
                 case 'KB': return this.KB;
@@ -93,7 +99,7 @@ class AutoFactor {
                 case 'YB': return this.YB;
                 default: return this.MB;
             }
-        } else if (typeof(input) == Number && input >= 0) {
+        } else if (typeof(input) === Number && input >= 0) {
             let scale = Math.floor(Math.log2(input) / 10);
             return (input / 1024 ** scale).toFixed(2) + [this.B, this.KB, this.MB, this.GB, this.TB, this.PB, this.EB, this.ZB, this.YB][scale];
         } else {
@@ -103,7 +109,7 @@ class AutoFactor {
     }
 
     metric(name, unit, symbol, factor, precision, pctPoint) {
-        return { 'name': name, 'unit': unit, 'symbol': symbol, 'factor': 1024 ** factor, 'precision': precision, 'pctPoint': pctPoint };
+        return { "name": name, "unit": unit, "symbol": symbol, "factor": 1024 ** factor, "precision": precision, "pctPoint": pctPoint };
     }
 
     static formatted(number) {
@@ -115,11 +121,11 @@ class MetaStats {
     /*
      *  Storage metadata stats class
      */
-    constructor(name = '', dataSize = 0, storageSize = 0 , objects = 0, blocksFree = 0, indexSize = 0, indexFree = 0) {
+    constructor(name = '', dataSize = 0, storageSize = 0, objects = 0, blocksFree = 0, indexSize = 0, indexFree = 0) {
         // this.instance = db.isMaster().me;
         this.hostname = db.hostInfo().system.hostname;
         this.proc = db.serverStatus().process;
-        db.serverStatus().process === 'mongod' ? this.dbPath = db.serverCmdLineOpts().parsed.storage.dbPath : this.dbPath = 'none';
+        db.serverStatus().process === 'mongod' ? this.dbPath = db.serverCmdLineOpts().parsed.storage.dbPath : this.dbPath = null;
         this.name = name;
         this.dataSize = dataSize;
         this.storageSize = storageSize;
@@ -143,6 +149,10 @@ class MetaStats {
  */
 
 function serverVer() {
+    return +db.version().match(/^[0-9]+\.[0-9]+/);
+}
+
+function shellVer() {
     return +version().match(/^[0-9]+\.[0-9]+/);
 }
 
