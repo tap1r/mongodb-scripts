@@ -8,22 +8,31 @@
 // Usage: "mongo [connection options] --quiet dbstats.js"
 
 /*
- *  Load helper library (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
- *  Save mdblib.js to the local directory for the mongo shell to read
+ *  Load helper lib (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
+ *  Save mdblib.js to the current working directory
  */
 
 load('mdblib.js');
 
 /*
- *  Formatting preferences
+ * User defined parameters
  */
 
 const scale = new ScaleFactor(); // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
-let termWidth = 124, columnWidth = 15, rowHeader = 36;
 
 /*
- *  main
+ *  Global defaults
  */
+
+let termWidth = 124, columnWidth = 15, rowHeader = 36;  // formatting preferences
+
+function main() {
+    /*
+    *  main
+    */
+    slaveOk();
+    getStats();
+}
 
 function getStats() {
     /*
@@ -34,11 +43,11 @@ function getStats() {
     dbNames.map(dbName => {
         let dbStats = db.getSiblingDB(dbName).stats();
         let database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, dbStats.indexSize);
-        let collections = db.getSiblingDB(dbName).getCollectionInfos({ type: "collection" }, true);
+        let collections = db.getSiblingDB(dbName).getCollectionInfos({ "type": "collection" }, true);
         printDbHeader(database.name);
         printCollHeader(collections.length);
         collections.map(collInfo => {
-            let collStats = db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ indexDetails: true });
+            let collStats = db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ "indexDetails": true });
             let collection = new MetaStats(collInfo.name, collStats.size, collStats.wiredTiger['block-manager']['file size in bytes'],
                                            collStats.count, collStats.wiredTiger['block-manager']['file bytes available for reuse']);
             Object.keys(collStats.indexDetails).map(indexName => {
@@ -49,7 +58,7 @@ function getStats() {
             database.blocksFree += collection.blocksFree;
             database.indexFree += collection.indexFree;
         });
-        let views = db.getSiblingDB(dbName).getCollectionInfos({ type: "view" }, true);
+        let views = db.getSiblingDB(dbName).getCollectionInfos({ "type": "view" }, true);
         printViewHeader(views.length);
         views.map(viewInfo => {
             printView(viewInfo.name);
@@ -203,7 +212,6 @@ function printDbPath(dbPath) {
     print('\n');
 }
 
-slaveOk();
-getStats();
+main();
 
 // EOF
