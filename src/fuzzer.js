@@ -23,7 +23,7 @@ load('mdblib.js');
 let dbName = 'database', collName = 'collection';
 // var batchSize = 1000; // adjust only if exceeding the BSON cap under Bulk
 let dropPref = true; // drop collection prior to generating data
-let exponent = 4; // number of doc by order of magnitude
+let exponent = 2; // number of doc by order of magnitude
 let totalDocs = Math.ceil(getRandomNumber(1, 10) * 10 ** exponent);
 let days = 365.25; // date range
 let fuzzer = { // not in use
@@ -43,7 +43,7 @@ let indexes = [ // createIndexes parameters
     { "random": 1 },
     { "timestamp": 1 }
 ];
-let wc = 1; // builk write concern
+let wc = 1; // bulk write concern
 
 /*
  *  Global defaults
@@ -55,8 +55,8 @@ let timestamp = Math.floor(now/1000.0);
 
 function main() {
     /*
-    *  main
-    */
+     *  main
+     */
     let avgSize = Object.bsonsize(genDocument());
     print('\n');
     print('Estimated document BSON size is:', avgSize, 'bytes');
