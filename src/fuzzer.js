@@ -125,7 +125,7 @@ function genDocument() {
         "int64": NumberLong(getRandomIntInclusive(-1 * 2 ** 63 - 1, 2 ** 63 - 1)),
         "double": getRandomNumber(-1 * 2 ** 12, 2 ** 12),
         "decimal128": NumberDecimal(getRandomNumber(-1 * 10 ** 127 - 1, 10 ** 127 -1)),
-        "regex": /\/[0-9a-z]*\//,
+        "regex": /\/[A-Z0-9a-z]*\//,
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
         "md5": MD5(genHexString(32)),
@@ -156,7 +156,6 @@ function dropNS(dropPref) {
         print('\n');
         print('Dropping namespace:', dbName + '.' + collName);
         db.getSiblingDB(dbName).getCollection(collName).drop();
-        
     } else {
         print('\n');
         print('Not dropping namespace:', dbName + '.' + collName);
