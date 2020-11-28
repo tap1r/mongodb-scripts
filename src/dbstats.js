@@ -15,7 +15,7 @@
 load('mdblib.js');
 
 /*
- * User defined parameters
+ *  User defined parameters
  */
 
 const scale = new ScaleFactor(); // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
@@ -28,8 +28,8 @@ let termWidth = 124, columnWidth = 15, rowHeader = 36;  // formatting preference
 
 function main() {
     /*
-    *  main
-    */
+     *  main
+     */
     slaveOk();
     getStats();
 }
