@@ -117,14 +117,14 @@ function genDocument() {
             "num": +getRandomNumber(-1 * 2 ** 12, 2 ** 12).toFixed(4)
         },
         "array": genArrayElements(getRandomIntInclusive(0, 10)),
-        "boolean": _rnd() < 0.5,
-        "date": new Date(now - (_rnd() * days * 24 * 60 * 60 * 1000)),
-        "timestamp": new Timestamp(timestamp - (_rnd() * days * 24 * 60 * 60), 1),
+        "boolean": rand() < 0.5,
+        "date": new Date(now - (rand() * days * 24 * 60 * 60 * 1000)),
+        "timestamp": new Timestamp(timestamp - (rand() * days * 24 * 60 * 60), 1),
         "null": null,
-        "int32": NumberInt(getRandomIntInclusive(-1 * (2 ** 31) - 1, (2 ** 31) - 1)),
-        "int64": NumberLong(getRandomIntInclusive(-1 * (2 ** 63) - 1, (2 ** 63) - 1)),
+        "int32": NumberInt(getRandomIntInclusive(-1 * 2 ** 31 - 1, 2 ** 31 - 1)),
+        "int64": NumberLong(getRandomIntInclusive(-1 * 2 ** 63 - 1, 2 ** 63 - 1)),
         "double": getRandomNumber(-1 * 2 ** 12, 2 ** 12),
-        "decimal128": NumberDecimal(getRandomNumber(-1 * (10 ** 127) - 1, (10 ** 127) -1)),
+        "decimal128": NumberDecimal(getRandomNumber(-1 * 10 ** 127 - 1, 10 ** 127 -1)),
         "regex": /\/[0-9a-z]*\//,
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
@@ -156,19 +156,20 @@ function dropNS(dropPref) {
         print('\n');
         print('Dropping namespace:', dbName + '.' + collName);
         db.getSiblingDB(dbName).getCollection(collName).drop();
-        return;
+        
     } else {
         print('\n');
         print('Not dropping namespace:', dbName + '.' + collName);
-        return;
     }
+
+    return;
 }
 
 function getRandomNumber(min = 0, max = 1) {
     /*
      *  generate random number
      */
-    return _rnd() * (max - min) + min;
+    return rand() * (max - min) + min;
 }
 
 function getRandomInt(min = 0, max = 1) {
@@ -177,7 +178,7 @@ function getRandomInt(min = 0, max = 1) {
      */
     min = Math.ceil(min);
     max = Math.floor(max);
-    return Math.floor(_rnd() * (max - min) + min);
+    return Math.floor(rand() * (max - min) + min);
 }
 
 function getRandomIntInclusive(min = 0, max = 1) {
@@ -186,7 +187,7 @@ function getRandomIntInclusive(min = 0, max = 1) {
      */
     min = Math.ceil(min);
     max = Math.floor(max);
-    return Math.floor(_rnd() * (max - min + 1) + min);
+    return Math.floor(rand() * (max - min + 1) + min);
 }
 
 function genHexString(len = 1) {
@@ -195,7 +196,7 @@ function genHexString(len = 1) {
      */
     let res = '';
     for (let i = 0; i < len; ++i) {
-        res += (Math.floor(_rnd() * 16)).toString(16);
+        res += (Math.floor(rand() * 16)).toString(16);
     }
 
     return res;
@@ -208,7 +209,7 @@ function genRandomString(len = 1) {
     let res = '';
     let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     for (let i = 0; i < len; ++i) {
-       res += chars.charAt(Math.floor(_rnd() * chars.length));
+       res += chars.charAt(Math.floor(rand() * chars.length));
     }
 
     return res;
@@ -221,7 +222,7 @@ function genRandomAlpha(len = 1) {
     let res = '';
     let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
     for (let i = 0; i < len; ++i) {
-       res += chars.charAt(Math.floor(_rnd() * chars.length));
+       res += chars.charAt(getRandomInt(0, chars.length));
     }
 
     return res;
@@ -232,15 +233,15 @@ function genRandomSymbol() {
      *  fetch random symbol
      */
     let symbol = '!#%&\'()+,-;=@[]^_`{}~¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ';
-    return symbol.charAt(Math.floor(_rnd() * symbol.length));
+    return symbol.charAt(Math.floor(rand() * symbol.length));
 }
 
 function genRandomCurrency() {
     /*
      *  fetch random curreny symbol
      */
-    let symbol = ['$', '€', '₡', '£', '₪', '₹', '¥', '₩', '₦', '₱zł', '₲', '฿', '₴', '₫'];
-    return symbol[(Math.floor(_rnd() * symbol.length))];
+    let currencies = ['$', '€', '₡', '£', '₪', '₹', '¥', '₩', '₦', '₱zł', '₲', '฿', '₴', '₫'];
+    return currencies[getRandomInt(0, currencies.length)];
 }
 
 function genArrayElements(len) {
@@ -260,8 +261,8 @@ function genRandomInclusivePareto(min, alpha = 1.161) {
      *  min is the lowest possible value that can be returned
      *  alpha controls the “shape” of the distribution
      */
-    let u = 1.0 - _rnd();
-    return min / Math.pow(u, 1.0 / alpha);
+    let u = 1.0 - rand();
+    return min / u ** (1.0 / alpha);
 }
 
 function randomIntInclusivePareto(min, max, alpha = 1.161) {
@@ -271,7 +272,7 @@ function randomIntInclusivePareto(min, max, alpha = 1.161) {
      */
     let probabilities = [];
     for (var k = min; k <= max; ++k) {
-        probabilities.push(1.0 / Math.pow(k, alpha));
+        probabilities.push(1.0 / k ** alpha);
     }
 
     let disc = SJS.Discrete(probabilities); // discrete sampler, returns value in the [0...probabilities.length-1] range
@@ -283,8 +284,8 @@ function normalDistribution(mu, sigma) {
      *  mu = mean
      *  sigma = standard deviation
      */
-    let u = _rnd();
-    let v = _rnd();
+    let u = rand();
+    let v = rand();
     let x = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(Math.PI*2 * v);
     // let y = Math.sqrt(-2.0 * Math.log(u)) * Math.sin(Math.PI*2 * v);
     return x * sigma + mu;
@@ -294,14 +295,21 @@ function expnDistribution(lambda) {
     /*
      *  exponential distribution function
      */
-    return -Math.log(1.0 - _rnd()) / lambda;
+    return -Math.log(1.0 - rand()) / lambda;
 }
 
 function genBenfordsRandomNumber(min, max) {
     /*
      *  generate a natural number
      */
-    return _rnd() * (max - min) + min;
+    return rand() * (max - min) + min;
+}
+
+function toCelsius(fahrenheit) {
+    /*
+     *  convert temparature unit
+     */
+    return (5/9) * (fahrenheit-32);
 }
 
 main();
