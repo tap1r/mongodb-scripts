@@ -5,12 +5,14 @@
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
- /*
+/*
  *  Global defaults
  */
 
-const bsonMax = 16 * 1024 ** 2;
-Random.setRandomSeed(); 
+if (bsonMax === undefined) {
+    var bsonMax = 16 * 1024 ** 2;
+}
+// Random.setRandomSeed(); 
 pcg32.srandom(42, 52); // seed
 
 /*
@@ -172,8 +174,8 @@ function rand() {
      */
     // return _rand(); // the shell's prng
     // return Math.random(); // node's prng
-    // return pcg32.random() / (2 ** 32 - 1); // PCG-XSH-RR
-    return Math.abs(_srand()) / (2 ** 63 - 1); // SecureRandom() method
+    return pcg32.random() / (2 ** 32 - 1); // PCG-XSH-RR
+    // return Math.abs(_srand()) / (2 ** 63 - 1); // SecureRandom() method
     // return Random.rand(); // SecureRandom() method
     // return Fortuna();
 }
