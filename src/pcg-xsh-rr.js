@@ -20,7 +20,7 @@ var UINT64 = function(a, b, c, d) {
         32: 0xffffffff
     };
   
-    if (typeof c === "undefined") {
+    if (typeof c === 'undefined') {
         a48 = (a >> 16) & _mask[16];
         a32 = a & _mask[16];
         a16 = (b >> 16) & _mask[16];
@@ -172,43 +172,43 @@ var UINT64 = function(a, b, c, d) {
     }
   
     function hex() {
-        if(a48 === 0 && a32 === 0 && a16 === 0 && a00 === 0) return "0";
+        if(a48 === 0 && a32 === 0 && a16 === 0 && a00 === 0) return '0';
 
         var o = a00.toString(16);
-        while(o.length < 4) o = "0" + o;
+        while(o.length < 4) o = '0' + o;
 
         o = a16.toString(16) + o;
-        while(o.length < 8) o = "0" + o;
+        while(o.length < 8) o = '0' + o;
 
         o = a32.toString(16) + o;
-        while(o.length < 12) o = "0" + o;
+        while(o.length < 12) o = '0' + o;
 
         o = a48.toString(16) + o;
-        while(o.length < 16) o = "0" + o;
+        while(o.length < 16) o = '0' + o;
 
-        o = o.replace(/^0+/, "");
+        o = o.replace(/^0+/, '');
 
-        return "0x" + o;
+        return '0x' + o;
     }
   
     function bin() {
-        if(a48 === 0 && a32 === 0 && a16 === 0 && a00 === 0) return "0";
+        if(a48 === 0 && a32 === 0 && a16 === 0 && a00 === 0) return '0';
 
         var o = a00.toString(2);
-        while(o.length < 16) o = "0" + o;
+        while(o.length < 16) o = '0' + o;
 
         o = a16.toString(2) + o;
-        while(o.length < 32) o = "0" + o;
+        while(o.length < 32) o = '0' + o;
 
         o = a32.toString(2) + o;
-        while(o.length < 48) o = "0" + o;
+        while(o.length < 48) o = '0' + o;
 
         o = a48.toString(2) + o;
-        while(o.length < 64) o = "0" + o;
+        while(o.length < 64) o = '0' + o;
 
-        o = o.replace(/^0+/, "");
+        o = o.replace(/^0+/, '');
 
-        return "0b" + o;
+        return '0b' + o;
     }
   
     return {
@@ -242,8 +242,8 @@ var rng = function(state, inc) {
 var _pcg32_global = rng(UINT64(0x853c49e6, 0x748fea9b), UINT64(0xda3e39cb, 0x94b95bdb));
 
 function srandom_r(_rng, initstate, initseq) {
-    if(typeof initstate === "number") initstate = UINT64(Math.floor(initstate / 0xffffffff), initstate >> 32);
-    if(typeof initseq === "number") initseq = UINT64(Math.floor(initseq / 0xffffffff), initseq >> 32);
+    if(typeof initstate === 'number') initstate = UINT64(Math.floor(initstate / 0xffffffff), initstate >> 32);
+    if(typeof initseq === 'number') initseq = UINT64(Math.floor(initseq / 0xffffffff), initseq >> 32);
     _rng.state = UINT64(0, 0);
     _rng.inc = initseq.lshift(1).or(UINT64(0, 1));
     random_r(_rng);
