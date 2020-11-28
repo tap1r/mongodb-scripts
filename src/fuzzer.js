@@ -8,10 +8,12 @@
 // Usage: "mongo [connection options] --quiet fuzzer.js"
 
 /*
- *  Load helper lib (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
- *  Save mdblib.js to the current working directory
+ *  Load helper pcg-xsh-rr.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/pcg-xsh-rr.js)
+ *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
+ *  Save libs to the current working directory
  */
 
+load('pcg-xsh-rr.js');
 load('mdblib.js');
 
 /*
