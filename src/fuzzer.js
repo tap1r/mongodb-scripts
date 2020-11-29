@@ -23,7 +23,7 @@ load('mdblib.js');
 let dbName = 'database', collName = 'collection';
 // var batchSize = 1000; // adjust only if exceeding the BSON cap under Bulk
 let dropPref = true; // drop collection prior to generating data
-let exponent = 2; // number of doc by order of magnitude
+let exponent = 4; // number of doc by order of magnitude
 let totalDocs = Math.ceil(getRandomNumber(1, 10) * 10 ** exponent);
 let days = 365.25; // date range
 let fuzzer = { // not in use
@@ -145,7 +145,7 @@ function genDocument() {
         "qty": NumberInt(getRandomIntInclusive(0, 10 ** 4)),
         "currency": genRandomCurrency(),
         "price": +getRandomNumber(0, 10 ** 4).toFixed(2),
-        "temperature": +normalDistribution(15, 10).toFixed(1),
+        "temperature": +genNormal(15, 10).toFixed(1),
         "temperatureUnit": ['°C', '°F', 'K'][getRandomIntInclusive(0, 2)]
     };
 }
@@ -271,39 +271,25 @@ function randomIntInclusivePareto(min, max, alpha = 1.161) {
      *  min is the lowest possible value that can be returned
      *  alpha controls the “shape” of the distribution
      */
-    let probabilities = [];
-    for (var k = min; k <= max; ++k) {
-        probabilities.push(1.0 / k ** alpha);
-    }
-
-    let disc = SJS.Discrete(probabilities); // discrete sampler, returns value in the [0...probabilities.length-1] range
-    return disc.draw() + min; // back to [min...max] interval
+    let k = max * (1.0 - rand()) + min
+    let v = k ** alpha;
+    return v + min;
 }
 
-function normalDistribution(mu, sigma) {
+function genNormal(mu, sigma) {
     /*
      *  mu = mean
      *  sigma = standard deviation
      */
-    let u = rand();
-    let v = rand();
-    let x = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(Math.PI*2 * v);
-    // let y = Math.sqrt(-2.0 * Math.log(u)) * Math.sin(Math.PI*2 * v);
+    let x = Math.sqrt(-2.0 * Math.log(rand())) * Math.cos(Math.PI*2 * rand());
     return x * sigma + mu;
 }
 
-function expnDistribution(lambda) {
+function genExponential(lambda = 1) {
     /*
      *  exponential distribution function
      */
     return -Math.log(1.0 - rand()) / lambda;
-}
-
-function genBenfordsRandomNumber(min, max) {
-    /*
-     *  generate a natural number
-     */
-    return rand() * (max - min) + min;
 }
 
 function toCelsius(fahrenheit) {
