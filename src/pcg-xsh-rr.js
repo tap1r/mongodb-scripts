@@ -25,8 +25,7 @@ var UINT64 = function(a, b, c, d) {
         a32 = a & _mask[16];
         a16 = (b >> 16) & _mask[16];
         a00 = b & _mask[16];
-    }
-    else {
+    } else {
         a48 = a;
         a32 = b;
         a16 = c;
@@ -62,11 +61,11 @@ var UINT64 = function(a, b, c, d) {
     function lshift(n) {
         n = +n;
 
-        if(n <= 0)   return UINT64(a48, a32, a16, a00);
-        if(n >= 64)  return UINT64(0, 0, 0, 0);
-        if(n === 16) return UINT64(a32, a16, a00, 0);
-        if(n === 32) return UINT64(a16, a00, 0, 0);
-        if(n === 48) return UINT64(a00, 0, 0, 0);
+        if (n <= 0)   return UINT64(a48, a32, a16, a00);
+        if (n >= 64)  return UINT64(0, 0, 0, 0);
+        if (n === 16) return UINT64(a32, a16, a00, 0);
+        if (n === 32) return UINT64(a16, a00, 0, 0);
+        if (n === 48) return UINT64(a00, 0, 0, 0);
 
         var _n = n % 16;
         var a = (a48 << _n) | (a32 >> (16 - _n));
@@ -79,10 +78,10 @@ var UINT64 = function(a, b, c, d) {
         c = c & _mask[16];
         d = d & _mask[16];
 
-        if(n < 16)      return UINT64(a, b, c, d);
-        else if(n < 32) return UINT64(b, c, d, 0);
-        else if(n < 48) return UINT64(c, d, 0, 0);
-        else            return UINT64(d, 0, 0, 0);
+        if (n < 16)      return UINT64(a, b, c, d);
+        else if (n < 32) return UINT64(b, c, d, 0);
+        else if (n < 48) return UINT64(c, d, 0, 0);
+        else             return UINT64(d, 0, 0, 0);
     }
   
     function or(other) {
@@ -172,19 +171,19 @@ var UINT64 = function(a, b, c, d) {
     }
   
     function hex() {
-        if(a48 === 0 && a32 === 0 && a16 === 0 && a00 === 0) return '0';
+        if (a48 === 0 && a32 === 0 && a16 === 0 && a00 === 0) return '0';
 
         var o = a00.toString(16);
-        while(o.length < 4) o = '0' + o;
+        while (o.length < 4) o = '0' + o;
 
         o = a16.toString(16) + o;
-        while(o.length < 8) o = '0' + o;
+        while (o.length < 8) o = '0' + o;
 
         o = a32.toString(16) + o;
-        while(o.length < 12) o = '0' + o;
+        while (o.length < 12) o = '0' + o;
 
         o = a48.toString(16) + o;
-        while(o.length < 16) o = '0' + o;
+        while (o.length < 16) o = '0' + o;
 
         o = o.replace(/^0+/, '');
 
@@ -192,19 +191,19 @@ var UINT64 = function(a, b, c, d) {
     }
   
     function bin() {
-        if(a48 === 0 && a32 === 0 && a16 === 0 && a00 === 0) return '0';
+        if (a48 === 0 && a32 === 0 && a16 === 0 && a00 === 0) return '0';
 
         var o = a00.toString(2);
-        while(o.length < 16) o = '0' + o;
+        while (o.length < 16) o = '0' + o;
 
         o = a16.toString(2) + o;
-        while(o.length < 32) o = '0' + o;
+        while (o.length < 32) o = '0' + o;
 
         o = a32.toString(2) + o;
-        while(o.length < 48) o = '0' + o;
+        while (o.length < 48) o = '0' + o;
 
         o = a48.toString(2) + o;
-        while(o.length < 64) o = '0' + o;
+        while (o.length < 64) o = '0' + o;
 
         o = o.replace(/^0+/, '');
 
@@ -216,7 +215,6 @@ var UINT64 = function(a, b, c, d) {
         _a32: a32,
         _a16: a16,
         _a00: a00,
-
         rshift: rshift,
         lshift: lshift,
         or: or,
@@ -224,7 +222,6 @@ var UINT64 = function(a, b, c, d) {
         and: and,
         mul: mul,
         add: add,
-
         hex: hex,
         bin: bin
     };
@@ -242,8 +239,8 @@ var rng = function(state, inc) {
 var _pcg32_global = rng(UINT64(0x853c49e6, 0x748fea9b), UINT64(0xda3e39cb, 0x94b95bdb));
 
 function srandom_r(_rng, initstate, initseq) {
-    if(typeof initstate === 'number') initstate = UINT64(Math.floor(initstate / 0xffffffff), initstate >> 32);
-    if(typeof initseq === 'number') initseq = UINT64(Math.floor(initseq / 0xffffffff), initseq >> 32);
+    if (typeof initstate === 'number') initstate = UINT64(Math.floor(initstate / 0xffffffff), initstate >> 32);
+    if (typeof initseq === 'number') initseq = UINT64(Math.floor(initseq / 0xffffffff), initseq >> 32);
     _rng.state = UINT64(0, 0);
     _rng.inc = initseq.lshift(1).or(UINT64(0, 1));
     random_r(_rng);
@@ -262,8 +259,7 @@ function random_r(_rng) {
     var rot = oldstate.rshift(59)._a00;
     var rot2 = (-rot) & 31;
     var result = xorshifted.rshift(rot).or(xorshifted.lshift(rot2)).and(UINT64(0, 0xffffffff));
-    var result32 = parseInt(result.hex(), 16);
-    return result32;
+    return parseInt(result.hex(), 16); // result32;
 }
 
 function random() {
