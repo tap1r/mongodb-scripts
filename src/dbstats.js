@@ -18,13 +18,16 @@ load('mdblib.js');
  *  User defined parameters
  */
 
-const scale = new ScaleFactor(); // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
+if (scale === undefined) {
+    // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
+    var scale = new ScaleFactor();
+}
 
 /*
  *  Global defaults
  */
 
-let termWidth = 124, columnWidth = 15, rowHeader = 36;  // formatting preferences
+let termWidth = 124, columnWidth = 15, rowHeader = 36; // formatting preferences
 
 function main() {
     /*
