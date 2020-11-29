@@ -13,7 +13,7 @@ if (bsonMax === undefined) {
     var bsonMax = 16 * 1024 ** 2;
 }
 // Random.setRandomSeed(); 
-pcg32.srandom(42, 52); // seed
+// pcg32.srandom(42, 52); // seed
 
 /*
  *  Helper functions, derived from:
@@ -173,8 +173,8 @@ function rand() {
      *  Choose your preferred randomiser
      */
     // return _rand(); // the shell's prng
-    // return Math.random(); // node's prng
-    return pcg32.random() / (2 ** 32 - 1); // PCG-XSH-RR
+    return Math.random(); // node's prng
+    // return pcg32.random() / (2 ** 32 - 1); // PCG-XSH-RR
     // return Math.abs(_srand()) / (2 ** 63 - 1); // SecureRandom() method
     // return Random.rand(); // SecureRandom() method
     // return Fortuna();
