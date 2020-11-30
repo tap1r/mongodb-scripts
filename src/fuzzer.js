@@ -13,7 +13,7 @@
  *  Save libs to the current working directory
  */
 
-load('pcg-xsh-rr.js');
+// load('pcg-xsh-rr.js');
 load('mdblib.js');
 
 /*
@@ -25,24 +25,31 @@ let dbName = 'database', collName = 'collection';
 let dropPref = true; // drop collection prior to generating data
 let exponent = 4; // number of doc by order of magnitude
 let totalDocs = Math.ceil(getRandomNumber(1, 10) * 10 ** exponent);
-let days = 365.25; // date range
-let fuzzer = { // not in use
+let fuzzer = { // preferences
     "_id": "ts", // ['oid'|'ts']
+    "range": 365.25, // date range in days
     "vary_types": false, // fuzz value types
     "nests": 0, // how many nested layers
     "distribution": "uniform", // uniform, normal, bimodal, pareto, exponent
-    "range": "max", // min, max, %
     "entropy": 100, // 0 - 100%
     "cardinality": 1, // experimental
     "sparsity": 0, // 0 - 100%
-    "weighting": 50 // 0 - 100%
+    "weighting": 50, // 0 - 100%
+    "schemas": [{}, {}, {}],
+    "ratios": [10, 5, 1]
 };
+var sampleSize = 0, docSize = 0;
+fuzzer.ratios.forEach((ratio) => {
+    sampleSize += parseInt(ratio);
+});
+sampleSize *= sampleSize;
 let indexes = [ // createIndexes parameters
     // { "oid": { unique: true } },
     { "date": 1 },
     { "location": "2dsphere" },
     { "random": 1 },
-    { "timestamp": 1 }
+    { "timestamp": 1 },
+    (serverVer() >= 4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
 let wc = 1; // bulk write concern
 
@@ -52,22 +59,27 @@ let wc = 1; // bulk write concern
 
 var batch = 0, totalBatches = 1, residual = 0, doc = {};
 let now = new Date().getTime();
-let timestamp = Math.floor(now/1000.0);
+let timestamp = (now/1000.0)|0;
 
 function main() {
     /*
      *  main
      */
-    let avgSize = Object.bsonsize(genDocument());
     print('\n');
-    print('Estimated document BSON size is:', avgSize, 'bytes');
-    let batchSize = Math.floor((bsonMax * 0.8 / avgSize) / 1000) * 1000;
+    print('Sampling', sampleSize, 'document(s)');
+    for (let i = 0; i < sampleSize; ++i) {
+        docSize += Object.bsonsize(genDocument());
+    }
+    let avgSize = (docSize / sampleSize)|0;
+    print('\n');
+    print('Estimated document BSON size average:', avgSize, 'bytes');
+    let batchSize = (((bsonMax * 0.95 / avgSize) / 1000)|0) * 1000;
     print('Estimated optimal batch size capacity:', batchSize, 'documents');
     if (totalDocs < batchSize) {
         batchSize = totalDocs;
     } else {
-        totalBatches += Math.floor(totalDocs / batchSize);
-        residual = Math.floor(totalDocs % batchSize);
+        totalBatches += (totalDocs / batchSize)|0;
+        residual = (totalDocs % batchSize)|0;
     }
 
     dropNS(dropPref);
@@ -111,7 +123,7 @@ function genDocument() {
     /*
      *  generate pseudo-random key values
      */
-    let dateOffset = rand() * days * 24 * 60 * 60;
+    let dateOffset = rand() * fuzzer.range * 24 * 60 * 60;
     let oid = new ObjectId(
         Math.floor(timestamp - (dateOffset)).toString(16) + 
         genRandomHex(16)
@@ -164,8 +176,10 @@ function genDocument() {
         "_id": oid,
         "schemaC": genRandomAlpha(getRandomIntInclusive(12, 24)),
     };
-    let schemas = [schemaA, schemaB, schemaC];
-    return schemas[getRandomRatioInt([55, 27, 2])];
+    fuzzer.schemas[0] = schemaA;
+    fuzzer.schemas[1] = schemaB;
+    fuzzer.schemas[2] = schemaC;
+    return fuzzer.schemas[getRandomRatioInt(fuzzer.ratios)];
 }
 
 function dropNS(dropPref) {
@@ -197,7 +211,7 @@ function getRandomInt(min = 0, max = 1) {
      */
     min = Math.ceil(min);
     max = Math.floor(max);
-    return Math.floor(rand() * (max - min) + min);
+    return (rand() * (max - min) + min)|0;
 }
 
 function getRandomIntInclusive(min = 0, max = 1) {
@@ -206,21 +220,21 @@ function getRandomIntInclusive(min = 0, max = 1) {
      */
     min = Math.ceil(min);
     max = Math.floor(max);
-    return Math.floor(rand() * (max - min + 1) + min);
+    return (rand() * (max - min + 1) + min)|0;
 }
 
 function getRandomRatioInt(ratios = [1]) {
     /*
      *  generate ratioed random integer
      */
-    weightedIndex = [];
+    let weightedIndex = [];
     ratios.forEach((ratio, idx) => {
-        for (i = 0; i < ratio; ++i) {
+        for (let i = 0; i < ratio; ++i) {
             weightedIndex.push(idx);
         }
     });
 
-    return weightedIndex[Math.random() * weightedIndex.length|0];
+    return weightedIndex[rand() * weightedIndex.length|0];
 }
 
 function genRandomHex(len = 1) {
@@ -229,7 +243,7 @@ function genRandomHex(len = 1) {
      */
     let res = '';
     for (let i = 0; i < len; ++i) {
-        res += (Math.floor(rand() * 16)).toString(16);
+        res += (rand() * 16|0).toString(16);
     }
 
     return res;
@@ -242,7 +256,7 @@ function genRandomString(len = 1) {
     let res = '';
     let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     for (let i = 0; i < len; ++i) {
-       res += chars.charAt(Math.floor(rand() * chars.length));
+       res += chars.charAt(rand() * chars.length|0);
     }
 
     return res;
@@ -250,7 +264,7 @@ function genRandomString(len = 1) {
 
 function genRandomAlpha(len = 1) {
     /*
-     *  fetch random alpha character
+     *  generate random alpha-character string
      */
     let res = '';
     let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -266,7 +280,7 @@ function genRandomSymbol() {
      *  fetch random symbol
      */
     let symbol = '!#%&\'()+,-;=@[]^_`{}~¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ';
-    return symbol.charAt(Math.floor(rand() * symbol.length));
+    return symbol.charAt(rand() * symbol.length|0);
 }
 
 function genRandomCurrency() {
@@ -282,7 +296,7 @@ function genArrayElements(len) {
      *  generate array of random strings
      */
     let array = [];
-    for (let i = 0; i < len; ++i) {
+    for (i = 0; i < len; ++i) {
         array.push(genRandomString(getRandomIntInclusive(6, 24)));
     }
 
@@ -328,7 +342,7 @@ function toCelsius(fahrenheit) {
     /*
      *  convert temparature unit
      */
-    return (5/9) * (fahrenheit-32);
+    return (5/9) * (fahrenheit - 32);
 }
 
 main();
