@@ -27,11 +27,12 @@ let exponent = 4; // number of doc by order of magnitude
 let totalDocs = Math.ceil(getRandomNumber(1, 10) * 10 ** exponent);
 let days = 365.25; // date range
 let fuzzer = { // not in use
-    "_id": "", // default to server/bulk generation
+    "_id": "ts", // ['oid'|'ts']
     "vary_types": false, // fuzz value types
     "nests": 0, // how many nested layers
     "distribution": "uniform", // uniform, normal, bimodal, pareto, exponent
     "range": "max", // min, max, %
+    "entropy": 100, // 0 - 100%
     "cardinality": 1, // experimental
     "sparsity": 0, // 0 - 100%
     "weighting": 50 // 0 - 100%
@@ -110,18 +111,25 @@ function genDocument() {
     /*
      *  generate pseudo-random key values
      */
-    return {
-        // "_id": new ObjectId(),
+    let dateOffset = rand() * days * 24 * 60 * 60;
+    let oid = new ObjectId(
+        Math.floor(timestamp - (dateOffset)).toString(16) + 
+        genRandomHex(16)
+    );
+    let date = new Date(now - (dateOffset * 1000));
+    let ts = new Timestamp(timestamp - (dateOffset), 1);
+    let schemaA = {
+        "_id": oid,
         "string": genRandomString(getRandomIntInclusive(6, 24)),
         "object": {
-            "oid": ObjectId(),
+            "oid": new ObjectId(),
             "str": genRandomAlpha(getRandomIntInclusive(8, 16)),
             "num": +getRandomNumber(-1 * 2 ** 12, 2 ** 12).toFixed(4)
         },
         "array": genArrayElements(getRandomIntInclusive(0, 10)),
         "boolean": rand() < 0.5,
-        "date": new Date(now - (rand() * days * 24 * 60 * 60 * 1000)),
-        "timestamp": new Timestamp(timestamp - (rand() * days * 24 * 60 * 60), 1),
+        "date": date,
+        "timestamp": ts,
         "null": null,
         "int32": NumberInt(getRandomIntInclusive(-1 * 2 ** 31 - 1, 2 ** 31 - 1)),
         "int64": NumberLong(getRandomIntInclusive(-1 * 2 ** 63 - 1, 2 ** 63 - 1)),
@@ -130,7 +138,7 @@ function genDocument() {
         "regex": /\/[A-Z0-9a-z]*\//,
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
-        "md5": MD5(genHexString(32)),
+        "md5": MD5(genRandomHex(32)),
         "fle": BinData(6, UUID().base64()),
         "location": {
             "type": "Point",
@@ -148,6 +156,16 @@ function genDocument() {
         "temperature": +genNormal(15, 10).toFixed(1),
         "temperatureUnit": ['°C', '°F', 'K'][getRandomIntInclusive(0, 2)]
     };
+    let schemaB = {
+        "_id": oid,
+        "schemaB": genRandomAlpha(getRandomIntInclusive(12, 24)),
+    };
+    let schemaC = {
+        "_id": oid,
+        "schemaC": genRandomAlpha(getRandomIntInclusive(12, 24)),
+    };
+    let schemas = [schemaA, schemaB, schemaC];
+    return schemas[getRandomRatioInt([55, 27, 2])];
 }
 
 function dropNS(dropPref) {
@@ -191,9 +209,23 @@ function getRandomIntInclusive(min = 0, max = 1) {
     return Math.floor(rand() * (max - min + 1) + min);
 }
 
-function genHexString(len = 1) {
+function getRandomRatioInt(ratios = [1]) {
     /*
-     *  generate hexadecimal string
+     *  generate ratioed random integer
+     */
+    weightedIndex = [];
+    ratios.forEach((ratio, idx) => {
+        for (i = 0; i < ratio; ++i) {
+            weightedIndex.push(idx);
+        }
+    });
+
+    return weightedIndex[Math.random() * weightedIndex.length|0];
+}
+
+function genRandomHex(len = 1) {
+    /*
+     *  generate random hexadecimal string
      */
     let res = '';
     for (let i = 0; i < len; ++i) {
@@ -266,7 +298,7 @@ function genRandomInclusivePareto(min, alpha = 1.161) {
     return min / u ** (1.0 / alpha);
 }
 
-function randomIntInclusivePareto(min, max, alpha = 1.161) {
+function genRandomIntInclusivePareto(min, max, alpha = 1.161) {
     /*
      *  min is the lowest possible value that can be returned
      *  alpha controls the “shape” of the distribution
