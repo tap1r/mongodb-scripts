@@ -44,7 +44,6 @@ fuzzer.ratios.forEach((ratio) => {
 });
 sampleSize *= sampleSize;
 let indexes = [ // createIndexes parameters
-    // { "oid": { unique: true } },
     { "date": 1 },
     { "location": "2dsphere" },
     { "random": 1 },
@@ -100,7 +99,7 @@ function main() {
 
         var result = bulk.execute({ "w": wc });
         print('...bulk inserting batch', i + 1, 'of', totalBatches,
-            '(' + result.nInserted, 'documents)');
+              '(' + result.nInserted, 'documents)');
     }
 
     print('\n');
@@ -124,10 +123,17 @@ function genDocument() {
      *  generate pseudo-random key values
      */
     let dateOffset = rand() * fuzzer.range * 24 * 60 * 60;
-    let oid = new ObjectId(
-        Math.floor(timestamp - (dateOffset)).toString(16) + 
-        genRandomHex(16)
-    );
+    switch (fuzzer._id) {
+        case 'oid':
+            var oid = new ObjectId();
+            break;
+        default:
+            var oid = new ObjectId(
+                Math.floor(timestamp - (dateOffset)).toString(16) + 
+                genRandomHex(16)
+            );
+    }
+
     let date = new Date(now - (dateOffset * 1000));
     let ts = new Timestamp(timestamp - (dateOffset), 1);
     let schemaA = {
@@ -296,7 +302,7 @@ function genArrayElements(len) {
      *  generate array of random strings
      */
     let array = [];
-    for (i = 0; i < len; ++i) {
+    for (let i = 0; i < len; ++i) {
         array.push(genRandomString(getRandomIntInclusive(6, 24)));
     }
 
