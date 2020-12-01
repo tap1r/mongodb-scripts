@@ -106,7 +106,7 @@ function main() {
 
     print('\n');
     print('Completed generating:', totalDocs,
-        'document(s) in "' + dbName + '.' + collName + '"');
+          'document(s) in "' + dbName + '.' + collName + '"');
 
     // create indexes
     print('\n');
@@ -140,6 +140,7 @@ function genDocument() {
     let ts = new Timestamp(timestamp - (dateOffset), 1);
     let schemaA = {
         "_id": oid,
+        "schema": "Shape A",
         "string": genRandomString(getRandomIntInclusive(6, 24)),
         "object": {
             "oid": new ObjectId(),
@@ -178,11 +179,11 @@ function genDocument() {
     };
     let schemaB = {
         "_id": oid,
-        "schemaB": genRandomAlpha(getRandomIntInclusive(12, 24)),
+        "schema": "Shape B"
     };
     let schemaC = {
         "_id": oid,
-        "schemaC": genRandomAlpha(getRandomIntInclusive(12, 24)),
+        "schema": "Shape C"
     };
     fuzzer.schemas[0] = schemaA;
     fuzzer.schemas[1] = schemaB;
