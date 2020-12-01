@@ -21,12 +21,11 @@ load('mdblib.js');
  */
 
 let dbName = 'database', collName = 'collection';
-// var batchSize = 1000; // adjust only if exceeding the BSON cap under Bulk
 let dropPref = true; // drop collection prior to generating data
-let exponent = 4; // number of doc by order of magnitude
+let exponent = 4; // number of documents by order of magnitude
 let totalDocs = Math.ceil(getRandomNumber(1, 10) * 10 ** exponent);
 let fuzzer = { // preferences
-    "_id": "ts", // ['oid'|'ts']
+    "_id": "ts", // ['ts'|'oid']
     "range": 365.25, // date range in days
     "vary_types": false, // fuzz value types
     "nests": 0, // how many nested layers
@@ -36,9 +35,9 @@ let fuzzer = { // preferences
     "sparsity": 0, // 0 - 100%
     "weighting": 50, // 0 - 100%
     "schemas": [{}, {}, {}],
-    "ratios": [10, 5, 1]
+    "ratios": [1, 0, 0]
 };
-var sampleSize = 0, docSize = 0;
+var sampleSize = 9, docSize = 0;
 fuzzer.ratios.forEach((ratio) => {
     sampleSize += parseInt(ratio);
 });
@@ -64,15 +63,13 @@ function main() {
     /*
      *  main
      */
-    print('\n');
-    print('Sampling', sampleSize, 'document(s)');
     for (let i = 0; i < sampleSize; ++i) {
         docSize += Object.bsonsize(genDocument());
     }
     let avgSize = (docSize / sampleSize)|0;
     print('\n');
-    print('Estimated document BSON size average:', avgSize, 'bytes');
-    let batchSize = (((bsonMax * 0.95 / avgSize) / 1000)|0) * 1000;
+    print('Sampling', sampleSize, 'document(s) with BSON size average:', avgSize, 'bytes');
+    let batchSize = (bsonMax * 0.95 / avgSize)|0;
     print('Estimated optimal batch size capacity:', batchSize, 'documents');
     if (totalDocs < batchSize) {
         batchSize = totalDocs;
@@ -85,7 +82,7 @@ function main() {
 
     // generate and bulk write the docs
     print('\n');
-    print('Generating', totalDocs, 'documents in', totalBatches, 'batch(es)');
+    print('Generating', totalDocs, 'document(s) in', totalBatches, 'batch(es)');
     for (let i = 0; i < totalBatches; ++i) {
         if (i === totalBatches - 1 && residual > 0) {
             batchSize = residual;
@@ -97,18 +94,23 @@ function main() {
             bulk.insert(doc);
         }
 
-        var result = bulk.execute({ "w": wc });
+        try {
+            var result = bulk.execute({ "w": wc });
+        } catch (e) {
+            print(e);
+        }
+
         print('...bulk inserting batch', i + 1, 'of', totalBatches,
-              '(' + result.nInserted, 'documents)');
+              '(' + result.nInserted, 'document(s))');
     }
 
     print('\n');
     print('Completed generating:', totalDocs,
-        'documents in "' + dbName + '.' + collName + '"');
+        'document(s) in "' + dbName + '.' + collName + '"');
 
     // create indexes
     print('\n');
-    print('Building indexes:');
+    print('Building index(es):');
     indexes.forEach((index) => {
         printjson(index);
     });
