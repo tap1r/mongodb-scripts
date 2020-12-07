@@ -41,9 +41,8 @@ function getStats() {
     /*
      *  Gather DB stats (and print)
      */
-    let dbNames = db.getMongo().getDBNames();
     let dbPath = new MetaStats();
-    dbNames.map(dbName => {
+    db.getMongo().getDBNames().map(dbName => {
         let dbStats = db.getSiblingDB(dbName).stats();
         let database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, dbStats.indexSize);
         let collections = db.getSiblingDB(dbName).getCollectionInfos({ "type": "collection" }, true);
