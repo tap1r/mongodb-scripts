@@ -9,7 +9,7 @@
  *  Global defaults
  */
 
-if (bsonMax === undefined) {
+if (typeof bsonMax === 'undefined') {
     var bsonMax = 16 * 1024 ** 2;
 }
 // Random.setRandomSeed(); 
@@ -123,9 +123,9 @@ class AutoFactor {
 
 class MetaStats {
     /*
-     *  Storage metadata stats class
+     *  Storage statistics metadata class
      */
-    constructor(name = '', dataSize = 0, storageSize = 0, objects = 0, blocksFree = 0, indexSize = 0, indexFree = 0) {
+    constructor(name = '', dataSize = 0, storageSize = 0, objects = 0, blocksFree = 0, indexSize = 0, indexFree = 0, compressor = '') {
         // this.instance = db.isMaster().me;
         this.hostname = db.hostInfo().system.hostname;
         this.proc = db.serverStatus().process;
@@ -137,6 +137,7 @@ class MetaStats {
         this.blocksFree = blocksFree;
         this.indexSize = indexSize;
         this.indexFree = indexFree;
+        this.compressor = compressor;
     }
 
     compression() {
