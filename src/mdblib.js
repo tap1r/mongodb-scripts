@@ -81,14 +81,14 @@ class AutoFactor {
      */
     constructor(input) {
         this.B = this.metric('bytes', 'B', '', 0, 0, 2);
-        this.KB = this.metric('kilobytes', 'KB', 'k', 1, 2, 1 );
-        this.MB = this.metric('megabytes', 'MB', 'M', 2, 2, 1 );
-        this.GB = this.metric('gigabytes', 'GB', 'G', 3, 2, 1 );
-        this.TB = this.metric('terabytes', 'TB', 'T', 4, 2, 1 );
-        this.PB = this.metric('petabytes', 'PB', 'P', 5, 2, 1 );
-        this.EB = this.metric('exabytes', 'EB', 'E', 6, 2, 1 );
-        this.ZB = this.metric('zettabytes', 'ZB', 'Z', 7, 2, 1 );
-        this.YB = this.metric('yottabytes', 'YB', 'Y', 8, 2, 1 );
+        this.KB = this.metric('kilobytes', 'KB', 'k', 1, 2, 1);
+        this.MB = this.metric('megabytes', 'MB', 'M', 2, 2, 1);
+        this.GB = this.metric('gigabytes', 'GB', 'G', 3, 2, 1);
+        this.TB = this.metric('terabytes', 'TB', 'T', 4, 2, 1);
+        this.PB = this.metric('petabytes', 'PB', 'P', 5, 2, 1);
+        this.EB = this.metric('exabytes', 'EB', 'E', 6, 2, 1);
+        this.ZB = this.metric('zettabytes', 'ZB', 'Z', 7, 2, 1);
+        this.YB = this.metric('yottabytes', 'YB', 'Y', 8, 2, 1);
 
         if (typeof(input) === String) {
             switch (input.toUpperCase()) {
@@ -107,8 +107,7 @@ class AutoFactor {
             let scale = Math.floor(Math.log2(input) / 10);
             return (input / 1024 ** scale).toFixed(2) + [this.B, this.KB, this.MB, this.GB, this.TB, this.PB, this.EB, this.ZB, this.YB][scale];
         } else {
-            print('Invalid parameter type');
-            return;
+            return print('Invalid parameter type');
         }
     }
 
@@ -125,7 +124,7 @@ class MetaStats {
     /*
      *  Storage statistics metadata class
      */
-    constructor(name = '', dataSize = 0, storageSize = 0, objects = 0, blocksFree = 0, indexSize = 0, indexFree = 0, compressor = '') {
+    constructor(name = '', dataSize = 0, storageSize = 0, objects = 0, blocksFree = 0, compressor = '', indexSize = 0, indexFree = 0) {
         // this.instance = db.isMaster().me;
         this.hostname = db.hostInfo().system.hostname;
         this.proc = db.serverStatus().process;
