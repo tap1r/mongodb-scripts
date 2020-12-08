@@ -27,7 +27,7 @@ if (scale === undefined) {
  *  Global defaults
  */
 
-let termWidth = 124, columnWidth = 15, rowHeader = 36; // formatting preferences
+let termWidth = 124, columnWidth = 14, rowHeader = 40; // formatting preferences
 
 function main() {
     /*
@@ -44,14 +44,15 @@ function getStats() {
     let dbPath = new MetaStats();
     db.getMongo().getDBNames().map(dbName => {
         let dbStats = db.getSiblingDB(dbName).stats();
-        let database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, dbStats.indexSize);
+        let database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, '', dbStats.indexSize);
         let collections = db.getSiblingDB(dbName).getCollectionInfos({ "type": "collection" }, true);
         printDbHeader(database.name);
         printCollHeader(collections.length);
         collections.map(collInfo => {
             let collStats = db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ "indexDetails": true });
             let collection = new MetaStats(collInfo.name, collStats.size, collStats.wiredTiger['block-manager']['file size in bytes'],
-                                           collStats.count, collStats.wiredTiger['block-manager']['file bytes available for reuse']);
+                                           collStats.count, collStats.wiredTiger['block-manager']['file bytes available for reuse'],
+                                           collStats.wiredTiger.creationString.match(/block_compressor=[a-z]+/)[0].slice(17));
             Object.keys(collStats.indexDetails).map(indexName => {
                 collection.indexSize += collStats.indexDetails[indexName]['block-manager']['file size in bytes'];
                 collection.indexFree += collStats.indexDetails[indexName]['block-manager']['file bytes available for reuse'];
@@ -105,7 +106,7 @@ function printDbHeader(databaseName) {
     print('='.repeat(termWidth));
     print(('Database: ' + databaseName).padEnd(rowHeader),
            'Data size'.padStart(columnWidth),
-           'Compression'.padStart(columnWidth),
+           'Compression'.padStart(columnWidth + 1),
            'Size on disk'.padStart(columnWidth),
            'Free blocks (reuse)'.padStart(columnWidth + 8),
            'Object count'.padStart(columnWidth)
@@ -135,7 +136,8 @@ function printCollection(collection) {
     print('-'.repeat(termWidth));
     print((' ' + collection.name).padEnd(rowHeader),
           formatUnit(collection.dataSize).padStart(columnWidth),
-          formatRatio(collection.compression()).padStart(columnWidth),
+          (formatRatio(collection.compression()) +
+              (collection.compressor).padStart(7)).padStart(columnWidth + 1),
           formatUnit(collection.storageSize).padStart(columnWidth),
           (formatUnit(collection.blocksFree) +
               ('(' + formatPct(collection.blocksFree,
@@ -159,7 +161,7 @@ function printDb(database) {
     print('-'.repeat(termWidth));
     print('Collections subtotal:'.padEnd(rowHeader),
           formatUnit(database.dataSize).padStart(columnWidth),
-          formatRatio(database.compression()).padStart(columnWidth),
+          formatRatio(database.compression()).padStart(columnWidth + 1),
           formatUnit(database.storageSize).padStart(columnWidth),
           (formatUnit(database.blocksFree).padStart(columnWidth) +
               ('(' + formatPct(database.blocksFree,
@@ -168,7 +170,7 @@ function printDb(database) {
     );
     print('Indexes subtotal:'.padEnd(rowHeader),
           ''.padStart(columnWidth),
-          ''.padStart(columnWidth),
+          ''.padStart(columnWidth + 1),
           formatUnit(database.indexSize).padStart(columnWidth),
           (formatUnit(database.indexFree).padStart(columnWidth) +
               ('(' + formatPct(database.indexFree,
@@ -185,7 +187,7 @@ function printDbPath(dbPath) {
     print('='.repeat(termWidth));
     print('dbPath totals'.padEnd(rowHeader),
           'Data size'.padStart(columnWidth),
-          'Compression'.padStart(columnWidth),
+          'Compression'.padStart(columnWidth + 1),
           'Size on disk'.padStart(columnWidth),
           'Free blocks (reuse)'.padStart(columnWidth + 8),
           'Object count'.padStart(columnWidth)
@@ -193,7 +195,7 @@ function printDbPath(dbPath) {
     print('-'.repeat(termWidth));
     print('All DBs:'.padEnd(rowHeader),
           formatUnit(dbPath.dataSize).padStart(columnWidth),
-          formatRatio(dbPath.compression()).padStart(columnWidth),
+          formatRatio(dbPath.compression()).padStart(columnWidth + 1),
           formatUnit(dbPath.storageSize).padStart(columnWidth),
           (formatUnit(dbPath.blocksFree) +
               ('(' + formatPct(dbPath.blocksFree,
@@ -202,7 +204,7 @@ function printDbPath(dbPath) {
     );
     print('All indexes:'.padEnd(rowHeader),
           ''.padStart(columnWidth),
-          ''.padStart(columnWidth),
+          ''.padStart(columnWidth + 1),
           formatUnit(dbPath.indexSize).padStart(columnWidth),
           (formatUnit(dbPath.indexFree) +
               ('(' + formatPct(dbPath.indexFree,
