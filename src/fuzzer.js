@@ -20,7 +20,7 @@ load('mdblib.js');
  *  User defined parameters
  */
 
-let dbName = 'database', collName = 'collection';
+let dbName = 'database', collName = 'collection', compressor = 'zstd';
 let dropPref = true; // drop collection prior to generating data
 let exponent = 4; // number of documents by order of magnitude
 let totalDocs = Math.ceil(getRandomNumber(1, 10) * 10 ** exponent);
@@ -199,6 +199,11 @@ function dropNS(dropPref) {
         print('\n');
         print('Dropping namespace:', dbName + '.' + collName);
         db.getSiblingDB(dbName).getCollection(collName).drop();
+        print('Creating namespace:', dbName + '.' + collName, 'with', compressor, 'block compression');
+        db.getSiblingDB(dbName).createCollection(
+            collName,
+            { "storageEngine": { "wiredTiger": { "configString": "block_compressor=" + compressor } } }
+        )
     } else {
         print('\n');
         print('Not dropping namespace:', dbName + '.' + collName);
