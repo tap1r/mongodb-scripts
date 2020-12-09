@@ -211,7 +211,7 @@ function printDbPath(dbPath) {
           dbPath.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
     );
     print('='.repeat(termWidth));
-    print('Host:', dbPath.hostname, 'Type:', dbPath.proc, 'DbPath:', dbPath.dbPath);
+    print('Host:', dbPath.hostname, '\tType:', dbPath.proc, '\tDbPath:', dbPath.dbPath);
     print('='.repeat(termWidth));
     print('\n');
 }
