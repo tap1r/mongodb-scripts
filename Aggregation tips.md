@@ -21,7 +21,7 @@ var agg = [
     },{
         $match: {
             $expr: {
-                $gte: ["$isodate", { $subtract: ["$__now.localTime", offset }]
+                $gte: ["$isodate", { $subtract: ["$__now.localTime", offset] }]
             }
         }
     },{
