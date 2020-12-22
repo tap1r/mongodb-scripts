@@ -74,7 +74,7 @@ function main() {
             docs = churnInfo.document_count;
         });
     } else {
-        print('Warning: Using the legacy client side calculation technique');
+        print('\nWarning: Using the legacy client side calculation technique');
         oplog.aggregate(agg).forEach((op) => {
             total += Object.bsonsize(op);
             ++docs;
