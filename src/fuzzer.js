@@ -20,7 +20,8 @@ load('mdblib.js');
  *  User defined parameters
  */
 
-let dbName = 'database', collName = 'collection', compressor = (serverVer() >= 4.2) ? 'zstd' : 'zlib';
+let dbName = 'database', collName = 'collection';
+let compressor = (serverVer() >= 4.2) ? 'zstd' : 'zlib';
 let dropPref = true; // drop collection prior to generating data
 let exponent = 5; // number of documents by order of magnitude
 let totalDocs = Math.ceil(getRandomNumber(1, 10) * 10 ** exponent);
@@ -29,7 +30,7 @@ let fuzzer = { // preferences
     "range": 365.25, // date range in days
     "vary_types": false, // fuzz value types
     "nests": 0, // how many nested layers
-    "distribution": "uniform", // uniform, normal, bimodal, pareto, exponent
+    "distribution": "uniform", // uniform, normal, bimodal, pareto, exponential
     "entropy": 100, // 0 - 100%
     "cardinality": 1, // experimental
     "sparsity": 0, // 0 - 100%
@@ -175,7 +176,8 @@ function genDocument() {
         "currency": genRandomCurrency(),
         "price": +getRandomNumber(0, 10 ** 4).toFixed(2),
         "temperature": +genNormal(15, 10).toFixed(1),
-        "temperatureUnit": ['°C', '°F', 'K'][getRandomIntInclusive(0, 2)]
+        "temperatureUnit": ['°C', '°F', 'K'][getRandomIntInclusive(0, 2)],
+        "Status": ['Active', 'Inactive', 'Unknown'][getRandomRatioInt([80, 20, 1])]
     };
     let schemaB = {
         "_id": oid,
