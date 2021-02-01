@@ -22,8 +22,13 @@ load('mdblib.js');
 
 let dbName = 'database', collName = 'collection';
 let compressor = (serverVer() >= 4.2) ? 'zstd' : 'zlib';
+let collation = {
+    "locale": "simple"
+    // "locale": "en_US", "strength": 1
+};
+let wc = 1; // bulk write concern
 let dropPref = true; // drop collection prior to generating data
-let exponent = 5; // number of documents by order of magnitude
+let exponent = 4; // order of magnitude (total documents)
 let totalDocs = Math.ceil(getRandomNumber(1, 10) * 10 ** exponent);
 let fuzzer = { // preferences
     "_id": "ts", // ['ts'|'oid']
@@ -50,7 +55,10 @@ let indexes = [ // createIndexes parameters
     { "timestamp": 1 },
     (serverVer() >= 4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
-let wc = 1; // bulk write concern
+let specialIndexes = [ // no locale support
+    { "2dlegacy": "2d" },
+    { "string": "text" }
+];
 
 /*
  *  Global defaults
@@ -111,11 +119,17 @@ function main() {
 
     // create indexes
     print('\n');
-    print('Building index(es):');
+    print('Building regular index(es):');
     indexes.forEach((index) => {
         printjson(index);
     });
-    db.getSiblingDB(dbName).getCollection(collName).createIndexes(indexes, {}, 1);
+    db.getSiblingDB(dbName).getCollection(collName).createIndexes(indexes, {});
+    print('\n');
+    print('Building special index(es) without locales:');
+    specialIndexes.forEach((index) => {
+        printjson(index);
+    });
+    db.getSiblingDB(dbName).getCollection(collName).createIndexes(specialIndexes, { "collation": { "locale": "simple" } });
     print('\n');
     print('Complete!');
     print('\n');
@@ -162,6 +176,10 @@ function genDocument() {
         "uuid": UUID(),
         "md5": MD5(genRandomHex(32)),
         "fle": BinData(6, UUID().base64()),
+        "2dlegacy": [
+                    +getRandomNumber(-180, 180).toFixed(4),
+                    +getRandomNumber(-90, 90).toFixed(4)
+        ],
         "location": {
             "type": "Point",
                 "coordinates": [
@@ -173,19 +191,19 @@ function genDocument() {
         "symbol": genRandomSymbol(),
         "unit": +getRandomNumber(0, 10 ** 6).toFixed(2),
         "qty": NumberInt(getRandomIntInclusive(0, 10 ** 4)),
-        "currency": genRandomCurrency(),
-        "price": +getRandomNumber(0, 10 ** 4).toFixed(2),
-        "temperature": +genNormal(15, 10).toFixed(1),
-        "temperatureUnit": ['°C', '°F', 'K'][getRandomIntInclusive(0, 2)],
-        "Status": ['Active', 'Inactive', 'Unknown'][getRandomRatioInt([80, 20, 1])]
+        "price": [+getRandomNumber(0, 10 ** 4).toFixed(2), genRandomCurrency()],
+        "temperature": [+genNormal(15, 10).toFixed(1), ['°C', '°F', 'K'][getRandomIntInclusive(0, 2)]],
+        "status": ['Active', 'Inactive', null][getRandomRatioInt([80, 20, 1])]
     };
     let schemaB = {
         "_id": oid,
-        "schema": "Shape B"
+        "schema": "Shape B",
+        "random": +getRandomNumber(0, totalDocs).toFixed(4)
     };
     let schemaC = {
         "_id": oid,
-        "schema": "Shape C"
+        "schema": "Shape C",
+        "random": +getRandomNumber(0, totalDocs).toFixed(4)
     };
     fuzzer.schemas[0] = schemaA;
     fuzzer.schemas[1] = schemaB;
@@ -201,9 +219,15 @@ function dropNS(dropPref) {
         print('\n');
         print('Dropping namespace:', dbName + '.' + collName);
         db.getSiblingDB(dbName).getCollection(collName).drop();
-        print('Creating namespace:', dbName + '.' + collName, 'with', compressor, 'block compression');
+        print('Creating namespace:', dbName + '.' + collName,
+              'with', compressor, 'block compression',
+              'and', collation.locale, 'collation locale'
+        );
         db.getSiblingDB(dbName).createCollection(collName,
-            { "storageEngine": { "wiredTiger": { "configString": "block_compressor=" + compressor } } }
+            {
+                "storageEngine": { "wiredTiger": { "configString": "block_compressor=" + compressor } },
+                "collation": collation
+            }
         )
     } else {
         print('\n');
@@ -212,6 +236,12 @@ function dropNS(dropPref) {
 
     return;
 }
+
+/*
+ * Helper functions
+ */
+
+const K = 273.15;
 
 function getRandomNumber(min = 0, max = 1) {
     /*
@@ -292,7 +322,7 @@ function genRandomAlpha(len = 1) {
 
 function genRandomSymbol() {
     /*
-     *  fetch random symbol
+     *  generate random symbol
      */
     let symbol = '!#%&\'()+,-;=@[]^_`{}~¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ';
     return symbol.charAt(rand() * symbol.length|0);
@@ -300,7 +330,7 @@ function genRandomSymbol() {
 
 function genRandomCurrency() {
     /*
-     *  fetch random curreny symbol
+     *  generate random curreny symbol
      */
     let currencies = ['$', '€', '₡', '£', '₪', '₹', '¥', '₩', '₦', '₱zł', '₲', '฿', '₴', '₫'];
     return currencies[getRandomInt(0, currencies.length)];
@@ -321,7 +351,7 @@ function genArrayElements(len) {
 function genRandomInclusivePareto(min, alpha = 1.161) {
     /*
      *  min is the lowest possible value that can be returned
-     *  alpha controls the “shape” of the distribution
+     *  alpha controls the "shape" of the distribution
      */
     let u = 1.0 - rand();
     return min / u ** (1.0 / alpha);
@@ -330,7 +360,7 @@ function genRandomInclusivePareto(min, alpha = 1.161) {
 function genRandomIntInclusivePareto(min, max, alpha = 1.161) {
     /*
      *  min is the lowest possible value that can be returned
-     *  alpha controls the “shape” of the distribution
+     *  alpha controls the "shape" of the distribution
      */
     let k = max * (1.0 - rand()) + min
     let v = k ** alpha;
@@ -353,11 +383,46 @@ function genExponential(lambda = 1) {
     return -Math.log(1.0 - rand()) / lambda;
 }
 
-function toCelsius(fahrenheit) {
+function ftoc(fahrenheit) {
     /*
-     *  convert temparature unit
+     *  convert Fahrenheit to Celsius temparature unit
      */
-    return (5/9) * (fahrenheit - 32);
+    return (fahrenheit - 32) / 1.8;
+}
+
+function ctof(celsius) {
+    /*
+     *  convert Celsius to Fahrenheit temparature unit
+     */
+    return celsius * 1.8 + 32;
+}
+
+function ctok(celsius) {
+    /*
+     *  convert Celsius to Kelvin temparature unit
+     */
+    return celsius + K;
+}
+
+function ktoc(kelvin) {
+    /*
+     *  convert Kelvin to Celsius temparature unit
+     */
+    return kelvin - K;
+}
+
+function ftok(fahrenheit) {
+    /*
+     *  convert Fahrenheit to Kelvin temparature unit
+     */
+    return ((fahrenheit - 32) / 1.8) + K;
+}
+
+function ktof(kelvin) {
+    /*
+     *  convert Kelvin to Fahrenheit temparature unit
+     */
+    return (kelvin - K) * 1.8 + 32;
 }
 
 main();
