@@ -22,6 +22,7 @@ load('mdblib.js');
 
 let dbName = 'database', collName = 'collection';
 let compressor = (serverVer() >= 4.2) ? 'zstd' : 'zlib';
+// { "collation": { "locale": "simple" } }
 let collation = {
     "locale": "simple" // ["simple"|"en"|"es"|"de"|"fr"]
 };
@@ -90,7 +91,7 @@ function main() {
 
     // generate and bulk write the docs
     print('\n');
-    print('Generating', totalDocs, 'document(s) in', totalBatches, 'batch(es)');
+    print('Generating', totalDocs, 'document(s) in', totalBatches, 'batch(es):');
     for (let i = 0; i < totalBatches; ++i) {
         if (i === totalBatches - 1 && residual > 0) {
             batchSize = residual;
@@ -118,11 +119,11 @@ function main() {
 
     // create indexes
     print('\n');
-    print('Building regular index(es) with the collection\'s locale "' + collation.locale + '":');
+    print('Building regular index(es) with collection locale "' + collation.locale + '":');
     indexes.forEach((index) => {
         printjson(index);
     });
-    db.getSiblingDB(dbName).getCollection(collName).createIndexes(indexes);
+    db.getSiblingDB(dbName).getCollection(collName).createIndexes(indexes, { "collation": collation } );
     print('\n');
     print('Building special index(es) with collation locale "simple":');
     specialIndexes.forEach((index) => {
