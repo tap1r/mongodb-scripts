@@ -72,6 +72,10 @@ function main() {
     /*
      *  main
      */
+    print('\n');
+    print('Synthethising', totalDocs, 'total document(s)');
+
+    // sampling
     for (let i = 0; i < sampleSize; ++i) {
         docSize += Object.bsonsize(genDocument());
     }
@@ -119,13 +123,13 @@ function main() {
 
     // create indexes
     print('\n');
-    print('Building regular index(es) with collection locale "' + collation.locale + '":');
+    print('Building index(es) with collation locale "' + collation.locale + '"');
     indexes.forEach((index) => {
         printjson(index);
     });
     db.getSiblingDB(dbName).getCollection(collName).createIndexes(indexes, { "collation": collation } );
     print('\n');
-    print('Building special index(es) with collation locale "simple":');
+    print('Building index(es) with collation locale "simple"');
     specialIndexes.forEach((index) => {
         printjson(index);
     });
