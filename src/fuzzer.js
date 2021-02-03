@@ -23,15 +23,14 @@ load('mdblib.js');
 let dbName = 'database', collName = 'collection';
 let compressor = (serverVer() >= 4.2) ? 'zstd' : 'zlib';
 let collation = {
-    "locale": "simple"
-    // "locale": "en_US", "strength": 1
+    "locale": "simple" // ["simple"|"en"|"es"|"de"|"fr"]
 };
 let wc = 1; // bulk write concern
 let dropPref = true; // drop collection prior to generating data
 let exponent = 4; // order of magnitude (total documents)
 let totalDocs = Math.ceil(getRandomNumber(1, 10) * 10 ** exponent);
 let fuzzer = { // preferences
-    "_id": "ts", // ['ts'|'oid']
+    "_id": "ts", // ["ts"|"oid"]
     "range": 365.25, // date range in days
     "vary_types": false, // fuzz value types
     "nests": 0, // how many nested layers
@@ -55,7 +54,7 @@ let indexes = [ // createIndexes parameters
     { "timestamp": 1 },
     (serverVer() >= 4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
-let specialIndexes = [ // no locale support
+let specialIndexes = [ // collations not supported
     { "2dlegacy": "2d" },
     { "string": "text" }
 ];
@@ -119,13 +118,13 @@ function main() {
 
     // create indexes
     print('\n');
-    print('Building regular index(es):');
+    print('Building regular index(es) with the collection\'s locale "' + collation.locale + '":');
     indexes.forEach((index) => {
         printjson(index);
     });
-    db.getSiblingDB(dbName).getCollection(collName).createIndexes(indexes, {});
+    db.getSiblingDB(dbName).getCollection(collName).createIndexes(indexes);
     print('\n');
-    print('Building special index(es) without locales:');
+    print('Building special index(es) with collation locale "simple":');
     specialIndexes.forEach((index) => {
         printjson(index);
     });
@@ -133,6 +132,8 @@ function main() {
     print('\n');
     print('Complete!');
     print('\n');
+
+    return;
 }
 
 function genDocument() {
@@ -208,6 +209,7 @@ function genDocument() {
     fuzzer.schemas[0] = schemaA;
     fuzzer.schemas[1] = schemaB;
     fuzzer.schemas[2] = schemaC;
+
     return fuzzer.schemas[getRandomRatioInt(fuzzer.ratios)];
 }
 
@@ -217,11 +219,11 @@ function dropNS(dropPref) {
      */
     if (dropPref) {
         print('\n');
-        print('Dropping namespace:', dbName + '.' + collName);
+        print('Dropping namespace "' + dbName + '.' + collName + '"');
         db.getSiblingDB(dbName).getCollection(collName).drop();
-        print('Creating namespace:', dbName + '.' + collName,
-              'with', compressor, 'block compression',
-              'and', collation.locale, 'collation locale'
+        print('Creating namespace "' + dbName + '.' + collName + '"',
+              'with block compression "' + compressor + '"',
+              'and collation locale "' + collation.locale + '"'
         );
         db.getSiblingDB(dbName).createCollection(collName,
             {
@@ -231,14 +233,14 @@ function dropNS(dropPref) {
         )
     } else {
         print('\n');
-        print('Not dropping namespace:', dbName + '.' + collName);
+        print('Not dropping namespace "' + dbName + '.' + collName + '"');
     }
 
     return;
 }
 
 /*
- * Helper functions
+ *  Helper functions
  */
 
 const K = 273.15;
@@ -256,6 +258,7 @@ function getRandomInt(min = 0, max = 1) {
      */
     min = Math.ceil(min);
     max = Math.floor(max);
+
     return (rand() * (max - min) + min)|0;
 }
 
@@ -265,6 +268,7 @@ function getRandomIntInclusive(min = 0, max = 1) {
      */
     min = Math.ceil(min);
     max = Math.floor(max);
+
     return (rand() * (max - min + 1) + min)|0;
 }
 
@@ -325,6 +329,7 @@ function genRandomSymbol() {
      *  generate random symbol
      */
     let symbol = '!#%&\'()+,-;=@[]^_`{}~¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ';
+
     return symbol.charAt(rand() * symbol.length|0);
 }
 
@@ -333,6 +338,7 @@ function genRandomCurrency() {
      *  generate random curreny symbol
      */
     let currencies = ['$', '€', '₡', '£', '₪', '₹', '¥', '₩', '₦', '₱zł', '₲', '฿', '₴', '₫'];
+
     return currencies[getRandomInt(0, currencies.length)];
 }
 
@@ -354,6 +360,7 @@ function genRandomInclusivePareto(min, alpha = 1.161) {
      *  alpha controls the "shape" of the distribution
      */
     let u = 1.0 - rand();
+
     return min / u ** (1.0 / alpha);
 }
 
@@ -364,6 +371,7 @@ function genRandomIntInclusivePareto(min, max, alpha = 1.161) {
      */
     let k = max * (1.0 - rand()) + min
     let v = k ** alpha;
+
     return v + min;
 }
 
@@ -373,6 +381,7 @@ function genNormal(mu, sigma) {
      *  sigma = standard deviation
      */
     let x = Math.sqrt(-2.0 * Math.log(rand())) * Math.cos(Math.PI*2 * rand());
+
     return x * sigma + mu;
 }
 
