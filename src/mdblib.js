@@ -9,9 +9,12 @@
  *  Global defaults
  */
 
-if (typeof bsonMax === 'undefined') {
+if (typeof db.isMaster().maxBsonObjectSize === 'undefined') {
     var bsonMax = 16 * 1024 ** 2;
+} else {
+    var bsonMax = db.isMaster().maxBsonObjectSize;
 }
+
 // Random.setRandomSeed(); 
 // pcg32.srandom(42, 52); // seed
 
@@ -148,6 +151,25 @@ class MetaStats {
     }
 }
 
+function rand() {
+    /*
+     *  Choose your preferred randomiser
+     */
+    // return _rand(); // the shell's prng
+    return Math.random(); // node's prng
+    // return pcg32.random() / (2 ** 32 - 1); // PCG-XSH-RR
+    // return Math.abs(_srand()) / (2 ** 63 - 1); // SecureRandom() method
+    // return Random.rand(); // SecureRandom() method
+    // return Fortuna();
+}
+
+function isReplSet() {
+    /*
+     *  determine if current host is a replSet memeber
+     */
+    return (typeof db.isMaster().hosts !== 'undefined')
+}
+
 /*
  *  Versioned helper commands
  */
@@ -166,18 +188,6 @@ function slaveOk() {
     } else {
         return rs.slaveOk();
     }
-}
-
-function rand() {
-    /*
-     *  Choose your preferred randomiser
-     */
-    // return _rand(); // the shell's prng
-    return Math.random(); // node's prng
-    // return pcg32.random() / (2 ** 32 - 1); // PCG-XSH-RR
-    // return Math.abs(_srand()) / (2 ** 63 - 1); // SecureRandom() method
-    // return Random.rand(); // SecureRandom() method
-    // return Fortuna();
 }
 
 // EOF
