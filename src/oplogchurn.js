@@ -44,18 +44,20 @@ function main() {
     let d2 = date.toISOString(); // end datetime
     let t1 = Math.floor(date.setHours(date.getHours() - hrs) / 1000.0); // start timestamp
     let d1 = date.toISOString(); // start datetime
-    let agg = [{
-        "$match": {
-            "ts": {
-                "$gte": Timestamp(t1, 1),
-                "$lte": Timestamp(t2, 1)
+    let agg = [
+        {
+            "$match": {
+                "ts": {
+                    "$gte": Timestamp(t1, 1),
+                    "$lte": Timestamp(t2, 1)
+                }
             }
+        },{
+            "$project": { "_id": 0 }
         }
-    },{
-        "$project": { "_id": 0 }
-    }];
+    ];
 
-    // Measure interval stats
+    // Measure interval statistics
     slaveOk();
     let oplog = db.getSiblingDB('local').getCollection('oplog.rs');
 
@@ -65,16 +67,17 @@ function main() {
         agg.push({
             "$group": {
                 "_id": null,
-                "bson_data_size": { "$sum": { "$bsonSize": "$$ROOT" }},
+                "bson_data_size": { "$sum": { "$bsonSize": "$$ROOT" } },
                 "document_count": { "$sum": 1 }
-                }
+            }
         });
         oplog.aggregate(agg).map(churnInfo => {
             total = churnInfo.bson_data_size;
             docs = churnInfo.document_count;
         });
     } else {
-        print('\nWarning: Using the legacy client side calculation technique');
+        print('\n');
+        print('Warning: Using the legacy client side calculation technique');
         oplog.aggregate(agg).forEach((op) => {
             total += Object.bsonsize(op);
             ++docs;
@@ -107,6 +110,12 @@ function main() {
     print('\n');
 }
 
-main();
+if (!isReplSet()) {
+    print('\n');
+    print('Host is not a replica set member....exiting!');    
+    print('\n');
+} else {
+    main();
+}
 
 // EOF
