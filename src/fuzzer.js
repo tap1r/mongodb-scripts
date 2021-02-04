@@ -79,6 +79,7 @@ function main() {
     for (let i = 0; i < sampleSize; ++i) {
         docSize += Object.bsonsize(genDocument());
     }
+    
     let avgSize = (docSize / sampleSize)|0;
     print('\n');
     print('Sampling', sampleSize, 'document(s) with BSON size average:', avgSize, 'bytes');
@@ -111,6 +112,8 @@ function main() {
             var result = bulk.execute({ "w": wc });
         } catch (e) {
             print(e);
+            print('\n');
+            print('Generation failed');
         }
 
         print('...bulk inserting batch', i + 1, 'of', totalBatches,
@@ -127,13 +130,19 @@ function main() {
     indexes.forEach((index) => {
         printjson(index);
     });
-    db.getSiblingDB(dbName).getCollection(collName).createIndexes(indexes, { "collation": collation } );
+    db.getSiblingDB(dbName).getCollection(collName).createIndexes(
+        indexes,
+        { "collation": collation }
+    );
     print('\n');
     print('Building index(es) with collation locale "simple"');
     specialIndexes.forEach((index) => {
         printjson(index);
     });
-    db.getSiblingDB(dbName).getCollection(collName).createIndexes(specialIndexes, { "collation": { "locale": "simple" } });
+    db.getSiblingDB(dbName).getCollection(collName).createIndexes(
+        specialIndexes,
+        { "collation": { "locale": "simple" } }
+    );
     print('\n');
     print('Complete!');
     print('\n');
@@ -152,7 +161,7 @@ function genDocument() {
             break;
         default:
             var oid = new ObjectId(
-                Math.floor(timestamp - (dateOffset)).toString(16) + 
+                Math.floor(timestamp - (dateOffset)).toString(16) +
                 genRandomHex(16)
             );
     }
