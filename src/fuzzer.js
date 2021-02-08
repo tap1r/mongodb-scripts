@@ -21,10 +21,9 @@ load('mdblib.js');
  */
 
 let dbName = 'database', collName = 'collection';
-let compressor = (serverVer() >= 4.2) ? 'zstd' : 'zlib';
-// { "collation": { "locale": "simple" } }
+let compressor = (serverVer(4.2)) ? 'zstd' : 'zlib';
 let collation = {
-    "locale": "simple" // ["simple"|"en"|"es"|"de"|"fr"]
+    "locale": "simple" // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
 };
 let wc = 1; // bulk write concern
 let dropPref = true; // drop collection prior to generating data
@@ -53,7 +52,7 @@ let indexes = [ // createIndexes parameters
     { "location": "2dsphere" },
     { "random": 1 },
     { "timestamp": 1 },
-    (serverVer() >= 4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
+    (serverVer(4.2)) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
 let specialIndexes = [ // collations not supported
     { "2dlegacy": "2d" },
