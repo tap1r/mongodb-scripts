@@ -61,7 +61,7 @@ function main() {
     slaveOk();
     let oplog = db.getSiblingDB('local').getCollection('oplog.rs');
 
-    if (serverVer() >= 4.4) {
+    if (serverVer(4.4)) {
         // Use the v4.4 $bsonSize aggregation operator
         // print('Using the $bsonSize aggregation operator');
         agg.push({
