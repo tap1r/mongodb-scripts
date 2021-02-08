@@ -165,7 +165,7 @@ function rand() {
 
 function isReplSet() {
     /*
-     *  determine if current host is a replSet memeber
+     *  Determine if current host is a replSet member
      */
     return (typeof db.isMaster().hosts !== 'undefined')
 }
@@ -174,15 +174,30 @@ function isReplSet() {
  *  Versioned helper commands
  */
 
-function serverVer() {
-    return +db.version().match(/^[0-9]+\.[0-9]+/);
+function serverVer(ver) {
+    /*
+     *  Evaluate server version
+     */
+    if (ver !== undefined && ver <= +db.version().match(/^[0-9]+\.[0-9]+/)) {
+        return true;
+    } else if (ver !== null && ver > +db.version().match(/^[0-9]+\.[0-9]+/)) {
+        return false;
+    } else {
+        return +db.version().match(/^[0-9]+\.[0-9]+/);
+    }
 }
 
 function shellVer() {
+    /*
+     *  Evaluate shell version
+     */
     return +version().match(/^[0-9]+\.[0-9]+/);
 }
 
 function slaveOk() {
+    /*
+     *  Backward compatability with slaveOk()
+     */
     if (shellVer() >= 4.4) {
         return rs.secondaryOk();
     } else {
