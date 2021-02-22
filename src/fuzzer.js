@@ -191,22 +191,29 @@ function genDocument() {
         "md5": MD5(genRandomHex(32)),
         "fle": BinData(6, UUID().base64()),
         "2dlegacy": [
-                    +getRandomNumber(-180, 180).toFixed(4),
-                    +getRandomNumber(-90, 90).toFixed(4)
+            +getRandomNumber(-180, 180).toFixed(8),
+            +getRandomNumber(-90, 90).toFixed(8)
         ],
         "location": {
             "type": "Point",
-                "coordinates": [
-                    +getRandomNumber(-180, 180).toFixed(4),
-                    +getRandomNumber(-90, 90).toFixed(4)
-                ]
+            "coordinates": [
+                +getRandomNumber(-180, 180).toFixed(8),
+                +getRandomNumber(-90, 90).toFixed(8)
+            ]
         },
         "random": +getRandomNumber(0, totalDocs).toFixed(4),
         "symbol": genRandomSymbol(),
         "unit": +getRandomNumber(0, 10 ** 6).toFixed(2),
         "qty": NumberInt(getRandomIntInclusive(0, 10 ** 4)),
-        "price": [+getRandomNumber(0, 10 ** 4).toFixed(2), genRandomCurrency()],
-        "temperature": [+genNormal(15, 10).toFixed(1), ['°C', '°F', 'K'][getRandomIntInclusive(0, 2)]],
+        "price": [
+            +getRandomNumber(0, 10 ** 4).toFixed(2),
+            genRandomCurrency()
+        ],
+        "temperature": [
+            +genNormal(15, 10).toFixed(1),
+            ['°C', '°F', 'K'][getRandomIntInclusive(0, 2)]
+        ],
+        "dB": +genNormal(20, 10).toFixed(3),
         "status": ['Active', 'Inactive', null][getRandomRatioInt([80, 20, 1])]
     };
     let schemaB = {
@@ -226,7 +233,7 @@ function genDocument() {
     return fuzzer.schemas[getRandomRatioInt(fuzzer.ratios)];
 }
 
-function dropNS(dropPref) {
+function dropNS(dropPref=false) {
     /*
      *  drop target namespace
      */
