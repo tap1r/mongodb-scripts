@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version = "0.1.0"
+ *  Version = "0.1.1"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -40,15 +40,15 @@ function main() {
      */
     var total = 0, docs = 0;
     let date = new Date();
-    let t2 = Math.floor(date.getTime() / 1000.0); // end timestamp
+    let t2 = (date.getTime() / 1000.0)|0; // end timestamp
     let d2 = date.toISOString(); // end datetime
-    let t1 = Math.floor(date.setHours(date.getHours() - hrs) / 1000.0); // start timestamp
+    let t1 = (date.setHours(date.getHours() - hrs) / 1000.0)|0; // start timestamp
     let d1 = date.toISOString(); // start datetime
     let agg = [
         {
             "$match": {
                 "ts": {
-                    "$gte": Timestamp(t1, 1),
+                    "$gt": Timestamp(t1, 1),
                     "$lte": Timestamp(t2, 1)
                 }
             }
@@ -63,7 +63,6 @@ function main() {
 
     if (serverVer(4.4)) {
         // Use the v4.4 $bsonSize aggregation operator
-        // print('Using the $bsonSize aggregation operator');
         agg.push({
             "$group": {
                 "_id": null,
