@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version = "0.1.0"
+ *  Version = "0.1.1"
  *  Description: Generate pseudo random test data, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -28,7 +28,7 @@ let collation = {
 let wc = 1; // bulk write concern
 let dropPref = true; // drop collection prior to generating data
 let exponent = 4; // order of magnitude (total documents)
-let totalDocs = Math.ceil(getRandomNumber(1, 10) * 10 ** exponent);
+let totalDocs = Math.ceil(getRandomNumber(1, 10) * Math.pow(10, exponent));
 let fuzzer = { // preferences
     "_id": "ts", // ["ts"|"oid"]
     "range": 365.25, // date range in days
@@ -173,17 +173,17 @@ function genDocument() {
         "object": {
             "oid": new ObjectId(),
             "str": genRandomAlpha(getRandomIntInclusive(8, 16)),
-            "num": +getRandomNumber(-1 * 2 ** 12, 2 ** 12).toFixed(4)
+            "num": +getRandomNumber(-1 * Math.pow(2, 12), Math.pow(2, 12)).toFixed(4)
         },
         "array": genArrayElements(getRandomIntInclusive(0, 10)),
         "boolean": rand() < 0.5,
         "date": date,
         "timestamp": ts,
         "null": null,
-        "int32": NumberInt(getRandomIntInclusive(-1 * 2 ** 31 - 1, 2 ** 31 - 1)),
-        "int64": NumberLong(getRandomIntInclusive(-1 * 2 ** 63 - 1, 2 ** 63 - 1)),
-        "double": getRandomNumber(-1 * 2 ** 12, 2 ** 12),
-        "decimal128": NumberDecimal(getRandomNumber(-1 * 10 ** 127 - 1, 10 ** 127 -1)),
+        "int32": NumberInt(getRandomIntInclusive(-1 * Math.pow(2, 31) - 1, Math.pow(2, 31) - 1)),
+        "int64": NumberLong(getRandomIntInclusive(-1 * Math.pow(2, 63) - 1, Math.pow(2, 63) - 1)),
+        "double": getRandomNumber(-1 * Math.pow(2, 12), Math.pow(2, 12)),
+        "decimal128": NumberDecimal(getRandomNumber(-1 * Math.pow(10, 127) - 1, Math.pow(10, 127) -1)),
         "regex": /\/[A-Z0-9a-z]*\//,
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
@@ -202,10 +202,10 @@ function genDocument() {
         },
         "random": +getRandomNumber(0, totalDocs).toFixed(4),
         "symbol": genRandomSymbol(),
-        "unit": +getRandomNumber(0, 10 ** 6).toFixed(2),
-        "qty": NumberInt(getRandomIntInclusive(0, 10 ** 4)),
+        "unit": +getRandomNumber(0, Math.pow(10, 6)).toFixed(2),
+        "qty": NumberInt(getRandomIntInclusive(0, Math.pow(10, 4))),
         "price": [
-            +getRandomNumber(0, 10 ** 4).toFixed(2),
+            +getRandomNumber(0, Math.pow(10, 4)).toFixed(2),
             genRandomCurrency()
         ],
         "temperature": [
@@ -380,7 +380,7 @@ function genRandomInclusivePareto(min, alpha = 1.161) {
      */
     let u = 1.0 - rand();
 
-    return min / u ** (1.0 / alpha);
+    return min / Math.pow(u, (1.0 / alpha));
 }
 
 function genRandomIntInclusivePareto(min, max, alpha = 1.161) {
@@ -389,7 +389,7 @@ function genRandomIntInclusivePareto(min, max, alpha = 1.161) {
      *  alpha controls the "shape" of the distribution
      */
     let k = max * (1.0 - rand()) + min
-    let v = k ** alpha;
+    let v = Math.pow(k, alpha);
 
     return v + min;
 }
