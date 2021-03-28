@@ -32,6 +32,7 @@ let totalDocs = Math.ceil(getRandomNumber(1, 10) * 10 ** exponent);
 let fuzzer = { // preferences
     "_id": "ts", // ["ts"|"oid"]
     "range": 365.25, // date range in days
+    "future": 0, // 0 - 100%, portion of date range in future
     "vary_types": false, // fuzz value types
     "nests": 0, // how many nested layers
     "distribution": "uniform", // uniform, normal, bimodal, pareto, exponential
@@ -43,9 +44,7 @@ let fuzzer = { // preferences
     "ratios": [1, 0, 0]
 };
 var sampleSize = 9, docSize = 0;
-fuzzer.ratios.forEach((ratio) => {
-    sampleSize += parseInt(ratio);
-});
+fuzzer.ratios.forEach((ratio) => sampleSize += parseInt(ratio));
 sampleSize *= sampleSize;
 let indexes = [ // createIndexes parameters
     { "date": 1 },
@@ -72,7 +71,7 @@ function main() {
      *  main
      */
     print('\n');
-    print('Synthethising', totalDocs, 'total document(s)');
+    print('Synthesising', totalDocs, 'total document(s)');
 
     // sampling
     for (let i = 0; i < sampleSize; ++i) {
