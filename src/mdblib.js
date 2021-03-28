@@ -107,7 +107,7 @@ class AutoFactor {
                 default:   return this.MB;
             }
         } else if (typeof(input) === Number && input >= 0) {
-            let scale = Math.floor(Math.log2(input) / 10);
+            let scale = (Math.log2(input) / 10)|0;
             return (input / 1024 ** scale).toFixed(2) + [this.B, this.KB, this.MB, this.GB, this.TB, this.PB, this.EB, this.ZB, this.YB][scale];
         } else {
             return print('Invalid parameter type');
