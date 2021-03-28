@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version = "0.1.0"
+ *  Version = "0.1.1"
  *  Description: mongo shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -10,7 +10,7 @@
  */
 
 if (typeof db.isMaster().maxBsonObjectSize === 'undefined') {
-    var bsonMax = 16 * 1024 ** 2;
+    var bsonMax = 16 * Math.pow(1024, 2);
 } else {
     var bsonMax = db.isMaster().maxBsonObjectSize;
 }
@@ -64,16 +64,16 @@ class ScaleFactor {
     constructor(unit = 'MB') {
         // default to MB
         switch (unit.toUpperCase()) {
-            case  'B': return { "name": "bytes",      "unit":  "B", "symbol":  "", "factor": 1024 ** 0, "precision": 0, "pctPoint": 2 };
-            case 'KB': return { "name": "kilobytes",  "unit": "KB", "symbol": "k", "factor": 1024 ** 1, "precision": 2, "pctPoint": 1 };
-            case 'MB': return { "name": "megabytes",  "unit": "MB", "symbol": "M", "factor": 1024 ** 2, "precision": 2, "pctPoint": 1 };
-            case 'GB': return { "name": "gigabytes",  "unit": "GB", "symbol": "G", "factor": 1024 ** 3, "precision": 2, "pctPoint": 1 };
-            case 'TB': return { "name": "terabytes",  "unit": "TB", "symbol": "T", "factor": 1024 ** 4, "precision": 2, "pctPoint": 1 };
-            case 'PB': return { "name": "petabytes",  "unit": "PB", "symbol": "P", "factor": 1024 ** 5, "precision": 2, "pctPoint": 1 };
-            case 'EB': return { "name": "exabytes",   "unit": "EB", "symbol": "E", "factor": 1024 ** 6, "precision": 2, "pctPoint": 1 };
-            case 'ZB': return { "name": "zettabytes", "unit": "ZB", "symbol": "Z", "factor": 1024 ** 7, "precision": 2, "pctPoint": 1 };
-            case 'YB': return { "name": "yottabytes", "unit": "YB", "symbol": "Y", "factor": 1024 ** 8, "precision": 2, "pctPoint": 1 };
-            default:   return { "name": "megabytes",  "unit": "MB", "symbol": "M", "factor": 1024 ** 2, "precision": 2, "pctPoint": 1 };
+            case  'B': return { "name": "bytes",      "unit":  "B", "symbol":  "", "factor": Math.pow(1024, 0), "precision": 0, "pctPoint": 2 };
+            case 'KB': return { "name": "kilobytes",  "unit": "KB", "symbol": "k", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 };
+            case 'MB': return { "name": "megabytes",  "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
+            case 'GB': return { "name": "gigabytes",  "unit": "GB", "symbol": "G", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 };
+            case 'TB': return { "name": "terabytes",  "unit": "TB", "symbol": "T", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 };
+            case 'PB': return { "name": "petabytes",  "unit": "PB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 };
+            case 'EB': return { "name": "exabytes",   "unit": "EB", "symbol": "E", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 };
+            case 'ZB': return { "name": "zettabytes", "unit": "ZB", "symbol": "Z", "factor": Math.pow(1024, 7), "precision": 2, "pctPoint": 1 };
+            case 'YB': return { "name": "yottabytes", "unit": "YB", "symbol": "Y", "factor": Math.pow(1024, 8), "precision": 2, "pctPoint": 1 };
+            default:   return { "name": "megabytes",  "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
         }
     }
 }
@@ -108,14 +108,14 @@ class AutoFactor {
             }
         } else if (typeof(input) === Number && input >= 0) {
             let scale = (Math.log2(input) / 10)|0;
-            return (input / 1024 ** scale).toFixed(2) + [this.B, this.KB, this.MB, this.GB, this.TB, this.PB, this.EB, this.ZB, this.YB][scale];
+            return (input / Math.pow(1024, scale)).toFixed(2) + [this.B, this.KB, this.MB, this.GB, this.TB, this.PB, this.EB, this.ZB, this.YB][scale];
         } else {
             return print('Invalid parameter type');
         }
     }
 
     metric(name, unit, symbol, factor, precision, pctPoint) {
-        return { "name": name, "unit": unit, "symbol": symbol, "factor": 1024 ** factor, "precision": precision, "pctPoint": pctPoint };
+        return { "name": name, "unit": unit, "symbol": symbol, "factor": Math.pow(1024, factor), "precision": precision, "pctPoint": pctPoint };
     }
 
     static formatted(number) {
@@ -157,8 +157,8 @@ function rand() {
      */
     // return _rand(); // the shell's prng
     return Math.random(); // node's prng
-    // return pcg32.random() / (2 ** 32 - 1); // PCG-XSH-RR
-    // return Math.abs(_srand()) / (2 ** 63 - 1); // SecureRandom() method
+    // return pcg32.random() / (Math.pow(2, 32) - 1); // PCG-XSH-RR
+    // return Math.abs(_srand()) / (Math.pow(2, 63) - 1); // SecureRandom() method
     // return Random.rand(); // SecureRandom() method
     // return Fortuna();
 }
