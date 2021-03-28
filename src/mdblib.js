@@ -178,7 +178,7 @@ function serverVer(ver) {
     /*
      *  Evaluate server version
      */
-    if (ver !== undefined && ver <= +db.version().match(/^[0-9]+\.[0-9]+/)) {
+    if (ver !== 'undefined' && ver <= +db.version().match(/^[0-9]+\.[0-9]+/)) {
         return true;
     } else if (ver !== null && ver > +db.version().match(/^[0-9]+\.[0-9]+/)) {
         return false;
