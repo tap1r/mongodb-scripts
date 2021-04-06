@@ -20,7 +20,7 @@ load('mdblib.js');
 
 if (typeof hrs === 'undefined') {
     // set interval in hours
-    var hrs = 1;
+    let hrs = 1;
 }
 
 if (typeof scale === 'undefined') {
