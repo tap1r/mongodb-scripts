@@ -18,12 +18,12 @@ load('mdblib.js');
  *  User defined parameters
  */
 
-if (hrs === undefined) {
+if (typeof hrs === 'undefined') {
     // set interval in hours
     var hrs = 1;
 }
 
-if (scale === undefined) {
+if (typeof scale === 'undefined') {
     // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
     var scale = new ScaleFactor();
 }
