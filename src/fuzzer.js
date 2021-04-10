@@ -53,7 +53,7 @@ let indexes = [ // createIndexes parameters
     { "timestamp": 1 },
     (serverVer(4.2)) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
-let specialIndexes = [ // collations not supported
+let specialIndexes = [ // unsupported by collations 
     { "2dlegacy": "2d" },
     { "string": "text" }
 ];
@@ -90,7 +90,7 @@ function main() {
         residual = (totalDocs % batchSize)|0;
     }
 
-    dropNS(dropPref);
+    dropNS(dropPref, collName);
 
     // generate and bulk write the docs
     print('\n');
@@ -232,11 +232,11 @@ function genDocument() {
     return fuzzer.schemas[getRandomRatioInt(fuzzer.ratios)];
 }
 
-function dropNS(dropPref=false) {
+function dropNS(dropPref = false, collName = false) {
     /*
      *  drop target namespace
      */
-    if (dropPref) {
+    if (dropPref && collName) {
         print('\n');
         print('Dropping namespace "' + dbName + '.' + collName + '"');
         db.getSiblingDB(dbName).getCollection(collName).drop();
