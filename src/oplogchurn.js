@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version = "0.1.1"
+ *  Version = "0.1.2"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -20,7 +20,7 @@ load('mdblib.js');
 
 if (typeof hrs === 'undefined') {
     // set interval in hours
-    let hrs = 1;
+    var hrs = 1;
 }
 
 if (typeof scale === 'undefined') {
@@ -32,7 +32,18 @@ if (typeof scale === 'undefined') {
  *  Global defaults
  */
 
-let termWidth = 60, columnWidth = 25, rowHeader = 34; // formatting preferences
+// formatting preferences
+if (typeof termWidth === 'undefined') {
+    var termWidth = 60;
+}
+
+if (typeof columnWidth === 'undefined') {
+    var columnWidth = 25;
+}
+
+if (typeof rowHeader === 'undefined') {
+    var rowHeader = 34;
+}
 
 function main() {
     /*
@@ -44,8 +55,7 @@ function main() {
     let d2 = date.toISOString(); // end datetime
     let t1 = (date.setHours(date.getHours() - hrs) / 1000.0)|0; // start timestamp
     let d1 = date.toISOString(); // start datetime
-    let agg = [
-        {
+    let agg = [{
             "$match": {
                 "ts": {
                     "$gt": Timestamp(t1, 1),
@@ -54,8 +64,7 @@ function main() {
             }
         },{
             "$project": { "_id": 0 }
-        }
-    ];
+    }];
 
     // Measure interval statistics
     slaveOk();
