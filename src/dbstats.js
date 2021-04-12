@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version = "0.2.0"
+ *  Version = "0.2.1"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -23,7 +23,7 @@ if (typeof _mdblib === 'undefined') {
  *  User defined parameters
  */
 
-if (scale === undefined) {
+if (typeof scale === 'undefined') {
     // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
     var scale = new ScaleFactor();
 }
@@ -68,9 +68,7 @@ function getStats() {
         });
         let views = db.getSiblingDB(dbName).getCollectionInfos({ "type": "view" }, true);
         printViewHeader(views.length);
-        views.map(viewInfo => {
-            printView(viewInfo.name);
-        });
+        views.map(viewInfo => printView(viewInfo.name));
         printDb(database);
         dbPath.dataSize += database.dataSize;
         dbPath.storageSize += database.storageSize;
