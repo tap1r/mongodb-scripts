@@ -9,7 +9,7 @@
 
 /*
  *  Load helper lib (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
- *  Save mdblib.js to the current working directory
+ *  Save libs to the $MDBLIB or valid search path
  */
 
 var libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
