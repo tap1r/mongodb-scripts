@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version = "0.2.1"
+ *  Version = "0.2.2"
  *  Description: Generate pseudo random test data, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -26,7 +26,7 @@ if (typeof _mdblib === 'undefined') {
  */
 
 let dbName = 'database', collName = 'collection';
-let compressor = (serverVer(4.2)) ? 'zstd' : 'zlib';
+let compressor = (serverVer(4.2)) ? 'zstd' : 'zlib'; // ["none"|"snappy"|"zlib"|"zstd"]
 let collation = {
     "locale": "simple" // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
 };
@@ -94,7 +94,7 @@ function main() {
         residual = (totalDocs % batchSize)|0;
     }
 
-    dropNS(dropPref, collName);
+    dropNS(dropPref, dbName, collName, compressor, collation);
 
     // generate and bulk write the docs
     print('\n');
@@ -232,11 +232,13 @@ function genDocument() {
     return fuzzer.schemas[getRandomRatioInt(fuzzer.ratios)];
 }
 
-function dropNS(dropPref = false, collName = false) {
+function dropNS(dropPref = false, dbName = false, collName = false,
+                compressor = (serverVer(4.2)) ? 'zstd' : 'zlib',
+                collation = { "locale": "simple" }) {
     /*
      *  drop target namespace
      */
-    if (dropPref && collName) {
+    if (dropPref) {
         print('\n');
         print('Dropping namespace "' + dbName + '.' + collName + '"');
         db.getSiblingDB(dbName).getCollection(collName).drop();
