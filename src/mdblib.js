@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version = "0.2.0"
+ *  Version = "0.2.1"
  *  Description: mongo shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -212,6 +212,13 @@ function getRandomNumber(min = 0, max = 1) {
      *  generate random number
      */
     return rand() * (max - min) + min;
+}
+
+function getRandomExp(exponent = 0) {
+    /*
+     *  generate random exponential number
+     */
+    return Math.ceil(getRandomNumber(1, 10) * Math.pow(10, exponent));
 }
 
 function getRandomInt(min = 0, max = 1) {
