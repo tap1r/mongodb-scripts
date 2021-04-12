@@ -157,9 +157,9 @@ function genDocument() {
         case 'oid':
             var oid = new ObjectId();
             break;
-        default:
+        default: // the 'ts' option
             var oid = new ObjectId(
-                Math.floor(timestamp - (dateOffset)).toString(16) +
+                Math.floor(timestamp - dateOffset).toString(16) +
                 genRandomHex(16)
             );
     }
@@ -167,11 +167,11 @@ function genDocument() {
     let date = new Date(now - (dateOffset * 1000));
     let ts = new Timestamp(timestamp - (dateOffset), 1);
     let schemaA = {
-        "_id": oid,
+        //"_id": oid,
         "schema": "Shape A",
         "string": genRandomString(getRandomIntInclusive(6, 24)),
         "object": {
-            "oid": new ObjectId(),
+            "oid": oid,
             "str": genRandomAlpha(getRandomIntInclusive(8, 16)),
             "num": +getRandomNumber(-1 * Math.pow(2, 12), Math.pow(2, 12)).toFixed(4)
         },
@@ -216,12 +216,12 @@ function genDocument() {
         "status": ['Active', 'Inactive', null][getRandomRatioInt([80, 20, 1])]
     };
     let schemaB = {
-        "_id": oid,
+        // "_id": oid,
         "schema": "Shape B",
         "random": +getRandomNumber(0, totalDocs).toFixed(4)
     };
     let schemaC = {
-        "_id": oid,
+        // "_id": oid,
         "schema": "Shape C",
         "random": +getRandomNumber(0, totalDocs).toFixed(4)
     };
@@ -236,7 +236,7 @@ function dropNS(dropPref = false, dbName = false, collName = false,
                 compressor = (serverVer(4.2)) ? 'zstd' : 'zlib',
                 collation = { "locale": "simple" }) {
     /*
-     *  drop target namespace
+     *  drop and recreate target namespace
      */
     if (dropPref) {
         print('\n');
