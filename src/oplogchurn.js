@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version = "0.1.2"
+ *  Version = "0.2.0"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,12 @@
  *  Save mdblib.js to the current working directory
  */
 
-load('mdblib.js');
+var libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
+var libName = 'mdblib.js';
+if (typeof mdblib === 'undefined') {
+    var mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
+    load(mdblib);
+}
 
 /*
  *  User defined parameters
