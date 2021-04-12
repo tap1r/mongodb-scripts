@@ -10,11 +10,16 @@
 /*
  *  Load helper pcg-xsh-rr.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/pcg-xsh-rr.js)
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
- *  Save libs to the current working directory
+ *  Save libs to the $MDBLIB or valid search path
  */
 
 // load('pcg-xsh-rr.js');
-load('mdblib.js');
+var libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
+var libName = 'mdblib.js';
+if (typeof mdblib === 'undefined') {
+    var mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
+    load(mdblib);
+}
 
 /*
  *  User defined parameters
