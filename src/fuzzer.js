@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version = "0.2.0"
+ *  Version = "0.2.1"
  *  Description: Generate pseudo random test data, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -32,8 +32,7 @@ let collation = {
 };
 let wc = 1; // bulk write concern
 let dropPref = true; // drop collection prior to generating data
-let exponent = 4; // order of magnitude (total documents)
-let totalDocs = Math.ceil(getRandomNumber(1, 10) * Math.pow(10, exponent));
+let totalDocs = getRandomExp(4); // number of documents to generate per namespace
 let fuzzer = { // preferences
     "_id": "ts", // ["ts"|"oid"]
     "range": 365.25, // date range in days
@@ -49,7 +48,7 @@ let fuzzer = { // preferences
     "ratios": [1, 0, 0]
 };
 var sampleSize = 9, docSize = 0;
-fuzzer.ratios.forEach((ratio) => sampleSize += parseInt(ratio));
+fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
 sampleSize *= sampleSize;
 let indexes = [ // createIndexes parameters
     { "date": 1 },
@@ -130,18 +129,14 @@ function main() {
     // create indexes
     print('\n');
     print('Building index(es) with collation locale "' + collation.locale + '"');
-    indexes.forEach((index) => {
-        printjson(index);
-    });
+    indexes.forEach(index => printjson(index));
     db.getSiblingDB(dbName).getCollection(collName).createIndexes(
         indexes,
         { "collation": collation }
     );
     print('\n');
     print('Building index(es) with collation locale "simple"');
-    specialIndexes.forEach((index) => {
-        printjson(index);
-    });
+    specialIndexes.forEach(index => printjson(index));
     db.getSiblingDB(dbName).getCollection(collName).createIndexes(
         specialIndexes,
         { "collation": { "locale": "simple" } }
