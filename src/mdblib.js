@@ -9,11 +9,7 @@
  *  Global defaults
  */
 
-if (typeof db.isMaster().maxBsonObjectSize === 'undefined') {
-    var bsonMax = 16 * Math.pow(1024, 2);
-} else {
-    var bsonMax = db.isMaster().maxBsonObjectSize;
-}
+var bsonMax = (typeof db.isMaster().maxBsonObjectSize === 'undefined') ? 16 * Math.pow(1024, 2) : db.isMaster().maxBsonObjectSize;
 
 // Random.setRandomSeed(); 
 // pcg32.srandom(42, 52); // seed
@@ -180,7 +176,7 @@ function serverVer(ver) {
      */
     if (ver !== 'undefined' && ver <= +db.version().match(/^[0-9]+\.[0-9]+/)) {
         return true;
-    } else if (ver !== null && ver > +db.version().match(/^[0-9]+\.[0-9]+/)) {
+    } else if (ver !== 'undefined' && ver > +db.version().match(/^[0-9]+\.[0-9]+/)) {
         return false;
     } else {
         return +db.version().match(/^[0-9]+\.[0-9]+/);
