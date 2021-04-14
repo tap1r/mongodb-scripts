@@ -173,17 +173,26 @@ function genDocument() {
         "object": {
             "oid": oid,
             "str": genRandomAlpha(getRandomIntInclusive(8, 16)),
-            "num": +getRandomNumber(-1 * Math.pow(2, 12), Math.pow(2, 12)).toFixed(4)
+            "num": +getRandomNumber(-1 * Math.pow(2, 12),
+                                         Math.pow(2, 12)
+                    ).toFixed(4)
         },
         "array": genArrayElements(getRandomIntInclusive(0, 10)),
         "boolean": rand() < 0.5,
         "date": date,
         "timestamp": ts,
         "null": null,
-        "int32": NumberInt(getRandomIntInclusive(-1 * Math.pow(2, 31) - 1, Math.pow(2, 31) - 1)),
-        "int64": NumberLong(getRandomIntInclusive(-1 * Math.pow(2, 63) - 1, Math.pow(2, 63) - 1)),
-        "double": getRandomNumber(-1 * Math.pow(2, 12), Math.pow(2, 12)),
-        "decimal128": NumberDecimal(getRandomNumber(-1 * Math.pow(10, 127) - 1, Math.pow(10, 127) -1)),
+        "int32": NumberInt(getRandomIntInclusive(-1 * Math.pow(2, 31) - 1,
+                                                      Math.pow(2, 31) - 1)
+                           ),
+        "int64": NumberLong(getRandomIntInclusive(-1 * Math.pow(2, 63) - 1,
+                                                       Math.pow(2, 63) - 1)
+                            ),
+        "double": getRandomNumber(-1 * Math.pow(2, 12),
+                                       Math.pow(2, 12)),
+        "decimal128": NumberDecimal(getRandomNumber(-1 * Math.pow(10, 127) - 1,
+                                                         Math.pow(10, 127) -1)
+                                    ),
         "regex": /\/[A-Z0-9a-z]*\//,
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
@@ -210,10 +219,19 @@ function genDocument() {
         ],
         "temperature": [
             +genNormal(15, 10).toFixed(1),
-            ['°C', '°F', 'K'][getRandomIntInclusive(0, 2)]
+            [
+                'K',
+                '°F',
+                '°C'
+            ][getRandomIntInclusive(0, 2)]
         ],
         "dB": +genNormal(20, 10).toFixed(3),
-        "status": ['Active', 'Inactive', null][getRandomRatioInt([80, 20, 1])]
+        "status": [
+            'Active',
+            'Inactive',
+            null
+            ][getRandomRatioInt([80, 20, 1])
+        ]
     };
     let schemaB = {
         // "_id": oid,
@@ -248,7 +266,9 @@ function dropNS(dropPref = false, dbName = false, collName = false,
         );
         db.getSiblingDB(dbName).createCollection(collName,
             {
-                "storageEngine": { "wiredTiger": { "configString": "block_compressor=" + compressor } },
+                "storageEngine": {
+                    "wiredTiger": {
+                        "configString": "block_compressor=" + compressor } },
                 "collation": collation
             }
         )
