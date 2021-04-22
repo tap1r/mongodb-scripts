@@ -58,7 +58,7 @@ let indexes = [ // createIndexes parameters
     (serverVer(4.2)) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
 let specialIndexes = [ // unsupported by collations 
-    { "2dlegacy": "2d" },
+    { "location.coordinates": "2d" },
     { "string": "text" }
 ];
 
@@ -198,10 +198,6 @@ function genDocument() {
         "uuid": UUID(),
         "md5": MD5(genRandomHex(32)),
         "fle": BinData(6, UUID().base64()),
-        "2dlegacy": [
-            +getRandomNumber(-180, 180).toFixed(8),
-            +getRandomNumber(-90, 90).toFixed(8)
-        ],
         "location": {
             "type": "Point",
             "coordinates": [
@@ -219,11 +215,7 @@ function genDocument() {
         ],
         "temperature": [
             +genNormal(15, 10).toFixed(1),
-            [
-                'K',
-                '°F',
-                '°C'
-            ][getRandomIntInclusive(0, 2)]
+            ['K', '°F', '°C'][getRandomIntInclusive(0, 2)]
         ],
         "dB": +genNormal(20, 10).toFixed(3),
         "status": [
