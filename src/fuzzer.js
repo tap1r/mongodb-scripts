@@ -14,11 +14,13 @@
  */
 
 // load('pcg-xsh-rr.js');
-if (typeof _mdblib === 'undefined') {
+if (typeof _mdblib === 'undefined' && +version().match(/^[0-9]+\.[0-9]+/) >= 4.4) {
     let libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
     let libName = 'mdblib.js';
     var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
     load(_mdblib);
+} else {
+    load('mdblib.js');
 }
 
 /*
@@ -39,7 +41,7 @@ let fuzzer = { // preferences
     "future": 0, // 0 - 100%, portion of date range in future
     "vary_types": false, // fuzz value types
     "nests": 0, // how many nested layers
-    "distribution": "uniform", // uniform, normal, bimodal, pareto, exponential
+    "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
     "entropy": 100, // 0 - 100%
     "cardinality": 1, // experimental
     "sparsity": 0, // 0 - 100%
