@@ -12,11 +12,13 @@
  *  Save libs to the $MDBLIB or valid search path
  */
 
-if (typeof _mdblib === 'undefined') {
+if (typeof _mdblib === 'undefined' && +version().match(/^[0-9]+\.[0-9]+/) >= 4.4) {
     let libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
     let libName = 'mdblib.js';
     var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
     load(_mdblib);
+} else {
+    load('mdblib.js');
 }
 
 /*
