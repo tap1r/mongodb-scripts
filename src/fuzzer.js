@@ -29,7 +29,7 @@ if (typeof _mdblib === 'undefined' && +version().match(/^[0-9]+\.[0-9]+/) >= 4.4
 
 let dbName = 'database', collName = 'collection';
 let compressor = (serverVer(4.2)) ? 'zstd' : 'zlib'; // ["none"|"snappy"|"zlib"|"zstd"]
-let idioma = "none"; // ["none"|"da"|"nl"|"en"|"fi"|"fr"|"de"|"hu"|"it"|"nb"|"pt"|"ro"|"ru"|"es"|"sv"|"tr"]
+let idioma = "none";
 let collation = { // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
     "locale": "simple"
 };
@@ -75,7 +75,7 @@ let indexOptions = {
 };
 let specialIndexes = [ // unsupported by collations 
     { "location.coordinates": "2d" },
-    { "text": "text" }
+    { "quote.txt": "text" }
 ];
 let specialIndexOptions = {
     "collation": { "locale": "simple" },
@@ -189,6 +189,10 @@ function genDocument() {
         "schema": "Shape-A",
         "language": idioma,
         "string": genRandomString(getRandomIntInclusive(6, 24)),
+        "quote": {
+            "language": idiomas[getRandomRatioInt([80, 0, 0, 5, 0, 3, 2])],
+            "txt": genRandomString(getRandomIntInclusive(6, 24)),
+        },
         "object": {
             "oid": oid,
             "str": genRandomAlpha(getRandomIntInclusive(8, 16)),
@@ -266,14 +270,27 @@ function genDocument() {
         "polygon": { // polygon with a single ring
             "type": "Polygon",
             "coordinates": [
-                [[0, 0], [3, 6], [6, 1], [0, 0]]
+                [
+                    [0, 0],
+                    [3, 6],
+                    [6, 1],
+                    [0, 0]]
             ]
         },
         "polygonMulti": { // polygons with multiple rings
             "type": "Polygon",
             "coordinates": [
-                [[0, 0], [3, 6], [6, 1], [0, 0]],
-                [[2, 2], [3, 3], [4, 2], [2, 2]]
+                [
+                    [0, 0],
+                    [3, 6],
+                    [6, 1],
+                    [0, 0]
+                ],[
+                    [2, 2],
+                    [3, 3],
+                    [4, 2],
+                    [2, 2]
+                ]
             ]
         },
         "multiPoint": { // GeoJSON MultiPoint
@@ -288,36 +305,68 @@ function genDocument() {
         "multiLineString": { // GeoJSON MultiLineString
             "type": "MultiLineString",
             "coordinates": [
-                [[-73.96943, 40.78519], [-73.96082, 40.78095]],
-                [[-73.96415, 40.79229], [-73.95544, 40.78854]],
-                [[-73.97162, 40.78205], [-73.96374, 40.77715]],
-                [[-73.97880, 40.77247], [-73.97036, 40.76811]]
+                [
+                    [-73.96943, 40.78519],
+                    [-73.96082, 40.78095]
+                ],[
+                    [-73.96415, 40.79229],
+                    [-73.95544, 40.78854]
+                ],[
+                    [-73.97162, 40.78205],
+                    [-73.96374, 40.77715]
+                ],[
+                    [-73.97880, 40.77247],
+                    [-73.97036, 40.76811]
+                ]
             ]
         },
         "multiPolygon": { // GeoJSON MultiPolygon
             "type": "MultiPolygon",
             "coordinates": [
-                [[[-73.958, 40.8003], [-73.9498, 40.7968], [-73.9737, 40.7648], [-73.9814, 40.7681], [-73.958, 40.8003]]],
-                [[[-73.958, 40.8003], [-73.9498, 40.7968], [-73.9737, 40.7648], [-73.958, 40.8003]]]
+                [
+                    [
+                        [-73.958, 40.8003],
+                        [-73.9498, 40.7968],
+                        [-73.9737, 40.7648],
+                        [-73.9814, 40.7681],
+                        [-73.958, 40.8003]
+                    ]
+                ],[
+                    [
+                        [-73.958, 40.8003],
+                        [-73.9498, 40.7968],
+                        [-73.9737, 40.7648],
+                        [-73.958, 40.8003]
+                    ]
+                ]
             ]
         },
         "geoCollection": { // GeoJSON GeometryCollection
-            type: "GeometryCollection",
-            geometries: [{
-                type: "MultiPoint",
-                coordinates: [
+            "type": "GeometryCollection",
+            "geometries": [{
+                "type": "MultiPoint",
+                "coordinates": [
                     [-73.9580, 40.8003],
                     [-73.9498, 40.7968],
                     [-73.9737, 40.7648],
                     [-73.9814, 40.7681]
                 ]
             },{
-                type: "MultiLineString",
-                coordinates: [
-                    [[-73.96943, 40.78519], [-73.96082, 40.78095]],
-                    [[-73.96415, 40.79229], [-73.95544, 40.78854]],
-                    [[-73.97162, 40.78205], [-73.96374, 40.77715]],
-                    [[-73.97880, 40.77247], [-73.97036, 40.76811]]
+                "type": "MultiLineString",
+                "coordinates": [
+                    [
+                        [-73.96943, 40.78519],
+                        [-73.96082, 40.78095]
+                    ],[
+                        [-73.96415, 40.79229],
+                        [-73.95544, 40.78854]
+                    ],[
+                        [-73.97162, 40.78205],
+                        [-73.96374, 40.77715]
+                    ],[
+                        [-73.97880, 40.77247],
+                        [-73.97036, 40.76811]
+                    ]
                 ]
             }]
         }
