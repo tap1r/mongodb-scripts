@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version = "0.2.2"
+ *  Version = "0.2.3"
  *  Description: Generate pseudo random test data, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -29,10 +29,10 @@ if (typeof _mdblib === 'undefined' && +version().match(/^[0-9]+\.[0-9]+/) >= 4.4
 
 let dbName = 'database', collName = 'collection';
 let compressor = (serverVer(4.2)) ? 'zstd' : 'zlib'; // ["none"|"snappy"|"zlib"|"zstd"]
-let collation = {
-    "locale": "simple" // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
+let idioma = "none"; // ["none"|"da"|"nl"|"en"|"fi"|"fr"|"de"|"hu"|"it"|"nb"|"pt"|"ro"|"ru"|"es"|"sv"|"tr"]
+let collation = { // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
+    "locale": "simple"
 };
-let wc = 1; // bulk write concern
 let dropPref = true; // drop collection prior to generating data
 let totalDocs = getRandomExp(4); // number of documents to generate per namespace
 let fuzzer = { // preferences
@@ -49,20 +49,38 @@ let fuzzer = { // preferences
     "schemas": [{}, {}, {}],
     "ratios": [1, 0, 0]
 };
+let wc = 1; // bulk write concern
 var sampleSize = 9, docSize = 0;
 fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
 sampleSize *= sampleSize;
 let indexes = [ // createIndexes parameters
     { "date": 1 },
-    { "location": "2dsphere" },
+    { "language": 1, "schema": 1 },
     { "random": 1 },
+    { "string": "hashed" },
+    { "array": 1 },
     { "timestamp": 1 },
+    { "location": "2dsphere" },
+    { "lineString": "2dsphere" },
+    { "polygon": "2dsphere" },
+    { "polygonMulti": "2dsphere" },
+    { "multiPoint": "2dsphere" },
+    { "multiLineString": "2dsphere" },
+    { "multiPolygon": "2dsphere" },
+    { "geoCollection": "2dsphere" },
     (serverVer(4.2)) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
+let indexOptions = {
+    "collation": collation
+};
 let specialIndexes = [ // unsupported by collations 
     { "location.coordinates": "2d" },
-    { "string": "text" }
+    { "text": "text" }
 ];
+let specialIndexOptions = {
+    "collation": { "locale": "simple" },
+    "default_language": idioma
+};
 
 /*
  *  Global defaults
@@ -77,7 +95,7 @@ function main() {
      *  main
      */
     print('\n');
-    print('Synthesising', totalDocs, 'total document(s)');
+    print('Synthesising', totalDocs, 'document(s)');
 
     // sampling
     for (let i = 0; i < sampleSize; ++i) {
@@ -117,7 +135,7 @@ function main() {
         } catch (e) {
             print(e);
             print('\n');
-            print('Generation failed');
+            print('Generation failed.');
         }
 
         print('...bulk inserting batch', i + 1, 'of', totalBatches,
@@ -125,26 +143,24 @@ function main() {
     }
 
     print('\n');
-    print('Completed generating:', totalDocs,
+    print('Completed generating', totalDocs,
           'document(s) in "' + dbName + '.' + collName + '"');
 
     // create indexes
     print('\n');
     print('Building index(es) with collation locale "' + collation.locale + '"');
     indexes.forEach(index => printjson(index));
-    db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-        indexes,
-        { "collation": collation }
-    );
+    var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
+                    indexes, indexOptions
+                 );
+    (result.ok) ? print('Complete!') : print('Indexing failed:', result.msg);
     print('\n');
-    print('Building index(es) with collation locale "simple"');
+    print('Building exceptional index(es) without collation');
     specialIndexes.forEach(index => printjson(index));
-    db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-        specialIndexes,
-        { "collation": { "locale": "simple" } }
-    );
-    print('\n');
-    print('Complete!');
+    var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
+                    specialIndexes, specialIndexOptions
+                 );
+    (result.ok) ? print('Complete!') : print('Indexing failed:', result.msg);
     print('\n');
 
     return;
@@ -169,44 +185,47 @@ function genDocument() {
     let date = new Date(now - (dateOffset * 1000));
     let ts = new Timestamp(timestamp - (dateOffset), 1);
     let schemaA = {
-        //"_id": oid,
-        "schema": "Shape A",
+        "_id": oid,
+        "schema": "Shape-A",
+        "language": idioma,
         "string": genRandomString(getRandomIntInclusive(6, 24)),
         "object": {
             "oid": oid,
             "str": genRandomAlpha(getRandomIntInclusive(8, 16)),
-            "num": +getRandomNumber(-1 * Math.pow(2, 12),
-                                         Math.pow(2, 12)
-                    ).toFixed(4)
+            "num": +getRandomNumber(
+                        -1 * Math.pow(2, 12),
+                        Math.pow(2, 12)
+                   ).toFixed(4)
         },
         "array": genArrayElements(getRandomIntInclusive(0, 10)),
         "boolean": rand() < 0.5,
         "date": date,
         "timestamp": ts,
         "null": null,
-        "int32": NumberInt(getRandomIntInclusive(-1 * Math.pow(2, 31) - 1,
-                                                      Math.pow(2, 31) - 1)
-                           ),
-        "int64": NumberLong(getRandomIntInclusive(-1 * Math.pow(2, 63) - 1,
-                                                       Math.pow(2, 63) - 1)
-                            ),
-        "double": getRandomNumber(-1 * Math.pow(2, 12),
-                                       Math.pow(2, 12)),
-        "decimal128": NumberDecimal(getRandomNumber(-1 * Math.pow(10, 127) - 1,
-                                                         Math.pow(10, 127) -1)
-                                    ),
+        "int32": NumberInt(
+                    getRandomIntInclusive(
+                        -1 * (Math.pow(2, 31) - 1),
+                        Math.pow(2, 31) - 1)
+                    ),
+        "int64": NumberLong(
+                    getRandomIntInclusive(
+                        -1 * (Math.pow(2, 63) - 1),
+                        Math.pow(2, 63) - 1)
+                    ),
+        "double": getRandomNumber(
+                    -1 * Math.pow(2, 12),
+                    Math.pow(2, 12)
+                  ),
+        "decimal128": NumberDecimal(
+                        getRandomNumber(
+                            -1 * (Math.pow(10, 127) - 1),
+                            Math.pow(10, 127) -1)
+                        ),
         "regex": /\/[A-Z0-9a-z]*\//,
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
         "md5": MD5(genRandomHex(32)),
         "fle": BinData(6, UUID().base64()),
-        "location": {
-            "type": "Point",
-            "coordinates": [
-                +getRandomNumber(-180, 180).toFixed(8),
-                +getRandomNumber(-90, 90).toFixed(8)
-            ]
-        },
         "random": +getRandomNumber(0, totalDocs).toFixed(4),
         "symbol": genRandomSymbol(),
         "unit": +getRandomNumber(0, Math.pow(10, 6)).toFixed(2),
@@ -224,17 +243,95 @@ function genDocument() {
             'Active',
             'Inactive',
             null
-            ][getRandomRatioInt([80, 20, 1])
-        ]
+            ][getRandomRatioInt([80, 20, 1])],
+        "location": { // GeoJSON Point
+            "type": "Point",
+            "coordinates": [
+                +getRandomNumber(-180, 180).toFixed(4),
+                +getRandomNumber(-90, 90).toFixed(4)
+            ]
+        },
+        "lineString": { // GeoJSON LineString
+            "type": "LineString",
+            "coordinates": [
+                [
+                    +getRandomNumber(-180, 180).toFixed(4),
+                    +getRandomNumber(-90, 90).toFixed(4)
+                ],[
+                    +getRandomNumber(-180, 180).toFixed(4),
+                    +getRandomNumber(-90, 90).toFixed(4)
+                ]
+            ]
+        },
+        "polygon": { // polygon with a single ring
+            "type": "Polygon",
+            "coordinates": [
+                [[0, 0], [3, 6], [6, 1], [0, 0]]
+            ]
+        },
+        "polygonMulti": { // polygons with multiple rings
+            "type": "Polygon",
+            "coordinates": [
+                [[0, 0], [3, 6], [6, 1], [0, 0]],
+                [[2, 2], [3, 3], [4, 2], [2, 2]]
+            ]
+        },
+        "multiPoint": { // GeoJSON MultiPoint
+            "type": "MultiPoint",
+            "coordinates": [
+                [-73.9580, 40.8003],
+                [-73.9498, 40.7968],
+                [-73.9737, 40.7648],
+                [-73.9814, 40.7681]
+            ]
+        },
+        "multiLineString": { // GeoJSON MultiLineString
+            "type": "MultiLineString",
+            "coordinates": [
+                [[-73.96943, 40.78519], [-73.96082, 40.78095]],
+                [[-73.96415, 40.79229], [-73.95544, 40.78854]],
+                [[-73.97162, 40.78205], [-73.96374, 40.77715]],
+                [[-73.97880, 40.77247], [-73.97036, 40.76811]]
+            ]
+        },
+        "multiPolygon": { // GeoJSON MultiPolygon
+            "type": "MultiPolygon",
+            "coordinates": [
+                [[[-73.958, 40.8003], [-73.9498, 40.7968], [-73.9737, 40.7648], [-73.9814, 40.7681], [-73.958, 40.8003]]],
+                [[[-73.958, 40.8003], [-73.9498, 40.7968], [-73.9737, 40.7648], [-73.958, 40.8003]]]
+            ]
+        },
+        "geoCollection": { // GeoJSON GeometryCollection
+            type: "GeometryCollection",
+            geometries: [{
+                type: "MultiPoint",
+                coordinates: [
+                    [-73.9580, 40.8003],
+                    [-73.9498, 40.7968],
+                    [-73.9737, 40.7648],
+                    [-73.9814, 40.7681]
+                ]
+            },{
+                type: "MultiLineString",
+                coordinates: [
+                    [[-73.96943, 40.78519], [-73.96082, 40.78095]],
+                    [[-73.96415, 40.79229], [-73.95544, 40.78854]],
+                    [[-73.97162, 40.78205], [-73.96374, 40.77715]],
+                    [[-73.97880, 40.77247], [-73.97036, 40.76811]]
+                ]
+            }]
+        }
     };
     let schemaB = {
-        // "_id": oid,
-        "schema": "Shape B",
+        "_id": oid,
+        "schema": "Shape-B",
+        "language": idioma,
         "random": +getRandomNumber(0, totalDocs).toFixed(4)
     };
     let schemaC = {
-        // "_id": oid,
-        "schema": "Shape C",
+        "_id": oid,
+        "schema": "Shape-C",
+        "language": idioma,
         "random": +getRandomNumber(0, totalDocs).toFixed(4)
     };
     fuzzer.schemas[0] = schemaA;
@@ -254,10 +351,9 @@ function dropNS(dropPref = false, dbName = false, collName = false,
         print('\n');
         print('Dropping namespace "' + dbName + '.' + collName + '"');
         db.getSiblingDB(dbName).getCollection(collName).drop();
-        print('Creating namespace "' + dbName + '.' + collName + '"',
-              'with block compression "' + compressor + '"',
-              'and collation locale "' + collation.locale + '"'
-        );
+        print('Creating namespace "' + dbName + '.' + collName + '"');
+        print('...with block compression "' + compressor + '"');
+        print('...and collation locale "' + collation.locale + '"');
         db.getSiblingDB(dbName).createCollection(collName,
             {
                 "storageEngine": {
@@ -265,7 +361,7 @@ function dropNS(dropPref = false, dbName = false, collName = false,
                         "configString": "block_compressor=" + compressor } },
                 "collation": collation
             }
-        )
+        );
     } else {
         print('\n');
         print('Not dropping namespace "' + dbName + '.' + collName + '"');
