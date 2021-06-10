@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version = "0.2.1"
+ *  Version = "0.2.2"
  *  Description: mongo shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -10,6 +10,7 @@
  */
 
 var bsonMax = (typeof db.isMaster().maxBsonObjectSize === 'undefined') ? 16 * Math.pow(1024, 2) : db.isMaster().maxBsonObjectSize;
+const idiomas = ["none", "da", "nl", "en", "fi", "fr", "de", "hu", "it", "nb", "pt", "ro", "ru", "es", "sv", "tr"];
 
 // Random.setRandomSeed(); 
 // pcg32.srandom(42, 52); // seed
