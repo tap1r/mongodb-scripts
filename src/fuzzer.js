@@ -96,7 +96,7 @@ function main() {
      *  main
      */
     print('\n');
-    print('Fuzzer script synthesising:\t', totalDocs, 'document(s).');
+    print('Fuzzer script synthesising:', totalDocs, 'document(s).');
 
     // sampling synthethic documents and estimating batch size
     for (let i = 0; i < sampleSize; ++i) {
@@ -106,13 +106,15 @@ function main() {
     let avgSize = (docSize / sampleSize)|0;
     if (avgSize > bsonMax * 0.95) {
         print('\n');
-        print('Warning: The average document size of', avgSize, 'bytes approaches or exceeeds the BSON max size of', bsonMax, 'bytes');
+        print('Warning: The average document size of', avgSize,
+              'bytes approaches or exceeeds the BSON max size of', bsonMax, 'bytes');
     }
 
     print('\n');
-    print('Sampling', sampleSize, 'document(s) with BSON size averaging:\t', avgSize, 'byte(s)');
+    print('Sampling', sampleSize,
+          'document(s) with BSON size averaging:', avgSize, 'byte(s)');
     let batchSize = (bsonMax * 0.95 / avgSize)|0;
-    print('Estimated optimal batch capacity:\t', batchSize, 'document(s)');
+    print('Estimated optimal batch capacity:', batchSize, 'document(s)');
     if (totalDocs < batchSize) {
         batchSize = totalDocs;
     } else {
@@ -412,10 +414,10 @@ function dropNS(dropPref = false, dbName = false, collName = false,
      */
     print('\n');
     if (dropPref) {
-        print('Dropping namespace:\t"' + dbName + '.' + collName + '"');
+        print('Dropping namespace: "' + dbName + '.' + collName + '"');
         db.getSiblingDB(dbName).getCollection(collName).drop();
         print('\n');
-        print('Creating namespace:\t"' + dbName + '.' + collName + '"');
+        print('Creating namespace: "' + dbName + '.' + collName + '"');
         print('\twith block compression:\t"' + compressor + '"');
         print('\tand collation locale:\t"' + collation.locale + '"');
         db.getSiblingDB(dbName).createCollection(
@@ -427,7 +429,7 @@ function dropNS(dropPref = false, dbName = false, collName = false,
             }
         );
     } else {
-        print('Not dropping namespace:\t"' + dbName + '.' + collName + '"');
+        print('Not dropping namespace: "' + dbName + '.' + collName + '"');
     }
 
     return;
