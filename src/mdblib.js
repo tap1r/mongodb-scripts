@@ -9,8 +9,8 @@
  *  Global defaults
  */
 
-var bsonMax = (typeof db.isMaster().maxBsonObjectSize === 'undefined') ? 16 * Math.pow(1024, 2) : db.isMaster().maxBsonObjectSize;
-const idiomas = ["none", "da", "nl", "en", "fi", "fr", "de", "hu", "it", "nb", "pt", "ro", "ru", "es", "sv", "tr"];
+var bsonMax = (typeof isMaster().maxBsonObjectSize === 'undefined') ? 16 * Math.pow(1024, 2) : isMaster().maxBsonObjectSize;
+const idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', 'pt', 'ro', 'ru', 'es', 'sv', 'tr'];
 
 // Random.setRandomSeed(); 
 // pcg32.srandom(42, 52); // seed
@@ -125,7 +125,7 @@ class MetaStats {
      *  Storage statistics metadata class
      */
     constructor(name = '', dataSize = 0, storageSize = 0, objects = 0, blocksFree = 0, compressor = '', indexSize = 0, indexFree = 0) {
-        // this.instance = db.isMaster().me;
+        // this.instance = isMaster().me;
         this.hostname = db.hostInfo().system.hostname;
         this.proc = db.serverStatus().process;
         db.serverStatus().process === 'mongod' ? this.dbPath = db.serverCmdLineOpts().parsed.storage.dbPath : this.dbPath = null;
@@ -154,7 +154,7 @@ function rand() {
      */
     // return _rand(); // the shell's prng
     return Math.random(); // node's prng
-    // return pcg32.random() / (Math.pow(2, 32) - 1); // PCG-XSH-RR
+    // return pcg32.random() / (Math.pow(2, 32) - 1); // PCG-XSH-RR // load('pcg-xsh-rr.js');
     // return Math.abs(_srand()) / (Math.pow(2, 63) - 1); // SecureRandom() method
     // return Random.rand(); // SecureRandom() method
     // return Fortuna();
@@ -164,7 +164,7 @@ function isReplSet() {
     /*
      *  Determine if current host is a replSet member
      */
-    return (typeof db.isMaster().hosts !== 'undefined')
+    return (typeof isMaster().hosts !== 'undefined')
 }
 
 /*
@@ -193,12 +193,23 @@ function shellVer() {
 
 function slaveOk() {
     /*
-     *  Backward compatability with slaveOk()
+     *  Backward compatability with rs.slaveOk()
      */
     if (shellVer() >= 4.4) {
         return rs.secondaryOk();
     } else {
         return rs.slaveOk();
+    }
+}
+
+function isMaster() {
+    /*
+     *  Backward compatability with db.isMaster()
+     */
+    if (typeof db.hello() === 'undefined') {
+        return db.isMaster();
+    } else {
+        return db.hello();
     }
 }
 
