@@ -13,7 +13,6 @@
  *  Save libs to the $MDBLIB or valid search path
  */
 
-// load('pcg-xsh-rr.js');
 if (typeof _mdblib === 'undefined' && +version().match(/^[0-9]+\.[0-9]+/) >= 4.4) {
     let libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
     let libName = 'mdblib.js';
@@ -39,7 +38,7 @@ let totalDocs = getRandomExp(4); // number of documents to generate per namespac
 let fuzzer = { // preferences
     "_id": "ts", // ["ts"|"oid"]
     "range": 365.25, // date range in days
-    "future": 0, // 0 - 100%, portion of date range in future
+    "offset": -300, // date offset in days from now (neg = past, pos = future)
     "vary_types": false, // fuzz value types
     "nests": 0, // how many nested layers
     "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
@@ -127,6 +126,10 @@ function main() {
 
     // generate and bulk write the documents
     print('\n');
+    print('Specified date range:');
+    print('\tfrom:\t', new Date(now + fuzzer.offset * 86400000).toUTCString());
+    print('\tto:\t', new Date(now + fuzzer.offset * 86400000 + fuzzer.range * 86400000).toUTCString())
+    print('\n');
     print('Generating', totalDocs, 'document(s) in', totalBatches, 'batch(es):');
     for (let i = 0; i < totalBatches; ++i) {
         if (i === totalBatches - 1 && residual > 0) {
@@ -157,19 +160,28 @@ function main() {
     // create indexes
     print('\n');
     if (buildIndexes) {
-        print('Building index(es) with collation locale "' + collation.locale + '":');
-        indexes.forEach(index => print('\tkey:', Object.keys(index)[0]));
-        var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-                        indexes, indexOptions
-                     );
-        (result.ok) ? print('Indexing completed.') : print('Indexing failed:', result.msg);
+        if (indexes.length > 0) {
+            print('Building index(es) with collation locale "' + collation.locale + '":');
+            indexes.forEach(index => print('\tkey:', Object.keys(index)[0]));
+            var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
+                            indexes, indexOptions
+                        );
+            (result.ok) ? print('Indexing completed.') : print('Indexing failed:', result.msg);
+        } else {
+            print('No regular indexes specified to build.');
+        }
+        
         print('\n');
-        print('Building exceptional index(es) without collation support:');
-        specialIndexes.forEach(index => print('\tkey:', Object.keys(index)[0]));
-        var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-                        specialIndexes, specialIndexOptions
-                     );
-        (result.ok) ? print('Special indexing completed.') : print('Special indexing failed:', result.msg);
+        if (specialIndexes.length > 0) {
+            print('Building exceptional index(es) without collation support:');
+            specialIndexes.forEach(index => print('\tkey:', Object.keys(index)[0]));
+            var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
+                            specialIndexes, specialIndexOptions
+                         );
+            (result.ok) ? print('Special indexing completed.') : print('Special indexing failed:', result.msg);
+        } else {
+            print('No special indexes specified to build.');
+        }
     } else {
         print('Building indexes: "false"');
     }
@@ -184,20 +196,20 @@ function genDocument() {
     /*
      *  generate pseudo-random key values
      */
-    let dateOffset = rand() * fuzzer.range * 24 * 60 * 60;
+    let dateOffset = rand() * fuzzer.range * 86400 + fuzzer.offset * 86400;
     switch (fuzzer._id) {
         case 'oid':
             var oid = new ObjectId();
             break;
         default: // the 'ts' option
             var oid = new ObjectId(
-                Math.floor(timestamp - dateOffset).toString(16) +
+                Math.floor(timestamp + dateOffset).toString(16) +
                 genRandomHex(16)
             );
     }
 
-    let date = new Date(now - (dateOffset * 1000));
-    let ts = new Timestamp(timestamp - (dateOffset), 1);
+    let date = new Date(now + dateOffset * 1000);
+    let ts = new Timestamp(timestamp + dateOffset, 1);
     let schemaA = {
         "_id": oid,
         "schema": "Shape-A",
