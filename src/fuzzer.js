@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version = "0.2.3"
+ *  Version = "0.2.4"
  *  Description: Generate pseudo random test data, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -34,6 +34,7 @@ let collation = { // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
     "locale": "simple"
 };
 let dropPref = true; // drop collection prior to generating data
+let buildIndexes = true; // build index preferences
 let totalDocs = getRandomExp(4); // number of documents to generate per namespace
 let fuzzer = { // preferences
     "_id": "ts", // ["ts"|"oid"]
@@ -95,18 +96,23 @@ function main() {
      *  main
      */
     print('\n');
-    print('Synthesising', totalDocs, 'document(s)');
+    print('Fuzzer script synthesising:\t', totalDocs, 'document(s).');
 
-    // sampling
+    // sampling synthethic documents and estimating batch size
     for (let i = 0; i < sampleSize; ++i) {
         docSize += Object.bsonsize(genDocument());
     }
-    
+
     let avgSize = (docSize / sampleSize)|0;
+    if (avgSize > bsonMax * 0.95) {
+        print('\n');
+        print('Warning: The average document size of', avgSize, 'bytes approaches or exceeeds the BSON max size of', bsonMax, 'bytes');
+    }
+
     print('\n');
-    print('Sampling', sampleSize, 'document(s) with BSON size average:', avgSize, 'bytes');
+    print('Sampling', sampleSize, 'document(s) with BSON size averaging:\t', avgSize, 'byte(s)');
     let batchSize = (bsonMax * 0.95 / avgSize)|0;
-    print('Estimated optimal batch size capacity:', batchSize, 'documents');
+    print('Estimated optimal batch capacity:\t', batchSize, 'document(s)');
     if (totalDocs < batchSize) {
         batchSize = totalDocs;
     } else {
@@ -114,9 +120,10 @@ function main() {
         residual = (totalDocs % batchSize)|0;
     }
 
+    // recreate the namespace
     dropNS(dropPref, dbName, collName, compressor, collation);
 
-    // generate and bulk write the docs
+    // generate and bulk write the documents
     print('\n');
     print('Generating', totalDocs, 'document(s) in', totalBatches, 'batch(es):');
     for (let i = 0; i < totalBatches; ++i) {
@@ -132,36 +139,41 @@ function main() {
 
         try {
             var result = bulk.execute({ "w": wc });
+            print('\tbulk inserting', result.nInserted,
+                  'document(s) in batch', i + 1,
+                  'of', totalBatches);
         } catch (e) {
             print(e);
             print('\n');
             print('Generation failed.');
         }
-
-        print('...bulk inserting batch', i + 1, 'of', totalBatches,
-              '(' + result.nInserted, 'document(s))');
     }
 
-    print('\n');
     print('Completed generating', totalDocs,
-          'document(s) in "' + dbName + '.' + collName + '"');
+          'document(s) in "' + dbName + '.' + collName + '".');
 
     // create indexes
     print('\n');
-    print('Building index(es) with collation locale "' + collation.locale + '"');
-    indexes.forEach(index => printjson(index));
-    var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-                    indexes, indexOptions
-                 );
-    (result.ok) ? print('Complete!') : print('Indexing failed:', result.msg);
-    print('\n');
-    print('Building exceptional index(es) without collation');
-    specialIndexes.forEach(index => printjson(index));
-    var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-                    specialIndexes, specialIndexOptions
-                 );
-    (result.ok) ? print('Complete!') : print('Indexing failed:', result.msg);
-    print('\n');
+    if (buildIndexes) {
+        print('Building index(es) with collation locale "' + collation.locale + '":');
+        indexes.forEach(index => print('\tkey:', Object.keys(index)[0]));
+        var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
+                        indexes, indexOptions
+                     );
+        (result.ok) ? print('Indexing completed.') : print('Indexing failed:', result.msg);
+        print('\n');
+        print('Building exceptional index(es) without collation support:');
+        specialIndexes.forEach(index => print('\tkey:', Object.keys(index)[0]));
+        var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
+                        specialIndexes, specialIndexOptions
+                     );
+        (result.ok) ? print('Special indexing completed.') : print('Special indexing failed:', result.msg);
+    } else {
+        print('Building indexes: "false"');
+    }
+
+    // end
+    print('\nFuzzing completed!')
 
     return;
 }
@@ -190,7 +202,9 @@ function genDocument() {
         "language": idioma,
         "string": genRandomString(getRandomIntInclusive(6, 24)),
         "quote": {
-            "language": idiomas[getRandomRatioInt([80, 0, 0, 5, 0, 3, 2])],
+            "language": idiomas[
+                getRandomRatioInt([80, 0, 0, 5, 0, 3, 2])
+            ],
             "txt": genRandomString(getRandomIntInclusive(6, 24)),
         },
         "object": {
@@ -396,24 +410,24 @@ function dropNS(dropPref = false, dbName = false, collName = false,
     /*
      *  drop and recreate target namespace
      */
+    print('\n');
     if (dropPref) {
-        print('\n');
-        print('Dropping namespace "' + dbName + '.' + collName + '"');
+        print('Dropping namespace:\t"' + dbName + '.' + collName + '"');
         db.getSiblingDB(dbName).getCollection(collName).drop();
-        print('Creating namespace "' + dbName + '.' + collName + '"');
-        print('...with block compression "' + compressor + '"');
-        print('...and collation locale "' + collation.locale + '"');
-        db.getSiblingDB(dbName).createCollection(collName,
-            {
-                "storageEngine": {
-                    "wiredTiger": {
-                        "configString": "block_compressor=" + compressor } },
-                "collation": collation
+        print('\n');
+        print('Creating namespace:\t"' + dbName + '.' + collName + '"');
+        print('\twith block compression:\t"' + compressor + '"');
+        print('\tand collation locale:\t"' + collation.locale + '"');
+        db.getSiblingDB(dbName).createCollection(
+            collName,
+            { "storageEngine": {
+                "wiredTiger": {
+                    "configString": "block_compressor=" + compressor } },
+              "collation": collation
             }
         );
     } else {
-        print('\n');
-        print('Not dropping namespace "' + dbName + '.' + collName + '"');
+        print('Not dropping namespace:\t"' + dbName + '.' + collName + '"');
     }
 
     return;
