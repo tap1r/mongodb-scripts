@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version = "0.2.4"
+ *  Version = "0.2.5"
  *  Description: Generate pseudo random test data, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -53,7 +53,7 @@ let wc = 1; // bulk write concern
 var sampleSize = 9, docSize = 0;
 fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
 sampleSize *= sampleSize;
-let indexes = [ // createIndexes parameters
+let indexes = [ // index keys
     { "date": 1 },
     { "language": 1, "schema": 1 },
     { "random": 1 },
@@ -70,14 +70,14 @@ let indexes = [ // createIndexes parameters
     { "geoCollection": "2dsphere" },
     (serverVer(4.2)) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
-let indexOptions = {
+let indexOptions = { // createIndexes options
     "collation": collation
 };
-let specialIndexes = [ // unsupported by collations 
+let specialIndexes = [ // index keys unsupported by collations 
     { "location.coordinates": "2d" },
     { "quote.txt": "text" }
 ];
-let specialIndexOptions = {
+let specialIndexOptions = { // exceptional index options
     "collation": { "locale": "simple" },
     "default_language": idioma
 };
@@ -148,14 +148,12 @@ function main() {
                   'document(s) in batch', i + 1,
                   'of', totalBatches);
         } catch (e) {
-            print(e);
             print('\n');
-            print('Generation failed.');
+            print('Generation failed:', e);
         }
     }
 
-    print('Completed generating', totalDocs,
-          'document(s) in "' + dbName + '.' + collName + '".');
+    print('Generation completed.');
 
     // create indexes
     print('\n');
@@ -170,7 +168,7 @@ function main() {
         } else {
             print('No regular indexes specified to build.');
         }
-        
+
         print('\n');
         if (specialIndexes.length > 0) {
             print('Building exceptional index(es) without collation support:');
@@ -187,7 +185,7 @@ function main() {
     }
 
     // end
-    print('\nFuzzing completed!')
+    print('\nFuzzing completed!\n')
 
     return;
 }
