@@ -244,7 +244,7 @@ function genDocument() {
             "oid": oid,
             "str": genRandomAlpha(getRandomIntInclusive(8, 16)),
             "num": +getRandomNumber(
-                        -1 * Math.pow(2, 12),
+                        -Math.pow(2, 12),
                         Math.pow(2, 12)
                    ).toFixed(4)
         },
@@ -255,21 +255,21 @@ function genDocument() {
         "null": null,
         "int32": NumberInt(
                     getRandomIntInclusive(
-                        -1 * (Math.pow(2, 31) - 1),
+                        -(Math.pow(2, 31) - 1),
                         Math.pow(2, 31) - 1)
                     ),
         "int64": NumberLong(
                     getRandomIntInclusive(
-                        -1 * (Math.pow(2, 63) - 1),
+                        -(Math.pow(2, 63) - 1),
                         Math.pow(2, 63) - 1)
                     ),
         "double": getRandomNumber(
-                    -1 * Math.pow(2, 12),
+                    -Math.pow(2, 12),
                     Math.pow(2, 12)
                   ),
         "decimal128": NumberDecimal(
                         getRandomNumber(
-                            -1 * (Math.pow(10, 127) - 1),
+                            -(Math.pow(10, 127) - 1),
                             Math.pow(10, 127) -1)
                         ),
         "regex": /\/[A-Z0-9a-z]*\/g/,
