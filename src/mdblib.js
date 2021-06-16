@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version = "0.2.2"
+ *  Version = "0.2.3"
  *  Description: mongo shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -413,6 +413,13 @@ function ktof(kelvin) {
      *  convert Kelvin to Fahrenheit temparature unit
      */
     return (kelvin - K) * 1.8 + 32;
+}
+
+function bool(chance = 0.5) {
+    /*
+     *  return true/false
+     */
+    return rand() < chance;
 }
 
 // EOF
