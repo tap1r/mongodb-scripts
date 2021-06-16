@@ -148,7 +148,7 @@ function main() {
         try {
             var result = bulk.execute({ "w": wc });
             print('\tbulk inserting', result.nInserted,
-                  'document(s) in batch', i + 1,
+                  'document(s) in batch', 1 + i,
                   'of', totalBatches);
         } catch (e) {
             print('\n');
@@ -205,7 +205,17 @@ function genDocument() {
     /*
      *  generate pseudo-random key values
      */
-    let dateOffset = rand() * fuzzer.range * 86400 + fuzzer.offset * 86400;
+    switch (fuzzer.distribution) {
+        case 'uniform':
+            var dateOffset = rand() * fuzzer.range * 86400 + fuzzer.offset * 86400;
+            break;
+        default:
+            print('\n');
+            print('Unsupported distribution type:', fuzzer.distribution);
+            print('Defaulting to "uniform');
+            var dateOffset = rand() * fuzzer.range * 86400 + fuzzer.offset * 86400;
+    }
+
     switch (fuzzer._id) {
         case 'oid':
             var oid = new ObjectId();
@@ -239,7 +249,7 @@ function genDocument() {
                    ).toFixed(4)
         },
         "array": genArrayElements(getRandomIntInclusive(0, 10)),
-        "boolean": rand() < 0.5,
+        "boolean": bool(),
         "date": date,
         "timestamp": ts,
         "null": null,
