@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version = "0.2.5"
+ *  Version = "0.2.6"
  *  Description: Generate pseudo random test data, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -28,7 +28,7 @@ if (typeof _mdblib === 'undefined' && +version().match(/^[0-9]+\.[0-9]+/) >= 4.4
 
 let dbName = 'database', collName = 'collection';
 let compressor = (serverVer(4.2)) ? 'zstd' : 'zlib'; // ["none"|"snappy"|"zlib"|"zstd"]
-let idioma = "none";
+let idioma = 'none';
 let collation = { // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
     "locale": "simple"
 };
@@ -36,16 +36,16 @@ let dropPref = true; // drop collection prior to generating data
 let buildIndexes = true; // build index preferences
 let totalDocs = getRandomExp(4); // number of documents to generate per namespace
 let fuzzer = { // preferences
-    "_id": "ts", // ["ts"|"oid"]
+    "_id": "ts", // ["ts"|"oid"] - timeseries OID | client generated OID
     "range": 365.25, // date range in days
     "offset": -300, // date offset in days from now (neg = past, pos = future)
-    "vary_types": false, // fuzz value types
-    "nests": 0, // how many nested layers
     "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
-    "entropy": 100, // 0 - 100%
+    "vary_types": false, // fuzz value types: experimental
+    "nests": 0, // how many nested layers: experimental
+    "entropy": 100, // 0 - 100%: experimental
     "cardinality": 1, // experimental
-    "sparsity": 0, // 0 - 100%
-    "weighting": 50, // 0 - 100%
+    "sparsity": 0, // 0 - 100%: experimental
+    "weighting": 50, // 0 - 100%: experimental
     "schemas": [{}, {}, {}],
     "ratios": [1, 0, 0]
 };
@@ -61,13 +61,15 @@ let indexes = [ // index keys
     { "array": 1 },
     { "timestamp": 1 },
     { "location": "2dsphere" },
-    { "lineString": "2dsphere" },
-    { "polygon": "2dsphere" },
-    { "polygonMulti": "2dsphere" },
-    { "multiPoint": "2dsphere" },
-    { "multiLineString": "2dsphere" },
-    { "multiPolygon": "2dsphere" },
-    { "geoCollection": "2dsphere" },
+    /*
+        { "lineString": "2dsphere" },
+        { "polygon": "2dsphere" },
+        { "polygonMulti": "2dsphere" },
+        { "multiPoint": "2dsphere" },
+        { "multiLineString": "2dsphere" },
+        { "multiPolygon": "2dsphere" },
+        { "geoCollection": "2dsphere" },
+    */
     (serverVer(4.2)) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
 let indexOptions = { // createIndexes options
@@ -95,7 +97,7 @@ function main() {
      *  main
      */
     print('\n');
-    print('Fuzzer script synthesising:', totalDocs, 'document(s).');
+    print('Fuzzer script synthesising:', totalDocs, 'document(s)');
 
     // sampling synthethic documents and estimating batch size
     for (let i = 0; i < sampleSize; ++i) {
@@ -126,9 +128,10 @@ function main() {
 
     // generate and bulk write the documents
     print('\n');
-    print('Specified date range:');
+    print('Specified timeseries date range:');
     print('\tfrom:\t', new Date(now + fuzzer.offset * 86400000).toUTCString());
     print('\tto:\t', new Date(now + fuzzer.offset * 86400000 + fuzzer.range * 86400000).toUTCString())
+    print('\tdistribution:\t', fuzzer.distribution)
     print('\n');
     print('Generating', totalDocs, 'document(s) in', totalBatches, 'batch(es):');
     for (let i = 0; i < totalBatches; ++i) {
@@ -160,7 +163,11 @@ function main() {
     if (buildIndexes) {
         if (indexes.length > 0) {
             print('Building index(es) with collation locale "' + collation.locale + '":');
-            indexes.forEach(index => print('\tkey:', Object.keys(index)[0]));
+            indexes.forEach(index => {
+                for (let [key, value] of Object.entries(index)) {
+                    print('\tkey:', key, '/', value);
+                }
+            });
             var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
                             indexes, indexOptions
                         );
@@ -172,7 +179,11 @@ function main() {
         print('\n');
         if (specialIndexes.length > 0) {
             print('Building exceptional index(es) without collation support:');
-            specialIndexes.forEach(index => print('\tkey:', Object.keys(index)[0]));
+            specialIndexes.forEach(index => {
+                for (let [key, value] of Object.entries(index)) {
+                    print('\tkey:', key, '/', value);
+                }
+            });
             var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
                             specialIndexes, specialIndexOptions
                          );
@@ -185,7 +196,7 @@ function main() {
     }
 
     // end
-    print('\nFuzzing completed!\n')
+    print('\nFuzzing completed!\n\n')
 
     return;
 }
@@ -251,7 +262,7 @@ function genDocument() {
                             -1 * (Math.pow(10, 127) - 1),
                             Math.pow(10, 127) -1)
                         ),
-        "regex": /\/[A-Z0-9a-z]*\//,
+        "regex": /\/[A-Z0-9a-z]*\/g/,
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
         "md5": MD5(genRandomHex(32)),
@@ -381,17 +392,17 @@ function genDocument() {
                 "type": "MultiLineString",
                 "coordinates": [
                     [
-                        [-73.96943, 40.78519],
-                        [-73.96082, 40.78095]
+                        [-73.9694, 40.7851],
+                        [-73.9608, 40.7809]
                     ],[
-                        [-73.96415, 40.79229],
-                        [-73.95544, 40.78854]
+                        [-73.9641, 40.7922],
+                        [-73.9554, 40.7885]
                     ],[
-                        [-73.97162, 40.78205],
-                        [-73.96374, 40.77715]
+                        [-73.9716, 40.7820],
+                        [-73.9637, 40.7771]
                     ],[
-                        [-73.97880, 40.77247],
-                        [-73.97036, 40.76811]
+                        [-73.9788, 40.7724],
+                        [-73.9703, 40.7681]
                     ]
                 ]
             }]
