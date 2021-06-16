@@ -41,6 +41,7 @@ let fuzzer = { // preferences
     "offset": -300, // date offset in days from now (neg = past, pos = future)
     "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
     "vary_types": false, // fuzz value types: experimental
+    "polymorphic": false,
     "nests": 0, // how many nested layers: experimental
     "entropy": 100, // 0 - 100%: experimental
     "cardinality": 1, // experimental
@@ -212,7 +213,7 @@ function genDocument() {
         default:
             print('\n');
             print('Unsupported distribution type:', fuzzer.distribution);
-            print('Defaulting to "uniform');
+            print('Defaulting to "uniform"');
             var dateOffset = rand() * fuzzer.range * 86400 + fuzzer.offset * 86400;
     }
 
