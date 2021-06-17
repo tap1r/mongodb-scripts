@@ -20,6 +20,7 @@ const idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', '
  *  https://github.com/uxitten/polyfill/blob/master/string.polyfill.js
  *  https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/padStart
  *  https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/padEnd
+ *  https://github.com/tc39/proposal-object-values-entries
  */
 
 String.prototype.padStart = function padStart(targetLength, padString) {
@@ -50,6 +51,18 @@ String.prototype.padEnd = function padEnd(targetLength, padString) {
     }
 };
 
+if (!Object.entries) {
+    Object.entries = function(obj){
+        var ownProps = Object.keys(obj),
+            i = ownProps.length,
+            resArray = new Array(i); // preallocate the Array
+        while (i--)
+            resArray[i] = [ownProps[i], obj[ownProps[i]]];
+
+        return resArray;
+    };
+}
+  
 /*
  *  Helper classes
  */
