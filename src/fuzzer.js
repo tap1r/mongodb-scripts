@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version = "0.2.6"
+ *  Version = "0.2.7"
  *  Description: Generate pseudo random test data, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -19,6 +19,7 @@ if (typeof _mdblib === 'undefined' && +version().match(/^[0-9]+\.[0-9]+/) >= 4.4
     var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
     load(_mdblib);
 } else {
+    // pre-v4.4 copy the library to the CWD
     load('mdblib.js');
 }
 
@@ -27,8 +28,8 @@ if (typeof _mdblib === 'undefined' && +version().match(/^[0-9]+\.[0-9]+/) >= 4.4
  */
 
 let dbName = 'database', collName = 'collection';
-let compressor = (serverVer(4.2)) ? 'zstd' : 'zlib'; // ["none"|"snappy"|"zlib"|"zstd"]
-let idioma = 'none';
+let compressor = 'best'; // ["none"|"snappy"|"zlib"|"zstd"|"default"|"best"]
+let idioma = 'en';
 let collation = { // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
     "locale": "simple"
 };
@@ -40,13 +41,15 @@ let fuzzer = { // preferences
     "range": 365.25, // date range in days
     "offset": -300, // date offset in days from now (neg = past, pos = future)
     "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
-    "vary_types": false, // fuzz value types: experimental
-    "polymorphic": false,
-    "nests": 0, // how many nested layers: experimental
-    "entropy": 100, // 0 - 100%: experimental
-    "cardinality": 1, // experimental
-    "sparsity": 0, // 0 - 100%: experimental
-    "weighting": 50, // 0 - 100%: experimental
+    "polymorphic": { // experimental
+        "enabled": false,
+        "vary_types": false, // fuzz types
+        "nests": 0, // nested subdocs
+        "entropy": 100, // 0 - 100%
+        "cardinality": 1, // ratio:1
+        "sparsity": 0, // 0 - 100%
+        "weighting": 50 // 0 - 100%
+    },
     "schemas": [{}, {}, {}],
     "ratios": [1, 0, 0]
 };
@@ -71,7 +74,7 @@ let indexes = [ // index keys
         { "multiPolygon": "2dsphere" },
         { "geoCollection": "2dsphere" },
     */
-    (serverVer(4.2)) ? { "object.$**": 1 } : { "object.oid": 1 }
+    serverVer(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
 let indexOptions = { // createIndexes options
     "collation": collation
@@ -172,7 +175,7 @@ function main() {
             var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
                             indexes, indexOptions
                         );
-            (result.ok) ? print('Indexing completed.') : print('Indexing failed:', result.msg);
+            result.ok ? print('Indexing completed.') : print('Indexing failed:', result.msg);
         } else {
             print('No regular indexes specified to build.');
         }
@@ -182,13 +185,13 @@ function main() {
             print('Building exceptional index(es) without collation support:');
             specialIndexes.forEach(index => {
                 for (let [key, value] of Object.entries(index)) {
-                    print('\tkey:', key, '/', value);
+                    print('\tkey:', key, '/', (value === 'text') ? value + ' / ' + idioma : value);
                 }
             });
             var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
                             specialIndexes, specialIndexOptions
                          );
-            (result.ok) ? print('Special indexing completed.') : print('Special indexing failed:', result.msg);
+            result.ok ? print('Special indexing completed.') : print('Special indexing failed:', result.msg);
         } else {
             print('No special indexes specified to build.');
         }
@@ -257,22 +260,18 @@ function genDocument() {
         "int32": NumberInt(
                     getRandomIntInclusive(
                         -(Math.pow(2, 31) - 1),
-                        Math.pow(2, 31) - 1)
-                    ),
+                        Math.pow(2, 31) - 1)),
         "int64": NumberLong(
                     getRandomIntInclusive(
                         -(Math.pow(2, 63) - 1),
-                        Math.pow(2, 63) - 1)
-                    ),
+                        Math.pow(2, 63) - 1)),
         "double": getRandomNumber(
                     -Math.pow(2, 12),
-                    Math.pow(2, 12)
-                  ),
+                    Math.pow(2, 12)),
         "decimal128": NumberDecimal(
                         getRandomNumber(
                             -(Math.pow(10, 127) - 1),
-                            Math.pow(10, 127) -1)
-                        ),
+                            Math.pow(10, 127) -1)),
         "regex": /\/[A-Z0-9a-z]*\/g/,
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
@@ -439,25 +438,49 @@ function genDocument() {
 }
 
 function dropNS(dropPref = false, dbName = false, collName = false,
-                compressor = (serverVer(4.2)) ? 'zstd' : 'zlib',
-                collation = { "locale": "simple" }) {
+                compressor = 'best', collation = { "locale": "simple" }) {
     /*
      *  drop and recreate target namespace
      */
+    var msg = '';
+    switch(compressor.toLowerCase()) {
+        case 'best':
+            compressor = serverVer(4.2) ? 'zstd' : 'zlib';
+            break;
+        case 'none':
+            compressor = 'none';
+            break;
+        case 'zlib':
+            compressor = 'zlib';
+            break;
+        case 'zstd':
+            if (serverVer(4.2)) {
+                compressor = 'zstd';
+            } else {
+                compressor = 'zlib';
+                var msg = '("zstd" requires v4.2+)';
+            }
+
+            break;
+        default:
+            compressor = 'snappy';
+    }
+
     print('\n');
-    if (dropPref) {
+    if (dropPref && !!dbName && !!collName) {
         print('Dropping namespace: "' + dbName + '.' + collName + '"');
         db.getSiblingDB(dbName).getCollection(collName).drop();
         print('\n');
         print('Creating namespace: "' + dbName + '.' + collName + '"');
-        print('\twith block compression:\t"' + compressor + '"');
+        print('\twith block compression:\t"' + compressor + '"', msg);
         print('\tand collation locale:\t"' + collation.locale + '"');
         db.getSiblingDB(dbName).createCollection(
             collName,
-            { "storageEngine": {
-                "wiredTiger": {
-                    "configString": "block_compressor=" + compressor } },
-              "collation": collation
+            {
+                "storageEngine": {
+                    "wiredTiger": {
+                        "configString": "block_compressor=" + compressor } },
+                "collation": collation
             }
         );
     } else {
