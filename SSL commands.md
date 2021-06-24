@@ -44,7 +44,7 @@
    -x509 \
    -newkey rsa:2048 \
    -nodes \
-   -days 3650 \
+   -days 397 \
    -keyout private.key \
    -out server.crt \
    -subj "/C=US/ST=New York/L=New York/O=MongoDB, Inc./OU=Technical Services/CN=*.mongodb.com"
@@ -58,7 +58,7 @@
   ```bash
   openssl req \
     -newkey rsa:2048 \
-    -days 3650 \
+    -days 397 \
     -nodes \
     -x509 \
     -subj "/C=US/ST=New York/L=New York/O=MongoDB, Inc./OU=Technical Services/CN=*.mongodb.com" \
@@ -101,7 +101,7 @@
    -x509 \
    -newkey ec:<(openssl ecparam -name secp521r1) \
    -nodes \
-   -days 3650 \
+   -days 397 \
    -keyout private.key \
    -out server.crt \
    -subj "/C=US/ST=New York/L=New York/O=MongoDB, Inc./OU=Technical Services/CN=*.mongodb.com" \
