@@ -11,9 +11,10 @@ var dbName = 'database', collName = 'collection';
 // load('fuzzer.js');
 
 // delete n% of existing documents
+var n = 80;
 var deleteFilter = {
     "$expr": {
-        "$gt": [0.8, { "$rand": {} }]
+        "$gt": [n / 100, { "$rand": {} }]
     }
 };
 
@@ -41,7 +42,7 @@ try {
     print(e);
 }
 
-var unsetOptions = [{ "$unset": ["__$$compaction"] }];
+var unsetOptions = [{ "$unset": "__$$compaction" }];
 
 try {
     db.getSiblingDB(dbName).getCollection(collName).updateMany(updateFilter, unsetOptions);
