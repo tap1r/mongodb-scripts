@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version = "0.2.3"
+ *  Version = "0.2.4"
  *  Description: mongo shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -56,7 +56,7 @@ if (!Object.entries) {
         var ownProps = Object.keys(obj),
             i = ownProps.length,
             resArray = new Array(i); // preallocate the Array
-        while (i--)
+        while (--i)
             resArray[i] = [ownProps[i], obj[ownProps[i]]];
 
         return resArray;
@@ -433,6 +433,22 @@ function bool(chance = 0.5) {
      *  return true/false
      */
     return rand() < chance;
+}
+
+function benford() {
+    /*
+     *  benford law
+     */
+    array => [1, 2, 3, 4, 5, 6, 7, 8, 9].map(
+        val => [val, array.reduce(
+                (sum, item) => sum + (
+                    item [0] === val
+                ),
+                0
+            ) / array.length, Math.log10(1 + 1 / val)
+        ]);
+    
+        return array;
 }
 
 // EOF
