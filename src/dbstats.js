@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version = "0.2.1"
+ *  Version = "0.2.2"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -18,6 +18,7 @@ if (typeof _mdblib === 'undefined' && +version().match(/^[0-9]+\.[0-9]+/) >= 4.4
     var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
     load(_mdblib);
 } else {
+    // pre-v4.4 copy the library to the CWD
     load('mdblib.js');
 }
 
@@ -123,7 +124,7 @@ function printCollHeader(collTotal = 0) {
      *  Print collection table header
      */
     print('-'.repeat(termWidth));
-    print(('Collection(s):\t' + collTotal).padEnd(rowHeader));
+    print(('Collection' + ((collTotal === 1) ? '' : 's') + ':\t' + collTotal).padEnd(rowHeader));
 }
 
 function printViewHeader(viewTotal = 0) {
@@ -131,7 +132,7 @@ function printViewHeader(viewTotal = 0) {
      *  Print view table header
      */
     print('-'.repeat(termWidth));
-    print(('View(s):\t' + viewTotal).padEnd(rowHeader));
+    print(('View' + ((viewTotal === 1) ? '' : 's') + ':\t\t' + viewTotal).padEnd(rowHeader));
 }
 
 function printCollection(collection) {
