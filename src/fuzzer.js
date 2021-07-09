@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version = "0.2.7"
+ *  Version = "0.2.8"
  *  Description: Generate pseudo random test data, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -38,7 +38,7 @@ let buildIndexes = true; // build index preferences
 let totalDocs = getRandomExp(4); // number of documents to generate per namespace
 let fuzzer = { // preferences
     "_id": "ts", // ["ts"|"oid"] - timeseries OID | client generated OID
-    "range": 365.25, // date range in days
+    "range": 365.2422, // date range in days
     "offset": -300, // date offset in days from now (neg = past, pos = future)
     "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
     "polymorphic": { // experimental
@@ -51,7 +51,7 @@ let fuzzer = { // preferences
         "weighting": 50 // 0 - 100%
     },
     "schemas": [{}, {}, {}],
-    "ratios": [1, 0, 0]
+    "ratios": [7, 2, 1]
 };
 let wc = 1; // bulk write concern
 var sampleSize = 9, docSize = 0;
@@ -101,7 +101,7 @@ function main() {
      *  main
      */
     print('\n');
-    print('Fuzzer script synthesising:', totalDocs, 'document(s)');
+    print('Fuzzer script synthesising:', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'));
 
     // sampling synthethic documents and estimating batch size
     for (let i = 0; i < sampleSize; ++i) {
@@ -117,9 +117,9 @@ function main() {
 
     print('\n');
     print('Sampling', sampleSize,
-          'document(s) with BSON size averaging:', avgSize, 'byte(s)');
+          'document' + ((sampleSize === 1) ? '' : 's'), 'with BSON size averaging:', avgSize, 'byte' + ((avgSize === 1) ? '' : 's'));
     let batchSize = (bsonMax * 0.95 / avgSize)|0;
-    print('Estimated optimal batch capacity:', batchSize, 'document(s)');
+    print('Estimated optimal batch capacity:', batchSize, 'document' + ((batchSize === 1) ? '' : 's'));
     if (totalDocs < batchSize) {
         batchSize = totalDocs;
     } else {
@@ -133,11 +133,11 @@ function main() {
     // generate and bulk write the documents
     print('\n');
     print('Specified timeseries date range:');
-    print('\tfrom:\t', new Date(now + fuzzer.offset * 86400000).toUTCString());
-    print('\tto:\t', new Date(now + fuzzer.offset * 86400000 + fuzzer.range * 86400000).toUTCString())
+    print('\tfrom:\t\t', new Date(now + fuzzer.offset * 86400000).toISOString());
+    print('\tto:\t\t', new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString())
     print('\tdistribution:\t', fuzzer.distribution)
     print('\n');
-    print('Generating', totalDocs, 'document(s) in', totalBatches, 'batch(es):');
+    print('Generating', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'), 'in', totalBatches, 'batch' + ((totalBatches === 1) ? '' : 'es') + ':');
     for (let i = 0; i < totalBatches; ++i) {
         if (i === totalBatches - 1 && residual > 0) {
             batchSize = residual;
@@ -152,7 +152,7 @@ function main() {
         try {
             var result = bulk.execute({ "w": wc });
             print('\tbulk inserting', result.nInserted,
-                  'document(s) in batch', 1 + i,
+                  'document' + ((result.nInserted === 1) ? '' : 's'), 'in batch', 1 + i,
                   'of', totalBatches);
         } catch (e) {
             print('\n');
@@ -166,7 +166,7 @@ function main() {
     print('\n');
     if (buildIndexes) {
         if (indexes.length > 0) {
-            print('Building index(es) with collation locale "' + collation.locale + '":');
+            print('Building index' + ((indexes.length === 1) ? '' : 'es'), 'with collation locale "' + collation.locale + '":');
             indexes.forEach(index => {
                 for (let [key, value] of Object.entries(index)) {
                     print('\tkey:', key, '/', value);
@@ -182,7 +182,7 @@ function main() {
 
         print('\n');
         if (specialIndexes.length > 0) {
-            print('Building exceptional index(es) without collation support:');
+            print('Building exceptional index' + ((indexes.length === 1) ? '' : 'es'), 'without collation support:');
             specialIndexes.forEach(index => {
                 for (let [key, value] of Object.entries(index)) {
                     print('\tkey:', key, '/', (value === 'text') ? value + ' / ' + idioma : value);
