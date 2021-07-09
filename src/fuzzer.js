@@ -134,10 +134,11 @@ function main() {
     print('\n');
     print('Specified timeseries date range:');
     print('\tfrom:\t\t', new Date(now + fuzzer.offset * 86400000).toISOString());
-    print('\tto:\t\t', new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString())
-    print('\tdistribution:\t', fuzzer.distribution)
+    print('\tto:\t\t', new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString());
+    print('\tdistribution:\t', fuzzer.distribution);
     print('\n');
-    print('Generating', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'), 'in', totalBatches, 'batch' + ((totalBatches === 1) ? '' : 'es') + ':');
+    print('Generating', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'),
+          'in', totalBatches, 'batch' + ((totalBatches === 1) ? '' : 'es') + ':');
     for (let i = 0; i < totalBatches; ++i) {
         if (i === totalBatches - 1 && residual > 0) {
             batchSize = residual;
