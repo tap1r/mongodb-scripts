@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version = "0.2.0"
+ *  Version = "0.2.1"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,11 +12,14 @@
  *  Save libs to the $MDBLIB or valid search path
  */
 
-if (typeof _mdblib === 'undefined') {
+if (typeof _mdblib === 'undefined' && +version().match(/^[0-9]+\.[0-9]+/) >= 4.4) {
     let libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
     let libName = 'mdblib.js';
     var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
     load(_mdblib);
+} else {
+    // pre-v4.4 copy the library to the CWD
+    load('mdblib.js');
 }
 
 /*
@@ -108,7 +111,7 @@ function main() {
     print('Start time:'.padEnd(rowHeader), d1.padStart(columnWidth));
     print('End time:'.padEnd(rowHeader), d2.padStart(columnWidth));
     print('Interval duration:'.padEnd(rowHeader),
-          (hrs + ' hr(s)').padStart(columnWidth));
+          (hrs + ' hr' + ((hrs === 1) ? '' : 's')).padStart(columnWidth));
     print('Average oplog compression ratio:'.padEnd(rowHeader),
           (ratio + ':1').padStart(columnWidth));
     print('Interval document count:'.padEnd(rowHeader),
