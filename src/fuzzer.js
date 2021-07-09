@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version = "0.2.8"
+ *  Version = "0.2.9"
  *  Description: Generate pseudo random test data, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -33,7 +33,7 @@ let idioma = 'en';
 let collation = { // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
     "locale": "simple"
 };
-let dropPref = true; // drop collection prior to generating data
+let dropPref = false; // drop collection prior to generating data
 let buildIndexes = true; // build index preferences
 let totalDocs = getRandomExp(4); // number of documents to generate per namespace
 let fuzzer = { // preferences
@@ -101,7 +101,7 @@ function main() {
      *  main
      */
     print('\n');
-    print('Fuzzer script synthesising:', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'));
+    print('Fuzzer script synthesising', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'));
 
     // sampling synthethic documents and estimating batch size
     for (let i = 0; i < sampleSize; ++i) {
@@ -117,9 +117,9 @@ function main() {
 
     print('\n');
     print('Sampling', sampleSize,
-          'document' + ((sampleSize === 1) ? '' : 's'), 'with BSON size averaging:', avgSize, 'byte' + ((avgSize === 1) ? '' : 's'));
+          'document' + ((sampleSize === 1) ? '' : 's'), 'with BSON size averaging', avgSize, 'byte' + ((avgSize === 1) ? '' : 's'));
     let batchSize = (bsonMax * 0.95 / avgSize)|0;
-    print('Estimated optimal batch capacity:', batchSize, 'document' + ((batchSize === 1) ? '' : 's'));
+    print('Estimated optimal batch capacity', batchSize, 'document' + ((batchSize === 1) ? '' : 's'));
     if (totalDocs < batchSize) {
         batchSize = totalDocs;
     } else {
@@ -459,7 +459,7 @@ function dropNS(dropPref = false, dbName = false, collName = false,
                 compressor = 'zstd';
             } else {
                 compressor = 'zlib';
-                var msg = '("zstd" requires v4.2+)';
+                var msg = '("zstd" requires mongod v4.2+)';
             }
 
             break;
@@ -469,10 +469,20 @@ function dropNS(dropPref = false, dbName = false, collName = false,
 
     print('\n');
     if (dropPref && !!dbName && !!collName) {
-        print('Dropping namespace: "' + dbName + '.' + collName + '"');
+        print('Dropping namespace "' + dbName + '.' + collName + '"');
         db.getSiblingDB(dbName).getCollection(collName).drop();
         print('\n');
-        print('Creating namespace: "' + dbName + '.' + collName + '"');
+        createNS();
+    } else if (!dropPref && !db.getSiblingDB(dbName).getCollection(collName).exists()) {
+        print('Nominated namespace "' + dbName + '.' + collName + '" does not exist');
+        print('\n');
+        createNS();
+    } else {
+        print('Preserving existing namespace "' + dbName + '.' + collName + '"');
+    }
+
+    function createNS() {
+        print('Creating namespace "' + dbName + '.' + collName + '"');
         print('\twith block compression:\t"' + compressor + '"', msg);
         print('\tand collation locale:\t"' + collation.locale + '"');
         db.getSiblingDB(dbName).createCollection(
@@ -484,8 +494,6 @@ function dropNS(dropPref = false, dbName = false, collName = false,
                 "collation": collation
             }
         );
-    } else {
-        print('Not dropping namespace: "' + dbName + '.' + collName + '"');
     }
 
     return;
