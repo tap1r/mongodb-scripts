@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version = "0.2.4"
+ *  Version = "0.2.5"
  *  Description: mongo shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -208,7 +208,9 @@ function slaveOk() {
     /*
      *  Backward compatability with rs.slaveOk()
      */
-    if (shellVer() >= 4.4) {
+    if (typeof rs.slaveOk === 'undefined' && rs.secondaryOk === 'undefined') {
+        return db.getMongo().setReadPref('primaryPreferred');
+    } else if (shellVer() >= 4.4) {
         return rs.secondaryOk();
     } else {
         return rs.slaveOk();
@@ -219,7 +221,7 @@ function isMaster() {
     /*
      *  Backward compatability with db.isMaster()
      */
-    if (typeof db.hello() === 'undefined') {
+    if (typeof db.hello === 'undefined') {
         return db.isMaster();
     } else {
         return db.hello();
