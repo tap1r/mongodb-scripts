@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version = "0.2.1"
+ *  Version = "0.2.2"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -75,11 +75,10 @@ function main() {
     }];
 
     // Measure interval statistics
-    slaveOk();
+    db.getMongo().setReadPref('primaryPreferred');
     let oplog = db.getSiblingDB('local').getCollection('oplog.rs');
 
-    if (serverVer(4.4)) {
-        // Use the v4.4 $bsonSize aggregation operator
+    if (serverVer(4.4)) { // Use the v4.4 $bsonSize aggregation operator
         agg.push({
             "$group": {
                 "_id": null,
@@ -104,6 +103,9 @@ function main() {
     let stats = oplog.stats();
     let blocksFree = stats.wiredTiger['block-manager']['file bytes available for reuse'];
     let ratio = (stats.size / (stats.storageSize - blocksFree)).toFixed(2);
+    let intervalDataSize = total / scale.factor;
+    let intervalStorageSize = total / (scale.factor * ratio);
+    let oplogChurn = total / (scale.factor * ratio * hrs);
 
     // Print results
     print('\n');
@@ -117,15 +119,15 @@ function main() {
     print('Interval document count:'.padEnd(rowHeader),
           docs.toString().padStart(columnWidth));
     print('Interval data size:'.padEnd(rowHeader),
-          ((total / scale.factor).toFixed(2) + ' ' +
+          (intervalDataSize.toFixed(2) + ' ' +
           scale.unit).padStart(columnWidth));
     print('Estimated interval storage size:'.padEnd(rowHeader),
-          ((total / (scale.factor * ratio)).toFixed(2) + ' ' +
+          (intervalStorageSize.toFixed(2) + ' ' +
           scale.unit).padStart(columnWidth));
     print('-'.repeat(termWidth));
     print('Estimated current oplog churn:'.padEnd(rowHeader),
-          ((total / (scale.factor * ratio * hrs)).toFixed(2) +
-          ' ' + scale.unit + '/hr').padStart(columnWidth));
+          (oplogChurn.toFixed(2) + ' ' + scale.unit +
+          '/hr').padStart(columnWidth));
     print('='.repeat(termWidth));
     print('\n');
 }
