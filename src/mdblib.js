@@ -138,10 +138,23 @@ class MetaStats {
      *  Storage statistics metadata class
      */
     constructor(name = '', dataSize = 0, storageSize = 0, objects = 0, blocksFree = 0, compressor = '', indexSize = 0, indexFree = 0) {
-        // this.instance = isMaster().me;
-        this.hostname = db.hostInfo().system.hostname;
-        this.proc = db.serverStatus().process;
-        db.serverStatus().process === 'mongod' ? this.dbPath = db.serverCmdLineOpts().parsed.storage.dbPath : this.dbPath = null;
+        /*
+         * detect shell type
+         */
+        if (typeof process !== 'undefined' && process.title.match(/^mongosh/)[0] === 'mongosh') {
+            // workaround mongosh async constructor limits
+            // this.instance = (async() => db.hello().me)();
+            this.hostname = (async() => db.hostInfo().system.hostname)();
+            this.proc = (async() => db.serverStatus().process)();
+            this.dbPath = ((async() => db.serverStatus().process === 'mongod')()) ? (async() => db.serverCmdLineOpts().parsed.storage.dbPath)() : null;
+        } else {
+            // legacy shell sync methods
+            // this.instance = isMaster().me;
+            this.hostname = db.hostInfo().system.hostname;
+            this.proc = db.serverStatus().process;
+            this.dbPath = (db.serverStatus().process === 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : null;
+        }
+
         this.name = name;
         this.dataSize = dataSize;
         this.storageSize = storageSize;
@@ -204,12 +217,12 @@ function shellVer() {
     return +version().match(/^[0-9]+\.[0-9]+/);
 }
 
-function slaveOk() {
+function slaveOk(readPref = 'primaryPreferred') {
     /*
      *  Backward compatability with rs.slaveOk()
      */
-    if (typeof rs.slaveOk === 'undefined' && rs.secondaryOk === 'undefined') {
-        return db.getMongo().setReadPref('primaryPreferred');
+    if (typeof rs.slaveOk === 'undefined' && typeof rs.secondaryOk === 'undefined') {
+        return db.getMongo().setReadPref(readPref);
     } else if (shellVer() >= 4.4) {
         return rs.secondaryOk();
     } else {
@@ -227,6 +240,11 @@ function isMaster() {
         return db.hello();
     }
 }
+
+/*
+ *  Backward compatability with UUID().base64()
+ */
+if (typeof UUID().base64 === 'undefined') UUID.prototype.base64 = function() { return this.toString('base64'); }
 
 /*
  *  Helper functions
