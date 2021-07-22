@@ -37,10 +37,10 @@ The [oplogchurn.js](src/oplogchurn.js) script provides a metric of real-time opl
 
 ### Using _oplogchurn.js_
 
-Sample syntax to run against the _mongo_ shell:
+Sample syntax to run against either the _mongo_ or _mongosh_ shells:
 
 ```bash
-mongo [connection options] --quiet oplogchurn.js
+[mongo|mongosh] [connection options] --quiet oplogchurn.js
 ```
 
 ### Sample output
