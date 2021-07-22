@@ -14,10 +14,10 @@ The [dbstats.js](src/dbstats.js) script provides a basic tabular report of DB in
 
 ### Using _dbstats.js_
 
-Sample syntax to run against on the _mongo_ shell:
+Sample syntax to run against either of the _mongo_ or _mongosh_ shells:
 
 ```bash
-mongo [connection options] --quiet dbstats.js
+[mongo|mongosh] [connection options] --quiet dbstats.js
 ```
 
 ### Sample output
@@ -101,6 +101,6 @@ dbPath totals                                 Data size     Compression   Size o
 All DBs:                                      206.54 MB          1.49:1      236.06 MB       97.64 MB (41.4%)         263011
 All indexes:                                                                   5.48 MB        0.16 MB  (2.8%)
 ============================================================================================================================
-Host: hostname.example.org 	Type: mongod 	DbPath: /data/replset/rs1/db
+Hostname: hostname.example.org 	Type: mongod 	DbPath: /data/replset/rs1/db
 ============================================================================================================================
 ```
