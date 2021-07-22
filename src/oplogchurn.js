@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version = "0.2.3"
+ *  Version = "0.2.4"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,9 +13,16 @@
  */
 
 if (typeof _mdblib === 'undefined' && typeof _getEnv !== 'undefined') {
+    // newer legacy shell _getEnv() method
     let libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
     let libName = 'mdblib.js';
     var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
+    load(_mdblib);
+} else if (typeof _mdblib === 'undefined' && typeof process !== 'undefined') {
+    // mongosh process.env[] method
+    let libPaths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
+    let libName = 'mdblib.js';
+    var _mdblib = libPaths.find(libPath => fs.existsSync(libPath + '/' + libName)) + '/' + libName;
     load(_mdblib);
 } else {
     print('Newer shell methods unavailable, must load mdblib.js from the current working directory');
