@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version = "0.2.9"
+ *  Version = "0.3.1"
  *  Description: Generate pseudo random test data, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -10,16 +10,23 @@
 /*
  *  Load helper pcg-xsh-rr.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/pcg-xsh-rr.js)
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
- *  Save libs to the $MDBLIB or valid search path
+ *  Save libs to the $MDBLIB or other valid search path
  */
 
-if (typeof _mdblib === 'undefined' && +version().match(/^[0-9]+\.[0-9]+/) >= 4.4) {
+if (typeof _mdblib === 'undefined' && typeof _getEnv !== 'undefined') {
+    // newer legacy shell _getEnv() method
     let libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
     let libName = 'mdblib.js';
     var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
     load(_mdblib);
+} else if (typeof _mdblib === 'undefined' && typeof process !== 'undefined') {
+    // mongosh process.env[] method
+    let libPaths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
+    let libName = 'mdblib.js';
+    var _mdblib = libPaths.find(libPath => fs.existsSync(libPath + '/' + libName)) + '/' + libName;
+    load(_mdblib);
 } else {
-    // pre-v4.4 copy the library to the CWD
+    print('Newer shell methods unavailable, must load mdblib.js from the current working directory');
     load('mdblib.js');
 }
 
@@ -50,10 +57,10 @@ let fuzzer = { // preferences
         "sparsity": 0, // 0 - 100%
         "weighting": 50 // 0 - 100%
     },
-    "schemas": [{}, {}, {}],
+    "schemas": [],
     "ratios": [7, 2, 1]
 };
-let wc = 1; // bulk write concern
+let wc = { "w": 1 }; // write concern
 var sampleSize = 9, docSize = 0;
 fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
 sampleSize *= sampleSize;
@@ -65,15 +72,13 @@ let indexes = [ // index keys
     { "array": 1 },
     { "timestamp": 1 },
     { "location": "2dsphere" },
-    /*
-        { "lineString": "2dsphere" },
-        { "polygon": "2dsphere" },
-        { "polygonMulti": "2dsphere" },
-        { "multiPoint": "2dsphere" },
-        { "multiLineString": "2dsphere" },
-        { "multiPolygon": "2dsphere" },
-        { "geoCollection": "2dsphere" },
-    */
+    { "lineString": "2dsphere" },
+    { "polygon": "2dsphere" },
+    { "polygonMulti": "2dsphere" },
+    { "multiPoint": "2dsphere" },
+    { "multiLineString": "2dsphere" },
+    { "multiPolygon": "2dsphere" },
+    { "geoCollection": "2dsphere" },
     serverVer(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
 let indexOptions = { // createIndexes options
@@ -101,7 +106,8 @@ function main() {
      *  main
      */
     print('\n');
-    print('Fuzzer script synthesising', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'));
+    print('Fuzzer script synthesising', totalDocs,
+          'document' + ((totalDocs === 1) ? '' : 's'));
 
     // sampling synthethic documents and estimating batch size
     for (let i = 0; i < sampleSize; ++i) {
@@ -112,14 +118,18 @@ function main() {
     if (avgSize > bsonMax * 0.95) {
         print('\n');
         print('Warning: The average document size of', avgSize,
-              'bytes approaches or exceeeds the BSON max size of', bsonMax, 'bytes');
+              'bytes approaches or exceeeds the BSON max size of', bsonMax,
+              'bytes');
     }
 
     print('\n');
     print('Sampling', sampleSize,
-          'document' + ((sampleSize === 1) ? '' : 's'), 'with BSON size averaging', avgSize, 'byte' + ((avgSize === 1) ? '' : 's'));
+          'document' + ((sampleSize === 1) ? '' : 's'),
+          'with BSON size averaging', avgSize,
+          'byte' + ((avgSize === 1) ? '' : 's'));
     let batchSize = (bsonMax * 0.95 / avgSize)|0;
-    print('Estimated optimal batch capacity', batchSize, 'document' + ((batchSize === 1) ? '' : 's'));
+    print('Estimated optimal batch capacity', batchSize,
+          'document' + ((batchSize === 1) ? '' : 's'));
     if (totalDocs < batchSize) {
         batchSize = totalDocs;
     } else {
@@ -133,8 +143,10 @@ function main() {
     // generate and bulk write the documents
     print('\n');
     print('Specified timeseries date range:');
-    print('\tfrom:\t\t', new Date(now + fuzzer.offset * 86400000).toISOString());
-    print('\tto:\t\t', new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString());
+    print('\tfrom:\t\t',
+          new Date(now + fuzzer.offset * 86400000).toISOString());
+    print('\tto:\t\t',
+          new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString());
     print('\tdistribution:\t', fuzzer.distribution);
     print('\n');
     print('Generating', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'),
@@ -151,10 +163,10 @@ function main() {
         }
 
         try {
-            var result = bulk.execute({ "w": wc });
+            var result = bulk.execute(wc);
             print('\tbulk inserting', result.nInserted,
-                  'document' + ((result.nInserted === 1) ? '' : 's'), 'in batch', 1 + i,
-                  'of', totalBatches);
+                  'document' + ((result.nInserted === 1) ? '' : 's'),
+                  'in batch', 1 + i, 'of', totalBatches);
         } catch (e) {
             print('\n');
             print('Generation failed:', e);
@@ -167,7 +179,8 @@ function main() {
     print('\n');
     if (buildIndexes) {
         if (indexes.length > 0) {
-            print('Building index' + ((indexes.length === 1) ? '' : 'es'), 'with collation locale "' + collation.locale + '":');
+            print('Building index' + ((indexes.length === 1) ? '' : 'es'),
+                  'with collation locale "' + collation.locale + '":');
             indexes.forEach(index => {
                 for (let [key, value] of Object.entries(index)) {
                     print('\tkey:', key, '/', value);
@@ -175,18 +188,20 @@ function main() {
             });
             var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
                             indexes, indexOptions
-                        );
+                         );
             result.ok ? print('Indexing completed.') : print('Indexing failed:', result.msg);
         } else {
-            print('No regular indexes specified to build.');
+            print('No regular index builds specified.');
         }
 
         print('\n');
         if (specialIndexes.length > 0) {
-            print('Building exceptional index' + ((indexes.length === 1) ? '' : 'es'), 'without collation support:');
+            print('Building exceptional index' + ((indexes.length === 1) ? '' : 'es'),
+                  'without collation support:');
             specialIndexes.forEach(index => {
                 for (let [key, value] of Object.entries(index)) {
-                    print('\tkey:', key, '/', (value === 'text') ? value + ' / ' + idioma : value);
+                    print('\tkey:', key,
+                          '/', (value === 'text') ? value + ' / ' + idioma : value);
                 }
             });
             var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
@@ -194,7 +209,7 @@ function main() {
                          );
             result.ok ? print('Special indexing completed.') : print('Special indexing failed:', result.msg);
         } else {
-            print('No special indexes specified to build.');
+            print('No special index builds specified.');
         }
     } else {
         print('Building indexes: "false"');
@@ -212,13 +227,13 @@ function genDocument() {
      */
     switch (fuzzer.distribution) {
         case 'uniform':
-            var dateOffset = rand() * fuzzer.range * 86400 + fuzzer.offset * 86400;
+            var dateOffset = rand() * (fuzzer.range + fuzzer.offset) * 86400;
             break;
         default:
             print('\n');
             print('Unsupported distribution type:', fuzzer.distribution);
             print('Defaulting to "uniform"');
-            var dateOffset = rand() * fuzzer.range * 86400 + fuzzer.offset * 86400;
+            var dateOffset = rand() * (fuzzer.range + fuzzer.offset) * 86400;
     }
 
     switch (fuzzer._id) {
@@ -234,9 +249,11 @@ function genDocument() {
 
     let date = new Date(now + dateOffset * 1000);
     let ts = new Timestamp(timestamp + dateOffset, 1);
-    let schemaA = {
+    fuzzer.schemas = new Array();
+    fuzzer.schemas.push({
         "_id": oid,
-        "schema": "Shape-A",
+        "schema": "A",
+        "comment": "General purpose schema shape",
         "language": idioma,
         "string": genRandomString(getRandomIntInclusive(6, 24)),
         "quote": {
@@ -279,13 +296,32 @@ function genDocument() {
         "md5": MD5(genRandomHex(32)),
         "fle": BinData(6, UUID().base64()),
         "random": +getRandomNumber(0, totalDocs).toFixed(4),
-        "symbol": genRandomSymbol(),
+        "symbol": genRandomSymbol()
+    });
+    fuzzer.schemas.push({
+        "_id": oid,
+        "schema": "B",
+        "comment": "Timeseries schema example",
+        "language": idioma,
+        "timeField": date,
+        "metaField": [
+            'Series 1',
+            'Series 2',
+            'Series 3'
+            ][getRandomRatioInt([70, 20, 10])],
+        "granularity": "hours",
         "unit": +getRandomNumber(0, Math.pow(10, 6)).toFixed(2),
         "qty": NumberInt(getRandomIntInclusive(0, Math.pow(10, 4))),
         "price": [
             +getRandomNumber(0, Math.pow(10, 4)).toFixed(2),
             genRandomCurrency()
-        ],
+        ]
+    });
+    fuzzer.schemas.push({
+        "_id": oid,
+        "schema": "C",
+        "comment": "GeoJSON schema examples",
+        "language": idioma,
         "temperature": [
             +genNormal(15, 10).toFixed(1),
             ['K', '°F', '°C'][getRandomIntInclusive(0, 2)]
@@ -418,22 +454,7 @@ function genDocument() {
                 ]
             }]
         }
-    };
-    let schemaB = {
-        "_id": oid,
-        "schema": "Shape-B",
-        "language": idioma,
-        "random": +getRandomNumber(0, totalDocs).toFixed(4)
-    };
-    let schemaC = {
-        "_id": oid,
-        "schema": "Shape-C",
-        "language": idioma,
-        "random": +getRandomNumber(0, totalDocs).toFixed(4)
-    };
-    fuzzer.schemas[0] = schemaA;
-    fuzzer.schemas[1] = schemaB;
-    fuzzer.schemas[2] = schemaC;
+    });
 
     return fuzzer.schemas[getRandomRatioInt(fuzzer.ratios)];
 }
@@ -461,7 +482,6 @@ function dropNS(dropPref = false, dbName = false, collName = false,
                 compressor = 'zlib';
                 var msg = '("zstd" requires mongod v4.2+)';
             }
-
             break;
         default:
             compressor = 'snappy';
@@ -485,15 +505,31 @@ function dropNS(dropPref = false, dbName = false, collName = false,
         print('Creating namespace "' + dbName + '.' + collName + '"');
         print('\twith block compression:\t"' + compressor + '"', msg);
         print('\tand collation locale:\t"' + collation.locale + '"');
-        db.getSiblingDB(dbName).createCollection(
-            collName,
-            {
-                "storageEngine": {
-                    "wiredTiger": {
-                        "configString": "block_compressor=" + compressor } },
-                "collation": collation
-            }
-        );
+        let timeseries = {
+            "timeField": "timestamp",
+            "metaField": "data",
+            "granularity": "hours"
+        };
+        let expireAfterSeconds = 'off';
+        let options = {
+            "storageEngine": {
+                "wiredTiger": {
+                    "configString": "block_compressor=" + compressor
+                }
+            },
+            "collation": collation,
+            "writeConcern": wc
+        };
+        if (serverVer(5.0)) {
+            options.timeseries = timeseries;
+            options.expireAfterSeconds = expireAfterSeconds;
+            print('\tand timeseries options:\t"' +
+                  JSON.stringify(options.timeseries, null, 2),
+                  JSON.stringify(options.expireAfterSeconds, null, 2)
+                  + '"');
+        }
+
+        db.getSiblingDB(dbName).createCollection(collName, options);
     }
 
     return;
