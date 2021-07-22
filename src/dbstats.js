@@ -13,9 +13,16 @@
  */
 
 if (typeof _mdblib === 'undefined' && typeof _getEnv !== 'undefined') {
+    // newer legacy shell _getEnv() method
     let libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
     let libName = 'mdblib.js';
     var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
+    load(_mdblib);
+} else if (typeof _mdblib === 'undefined' && typeof process !== 'undefined') {
+    // mongosh process.env[] method
+    let libPaths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
+    let libName = 'mdblib.js';
+    var _mdblib = libPaths.find(libPath => fs.existsSync(libPath + '/' + libName)) + '/' + libName;
     load(_mdblib);
 } else {
     print('Newer shell methods unavailable, must load mdblib.js from the current working directory');
@@ -31,17 +38,22 @@ if (typeof scale === 'undefined') {
     var scale = new ScaleFactor();
 }
 
+/* (() => {
+    db.getMongo().setReadPref('primaryPreferred');
+})() */
+
 /*
  *  Global defaults
  */
 
 let termWidth = 124, columnWidth = 14, rowHeader = 40; // formatting preferences
+let readPref = 'primaryPreferred';
 
 function main() {
     /*
      *  main
      */
-    db.getMongo().setReadPref('primaryPreferred');
+    db.getMongo().setReadPref(readPref);
     getStats();
 }
 
@@ -217,7 +229,7 @@ function printDbPath(dbPath) {
           dbPath.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
     );
     print('='.repeat(termWidth));
-    print('Host:', dbPath.hostname, '\tType:', dbPath.proc, '\tDbPath:', dbPath.dbPath);
+    print('Hostname:', dbPath.hostname, '\tType:', dbPath.proc, '\tdbPath:', dbPath.dbPath);
     print('='.repeat(termWidth));
     print('\n');
 }
