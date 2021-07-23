@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version = "0.2.4"
+ *  Version = "0.2.5"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,25 +8,26 @@
 // Usage: "mongo [connection options] --quiet oplogchurn.js"
 
 /*
- *  Load helper lib (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
+ *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
  *  Save libs to the $MDBLIB or valid search path
  */
 
-if (typeof _mdblib === 'undefined' && typeof _getEnv !== 'undefined') {
-    // newer legacy shell _getEnv() method
-    let libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
+if (typeof _mdblib === 'undefined') {
+    /*
+     *  Load helper library mdblib.js
+     */
     let libName = 'mdblib.js';
-    var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
+    if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
+        let libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
+        var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
+    } else if (typeof _mdblib === 'undefined' && typeof process !== 'undefined') { // mongosh process.env[] method
+        let libPaths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
+        var _mdblib = libPaths.find(libPath => fs.existsSync(libPath + '/' + libName)) + '/' + libName;
+    } else {
+        print('Newer shell methods unavailable, must load mdblib.js from the current working directory');
+        var _mdblib = 'mdblib.js';
+    }
     load(_mdblib);
-} else if (typeof _mdblib === 'undefined' && typeof process !== 'undefined') {
-    // mongosh process.env[] method
-    let libPaths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
-    let libName = 'mdblib.js';
-    var _mdblib = libPaths.find(libPath => fs.existsSync(libPath + '/' + libName)) + '/' + libName;
-    load(_mdblib);
-} else {
-    print('Newer shell methods unavailable, must load mdblib.js from the current working directory');
-    load('mdblib.js');
 }
 
 /*
