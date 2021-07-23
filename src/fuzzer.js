@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version = "0.3.1"
+ *  Version = "0.3.2"
  *  Description: Generate pseudo random test data, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,21 +13,22 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-if (typeof _mdblib === 'undefined' && typeof _getEnv !== 'undefined') {
-    // newer legacy shell _getEnv() method
-    let libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
+if (typeof _mdblib === 'undefined') {
+    /*
+     *  Load heler library mdblib.js
+     */
     let libName = 'mdblib.js';
-    var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
+    if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
+        let libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
+        var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
+    } else if (typeof _mdblib === 'undefined' && typeof process !== 'undefined') { // mongosh process.env[] method
+        let libPaths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
+        var _mdblib = libPaths.find(libPath => fs.existsSync(libPath + '/' + libName)) + '/' + libName;
+    } else {
+        print('Newer shell methods unavailable, must load mdblib.js from the current working directory');
+        var _mdblib = 'mdblib.js';
+    }
     load(_mdblib);
-} else if (typeof _mdblib === 'undefined' && typeof process !== 'undefined') {
-    // mongosh process.env[] method
-    let libPaths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
-    let libName = 'mdblib.js';
-    var _mdblib = libPaths.find(libPath => fs.existsSync(libPath + '/' + libName)) + '/' + libName;
-    load(_mdblib);
-} else {
-    print('Newer shell methods unavailable, must load mdblib.js from the current working directory');
-    load('mdblib.js');
 }
 
 /*
