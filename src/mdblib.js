@@ -1,7 +1,7 @@
 /*
  *  Name: "mdblib.js"
- *  Version = "0.2.5"
- *  Description: mongo shell helper library
+ *  Version = "0.2.6"
+ *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
@@ -141,7 +141,7 @@ class MetaStats {
         /*
          * detect shell type
          */
-        if (typeof process !== 'undefined' && process.title.match(/^mongosh/)[0] === 'mongosh') {
+        if (typeof process !== 'undefined') {
             // workaround mongosh async constructor limits
             // this.instance = (async() => db.hello().me)();
             this.hostname = (async() => db.hostInfo().system.hostname)();
@@ -241,10 +241,27 @@ function isMaster() {
     }
 }
 
-/*
- *  Backward compatability with UUID().base64()
- */
-if (typeof UUID().base64 === 'undefined') UUID.prototype.base64 = function() { return this.toString('base64'); }
+if (typeof Object.prototype.bsonsize === 'undefined') {
+    /*
+     *  Backward compatability with Object.bsonsize()
+     */
+    Object.prototype.bsonsize = function(arg) { return bsonsize(arg); };
+}
+
+// if (typeof UUID().base64 === 'undefined') UUID.prototype.base64 = function() { return this.toString('base64'); }
+if (typeof Object.getPrototypeOf(UUID()).base64 === 'undefined') {
+    /*
+     *  Backward compatability with UUID().base64()
+     */
+    UUID.prototype.base64 = function() { return this.toString('base64'); };
+}
+
+if (typeof hex_md5 === 'undefined') {
+    /*
+     *  Backward compatability with hex_md5()
+     */
+    hex_md5 = function (arg) { return crypto.createHash('md5').update(arg).digest('hex'); };
+}
 
 /*
  *  Helper functions
