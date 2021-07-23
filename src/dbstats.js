@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version = "0.2.3"
+ *  Version = "0.2.4"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,25 +8,26 @@
 // Usage: "mongo [connection options] --quiet dbstats.js"
 
 /*
- *  Load helper lib (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
- *  Save libs to the $MDBLIB or valid search path
+ *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
+ *  Save libs to the $MDBLIB or other valid search path
  */
 
-if (typeof _mdblib === 'undefined' && typeof _getEnv !== 'undefined') {
-    // newer legacy shell _getEnv() method
-    let libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
+if (typeof _mdblib === 'undefined') {
+    /*
+     *  Load heler library mdblib.js
+     */
     let libName = 'mdblib.js';
-    var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
+    if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
+        let libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
+        var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
+    } else if (typeof _mdblib === 'undefined' && typeof process !== 'undefined') { // mongosh process.env[] method
+        let libPaths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
+        var _mdblib = libPaths.find(libPath => fs.existsSync(libPath + '/' + libName)) + '/' + libName;
+    } else {
+        print('Newer shell methods unavailable, must load mdblib.js from the current working directory');
+        var _mdblib = 'mdblib.js';
+    }
     load(_mdblib);
-} else if (typeof _mdblib === 'undefined' && typeof process !== 'undefined') {
-    // mongosh process.env[] method
-    let libPaths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
-    let libName = 'mdblib.js';
-    var _mdblib = libPaths.find(libPath => fs.existsSync(libPath + '/' + libName)) + '/' + libName;
-    load(_mdblib);
-} else {
-    print('Newer shell methods unavailable, must load mdblib.js from the current working directory');
-    load('mdblib.js');
 }
 
 /*
@@ -37,10 +38,6 @@ if (typeof scale === 'undefined') {
     // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
     var scale = new ScaleFactor();
 }
-
-/* (() => {
-    db.getMongo().setReadPref('primaryPreferred');
-})() */
 
 /*
  *  Global defaults
