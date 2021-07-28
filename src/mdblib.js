@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version = "0.2.7"
+ *  Version: "0.2.7"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
