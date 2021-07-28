@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version = "0.2.5"
+ *  Version: "0.2.5"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
