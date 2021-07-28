@@ -1,11 +1,11 @@
 /*
  *  Name: "fuzzer.js"
- *  Version = "0.3.2"
- *  Description: Generate pseudo random test data, with some fuzzing capability
+ *  Version = "0.3.3"
+ *  Description: Generate pseudorandom test data, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "mongo [connection options] --quiet fuzzer.js"
+// Usage: "[mongo|mongosh] [connection options] --quiet fuzzer.js"
 
 /*
  *  Load helper pcg-xsh-rr.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/pcg-xsh-rr.js)
@@ -41,13 +41,15 @@ let idioma = 'en';
 let collation = { // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
     "locale": "simple"
 };
+let serverless = false; // limit to serverless restrictions
+let tsColl = false; // time series collection type
 let dropPref = false; // drop collection prior to generating data
 let buildIndexes = true; // build index preferences
 let totalDocs = getRandomExp(4); // number of documents to generate per namespace
 let fuzzer = { // preferences
     "_id": "ts", // ["ts"|"oid"] - timeseries OID | client generated OID
     "range": 365.2422, // date range in days
-    "offset": -300, // date offset in days from now (neg = past, pos = future)
+    "offset": -300, // date offset in days from now() (neg = past, pos = future)
     "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
     "polymorphic": { // experimental
         "enabled": false,
@@ -98,21 +100,32 @@ let specialIndexOptions = { // exceptional index options
  *  Global defaults
  */
 
+if (typeof this.__script === 'undefined') {
+    this.__script = {
+        "name": "fuzzer.js",
+        "version": "0.3.2"
+    };
+    var comment = 'Running script ' + this.__script.name + ' v' + this.__script.version;
+    print('\n', comment);
+}
+
+if (typeof readPref === 'undefined') var readPref = 'primary';
 var batch = 0, totalBatches = 1, residual = 0, doc = {};
-let now = new Date().getTime();
-let timestamp = (now/1000.0)|0;
+var now = new Date().getTime();
+var timestamp = (now/1000.0)|0;
 
 function main() {
     /*
      *  main
      */
+    db.getMongo().setReadPref(readPref);
     print('\n');
-    print('Fuzzer script synthesising', totalDocs,
+    print('Synthesising', totalDocs,
           'document' + ((totalDocs === 1) ? '' : 's'));
 
     // sampling synthethic documents and estimating batch size
     for (let i = 0; i < sampleSize; ++i) {
-        docSize += Object.bsonsize(genDocument());
+        docSize += bsonsize(genDocument());
     }
 
     let avgSize = (docSize / sampleSize)|0;
@@ -143,7 +156,7 @@ function main() {
 
     // generate and bulk write the documents
     print('\n');
-    print('Specified timeseries date range:');
+    print('Specified time series date range:');
     print('\tfrom:\t\t',
           new Date(now + fuzzer.offset * 86400000).toISOString());
     print('\tto:\t\t',
@@ -165,7 +178,7 @@ function main() {
 
         try {
             var result = bulk.execute(wc);
-            print('\tbulk inserting', result.nInserted,
+            print('\tbulk inserted', result.nInserted,
                   'document' + ((result.nInserted === 1) ? '' : 's'),
                   'in batch', 1 + i, 'of', totalBatches);
         } catch (e) {
@@ -190,7 +203,10 @@ function main() {
             var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
                             indexes, indexOptions
                          );
-            result.ok ? print('Indexing completed.') : print('Indexing failed:', result.msg);
+            (result.note !== 'undefined') ? print('Indexing completed:', result.note)
+                : (result.ok === 1) ? print('Indexing completed!')
+                : (result.msg !== 'undefined') ? print('Indexing failed:', result.msg)
+                : print('Indexing completed with:', result);
         } else {
             print('No regular index builds specified.');
         }
@@ -290,7 +306,8 @@ function genDocument() {
         "decimal128": NumberDecimal(
                         getRandomNumber(
                             -(Math.pow(10, 127) - 1),
-                            Math.pow(10, 127) -1)),
+                            Math.pow(10, 127) -1)
+                      ),
         "regex": /\/[A-Z0-9a-z]*\/g/,
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
@@ -302,13 +319,13 @@ function genDocument() {
     fuzzer.schemas.push({
         "_id": oid,
         "schema": "B",
-        "comment": "Timeseries schema example",
+        "comment": "Time series schema example",
         "language": idioma,
         "timeField": date,
         "metaField": [
-            'Series 1',
-            'Series 2',
-            'Series 3'
+                'Series 1',
+                'Series 2',
+                'Series 3'
             ][getRandomRatioInt([70, 20, 10])],
         "granularity": "hours",
         "unit": +getRandomNumber(0, Math.pow(10, 6)).toFixed(2),
@@ -524,7 +541,7 @@ function dropNS(dropPref = false, dbName = false, collName = false,
         if (serverVer(5.0)) {
             options.timeseries = timeseries;
             options.expireAfterSeconds = expireAfterSeconds;
-            print('\tand timeseries options:\t"' +
+            print('\tand time series options:\t"' +
                   JSON.stringify(options.timeseries, null, 2),
                   JSON.stringify(options.expireAfterSeconds, null, 2)
                   + '"');

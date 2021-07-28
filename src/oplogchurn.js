@@ -1,11 +1,11 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version = "0.2.5"
+ *  Version = "0.2.6"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "mongo [connection options] --quiet oplogchurn.js"
+// Usage: "[mongo|mongosh] [connection options] --quiet oplogchurn.js"
 
 /*
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
@@ -48,18 +48,21 @@ if (typeof scale === 'undefined') {
  *  Global defaults
  */
 
+if (typeof this.__script === 'undefined') {
+    this.__script = {
+        "name": "oplogchurn.js",
+        "version": "0.2.6"
+    };
+    var comment = 'Running script ' + this.__script.name + ' v' + this.__script.version;
+    print('\n', comment);
+}
+
 // formatting preferences
-if (typeof termWidth === 'undefined') {
-    var termWidth = 60;
-}
+if (typeof termWidth === 'undefined') var termWidth = 60;
+if (typeof columnWidth === 'undefined') var columnWidth = 25;
+if (typeof rowHeader === 'undefined') var rowHeader = 34;
 
-if (typeof columnWidth === 'undefined') {
-    var columnWidth = 25;
-}
-
-if (typeof rowHeader === 'undefined') {
-    var rowHeader = 34;
-}
+if (typeof readPref === 'undefined') var readPref = 'primaryPreferred';
 
 function main() {
     /*
@@ -71,7 +74,7 @@ function main() {
     let d2 = date.toISOString(); // end datetime
     let t1 = (date.setHours(date.getHours() - hrs) / 1000.0)|0; // start timestamp
     let d1 = date.toISOString(); // start datetime
-    let agg = [{
+    let pipeline = [{
             "$match": {
                 "ts": {
                     "$gt": Timestamp(t1, 1),
@@ -81,34 +84,41 @@ function main() {
         },{
             "$project": { "_id": 0 }
     }];
+    let options = {
+        "allowDiskUse": true,
+        "comment": "Running oplog analysis with "
+                   + this.__script.name
+                   + " version "
+                   + this.__script.version
+    };
 
     // Measure interval statistics
-    db.getMongo().setReadPref('primaryPreferred');
+    db.getMongo().setReadPref(readPref);
     let oplog = db.getSiblingDB('local').getCollection('oplog.rs');
 
     if (serverVer(4.4)) { // Use the v4.4 $bsonSize aggregation operator
-        agg.push({
+        pipeline.push({
             "$group": {
                 "_id": null,
-                "bson_data_size": { "$sum": { "$bsonSize": "$$ROOT" } },
-                "document_count": { "$sum": 1 }
+                "__bsonDataSize": { "$sum": { "$bsonSize": "$$ROOT" } },
+                "__documentCount": { "$sum": 1 }
             }
         });
-        oplog.aggregate(agg).map(churnInfo => {
-            total = churnInfo.bson_data_size;
-            docs = churnInfo.document_count;
+        oplog.aggregate(pipeline, options).map(churnInfo => {
+            total = churnInfo.__bsonDataSize;
+            docs = churnInfo.__documentCount;
         });
     } else {
         print('\n');
         print('Warning: Using the legacy client side calculation technique');
-        oplog.aggregate(agg).forEach((op) => {
-            total += Object.bsonsize(op);
+        oplog.aggregate(pipeline, options).forEach((op) => {
+            total += bsonsize(op);
             ++docs;
         });
     }
 
     // Get host info
-    // let instance = isMaster().me;
+    // let instance = db.hello().me;
     let hostname = db.hostInfo().system.hostname;
     let dbPath = db.serverCmdLineOpts().parsed.storage.dbPath;
     // Get oplog stats

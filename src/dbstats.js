@@ -1,11 +1,11 @@
 /*
  *  Name: "dbstats.js"
- *  Version = "0.2.4"
+ *  Version = "0.2.5"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "mongo [connection options] --quiet dbstats.js"
+// Usage: "[mongo|mongosh] [connection options] --quiet dbstats.js"
 
 /*
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
@@ -43,8 +43,22 @@ if (typeof scale === 'undefined') {
  *  Global defaults
  */
 
-let termWidth = 124, columnWidth = 14, rowHeader = 40; // formatting preferences
-let readPref = 'primaryPreferred';
+if (typeof this.__script === 'undefined') {
+    this.__script = {
+        "name": "dbstats.js",
+        "version": "0.2.4"
+    };
+    var comment = 'Running script ' + this.__script.name + ' v' + this.__script.version;
+    print('\n', comment);
+}
+
+// formatting preferences
+if (typeof termWidth === 'undefined') var termWidth = 124;
+if (typeof columnWidth === 'undefined') var columnWidth = 14;
+if (typeof rowHeader === 'undefined') var rowHeader = 40;
+
+if (typeof readPref === 'undefined') var readPref = 'primaryPreferred';
+// var readPref = readPref ?? 'primaryPreferred';
 
 function main() {
     /*

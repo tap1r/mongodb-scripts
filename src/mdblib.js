@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version = "0.2.6"
+ *  Version = "0.2.7"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -23,35 +23,48 @@ const idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', '
  *  https://github.com/tc39/proposal-object-values-entries
  */
 
-String.prototype.padStart = function padStart(targetLength, padString) {
-    targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
-    padString = String(typeof padString !== 'undefined' ? padString : ' ');
-    if (this.length >= targetLength) {
-        return String(this);
-    } else {
-        targetLength = targetLength - this.length;
-        if (targetLength > padString.length) {
-            padString += padString.repeat(targetLength / padString.length); // append to original to ensure we are longer than needed
+if (String.prototype.padStart === 'undefined') {
+    /*
+     *  Add to older legacy shells
+     */
+    String.prototype.padStart = function padStart(targetLength, padString) {
+        targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
+        padString = String(typeof padString !== 'undefined' ? padString : ' ');
+        if (this.length >= targetLength) {
+            return String(this);
+        } else {
+            targetLength = targetLength - this.length;
+            if (targetLength > padString.length) {
+                padString += padString.repeat(targetLength / padString.length); // append to original to ensure we are longer than needed
+            }
+            return padString.slice(0, targetLength) + String(this);
         }
-        return padString.slice(0, targetLength) + String(this);
     }
-};
+}
 
-String.prototype.padEnd = function padEnd(targetLength, padString) {
-    targetLength = targetLength >> 0; // floor if number or convert non-number to 0;
-    padString = String(typeof padString !== 'undefined' ? padString : ' ');
-    if (this.length > targetLength) {
-        return String(this);
-    } else {
-        targetLength = targetLength - this.length;
-        if (targetLength > padString.length) {
-            padString += padString.repeat(targetLength / padString.length); // append to original to ensure we are longer than needed
+if (String.prototype.padEnd === 'undefined') {
+    /*
+     *  Add to older legacy shells
+     */
+    String.prototype.padEnd = function padEnd(targetLength, padString) {
+        targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
+        padString = String(typeof padString !== 'undefined' ? padString : ' ');
+        if (this.length > targetLength) {
+            return String(this);
+        } else {
+            targetLength = targetLength - this.length;
+            if (targetLength > padString.length) {
+                padString += padString.repeat(targetLength / padString.length); // append to original to ensure we are longer than needed
+            }
+            return String(this) + padString.slice(0, targetLength);
         }
-        return String(this) + padString.slice(0, targetLength);
     }
-};
+}
 
-if (!Object.entries) {
+if (Object.entries === 'undefined') {
+    /*
+     *  Add to older legacy shells
+     */
     Object.entries = function(obj){
         var ownProps = Object.keys(obj),
             i = ownProps.length,
@@ -139,7 +152,7 @@ class MetaStats {
      */
     constructor(name = '', dataSize = 0, storageSize = 0, objects = 0, blocksFree = 0, compressor = '', indexSize = 0, indexFree = 0) {
         /*
-         * detect shell type
+         *  detect shell type
          */
         if (typeof process !== 'undefined') {
             // workaround mongosh async constructor limits
@@ -241,26 +254,63 @@ function isMaster() {
     }
 }
 
-if (typeof Object.prototype.bsonsize === 'undefined') {
+if (typeof db.prototype.isMaster === 'undefined') {
     /*
-     *  Backward compatability with Object.bsonsize()
+     *  Backward compatability with db.isMaster()
      */
-    Object.prototype.bsonsize = function(arg) { return bsonsize(arg); };
+    db.prototype.isMaster = function() { return this.hello(); };
 }
 
-// if (typeof UUID().base64 === 'undefined') UUID.prototype.base64 = function() { return this.toString('base64'); }
-if (typeof Object.getPrototypeOf(UUID()).base64 === 'undefined') {
+if (typeof db.prototype.hello === 'undefined') {
     /*
-     *  Backward compatability with UUID().base64()
+     *  Forward compatability with db.hello()
      */
-    UUID.prototype.base64 = function() { return this.toString('base64'); };
+    db.prototype.hello = function() { return this.isMaster(); };
 }
 
-if (typeof hex_md5 === 'undefined') {
+if (typeof bsonsize === 'undefined') {
     /*
-     *  Backward compatability with hex_md5()
+     *  Forward compatability with bsonsize()
      */
-    hex_md5 = function (arg) { return crypto.createHash('md5').update(arg).digest('hex'); };
+    bsonsize = function(arg) { return Object.prototype.bsonsize(arg); };
+}
+
+if (typeof process !== 'undefined') {
+    /*
+     *  mongosh wrappers
+     */
+
+    // if (typeof Object.prototype.bsonsize === 'undefined') {
+        /*
+         *  Backward compatability with Object.bsonsize()
+         */
+        // Object.prototype.bsonsize = function bsonsize(arg) { return bsonsize(arg); };
+    // }
+
+    // if (typeof UUID().base64 === 'undefined') UUID.prototype.base64 = function() { return this.toString('base64'); }
+    if (typeof Object.getPrototypeOf(UUID()).base64 === 'undefined') {
+        /*
+         *  Backward compatability with UUID().base64()
+         */
+        UUID.prototype.base64 = function() { return this.toString('base64'); };
+    }
+
+    /*
+     *  Backward compatability with NumberLong()
+     */
+    NumberLong = function(arg) { return Long.fromNumber(arg); };
+
+    /*
+     *  Backward compatability with NumberDecimal()
+     */
+    NumberDecimal = function(arg) { return Decimal128.fromString(arg.toString()); };
+
+    if (typeof hex_md5 === 'undefined') {
+        /*
+         *  Backward compatability with hex_md5()
+         */
+        hex_md5 = function(arg) { return crypto.createHash('md5').update(arg).digest('hex'); };
+    }
 }
 
 /*
