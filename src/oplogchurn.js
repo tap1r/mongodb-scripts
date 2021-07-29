@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version = "0.2.6"
+ *  Version: "0.2.7"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -11,6 +11,15 @@
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
  *  Save libs to the $MDBLIB or valid search path
  */
+
+if (typeof this.__script === 'undefined') {
+    this.__script = {
+        "name": "oplogchurn.js",
+        "version": "0.2.7"
+    };
+    var comment = 'Running script ' + this.__script.name + ' v' + this.__script.version;
+    print('\n', __comment);
+}
 
 if (typeof _mdblib === 'undefined') {
     /*
@@ -48,15 +57,6 @@ if (typeof scale === 'undefined') {
  *  Global defaults
  */
 
-if (typeof this.__script === 'undefined') {
-    this.__script = {
-        "name": "oplogchurn.js",
-        "version": "0.2.6"
-    };
-    var comment = 'Running script ' + this.__script.name + ' v' + this.__script.version;
-    print('\n', comment);
-}
-
 // formatting preferences
 if (typeof termWidth === 'undefined') var termWidth = 60;
 if (typeof columnWidth === 'undefined') var columnWidth = 25;
@@ -68,7 +68,7 @@ function main() {
     /*
      *  main
      */
-    var total = 0, docs = 0;
+    var size = 0, docs = 0;
     let date = new Date();
     let t2 = (date.getTime() / 1000.0)|0; // end timestamp
     let d2 = date.toISOString(); // end datetime
@@ -77,12 +77,13 @@ function main() {
     let pipeline = [{
             "$match": {
                 "ts": {
-                    "$gt": Timestamp(t1, 1),
-                    "$lte": Timestamp(t2, 1)
+                    "$gt": Timestamp(t1, 1), // MONGOSH-930
+                    "$lte": Timestamp(t2, 1) // MONGOSH-930
                 }
             }
         },{
             "$project": { "_id": 0 }
+            // serverVer(4.2) ? { "$unset": "_id" } : { "$addFields": { "_id": "$$REMOVE" } }
     }];
     let options = {
         "allowDiskUse": true,
@@ -105,14 +106,14 @@ function main() {
             }
         });
         oplog.aggregate(pipeline, options).map(churnInfo => {
-            total = churnInfo.__bsonDataSize;
+            size = churnInfo.__bsonDataSize;
             docs = churnInfo.__documentCount;
         });
     } else {
         print('\n');
         print('Warning: Using the legacy client side calculation technique');
         oplog.aggregate(pipeline, options).forEach((op) => {
-            total += bsonsize(op);
+            size += bsonsize(op);
             ++docs;
         });
     }
@@ -125,9 +126,9 @@ function main() {
     let stats = oplog.stats();
     let blocksFree = stats.wiredTiger['block-manager']['file bytes available for reuse'];
     let ratio = (stats.size / (stats.storageSize - blocksFree)).toFixed(2);
-    let intervalDataSize = total / scale.factor;
-    let intervalStorageSize = total / (scale.factor * ratio);
-    let oplogChurn = total / (scale.factor * ratio * hrs);
+    let intervalDataSize = size / scale.factor;
+    let intervalStorageSize = size / (scale.factor * ratio);
+    let oplogChurn = size / (scale.factor * ratio * hrs);
 
     // Print results
     print('\n');
