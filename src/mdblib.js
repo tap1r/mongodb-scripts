@@ -65,7 +65,7 @@ if (Object.entries === 'undefined') {
     /*
      *  Add to older legacy shells
      */
-    Object.entries = function(obj){
+    Object.entries = function(obj) {
         var ownProps = Object.keys(obj),
             i = ownProps.length,
             resArray = new Array(i); // preallocate the Array
@@ -232,7 +232,7 @@ function shellVer() {
 
 function slaveOk(readPref = 'primaryPreferred') {
     /*
-     *  Backward compatability with rs.slaveOk()
+     *  Backward compatability with rs.slaveOk() and MONGOSH-910
      */
     if (typeof rs.slaveOk === 'undefined' && typeof rs.secondaryOk === 'undefined') {
         return db.getMongo().setReadPref(readPref);
@@ -258,21 +258,21 @@ if (typeof db.prototype.isMaster === 'undefined') {
     /*
      *  Backward compatability with db.isMaster()
      */
-    db.prototype.isMaster = function() { return this.hello(); };
+    db.prototype.isMaster = function() { return this.hello() };
 }
 
 if (typeof db.prototype.hello === 'undefined') {
     /*
      *  Forward compatability with db.hello()
      */
-    db.prototype.hello = function() { return this.isMaster(); };
+    db.prototype.hello = function() { return this.isMaster() };
 }
 
 if (typeof bsonsize === 'undefined') {
     /*
      *  Forward compatability with bsonsize()
      */
-    bsonsize = function(arg) { return Object.prototype.bsonsize(arg); };
+    bsonsize = function(arg) { return Object.prototype.bsonsize(arg) };
 }
 
 if (typeof process !== 'undefined') {
@@ -282,34 +282,37 @@ if (typeof process !== 'undefined') {
 
     // if (typeof Object.prototype.bsonsize === 'undefined') {
         /*
-         *  Backward compatability with Object.bsonsize()
+         *  Backward compatability with Object.bsonsize(), this method doesn't work with mongosh
          */
         // Object.prototype.bsonsize = function bsonsize(arg) { return bsonsize(arg); };
     // }
 
-    // if (typeof UUID().base64 === 'undefined') UUID.prototype.base64 = function() { return this.toString('base64'); }
     if (typeof Object.getPrototypeOf(UUID()).base64 === 'undefined') {
         /*
          *  Backward compatability with UUID().base64()
          */
-        UUID.prototype.base64 = function() { return this.toString('base64'); };
+        UUID.prototype.base64 = function() { return this.toString('base64') };
     }
 
-    /*
-     *  Backward compatability with NumberLong()
-     */
-    NumberLong = function(arg) { return Long.fromNumber(arg); };
+    if (typeof NumberLong === 'undefined') {
+        /*
+        *  Backward compatability with NumberLong()
+        */
+        NumberLong = function(arg) { return Long.fromNumber(arg) };
+    }
 
-    /*
-     *  Backward compatability with NumberDecimal()
-     */
-    NumberDecimal = function(arg) { return Decimal128.fromString(arg.toString()); };
+    if (typeof NumberDecimal === 'undefined') {
+        /*
+        *  Backward compatability with NumberDecimal()
+        */
+        NumberDecimal = function(arg) { return Decimal128.fromString(arg.toString()) };
+    }
 
     if (typeof hex_md5 === 'undefined') {
         /*
          *  Backward compatability with hex_md5()
          */
-        hex_md5 = function(arg) { return crypto.createHash('md5').update(arg).digest('hex'); };
+        hex_md5 = function(arg) { return crypto.createHash('md5').update(arg).digest('hex') };
     }
 }
 
