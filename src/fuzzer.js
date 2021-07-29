@@ -1,7 +1,7 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.3.3"
- *  Description: Generate pseudorandom test data, with some fuzzing capability
+ *  Version: "0.3.4"
+ *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
@@ -12,6 +12,15 @@
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
  *  Save libs to the $MDBLIB or other valid search path
  */
+
+if (typeof this.__script === 'undefined') {
+    this.__script = {
+        "name": "fuzzer.js",
+        "version": "0.3.4"
+    };
+    var __comment = 'Running script ' + this.__script.name + ' v' + this.__script.version;
+    print('\n', __comment);
+}
 
 if (typeof _mdblib === 'undefined') {
     /*
@@ -95,19 +104,11 @@ let specialIndexOptions = { // exceptional index options
     "collation": { "locale": "simple" },
     "default_language": idioma
 };
+let commitQuorum = serverVer(4.4) ? wc.w : null;
 
 /*
  *  Global defaults
  */
-
-if (typeof this.__script === 'undefined') {
-    this.__script = {
-        "name": "fuzzer.js",
-        "version": "0.3.2"
-    };
-    var comment = 'Running script ' + this.__script.name + ' v' + this.__script.version;
-    print('\n', comment);
-}
 
 if (typeof readPref === 'undefined') var readPref = 'primary';
 var batch = 0, totalBatches = 1, residual = 0, doc = {};
@@ -201,7 +202,7 @@ function main() {
                 }
             });
             var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-                            indexes, indexOptions
+                            indexes, indexOptions, commitQuorum
                          );
             (result.note !== 'undefined') ? print('Indexing completed:', result.note)
                 : (result.ok === 1) ? print('Indexing completed!')
@@ -222,9 +223,12 @@ function main() {
                 }
             });
             var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-                            specialIndexes, specialIndexOptions
+                            specialIndexes, specialIndexOptions, commitQuorum
                          );
-            result.ok ? print('Special indexing completed.') : print('Special indexing failed:', result.msg);
+            (result.note !== 'undefined') ? print('Special indexing completed:', result.note)
+                : (result.ok === 1) ? print('Special indexing completed!')
+                : (result.msg !== 'undefined') ? print('Special indexing failed:', result.msg)
+                : print('Special indexing completed with:', result);
         } else {
             print('No special index builds specified.');
         }
@@ -265,7 +269,7 @@ function genDocument() {
     }
 
     let date = new Date(now + dateOffset * 1000);
-    let ts = new Timestamp(timestamp + dateOffset, 1);
+    let ts = new Timestamp(timestamp + dateOffset, 1); // MONGOSH-930
     fuzzer.schemas = new Array();
     fuzzer.schemas.push({
         "_id": oid,
