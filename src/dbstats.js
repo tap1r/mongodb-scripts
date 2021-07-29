@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.2.5"
+ *  Version: "0.2.6"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -11,6 +11,15 @@
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
  *  Save libs to the $MDBLIB or other valid search path
  */
+
+if (typeof this.__script === 'undefined') {
+    this.__script = {
+        "name": "dbstats.js",
+        "version": "0.2.6"
+    };
+    var __comment = 'Running script ' + this.__script.name + ' v' + this.__script.version;
+    print('\n', __comment);
+}
 
 if (typeof _mdblib === 'undefined') {
     /*
@@ -42,15 +51,6 @@ if (typeof scale === 'undefined') {
 /*
  *  Global defaults
  */
-
-if (typeof this.__script === 'undefined') {
-    this.__script = {
-        "name": "dbstats.js",
-        "version": "0.2.4"
-    };
-    var comment = 'Running script ' + this.__script.name + ' v' + this.__script.version;
-    print('\n', comment);
-}
 
 // formatting preferences
 if (typeof termWidth === 'undefined') var termWidth = 124;
