@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.7"
+ *  Version: "0.2.8"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -9,7 +9,8 @@
  *  Global defaults
  */
 
-var bsonMax = (typeof isMaster().maxBsonObjectSize === 'undefined') ? 16 * Math.pow(1024, 2) : isMaster().maxBsonObjectSize;
+var bsonMax = (typeof hello().maxBsonObjectSize === 'undefined') ? 16 * Math.pow(1024, 2) : hello().maxBsonObjectSize;
+var maxWriteBatchSize = (typeof hello().maxWriteBatchSize === 'undefined') ? 100000 : hello().maxWriteBatchSize;
 const idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', 'pt', 'ro', 'ru', 'es', 'sv', 'tr'];
 
 // Random.setRandomSeed(); 
@@ -27,7 +28,7 @@ if (String.prototype.padStart === 'undefined') {
     /*
      *  Add to older legacy shells
      */
-    String.prototype.padStart = function padStart(targetLength, padString) {
+    String.prototype.padStart = (targetLength, padString) => {
         targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
         padString = String(typeof padString !== 'undefined' ? padString : ' ');
         if (this.length >= targetLength) {
@@ -46,7 +47,7 @@ if (String.prototype.padEnd === 'undefined') {
     /*
      *  Add to older legacy shells
      */
-    String.prototype.padEnd = function padEnd(targetLength, padString) {
+    String.prototype.padEnd = (targetLength, padString) => {
         targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
         padString = String(typeof padString !== 'undefined' ? padString : ' ');
         if (this.length > targetLength) {
@@ -61,11 +62,11 @@ if (String.prototype.padEnd === 'undefined') {
     }
 }
 
-if (Object.entries === 'undefined') {
+if (Object.prototype.entries === 'undefined') {
     /*
      *  Add to older legacy shells
      */
-    Object.entries = function(obj) {
+    Object.prototype.entries = obj => {
         var ownProps = Object.keys(obj),
             i = ownProps.length,
             resArray = new Array(i); // preallocate the Array
@@ -162,7 +163,7 @@ class MetaStats {
             this.dbPath = ((async() => db.serverStatus().process === 'mongod')()) ? (async() => db.serverCmdLineOpts().parsed.storage.dbPath)() : null;
         } else {
             // legacy shell sync methods
-            // this.instance = isMaster().me;
+            // this.instance = hello().me;
             this.hostname = db.hostInfo().system.hostname;
             this.proc = db.serverStatus().process;
             this.dbPath = (db.serverStatus().process === 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : null;
@@ -203,7 +204,7 @@ function isReplSet() {
     /*
      *  Determine if current host is a replSet member
      */
-    return (typeof isMaster().hosts !== 'undefined')
+    return (typeof hello().hosts !== 'undefined')
 }
 
 /*
@@ -214,65 +215,106 @@ function serverVer(ver) {
     /*
      *  Evaluate server version
      */
-    if (ver !== 'undefined' && ver <= +db.version().match(/^[0-9]+\.[0-9]+/)) {
-        return true;
-    } else if (ver !== 'undefined' && ver > +db.version().match(/^[0-9]+\.[0-9]+/)) {
-        return false;
-    } else {
-        return +db.version().match(/^[0-9]+\.[0-9]+/);
-    }
+    if (ver !== 'undefined' && ver <= +db.version().match(/^[0-9]+\.[0-9]+/))
+        return true
+    else if (ver !== 'undefined' && ver > +db.version().match(/^[0-9]+\.[0-9]+/))
+        return false
+    else
+        return +db.version().match(/^[0-9]+\.[0-9]+/)
 }
 
 function shellVer() {
     /*
      *  Evaluate shell version
      */
-    return +version().match(/^[0-9]+\.[0-9]+/);
+    return +version().match(/^[0-9]+\.[0-9]+/)
 }
 
 function slaveOk(readPref = 'primaryPreferred') {
     /*
      *  Backward compatability with rs.slaveOk() and MONGOSH-910
      */
-    if (typeof rs.slaveOk === 'undefined' && typeof rs.secondaryOk === 'undefined') {
-        return db.getMongo().setReadPref(readPref);
-    } else if (shellVer() >= 4.4) {
-        return rs.secondaryOk();
-    } else {
-        return rs.slaveOk();
-    }
+    if (typeof rs.prototype.slaveOk === 'undefined' && typeof rs.prototype.secondaryOk === 'undefined')
+        return db.getMongo().setReadPref(readPref)
+    else if (shellVer() >= 4.4)
+        return rs.secondaryOk()
+    else
+        return rs.slaveOk()
 }
 
 function isMaster() {
     /*
      *  Backward compatability with db.isMaster()
      */
-    if (typeof db.hello === 'undefined') {
-        return db.isMaster();
-    } else {
-        return db.hello();
-    }
+    if (typeof db.prototype.hello === 'undefined')
+        return db.isMaster()
+    else
+        return db.hello()
+}
+
+function hello() {
+    /*
+     *  Forward compatability with db.hello()
+     */
+    if (typeof db.prototype.hello === 'undefined')
+        return db.isMaster()
+    else
+        return db.hello()
+}
+
+function isAtlasPlatform() {
+    /*
+     *  Evaluate Atlas deployment platform
+     */
+    if (db.hello().msg === 'isdbgrid' && db.adminCommand({ atlasVersion: 1 }).ok === 1)
+        return 'serverless'
+    else if (db.hello().msg !== 'isdbgrid' && db.adminCommand({ atlasVersion: 1 }).ok === 1)
+        return 'sharedTier||dedicatedReplicaSet'
+    else if (db.hello().msg === 'isdbgrid' && db.serverStatus().atlasVersion === 'undefined')
+        return 'dedicatedShardedCluster'
+    else
+        return 'unknown'
+}
+
+function $NumberLong(arg) {
+    /*
+     *  NumberLong() wrapper
+     */
+    if (typeof process !== 'undefined')
+        return Long.fromNumber(arg)
+    else
+        return NumberLong(arg)
+}
+
+function $NumberDecimal(arg) {
+    /*
+     *  NumberDecimal() wrapper
+     */
+    if (typeof process !== 'undefined')
+        return Decimal128.fromString(arg.toString())
+    else
+        return NumberDecimal(arg)
 }
 
 if (typeof db.prototype.isMaster === 'undefined') {
     /*
      *  Backward compatability with db.isMaster()
      */
-    db.prototype.isMaster = function() { return this.hello() };
+    db.prototype.isMaster = () => this.hello()
 }
 
 if (typeof db.prototype.hello === 'undefined') {
     /*
      *  Forward compatability with db.hello()
      */
-    db.prototype.hello = function() { return this.isMaster() };
+    db.prototype.hello = () => this.isMaster()
 }
 
 if (typeof bsonsize === 'undefined') {
     /*
      *  Forward compatability with bsonsize()
      */
-    bsonsize = function(arg) { return Object.prototype.bsonsize(arg) };
+    bsonsize = arg => Object.prototype.bsonsize(arg)
 }
 
 if (typeof process !== 'undefined') {
@@ -291,28 +333,28 @@ if (typeof process !== 'undefined') {
         /*
          *  Backward compatability with UUID().base64()
          */
-        UUID.prototype.base64 = function() { return this.toString('base64') };
+        UUID.prototype.base64 = () => this.toString('base64')
     }
 
     if (typeof NumberLong === 'undefined') {
         /*
-        *  Backward compatability with NumberLong()
-        */
-        NumberLong = function(arg) { return Long.fromNumber(arg) };
+         *  Backward compatability with NumberLong() on older mongosh
+         */
+        NumberLong = arg => Long.fromNumber(arg)
     }
 
     if (typeof NumberDecimal === 'undefined') {
         /*
-        *  Backward compatability with NumberDecimal()
-        */
-        NumberDecimal = function(arg) { return Decimal128.fromString(arg.toString()) };
+         *  Backward compatability with NumberDecimal() on older mongosh
+         */
+        NumberDecimal = arg => Decimal128.fromString(arg.toString())
     }
 
     if (typeof hex_md5 === 'undefined') {
         /*
          *  Backward compatability with hex_md5()
          */
-        hex_md5 = function(arg) { return crypto.createHash('md5').update(arg).digest('hex') };
+        hex_md5 = arg => crypto.createHash('md5').update(arg).digest('hex')
     }
 }
 
@@ -326,14 +368,14 @@ function getRandomNumber(min = 0, max = 1) {
     /*
      *  generate random number
      */
-    return rand() * (max - min) + min;
+    return rand() * (max - min) + min
 }
 
 function getRandomExp(exponent = 0) {
     /*
      *  generate random exponential number
      */
-    return Math.ceil(getRandomNumber(1, 10) * Math.pow(10, exponent));
+    return Math.ceil(getRandomNumber(1, 10) * Math.pow(10, exponent))
 }
 
 function getRandomInt(min = 0, max = 1) {
@@ -453,7 +495,7 @@ function genRandomIntInclusivePareto(min, max, alpha = 1.161) {
      *  min is the lowest possible value that can be returned
      *  alpha controls the "shape" of the distribution
      */
-    let k = max * (1.0 - rand()) + min
+    let k = max * (1.0 - rand()) + min;
     let v = Math.pow(k, alpha);
 
     return v + min;
@@ -480,54 +522,54 @@ function ftoc(fahrenheit) {
     /*
      *  convert Fahrenheit to Celsius temparature unit
      */
-    return (fahrenheit - 32) / 1.8;
+    return (fahrenheit - 32) / 1.8
 }
 
 function ctof(celsius) {
     /*
      *  convert Celsius to Fahrenheit temparature unit
      */
-    return celsius * 1.8 + 32;
+    return celsius * 1.8 + 32
 }
 
 function ctok(celsius) {
     /*
      *  convert Celsius to Kelvin temparature unit
      */
-    return celsius + K;
+    return celsius + K
 }
 
 function ktoc(kelvin) {
     /*
      *  convert Kelvin to Celsius temparature unit
      */
-    return kelvin - K;
+    return kelvin - K
 }
 
 function ftok(fahrenheit) {
     /*
      *  convert Fahrenheit to Kelvin temparature unit
      */
-    return ((fahrenheit - 32) / 1.8) + K;
+    return ((fahrenheit - 32) / 1.8) + K
 }
 
 function ktof(kelvin) {
     /*
      *  convert Kelvin to Fahrenheit temparature unit
      */
-    return (kelvin - K) * 1.8 + 32;
+    return (kelvin - K) * 1.8 + 32
 }
 
 function bool(chance = 0.5) {
     /*
      *  return true/false
      */
-    return rand() < chance;
+    return rand() < chance
 }
 
 function benford() {
     /*
-     *  benford law
+     *  Benford's law (experimental)
      */
     array => [1, 2, 3, 4, 5, 6, 7, 8, 9].map(
         val => [val, array.reduce(
