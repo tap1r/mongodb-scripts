@@ -16,7 +16,7 @@
 if (typeof this.__script === 'undefined') {
     this.__script = {
         "name": "fuzzer.js",
-        "version": "0.3.4"
+        "version": "0.3.5"
     };
     var __comment = 'Running script ' + this.__script.name + ' v' + this.__script.version;
     print('\n', __comment);
@@ -195,40 +195,47 @@ function main() {
     if (buildIndexes) {
         if (indexes.length > 0) {
             print('Building index' + ((indexes.length === 1) ? '' : 'es'),
-                  'with collation locale "' + collation.locale + '":');
+                  'with collation locale "' + collation.locale + '":'
+            );
             indexes.forEach(index => {
                 for (let [key, value] of Object.entries(index)) {
-                    print('\tkey:', key, '/', value);
+                    print('\tkey:', key + '/' + value);
                 }
             });
-            var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-                            indexes, indexOptions, commitQuorum
-                         );
-            (result.note !== 'undefined') ? print('Indexing completed:', result.note)
-                : (result.ok === 1) ? print('Indexing completed!')
-                : (result.msg !== 'undefined') ? print('Indexing failed:', result.msg)
-                : print('Indexing completed with:', result);
+            let idxResult = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
+                indexes, indexOptions, commitQuorum
+            );
+            (typeof idxResult.note !== 'undefined')
+                ? print('Indexing completed:', idxResult.note)
+                : (idxResult.ok === 1)
+                ? print('Indexing completed!')
+                : (idxResult.msg !== 'undefined')
+                ? print('Indexing failed:', idxResult.msg)
+                : print('Indexing completed with:', idxResult.flat());
         } else {
             print('No regular index builds specified.');
         }
 
         print('\n');
         if (specialIndexes.length > 0) {
-            print('Building exceptional index' + ((indexes.length === 1) ? '' : 'es'),
-                  'without collation support:');
+            print('Building exceptional index' +
+                  ((specialIndexes.length === 1) ? '' : 'es'),
+                  'without collation support:'
+            );
             specialIndexes.forEach(index => {
                 for (let [key, value] of Object.entries(index)) {
-                    print('\tkey:', key,
-                          '/', (value === 'text') ? value + ' / ' + idioma : value);
+                    print('\tkey:', key + '/' +
+                          (value === 'text') ? value + ' / ' + idioma : value);
                 }
             });
-            var result = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-                            specialIndexes, specialIndexOptions, commitQuorum
-                         );
-            (result.note !== 'undefined') ? print('Special indexing completed:', result.note)
-                : (result.ok === 1) ? print('Special indexing completed!')
-                : (result.msg !== 'undefined') ? print('Special indexing failed:', result.msg)
-                : print('Special indexing completed with:', result);
+            let sidxResult = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
+                specialIndexes, specialIndexOptions, commitQuorum
+            );
+            (typeof sidxResult.note !== 'undefined')
+                ? print('Special indexing completed:', sidxResult.note)
+                : (sidxResult.ok === 1) ? print('Special indexing completed!')
+                : (sidxResult.msg !== 'undefined') ? print('Special indexing failed:', sidxResult.msg)
+                : print('Special indexing completed with:', sidxResult.flat());
         } else {
             print('No special index builds specified.');
         }
@@ -265,11 +272,14 @@ function genDocument() {
             var oid = new ObjectId(
                 Math.floor(timestamp + dateOffset).toString(16) +
                 genRandomHex(16)
+                // employ native mongosh method
             );
     }
 
     let date = new Date(now + dateOffset * 1000);
-    let ts = new Timestamp(timestamp + dateOffset, 1); // MONGOSH-930
+    let ts = (typeof process !== 'undefined') // MONGOSH-930
+        ? new Timestamp({ "t": timestamp + dateOffset, "i": 1 })
+        : new Timestamp(timestamp + dateOffset, 1);
     fuzzer.schemas = new Array();
     fuzzer.schemas.push({
         "_id": oid,
@@ -300,14 +310,14 @@ function genDocument() {
                     getRandomIntInclusive(
                         -(Math.pow(2, 31) - 1),
                         Math.pow(2, 31) - 1)),
-        "int64": NumberLong(
+        "int64": $NumberLong(
                     getRandomIntInclusive(
                         -(Math.pow(2, 63) - 1),
                         Math.pow(2, 63) - 1)),
         "double": getRandomNumber(
                     -Math.pow(2, 12),
                     Math.pow(2, 12)),
-        "decimal128": NumberDecimal(
+        "decimal128": $NumberDecimal(
                         getRandomNumber(
                             -(Math.pow(10, 127) - 1),
                             Math.pow(10, 127) -1)
