@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.8"
+ *  Version: "0.2.9"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -66,7 +66,7 @@ if (Object.prototype.entries === 'undefined') {
     /*
      *  Add to older legacy shells
      */
-    Object.prototype.entries = obj => {
+    Object.entries = obj => {
         var ownProps = Object.keys(obj),
             i = ownProps.length,
             resArray = new Array(i); // preallocate the Array
@@ -300,14 +300,14 @@ if (typeof db.prototype.isMaster === 'undefined') {
     /*
      *  Backward compatability with db.isMaster()
      */
-    db.prototype.isMaster = () => this.hello()
+    db.isMaster = () => this.hello()
 }
 
 if (typeof db.prototype.hello === 'undefined') {
     /*
      *  Forward compatability with db.hello()
      */
-    db.prototype.hello = () => this.isMaster()
+    db.hello = () => this.isMaster()
 }
 
 if (typeof bsonsize === 'undefined') {
