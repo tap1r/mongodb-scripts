@@ -199,21 +199,26 @@ function main() {
             );
             indexes.forEach(index => {
                 for (let [key, value] of Object.entries(index)) {
-                    print('\tkey:', key + '/' + value);
+                    print('\tkey:', key, '/', value);
                 }
             });
             let idxResult = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
                 indexes, indexOptions, commitQuorum
             );
-            (typeof idxResult.note !== 'undefined')
-                ? print('Indexing completed:', idxResult.note)
-                : (idxResult.ok === 1)
-                ? print('Indexing completed!')
-                : (idxResult.msg !== 'undefined')
-                ? print('Indexing failed:', idxResult.msg)
-                : print('Indexing completed with:', idxResult.flat());
+            let idxMsg = () => {
+                if (typeof idxResult.note !== 'undefined')
+                    return 'Indexing completed: ' + idxResult.note
+                else if (typeof idxResult.ok !== 'undefined')
+                    return 'Indexing completed!'
+                else if (typeof idxResult.msg !== 'undefined')
+                    return 'Indexing failed:' + idxResult.msg
+                else
+                    return 'Indexing completed with: ' + idxResult
+            }
+            
+            print(idxMsg());
         } else {
-            print('No regular index builds specified.');
+            print('No regular index builds specified.')
         }
 
         print('\n');
@@ -224,18 +229,25 @@ function main() {
             );
             specialIndexes.forEach(index => {
                 for (let [key, value] of Object.entries(index)) {
-                    print('\tkey:', key + '/' +
+                    print('\tkey:', key, '/',
                           (value === 'text') ? value + ' / ' + idioma : value);
                 }
             });
             let sidxResult = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
                 specialIndexes, specialIndexOptions, commitQuorum
             );
-            (typeof sidxResult.note !== 'undefined')
-                ? print('Special indexing completed:', sidxResult.note)
-                : (sidxResult.ok === 1) ? print('Special indexing completed!')
-                : (sidxResult.msg !== 'undefined') ? print('Special indexing failed:', sidxResult.msg)
-                : print('Special indexing completed with:', sidxResult.flat());
+            let sidxMsg = () => {
+                if (typeof sidxResult.note !== 'undefined')
+                    return 'Special indexing completed: ' + sidxResult.note
+                else if (typeof sidxResult.ok !== 'undefined')
+                    return 'Special indexing completed!'
+                else if (typeof sidxResult.msg !== 'undefined')
+                    return 'Special indexing failed: ' + sidxResult.msg
+                else
+                    return 'Special indexing completed with: ' + sidxResult
+            }
+
+            print(sidxMsg());
         } else {
             print('No special index builds specified.');
         }
