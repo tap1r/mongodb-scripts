@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.2.7"
+ *  Version: "0.2.8"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -17,7 +17,7 @@ if (typeof this.__script === 'undefined') {
         "name": "oplogchurn.js",
         "version": "0.2.7"
     };
-    var comment = 'Running script ' + this.__script.name + ' v' + this.__script.version;
+    var __comment = 'Running script ' + this.__script.name + ' v' + this.__script.version;
     print('\n', __comment);
 }
 
@@ -74,20 +74,22 @@ function main() {
     let d2 = date.toISOString(); // end datetime
     let t1 = (date.setHours(date.getHours() - hrs) / 1000.0)|0; // start timestamp
     let d1 = date.toISOString(); // start datetime
-    let pipeline = [{
-            "$match": {
-                "ts": {
-                    "$gt": Timestamp(t1, 1), // MONGOSH-930
-                    "$lte": Timestamp(t2, 1) // MONGOSH-930
-                }
-            }
-        },{
-            "$project": { "_id": 0 }
-            // serverVer(4.2) ? { "$unset": "_id" } : { "$addFields": { "_id": "$$REMOVE" } }
-    }];
+    let $match = (typeof process !== 'undefined') // MONGOSH-930
+        ? { "$match": { "ts": {
+            "$gt": Timestamp({ "t": t1, "i": 0 }),
+            "$lte": Timestamp({ "t": t2, "i": 0 })
+          } } }
+        : { "$match": { "ts": {
+            "$gt": Timestamp(t1, 0),
+            "$lte": Timestamp(t2, 0)
+          } } };
+    let $project = serverVer(4.2)
+        ? { "$unset": "_id" }
+        : { "$addFields": { "_id": "$$REMOVE" } };
+    let pipeline = [$match, $project];
     let options = {
         "allowDiskUse": true,
-        "comment": "Running oplog analysis with "
+        "comment": "Performing oplog analysis with "
                    + this.__script.name
                    + " version "
                    + this.__script.version
@@ -120,7 +122,10 @@ function main() {
 
     // Get host info
     // let instance = db.hello().me;
-    let hostname = db.hostInfo().system.hostname;
+    let host = db.hostInfo().system.hostname;
+    // secondary: true,
+    // primary: 'localhost:27018',
+    // me: 'localhost:27017',
     let dbPath = db.serverCmdLineOpts().parsed.storage.dbPath;
     // Get oplog stats
     let stats = oplog.stats();
@@ -133,7 +138,7 @@ function main() {
     // Print results
     print('\n');
     print('='.repeat(termWidth));
-    print('Hostname:'.padEnd(rowHeader), hostname.padStart(columnWidth));
+    print('Host:'.padEnd(rowHeader), host.padStart(columnWidth));
     print('DbPath:\t', dbPath.padStart(columnWidth));
     print('-'.repeat(termWidth));
     print('Start time:'.padEnd(rowHeader), d1.padStart(columnWidth));
