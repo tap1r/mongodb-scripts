@@ -240,7 +240,7 @@ function printDbPath(dbPath) {
           dbPath.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
     );
     print('='.repeat(termWidth));
-    print('Hostname:', dbPath.hostname, '\tType:', dbPath.proc, '\tdbPath:', dbPath.dbPath);
+    print('Host:', dbPath.hostname, '\tType:', dbPath.proc, '\tdbPath:', dbPath.dbPath);
     print('='.repeat(termWidth));
     print('\n');
 }
