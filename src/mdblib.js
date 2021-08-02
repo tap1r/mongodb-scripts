@@ -10,7 +10,7 @@
  */
 
 var bsonMax = (typeof hello().maxBsonObjectSize === 'undefined') ? 16 * Math.pow(1024, 2) : hello().maxBsonObjectSize;
-var maxWriteBatchSize = (typeof hello().maxWriteBatchSize === 'undefined') ? 100000 : hello().maxWriteBatchSize;
+// var maxWriteBatchSize = (typeof hello().maxWriteBatchSize === 'undefined') ? 100000 : hello().maxWriteBatchSize;
 const idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', 'pt', 'ro', 'ru', 'es', 'sv', 'tr'];
 
 // Random.setRandomSeed(); 
@@ -31,13 +31,13 @@ if (String.prototype.padStart === 'undefined') {
     String.prototype.padStart = (targetLength, padString) => {
         targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
         padString = String(typeof padString !== 'undefined' ? padString : ' ');
-        if (this.length >= targetLength) {
-            return String(this);
-        } else {
+        if (this.length >= targetLength)
+            return String(this)
+        else {
             targetLength = targetLength - this.length;
-            if (targetLength > padString.length) {
-                padString += padString.repeat(targetLength / padString.length); // append to original to ensure we are longer than needed
-            }
+            if (targetLength > padString.length)
+                padString += padString.repeat(targetLength / padString.length) // append to original to ensure we are longer than needed
+
             return padString.slice(0, targetLength) + String(this);
         }
     }
@@ -50,13 +50,13 @@ if (String.prototype.padEnd === 'undefined') {
     String.prototype.padEnd = (targetLength, padString) => {
         targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
         padString = String(typeof padString !== 'undefined' ? padString : ' ');
-        if (this.length > targetLength) {
-            return String(this);
-        } else {
+        if (this.length > targetLength)
+            return String(this)
+        else {
             targetLength = targetLength - this.length;
-            if (targetLength > padString.length) {
-                padString += padString.repeat(targetLength / padString.length); // append to original to ensure we are longer than needed
-            }
+            if (targetLength > padString.length)
+                padString += padString.repeat(targetLength / padString.length) // append to original to ensure we are longer than needed
+
             return String(this) + padString.slice(0, targetLength);
         }
     }
