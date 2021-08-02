@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.3.4"
+ *  Version: "0.3.5"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -50,10 +50,15 @@ let idioma = 'en';
 let collation = { // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
     "locale": "simple"
 };
-let serverless = false; // limit to serverless restrictions
-let tsColl = false; // time series collection type
 let dropPref = false; // drop collection prior to generating data
 let buildIndexes = true; // build index preferences
+let timeseries = false; // build time series collection type
+let tsOptions = {
+    "timeField": "timestamp",
+    "metaField": "data",
+    "granularity": "hours"
+};
+let expireAfterSeconds = 0; // TTL and time series options
 let totalDocs = getRandomExp(4); // number of documents to generate per namespace
 let fuzzer = { // preferences
     "_id": "ts", // ["ts"|"oid"] - timeseries OID | client generated OID
@@ -91,7 +96,7 @@ let indexes = [ // index keys
     { "multiLineString": "2dsphere" },
     { "multiPolygon": "2dsphere" },
     { "geoCollection": "2dsphere" },
-    serverVer(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
+    fCV(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
 let indexOptions = { // createIndexes options
     "collation": collation
@@ -104,7 +109,7 @@ let specialIndexOptions = { // exceptional index options
     "collation": { "locale": "simple" },
     "default_language": idioma
 };
-let commitQuorum = serverVer(4.4) ? wc.w : null;
+let commitQuorum = (wc.w > 0) ? wc.w : 'majority';
 
 /*
  *  Global defaults
@@ -122,7 +127,8 @@ function main() {
     db.getMongo().setReadPref(readPref);
     print('\n');
     print('Synthesising', totalDocs,
-          'document' + ((totalDocs === 1) ? '' : 's'));
+          'document' + ((totalDocs === 1) ? '' : 's')
+    );
 
     // sampling synthethic documents and estimating batch size
     for (let i = 0; i < sampleSize; ++i) {
@@ -134,17 +140,20 @@ function main() {
         print('\n');
         print('Warning: The average document size of', avgSize,
               'bytes approaches or exceeeds the BSON max size of', bsonMax,
-              'bytes');
+              'bytes'
+        );
     }
 
     print('\n');
     print('Sampling', sampleSize,
           'document' + ((sampleSize === 1) ? '' : 's'),
           'with BSON size averaging', avgSize,
-          'byte' + ((avgSize === 1) ? '' : 's'));
+          'byte' + ((avgSize === 1) ? '' : 's')
+    );
     let batchSize = (bsonMax * 0.95 / avgSize)|0;
     print('Estimated optimal batch capacity', batchSize,
-          'document' + ((batchSize === 1) ? '' : 's'));
+          'document' + ((batchSize === 1) ? '' : 's')
+    );
     if (totalDocs < batchSize) {
         batchSize = totalDocs;
     } else {
@@ -153,19 +162,22 @@ function main() {
     }
 
     // recreate the namespace
-    dropNS(dropPref, dbName, collName, compressor, collation);
+    dropNS(dropPref, dbName, collName, compressor, collation, tsOptions);
 
     // generate and bulk write the documents
     print('\n');
     print('Specified time series date range:');
     print('\tfrom:\t\t',
-          new Date(now + fuzzer.offset * 86400000).toISOString());
+          new Date(now + fuzzer.offset * 86400000).toISOString()
+    );
     print('\tto:\t\t',
-          new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString());
+          new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()
+    );
     print('\tdistribution:\t', fuzzer.distribution);
     print('\n');
     print('Generating', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'),
-          'in', totalBatches, 'batch' + ((totalBatches === 1) ? '' : 'es') + ':');
+          'in', totalBatches, 'batch' + ((totalBatches === 1) ? '' : 'es') + ':'
+    );
     for (let i = 0; i < totalBatches; ++i) {
         if (i === totalBatches - 1 && residual > 0) {
             batchSize = residual;
@@ -179,8 +191,9 @@ function main() {
 
         try {
             var result = bulk.execute(wc);
-            print('\tbulk inserted', result.nInserted,
-                  'document' + ((result.nInserted === 1) ? '' : 's'),
+            let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
+            print('\tbulk inserted', bInserted,
+                  'document' + ((bInserted === 1) ? '' : 's'),
                   'in batch', 1 + i, 'of', totalBatches);
         } catch (e) {
             print('\n');
@@ -202,20 +215,34 @@ function main() {
                     print('\tkey:', key, '/', value);
                 }
             });
-            let idxResult = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-                indexes, indexOptions, commitQuorum
-            );
+            let indexing = () => {
+                if (isReplSet()) {
+                    return db.getSiblingDB(dbName).getCollection(collName).createIndexes(
+                        indexes, indexOptions, commitQuorum
+                    )
+                } else {
+                    return db.getSiblingDB(dbName).getCollection(collName).createIndexes(
+                        indexes, indexOptions
+                    )
+                }
+            }
+
+            let idxResult = indexing();
             let idxMsg = () => {
-                if (typeof idxResult.note !== 'undefined')
-                    return 'Indexing completed: ' + idxResult.note
+                if (typeof idxResult.errmsg !== 'undefined')
+                    return 'Indexing operation failed: ' + idxResult.errmsg
+                else if (typeof idxResult.note !== 'undefined') {
+                    let diff = idxResult.numIndexesAfter - idxResult.numIndexesBefore
+                    return 'Indexing completed with note: ' + idxResult.note +
+                           ' with ' + diff + ' index changes.' }
                 else if (typeof idxResult.ok !== 'undefined')
                     return 'Indexing completed!'
                 else if (typeof idxResult.msg !== 'undefined')
-                    return 'Indexing failed:' + idxResult.msg
+                    return 'Indexing build failed with message: ' + idxResult.msg
                 else
-                    return 'Indexing completed with: ' + idxResult
+                    return 'Indexing completed with results:\n\t' + idxResult
             }
-            
+
             print(idxMsg());
         } else {
             print('No regular index builds specified.')
@@ -230,21 +257,36 @@ function main() {
             specialIndexes.forEach(index => {
                 for (let [key, value] of Object.entries(index)) {
                     print('\tkey:', key, '/',
-                          (value === 'text') ? value + ' / ' + idioma : value);
+                          (value === 'text') ? value + ' / ' + idioma : value
+                    );
                 }
             });
-            let sidxResult = db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-                specialIndexes, specialIndexOptions, commitQuorum
-            );
+            let sindexing = () => {
+                if (isReplSet()) {
+                    return db.getSiblingDB(dbName).getCollection(collName).createIndexes(
+                        specialIndexes, specialIndexOptions, commitQuorum
+                    )
+                } else {
+                    return db.getSiblingDB(dbName).getCollection(collName).createIndexes(
+                        specialIndexes, specialIndexOptions
+                    )
+                }
+            }
+
+            let sidxResult = sindexing();
             let sidxMsg = () => {
-                if (typeof sidxResult.note !== 'undefined')
-                    return 'Special indexing completed: ' + sidxResult.note
+                if (typeof sidxResult.errmsg !== 'undefined')
+                    return 'Special indexing operation failed: ' + sidxResult.errmsg
+                else if (typeof sidxResult.note !== 'undefined') {
+                    let diff = sidxResult.numIndexesAfter - sidxResult.numIndexesBefore
+                    return 'Special indexing completed with note: ' + sidxResult.note +
+                           ' with ' + diff + ' index changes.' }
                 else if (typeof sidxResult.ok !== 'undefined')
                     return 'Special indexing completed!'
                 else if (typeof sidxResult.msg !== 'undefined')
-                    return 'Special indexing failed: ' + sidxResult.msg
+                    return 'Special indexing build failed with message: ' + sidxResult.msg
                 else
-                    return 'Special indexing completed with: ' + sidxResult
+                    return 'Special indexing completed with results:\n\t' + sidxResult
             }
 
             print(sidxMsg());
@@ -256,7 +298,9 @@ function main() {
     }
 
     // end
-    print('\nFuzzing completed!\n\n')
+    print('\n');
+    print('Fuzzing completed!')
+    print('\n\n')
 
     return;
 }
@@ -290,8 +334,8 @@ function genDocument() {
 
     let date = new Date(now + dateOffset * 1000);
     let ts = (typeof process !== 'undefined') // MONGOSH-930
-        ? new Timestamp({ "t": timestamp + dateOffset, "i": 1 })
-        : new Timestamp(timestamp + dateOffset, 1);
+        ? new Timestamp({ "t": timestamp + dateOffset, "i": 0 })
+        : new Timestamp(timestamp + dateOffset, 0);
     fuzzer.schemas = new Array();
     fuzzer.schemas.push({
         "_id": oid,
@@ -504,14 +548,15 @@ function genDocument() {
 }
 
 function dropNS(dropPref = false, dbName = false, collName = false,
-                compressor = 'best', collation = { "locale": "simple" }) {
+                compressor = 'best', collation = { "locale": "simple" },
+                tsOptions) {
     /*
      *  drop and recreate target namespace
      */
     var msg = '';
     switch(compressor.toLowerCase()) {
         case 'best':
-            compressor = serverVer(4.2) ? 'zstd' : 'zlib';
+            compressor = fCV(4.2) ? 'zstd' : 'zlib';
             break;
         case 'none':
             compressor = 'none';
@@ -520,7 +565,7 @@ function dropNS(dropPref = false, dbName = false, collName = false,
             compressor = 'zlib';
             break;
         case 'zstd':
-            if (serverVer(4.2)) {
+            if (fCV(4.2)) {
                 compressor = 'zstd';
             } else {
                 compressor = 'zlib';
@@ -536,44 +581,49 @@ function dropNS(dropPref = false, dbName = false, collName = false,
         print('Dropping namespace "' + dbName + '.' + collName + '"');
         db.getSiblingDB(dbName).getCollection(collName).drop();
         print('\n');
-        createNS();
+        createNS(dbName, collName, msg, compressor, expireAfterSeconds, collation, tsOptions);
     } else if (!dropPref && !db.getSiblingDB(dbName).getCollection(collName).exists()) {
         print('Nominated namespace "' + dbName + '.' + collName + '" does not exist');
         print('\n');
-        createNS();
+        createNS(dbName, collName, msg, compressor, expireAfterSeconds, collation, tsOptions);
     } else {
         print('Preserving existing namespace "' + dbName + '.' + collName + '"');
     }
 
-    function createNS() {
-        print('Creating namespace "' + dbName + '.' + collName + '"');
-        print('\twith block compression:\t"' + compressor + '"', msg);
-        print('\tand collation locale:\t"' + collation.locale + '"');
-        let timeseries = {
-            "timeField": "timestamp",
-            "metaField": "data",
-            "granularity": "hours"
-        };
-        let expireAfterSeconds = 'off';
-        let options = {
-            "storageEngine": {
-                "wiredTiger": {
-                    "configString": "block_compressor=" + compressor
-                }
-            },
-            "collation": collation,
-            "writeConcern": wc
-        };
-        if (serverVer(5.0)) {
-            options.timeseries = timeseries;
-            options.expireAfterSeconds = expireAfterSeconds;
-            print('\tand time series options:\t"' +
-                  JSON.stringify(options.timeseries, null, 2),
-                  JSON.stringify(options.expireAfterSeconds, null, 2)
-                  + '"');
-        }
+    return;
+}
 
+function createNS(dbName = false, collName = false, msg = '',
+                  compressor = 'best', expireAfterSeconds = 0,
+                  collation = { "locale": "simple" },
+                  tsOptions = { "timeField": "timestamp",
+                                "metaField": "data",
+                                "granularity": "hours" }) {
+    print('Creating namespace "' + dbName + '.' + collName + '"');
+    print('\twith block compression:\t"' + compressor + '"', msg);
+    print('\tand collation locale:\t"' + collation.locale + '"');
+    let options = {
+        "storageEngine": {
+            "wiredTiger": {
+                "configString": "block_compressor=" + compressor
+            }
+        },
+        "collation": collation,
+        "writeConcern": wc
+    };
+    if (timeseries && fCV(5.0) && !isAtlasPlatform('serverless')) {
+        options.timeseries = tsOptions;
+        options.expireAfterSeconds = expireAfterSeconds;
+        print('\tand time series options:',
+              JSON.stringify(options, null, '\t')
+        );
+    }
+
+    try {
         db.getSiblingDB(dbName).createCollection(collName, options);
+    } catch (e) {
+        print('\n');
+        print('Namespace creation failed:', e);
     }
 
     return;
