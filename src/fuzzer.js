@@ -166,7 +166,7 @@ function main() {
 
     // generate and bulk write the documents
     print('\n');
-    print('Specified time series date range:');
+    print('Specified date range time series:');
     print('\tfrom:\t\t',
           new Date(now + fuzzer.offset * 86400000).toISOString()
     );
