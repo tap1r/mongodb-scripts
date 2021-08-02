@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.9"
+ *  Version: "0.2.10"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -262,18 +262,20 @@ function hello() {
         return db.hello()
 }
 
-function isAtlasPlatform() {
+function isAtlasPlatform(type) {
     /*
      *  Evaluate Atlas deployment platform
      */
     if (db.hello().msg === 'isdbgrid' && db.adminCommand({ atlasVersion: 1 }).ok === 1)
         return 'serverless'
+    else if (type === 'serverless' && db.hello().msg === 'isdbgrid' && db.adminCommand({ atlasVersion: 1 }).ok === 1)
+        return true
     else if (db.hello().msg !== 'isdbgrid' && db.adminCommand({ atlasVersion: 1 }).ok === 1)
         return 'sharedTier||dedicatedReplicaSet'
     else if (db.hello().msg === 'isdbgrid' && db.serverStatus().atlasVersion === 'undefined')
         return 'dedicatedShardedCluster'
     else
-        return 'unknown'
+        return false
 }
 
 function $NumberLong(arg) {
