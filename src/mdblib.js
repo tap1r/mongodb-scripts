@@ -204,7 +204,7 @@ function isReplSet() {
     /*
      *  Determine if current host is a replSet member
      */
-    return (typeof hello().hosts !== 'undefined')
+    return typeof hello().hosts !== 'undefined'
 }
 
 /*
