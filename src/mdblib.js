@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.10"
+ *  Version: "0.2.11"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -215,19 +215,39 @@ function serverVer(ver) {
     /*
      *  Evaluate server version
      */
-    if (ver !== 'undefined' && ver <= +db.version().match(/^[0-9]+\.[0-9]+/))
+    let svrVer = () => +db.version().match(/^[0-9]+\.[0-9]+/);
+    if (ver !== 'undefined' && ver <= svrVer())
         return true
-    else if (ver !== 'undefined' && ver > +db.version().match(/^[0-9]+\.[0-9]+/))
+    else if (ver !== 'undefined' && ver > svrVer())
         return false
     else
-        return +db.version().match(/^[0-9]+\.[0-9]+/)
+        return svrVer()
 }
 
-function shellVer() {
+function fCV(ver) {
+    /*
+     *  Evaluate feature compatibility version
+     */
+    let fCV = () => +db.adminCommand({ "getParameter": 1, "featureCompatibilityVersion": 1 }).featureCompatibilityVersion.version;
+    if (ver !== 'undefined' && ver <= fCV())
+        return true
+    else if (ver !== 'undefined' && ver > fCV())
+        return false
+    else
+        return fCV()
+}
+
+function shellVer(ver) {
     /*
      *  Evaluate shell version
      */
-    return +version().match(/^[0-9]+\.[0-9]+/)
+    let shell = () => +version().match(/^[0-9]+\.[0-9]+/);
+    if (ver !== 'undefined' && ver <= shell())
+        return true
+    else if (ver !== 'undefined' && ver > shell())
+        return false
+    else
+        return shell()
 }
 
 function slaveOk(readPref = 'primaryPreferred') {
@@ -278,26 +298,6 @@ function isAtlasPlatform(type) {
         return false
 }
 
-function $NumberLong(arg) {
-    /*
-     *  NumberLong() wrapper
-     */
-    if (typeof process !== 'undefined')
-        return Long.fromNumber(arg)
-    else
-        return NumberLong(arg)
-}
-
-function $NumberDecimal(arg) {
-    /*
-     *  NumberDecimal() wrapper
-     */
-    if (typeof process !== 'undefined')
-        return Decimal128.fromString(arg.toString())
-    else
-        return NumberDecimal(arg)
-}
-
 if (typeof db.prototype.isMaster === 'undefined') {
     /*
      *  Backward compatability with db.isMaster()
@@ -338,20 +338,6 @@ if (typeof process !== 'undefined') {
         UUID.prototype.base64 = () => this.toString('base64')
     }
 
-    if (typeof NumberLong === 'undefined') {
-        /*
-         *  Backward compatability with NumberLong() on older mongosh
-         */
-        NumberLong = arg => Long.fromNumber(arg)
-    }
-
-    if (typeof NumberDecimal === 'undefined') {
-        /*
-         *  Backward compatability with NumberDecimal() on older mongosh
-         */
-        NumberDecimal = arg => Decimal128.fromString(arg.toString())
-    }
-
     if (typeof hex_md5 === 'undefined') {
         /*
          *  Backward compatability with hex_md5()
@@ -365,6 +351,26 @@ if (typeof process !== 'undefined') {
  */
 
 const K = 273.15;
+
+function $NumberLong(arg) {
+    /*
+     *  NumberLong() wrapper
+     */
+    if (typeof process !== 'undefined')
+        return Long.fromNumber(arg)
+    else
+        return NumberLong(arg)
+}
+
+function $NumberDecimal(arg) {
+    /*
+     *  NumberDecimal() wrapper
+     */
+    if (typeof process !== 'undefined')
+        return Decimal128.fromString(arg.toString())
+    else
+        return NumberDecimal(arg)
+}
 
 function getRandomNumber(min = 0, max = 1) {
     /*
