@@ -77,7 +77,7 @@ let fuzzer = { // preferences
     "schemas": [],
     "ratios": [7, 2, 1]
 };
-let wc = { "w": 1 }; // write concern
+let wc = (isReplSet()) ? { "w": "majority" } : { "w": 1 }; // write concern
 var sampleSize = 9, docSize = 0;
 fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
 sampleSize *= sampleSize;
@@ -109,7 +109,7 @@ let specialIndexOptions = { // exceptional index options
     "collation": { "locale": "simple" },
     "default_language": idioma
 };
-let commitQuorum = (wc.w > 0) ? wc.w : 'majority';
+let commitQuorum = (wc.w == 0) ? 1 : wc.w;
 
 /*
  *  Global defaults
