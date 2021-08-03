@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.3.5"
+ *  Version: "0.3.6"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,32 +13,33 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-if (typeof this.__script === 'undefined') {
-    this.__script = {
-        "name": "fuzzer.js",
-        "version": "0.3.5"
-    };
-    var __comment = 'Running script ' + this.__script.name + ' v' + this.__script.version;
-    print('\n', __comment);
+__script = {
+    "name": "fuzzer.js",
+    "version": "0.3.6"
+};
+var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
+
+if (typeof __lib === 'undefined') {
+    /*
+     *  Load helper library mdblib.js
+     */
+    __lib = { "name": "mdblib.js" };
+    if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
+        __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
+        __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
+    } else if (typeof process !== 'undefined') { // mongosh process.env[] method
+        __lib.paths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
+        __lib.path = __lib.paths.find(path => fs.existsSync(path + '/' + __lib.name)) + '/' + __lib.name;
+    } else {
+        print('[WARN] Legacy shell methods detected, must load', __lib.name, 'from the current working directory');
+        __lib.path = __lib.name;
+    }
+
+    load(__lib.path);
 }
 
-if (typeof _mdblib === 'undefined') {
-    /*
-     *  Load heler library mdblib.js
-     */
-    let libName = 'mdblib.js';
-    if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
-        let libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
-        var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
-    } else if (typeof _mdblib === 'undefined' && typeof process !== 'undefined') { // mongosh process.env[] method
-        let libPaths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
-        var _mdblib = libPaths.find(libPath => fs.existsSync(libPath + '/' + libName)) + '/' + libName;
-    } else {
-        print('Newer shell methods unavailable, must load mdblib.js from the current working directory');
-        var _mdblib = 'mdblib.js';
-    }
-    load(_mdblib);
-}
+__comment += ' with ' + __lib.name + ' v' + __lib.version;
+print(__comment);
 
 /*
  *  User defined parameters
@@ -194,7 +195,8 @@ function main() {
             let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
             print('\tbulk inserted', bInserted,
                   'document' + ((bInserted === 1) ? '' : 's'),
-                  'in batch', 1 + i, 'of', totalBatches);
+                  'in batch', 1 + i, 'of', totalBatches
+            );
         } catch (e) {
             print('\n');
             print('Generation failed:', e);
@@ -378,7 +380,7 @@ function genDocument() {
                             -(Math.pow(10, 127) - 1),
                             Math.pow(10, 127) -1)
                       ),
-        "regex": /\/[A-Z0-9a-z]*\/g/,
+        "regex": /[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/,
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
         "md5": MD5(genRandomHex(32)),
@@ -586,9 +588,8 @@ function dropNS(dropPref = false, dbName = false, collName = false,
         print('Nominated namespace "' + dbName + '.' + collName + '" does not exist');
         print('\n');
         createNS(dbName, collName, msg, compressor, expireAfterSeconds, collation, tsOptions);
-    } else {
-        print('Preserving existing namespace "' + dbName + '.' + collName + '"');
-    }
+    } else
+        print('Preserving existing namespace "' + dbName + '.' + collName + '"')
 
     return;
 }
