@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.2.6"
+ *  Version: "0.2.7"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,32 +12,33 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-if (typeof this.__script === 'undefined') {
-    this.__script = {
-        "name": "dbstats.js",
-        "version": "0.2.6"
-    };
-    var __comment = 'Running script ' + this.__script.name + ' v' + this.__script.version;
-    print('\n', __comment);
+__script = {
+    "name": "dbstats.js",
+    "version": "0.2.7"
+};
+var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
+
+if (typeof __lib === 'undefined') {
+    /*
+     *  Load helper library mdblib.js
+     */
+    __lib = { "name": "mdblib.js" };
+    if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
+        __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
+        __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
+    } else if (typeof process !== 'undefined') { // mongosh process.env[] method
+        __lib.paths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
+        __lib.path = __lib.paths.find(path => fs.existsSync(path + '/' + __lib.name)) + '/' + __lib.name;
+    } else {
+        print('[WARN] Legacy shell methods detected, must load', __lib.name, 'from the current working directory');
+        __lib.path = __lib.name;
+    }
+
+    load(__lib.path);
 }
 
-if (typeof _mdblib === 'undefined') {
-    /*
-     *  Load heler library mdblib.js
-     */
-    let libName = 'mdblib.js';
-    if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
-        let libPaths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
-        var _mdblib = libPaths.find(libPath => fileExists(libPath + '/' + libName)) + '/' + libName;
-    } else if (typeof _mdblib === 'undefined' && typeof process !== 'undefined') { // mongosh process.env[] method
-        let libPaths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
-        var _mdblib = libPaths.find(libPath => fs.existsSync(libPath + '/' + libName)) + '/' + libName;
-    } else {
-        print('Newer shell methods unavailable, must load mdblib.js from the current working directory');
-        var _mdblib = 'mdblib.js';
-    }
-    load(_mdblib);
-}
+__comment += ' with ' + __lib.name + ' v' + __lib.version;
+print(__comment);
 
 /*
  *  User defined parameters
