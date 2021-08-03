@@ -1,16 +1,21 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.11"
+ *  Version: "0.2.12"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
+
+if (typeof this._lib === 'undefined')
+    this._lib = {}
+
+this._lib.name = 'mdblib.js';
+this._lib.version = '0.2.12';
 
 /*
  *  Global defaults
  */
 
 var bsonMax = (typeof hello().maxBsonObjectSize === 'undefined') ? 16 * Math.pow(1024, 2) : hello().maxBsonObjectSize;
-// var maxWriteBatchSize = (typeof hello().maxWriteBatchSize === 'undefined') ? 100000 : hello().maxWriteBatchSize;
 const idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', 'pt', 'ro', 'ru', 'es', 'sv', 'tr'];
 
 // Random.setRandomSeed(); 
