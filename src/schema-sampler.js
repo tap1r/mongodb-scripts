@@ -1,14 +1,29 @@
 /*
  *  Name: "schema-sampler.js"
- *  Version: "0.1.1"
- *  Description: generate schema data by simulating mongosqld sampling commands
+ *  Version: "0.1.2"
+ *  Description: generate schema with simulated mongosqld sampling commands
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "[mongo|mongosh] [connection options] --quiet schema-sampler.js"
+// Usage: "[mongo|mongosh] [connection options] --quiet schema-sampler.js > schema.json"
 
-var agg = [{ "$sample": { "size": 1 } }]; // sample size set to 1 for performance reasons, increase if required
-var dbs = db.getMongo().getDBNames().filter(dbName => dbName.match(/^(?!(admin|config|local)$)/i)); // scan all non-system namespaces
+__script = {
+    "name": "schema-sampler.js",
+    "version": "0.1.2"
+};
+print('\n', 'Running script', __script.name, ' v' + __script.version, '\n');
+
+var userOptions = {
+    /*
+     *  User preferences
+     */
+    readPreference: 'primaryPreferred',
+    sampleSize: 1    // defaults to 1 for performance reasons, increase for sparse data
+}
+
+db.getMongo().setReadPref(userOptions.readPreference);
+var agg = [{ "$sample": { "size": userOptions.sampleSize } }];
+var dbs = db.adminCommand({ "listDatabases": 1, "nameOnly": true, "filter": { "name": /^(?!(admin|config|local)$)/i }, "authorizedDatabases": true }).databases.map(dbName => dbName.name);
 // var dbs = ['namespace']; // restrict list to known namespaces
 var schema = dbs.map(dbName => ({
     "db": dbName,
