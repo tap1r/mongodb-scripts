@@ -5,11 +5,11 @@
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-if (typeof this._lib === 'undefined')
-    this._lib = {}
+if (typeof __lib === 'undefined')
+    __lib = {}
 
-this._lib.name = 'mdblib.js';
-this._lib.version = '0.2.12';
+__lib.name = 'mdblib.js';
+__lib.version = '0.2.12';
 
 /*
  *  Global defaults
