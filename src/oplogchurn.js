@@ -92,7 +92,7 @@ function main() {
         "allowDiskUse": true,
         "comment": "Performing oplog analysis with "
                    + this.__script.name
-                   + " version "
+                   + " v"
                    + this.__script.version
     };
 
