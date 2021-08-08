@@ -377,6 +377,20 @@ function $NumberDecimal(arg) {
         return NumberDecimal(arg)
 }
 
+function $getRandomRegex() {
+    /*
+     *  generate random regex
+     */
+    let regexes = [
+        '[a-z0-9]',
+        '[a-z]',
+        '[0-9]',
+        // '[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?'
+    ];
+
+    return '/' + regexes[getRandomInt(0, regexes.length)] + '/';
+}
+
 function getRandomNumber(min = 0, max = 1) {
     /*
      *  generate random number
