@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.2.9"
+ *  Version: "0.2.10"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -14,7 +14,7 @@
 
 __script = {
     "name": "oplogchurn.js",
-    "version": "0.2.9"
+    "version": "0.2.10"
 };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 
@@ -90,6 +90,7 @@ function main() {
     let pipeline = [$match, $project];
     let options = {
         "allowDiskUse": true,
+        "cursor": { "batchSize": 0 },
         "comment": "Performing oplog analysis with "
                    + this.__script.name
                    + " v"
@@ -100,7 +101,8 @@ function main() {
     db.getMongo().setReadPref(readPref);
     let oplog = db.getSiblingDB('local').getCollection('oplog.rs');
 
-    if (serverVer(4.4)) { // Use the v4.4 $bsonSize aggregation operator
+    if (serverVer(4.4)) {
+        // Using the v4.4 $bsonSize aggregation operator
         pipeline.push({
             "$group": {
                 "_id": null,
@@ -108,14 +110,14 @@ function main() {
                 "__documentCount": { "$sum": 1 }
             }
         });
-        oplog.aggregate(pipeline, options).map(churnInfo => {
+        oplog.aggregate(pipeline, options).forEach(churnInfo => {
             size = churnInfo.__bsonDataSize;
             docs = churnInfo.__documentCount;
         });
     } else {
         print('\n');
         print('Warning: Using the legacy client side calculation technique');
-        oplog.aggregate(pipeline, options).forEach((op) => {
+        oplog.aggregate(pipeline, options).forEach(op => {
             size += bsonsize(op);
             ++docs;
         });
