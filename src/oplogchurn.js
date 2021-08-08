@@ -147,31 +147,34 @@ function main() {
     print('Start time:'.padEnd(rowHeader), d1.padStart(columnWidth));
     print('End time:'.padEnd(rowHeader), d2.padStart(columnWidth));
     print('Interval duration:'.padEnd(rowHeader),
-          (hrs + ' hr' + ((hrs === 1) ? '' : 's')).padStart(columnWidth));
+          (hrs + ' hr' + ((hrs === 1) ? '' : 's')).padStart(columnWidth)
+    );
     print('Average oplog compression ratio:'.padEnd(rowHeader),
-          (ratio + ':1').padStart(columnWidth));
+          (ratio + ':1').padStart(columnWidth)
+    );
     print('Interval document count:'.padEnd(rowHeader),
-          docs.toString().padStart(columnWidth));
+          docs.toString().padStart(columnWidth)
+    );
     print('Interval data size:'.padEnd(rowHeader),
           (intervalDataSize.toFixed(2) + ' ' +
-          scale.unit).padStart(columnWidth));
+          scale.unit).padStart(columnWidth)
+    );
     print('Estimated interval storage size:'.padEnd(rowHeader),
           (intervalStorageSize.toFixed(2) + ' ' +
-          scale.unit).padStart(columnWidth));
+          scale.unit).padStart(columnWidth)
+    );
     print('-'.repeat(termWidth));
     print('Estimated current oplog churn:'.padEnd(rowHeader),
           (oplogChurn.toFixed(2) + ' ' + scale.unit +
-          '/hr').padStart(columnWidth));
+          '/hr').padStart(columnWidth)
+    );
     print('='.repeat(termWidth));
     print('\n');
 }
 
-if (!isReplSet()) {
-    print('\n');
-    print('Host is not a replica set member....exiting!');    
-    print('\n');
-} else {
-    main();
-}
+if (!isReplSet())
+    print('\n', 'Host is not a replica set member....exiting!', '\n')
+else
+    main()
 
 // EOF
