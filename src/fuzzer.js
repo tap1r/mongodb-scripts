@@ -583,11 +583,15 @@ function dropNS(dropPref = false, dbName = false, collName = false,
         print('Dropping namespace "' + dbName + '.' + collName + '"');
         db.getSiblingDB(dbName).getCollection(collName).drop();
         print('\n');
-        createNS(dbName, collName, msg, compressor, expireAfterSeconds, collation, tsOptions);
+        createNS(dbName, collName, msg, compressor,
+                 expireAfterSeconds, collation, tsOptions
+        );
     } else if (!dropPref && !db.getSiblingDB(dbName).getCollection(collName).exists()) {
         print('Nominated namespace "' + dbName + '.' + collName + '" does not exist');
         print('\n');
-        createNS(dbName, collName, msg, compressor, expireAfterSeconds, collation, tsOptions);
+        createNS(dbName, collName, msg, compressor,
+                 expireAfterSeconds, collation, tsOptions
+        );
     } else
         print('Preserving existing namespace "' + dbName + '.' + collName + '"')
 
