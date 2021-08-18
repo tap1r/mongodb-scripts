@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.12"
+ *  Version: "0.2.13"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -9,7 +9,7 @@ if (typeof __lib === 'undefined')
     __lib = {}
 
 __lib.name = 'mdblib.js';
-__lib.version = '0.2.12';
+__lib.version = '0.2.13';
 
 /*
  *  Global defaults
@@ -233,7 +233,12 @@ function fCV(ver) {
     /*
      *  Evaluate feature compatibility version
      */
-    let fCV = () => +db.adminCommand({ "getParameter": 1, "featureCompatibilityVersion": 1 }).featureCompatibilityVersion.version;
+    let fCV = () => {
+        if (db.serverStatus().process === 'mongod')
+            return +db.adminCommand({ "getParameter": 1, "featureCompatibilityVersion": 1 }).featureCompatibilityVersion.version
+        else
+            return serverVer(ver)
+    }
     if (ver !== 'undefined' && ver <= fCV())
         return true
     else if (ver !== 'undefined' && ver > fCV())
