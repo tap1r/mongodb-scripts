@@ -1,15 +1,15 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.13"
+ *  Version: "0.2.14"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 if (typeof __lib === 'undefined')
-    __lib = {}
+    let __lib = {}
 
 __lib.name = 'mdblib.js';
-__lib.version = '0.2.13';
+__lib.version = '0.2.14';
 
 /*
  *  Global defaults
@@ -286,7 +286,7 @@ function hello() {
     /*
      *  Forward compatability with db.hello()
      */
-    if (typeof db.prototype.hello === 'undefined')
+    if (typeof db.prototype.hello !== 'function')
         return db.isMaster()
     else
         return db.hello()
