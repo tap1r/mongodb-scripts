@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.3.7"
+ *  Version: "0.3.8"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-let __script = { "name": "fuzzer.js", "version": "0.3.7" };
+let __script = { "name": "fuzzer.js", "version": "0.3.8" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -135,8 +135,10 @@ function main() {
     let avgSize = (docSize / sampleSize)|0;
     if (avgSize > bsonMax * 0.95) {
         print('\n');
-        print('Warning: The average document size of', avgSize,
-              'bytes approaches or exceeeds the BSON max size of', bsonMax,
+        print('Warning: The average document size of',
+              avgSize,
+              'bytes approaches or exceeeds the BSON max size of',
+              bsonMax,
               'bytes'
         );
     }
@@ -159,7 +161,9 @@ function main() {
     }
 
     // recreate the namespace
-    dropNS(dropPref, dbName, collName, compressor, collation, tsOptions);
+    dropNS(dropPref, dbName, collName,
+           compressor, collation, tsOptions
+    );
 
     // generate and bulk write the documents
     print('\n');
@@ -376,7 +380,7 @@ function genDocument() {
                             -(Math.pow(10, 127) - 1),
                             Math.pow(10, 127) -1)
                       ),
-        "regex": /[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/,
+        "regex": $getRandomRegex(),
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
         "md5": MD5(genRandomHex(32)),
