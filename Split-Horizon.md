@@ -75,12 +75,9 @@ Add the split-horizon topology definitions
 ```javascript
 var config = rs.conf();
 config.version += 1;
-config.members[0].horizons = {};
-config.members[0].horizons.external = "external:37017";
-config.members[1].horizons = {};
-config.members[1].horizons.external = "external:37018";
-config.members[2].horizons = {};
-config.members[2].horizons.external = "external:37019";
+config.members[0].horizons = { "external": "external:37017" };
+config.members[1].horizons = { "external": "external:37018" };
+config.members[2].horizons = { "external": "external:37019" };
 rs.reconfig(config);
 ```
 
@@ -94,18 +91,18 @@ mongo "mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=rep
 
 The SDAM topology should appear as:
 
-```javascript
-[ "localhost:27017", "localhost:27018", "localhost:27019" ]
+```json
+["localhost:27017", "localhost:27018", "localhost:27019"]
 ```
 
 Connect to the translated port:
 
-```json
+```bash
 mongo "mongodb://external:37017,external:37018,external:37019/?replicaSet=replset" --sslCAFile mongodb.pk8 --ssl --eval 'db.isMaster()["hosts"]'
 ```
 
 The SDAM topology should appear as:
 
 ```json
-[ "external:37017", "external:37018", "external:37019" ]
+["external:37017", "external:37018", "external:37019"]
 ```
