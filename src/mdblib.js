@@ -1,15 +1,16 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.14"
+ *  Version: "0.2.15"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-if (typeof __lib === 'undefined')
-    let __lib = {}
-
-__lib.name = 'mdblib.js';
-__lib.version = '0.2.14';
+if (typeof __lib === 'undefined') {
+    var __lib = {
+        "name": "mdblib.js",
+        "version": "0.2.15"
+    }
+}
 
 /*
  *  Global defaults
@@ -298,9 +299,9 @@ function isAtlasPlatform(type) {
      */
     if (db.hello().msg === 'isdbgrid' && db.adminCommand({ atlasVersion: 1 }).ok === 1)
         return 'serverless'
-    else if (type === 'serverless' && db.hello().msg === 'isdbgrid' && db.adminCommand({ atlasVersion: 1 }).ok === 1)
+    else if (type === 'serverless' && db.hello().msg === 'isdbgrid' && db.adminCommand({ "atlasVersion": 1 }).ok === 1)
         return true
-    else if (db.hello().msg !== 'isdbgrid' && db.adminCommand({ atlasVersion: 1 }).ok === 1)
+    else if (db.hello().msg !== 'isdbgrid' && db.adminCommand({ "atlasVersion": 1 }).ok === 1)
         return 'sharedTier||dedicatedReplicaSet'
     else if (db.hello().msg === 'isdbgrid' && db.serverStatus().atlasVersion === 'undefined')
         return 'dedicatedShardedCluster'
@@ -387,13 +388,13 @@ function $getRandomRegex() {
      *  generate random regex
      */
     let regexes = [
-        '[a-z0-9]',
-        '[a-z]',
-        '[0-9]',
-        // '[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?'
+        /[a-z0-9]/,
+        /[a-z]/,
+        /[0-9]/,
+        /[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/
     ];
 
-    return '/' + regexes[getRandomInt(0, regexes.length)] + '/';
+    return regexes[getRandomInt(0, regexes.length)];
 }
 
 function getRandomNumber(min = 0, max = 1) {
