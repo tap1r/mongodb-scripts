@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.3.6"
+ *  Version: "0.3.7"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,17 +13,13 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-__script = {
-    "name": "fuzzer.js",
-    "version": "0.3.6"
-};
+let __script = { "name": "fuzzer.js", "version": "0.3.7" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
-
 if (typeof __lib === 'undefined') {
     /*
      *  Load helper library mdblib.js
      */
-    __lib = { "name": "mdblib.js" };
+    let __lib = { "name": "mdblib.js" };
     if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
         __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
         __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
@@ -148,7 +144,7 @@ function main() {
     print('\n');
     print('Sampling', sampleSize,
           'document' + ((sampleSize === 1) ? '' : 's'),
-          'with BSON size averaging', avgSize,
+          'each with BSON size averaging', avgSize,
           'byte' + ((avgSize === 1) ? '' : 's')
     );
     let batchSize = (bsonMax * 0.95 / avgSize)|0;
