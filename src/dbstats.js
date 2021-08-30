@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.2.7"
+ *  Version: "0.2.8"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,17 +12,13 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-__script = {
-    "name": "dbstats.js",
-    "version": "0.2.7"
-};
+let __script = { "name": "dbstats.js", "version": "0.2.8" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
-
 if (typeof __lib === 'undefined') {
     /*
      *  Load helper library mdblib.js
      */
-    __lib = { "name": "mdblib.js" };
+    let __lib = { "name": "mdblib.js" };
     if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
         __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
         __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
@@ -59,14 +55,14 @@ if (typeof columnWidth === 'undefined') var columnWidth = 14;
 if (typeof rowHeader === 'undefined') var rowHeader = 40;
 
 if (typeof readPref === 'undefined') var readPref = 'primaryPreferred';
-// var readPref = readPref ?? 'primaryPreferred';
 
 function main() {
     /*
      *  main
      */
     db.getMongo().setReadPref(readPref);
-    getStats();
+    let stats = getStats();
+    printDbPath(stats);
 }
 
 function getStats() {
@@ -104,7 +100,8 @@ function getStats() {
         dbPath.indexFree += database.indexFree;
         dbPath.blocksFree += database.blocksFree;
     });
-    printDbPath(dbPath);
+
+    return dbPath;
 }
 
 function formatUnit(metric) {
