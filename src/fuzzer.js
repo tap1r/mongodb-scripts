@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.3.8"
+ *  Version: "0.3.9"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-let __script = { "name": "fuzzer.js", "version": "0.3.8" };
+let __script = { "name": "fuzzer.js", "version": "0.3.9" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -96,13 +96,15 @@ let indexes = [ // index keys
     fCV(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
 let indexOptions = { // createIndexes options
+    "sparse": true,
     "collation": collation
 };
-let specialIndexes = [ // index keys unsupported by collations 
+let specialIndexes = [ // index types unsupported by collations 
     { "location.coordinates": "2d" },
     { "quote.txt": "text" }
 ];
 let specialIndexOptions = { // exceptional index options
+    "sparse": true,
     "collation": { "locale": "simple" },
     "default_language": idioma
 };
@@ -313,13 +315,29 @@ function genDocument() {
      */
     switch (fuzzer.distribution) {
         case 'uniform':
-            var dateOffset = rand() * (fuzzer.range + fuzzer.offset) * 86400;
+            var secondsOffset = +(getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
             break;
+        case 'normal': // genNormal(mu, sigma)
+            var secondsOffset = +(genNormal(fuzzer.offset + fuzzer.range/2, fuzzer.range/2) * 86400)|0;
+            break;
+        case 'bimodal': // not implemented yet
+            // var secondsOffset = +(getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
+            // break;
+        case 'pareto': // not implemented yet
+            // genRandomInclusivePareto(min, alpha = 1.161) {
+            // var secondsOffset = +(genRandomInclusivePareto(fuzzer.offset + fuzzer.range) * 86400)|0;
+            // break;
+        case 'exponential': // not implemented yet
+            // getRandomExp()
+            // var secondsOffset = +(getRandomExp(fuzzer.offset, fuzzer.offset + fuzzer.range, 128) * 86400)|0;
+            // break;
         default:
-            print('\n');
-            print('Unsupported distribution type:', fuzzer.distribution);
-            print('Defaulting to "uniform"');
-            var dateOffset = rand() * (fuzzer.range + fuzzer.offset) * 86400;
+            print('\n',
+                  'Unsupported distribution type:',
+                  fuzzer.distribution,
+                  'Defaulting to "uniform"'
+            );
+            var secondsOffset = +(getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
     }
 
     switch (fuzzer._id) {
@@ -328,16 +346,16 @@ function genDocument() {
             break;
         default: // the 'ts' option
             var oid = new ObjectId(
-                Math.floor(timestamp + dateOffset).toString(16) +
+                Math.floor(timestamp + secondsOffset).toString(16) +
                 genRandomHex(16)
                 // employ native mongosh method
             );
     }
 
-    let date = new Date(now + dateOffset * 1000);
+    let date = new Date(now + (secondsOffset * 1000));
     let ts = (typeof process !== 'undefined') // MONGOSH-930
-        ? new Timestamp({ "t": timestamp + dateOffset, "i": 0 })
-        : new Timestamp(timestamp + dateOffset, 0);
+        ? new Timestamp({ "t": timestamp + secondsOffset, "i": 0 })
+        : new Timestamp(timestamp + secondsOffset, 0);
     fuzzer.schemas = new Array();
     fuzzer.schemas.push({
         "_id": oid,
