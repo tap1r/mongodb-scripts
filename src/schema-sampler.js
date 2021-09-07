@@ -1,16 +1,13 @@
 /*
  *  Name: "schema-sampler.js"
- *  Version: "0.2.0"
+ *  Version: "0.2.1"
  *  Description: generate schema with simulated mongosqld sampling commands
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "[mongo|mongosh] [connection options] --quiet schema-sampler.js > schema.json"
 
-__script = {
-    "name": "schema-sampler.js",
-    "version": "0.2.0"
-};
+let __script = { "name": "schema-sampler.js", "version": "0.2.1" };
 print('\n', 'Running script', __script.name, 'v' + __script.version);
 
 let userOptions = {
@@ -40,8 +37,7 @@ function getSchema(sampleSize) {
      */
     let pipeline = [{ "$sample": { "size": sampleSize } }];
     // let comment = 'Executed by ' + __script.name + ' v' + __script.version;
-    let listDbOpts = [
-        {
+    let listDbOpts = [{
             "listDatabases": 1,
             "filter": { "name": /^(?!(admin|config|local)$)/ },
             "nameOnly": true,
@@ -50,16 +46,14 @@ function getSchema(sampleSize) {
         // comment
     ];
     // db.runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true });
-    let listColOpts = [
-        {
+    let listColOpts = [{
             "type": "collection",
             "name": { "$not": { "$regex": /^system\./ } }
         },
         true,
         true
     ];
-    let listViewOpts = [
-        {
+    let listViewOpts = [{
             "type": "view",
             "name": { "$not": { "$regex": /^system\./ } }
         },
