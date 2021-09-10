@@ -45,7 +45,14 @@ let dbName = 'database', collName = 'collection';
 let compressor = 'best'; // ["none"|"snappy"|"zlib"|"zstd"|"default"|"best"]
 let idioma = 'en';
 let collation = { // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
-    "locale": "simple"
+    "locale": "simple",
+    // caseLevel: <boolean>,
+    // caseFirst: <string>,
+    // strength: <int>,
+    // numericOrdering: <boolean>,
+    // alternate: <string>,
+    // maxVariable: <string>,
+    // backwards: <boolean>
 };
 let dropPref = false; // drop collection prior to generating data
 let buildIndexes = true; // build index preferences
@@ -96,15 +103,25 @@ let indexes = [ // index keys
     fCV(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
 let indexOptions = { // createIndexes options
-    "sparse": true,
+    "background": fCV(4.0) ? true : false,
+    // "unique": false,
+    // "partialFilterExpression": { "$exists": true },
+    // "sparse": true,
+    // "expireAfterSeconds": expireAfterSeconds,
+    // "hidden": hidden,
     "collation": collation
 };
-let specialIndexes = [ // index types unsupported by collations 
+let specialIndexes = [ // index types unsupported by collations
     { "location.coordinates": "2d" },
     { "quote.txt": "text" }
 ];
 let specialIndexOptions = { // exceptional index options
-    "sparse": true,
+    "background": fCV(4.0) ? true : false,
+    // "unique": false,
+    // "partialFilterExpression": { "$exists": true },
+    // "sparse": true,
+    // "expireAfterSeconds": expireAfterSeconds,
+    // "hidden": hidden,
     "collation": { "locale": "simple" },
     "default_language": idioma
 };
@@ -168,17 +185,13 @@ function main() {
     );
 
     // generate and bulk write the documents
-    print('\n');
-    print('Specified date range time series:');
-    print('\tfrom:\t\t',
-          new Date(now + fuzzer.offset * 86400000).toISOString()
-    );
-    print('\tto:\t\t',
-          new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()
-    );
-    print('\tdistribution:\t', fuzzer.distribution);
-    print('\n');
-    print('Generating', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'),
+    print('\nSpecified date range time series:',
+          '\n\tfrom:\t\t',
+          new Date(now + fuzzer.offset * 86400000).toISOString(),
+          '\n\tto:\t\t',
+          new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString(),
+          '\n\tdistribution:\t', fuzzer.distribution,
+          '\n\nGenerating', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'),
           'in', totalBatches, 'batch' + ((totalBatches === 1) ? '' : 'es') + ':'
     );
     for (let i = 0; i < totalBatches; ++i) {
@@ -200,8 +213,7 @@ function main() {
                   'in batch', 1 + i, 'of', totalBatches
             );
         } catch (e) {
-            print('\n');
-            print('Generation failed:', e);
+            print('Generation failed with:', e);
         }
     }
 
@@ -244,7 +256,7 @@ function main() {
                 else if (typeof idxResult.msg !== 'undefined')
                     return 'Indexing build failed with message: ' + idxResult.msg
                 else
-                    return 'Indexing completed with results:\n\t' + idxResult
+                    return 'Indexing completed with results:\t' + idxResult
             }
 
             print(idxMsg());
@@ -290,7 +302,7 @@ function main() {
                 else if (typeof sidxResult.msg !== 'undefined')
                     return 'Special indexing build failed with message: ' + sidxResult.msg
                 else
-                    return 'Special indexing completed with results:\n\t' + sidxResult
+                    return 'Special indexing completed with results:\t' + sidxResult
             }
 
             print(sidxMsg());
@@ -302,9 +314,7 @@ function main() {
     }
 
     // end
-    print('\n');
-    print('Fuzzing completed!')
-    print('\n\n')
+    print('\nFuzzing completed!\n\n');
 
     return;
 }
@@ -332,10 +342,9 @@ function genDocument() {
             // var secondsOffset = +(getRandomExp(fuzzer.offset, fuzzer.offset + fuzzer.range, 128) * 86400)|0;
             // break;
         default:
-            print('\n',
-                  'Unsupported distribution type:',
+            print('\nUnsupported distribution type:',
                   fuzzer.distribution,
-                  'Defaulting to "uniform"'
+                  '\nDefaulting to "uniform"'
             );
             var secondsOffset = +(getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
     }
@@ -598,15 +607,13 @@ function dropNS(dropPref = false, dbName = false, collName = false,
 
     print('\n');
     if (dropPref && !!dbName && !!collName) {
-        print('Dropping namespace "' + dbName + '.' + collName + '"');
+        print('Dropping namespace "' + dbName + '.' + collName + '"\n');
         db.getSiblingDB(dbName).getCollection(collName).drop();
-        print('\n');
         createNS(dbName, collName, msg, compressor,
                  expireAfterSeconds, collation, tsOptions
         );
     } else if (!dropPref && !db.getSiblingDB(dbName).getCollection(collName).exists()) {
-        print('Nominated namespace "' + dbName + '.' + collName + '" does not exist');
-        print('\n');
+        print('Nominated namespace "' + dbName + '.' + collName + '" does not exist\n');
         createNS(dbName, collName, msg, compressor,
                  expireAfterSeconds, collation, tsOptions
         );
@@ -622,9 +629,10 @@ function createNS(dbName = false, collName = false, msg = '',
                   tsOptions = { "timeField": "timestamp",
                                 "metaField": "data",
                                 "granularity": "hours" }) {
-    print('Creating namespace "' + dbName + '.' + collName + '"');
-    print('\twith block compression:\t"' + compressor + '"', msg);
-    print('\tand collation locale:\t"' + collation.locale + '"');
+    print('Creating namespace "' + dbName + '.' + collName + '"',
+          '\n\twith block compression:\t"' + compressor + '"', msg,
+          '\n\tand collation locale:\t"' + collation.locale + '"'
+    );
     let options = {
         "storageEngine": {
             "wiredTiger": {
@@ -645,8 +653,7 @@ function createNS(dbName = false, collName = false, msg = '',
     try {
         db.getSiblingDB(dbName).createCollection(collName, options);
     } catch (e) {
-        print('\n');
-        print('Namespace creation failed:', e);
+        print('\nNamespace creation failed:', e);
     }
 
     return;
