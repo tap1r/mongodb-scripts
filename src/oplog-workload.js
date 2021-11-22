@@ -1,7 +1,7 @@
 /*
  *  Name: "oplog-workload.js"
  *  Version: "0.1.0"
- *  Description: oplog workload analysis script
+ *  Description: oplog "workload" analysis script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
@@ -63,7 +63,7 @@ if (typeof termWidth === 'undefined') var termWidth = 60;
 if (typeof columnWidth === 'undefined') var columnWidth = 25;
 if (typeof rowHeader === 'undefined') var rowHeader = 34;
 
-if (typeof readPref === 'undefined') var readPref = 'primaryPreferred';
+if (typeof readPref === 'undefined') var readPref = 'secondaryPreferred';
 
 function main() {
     /*
@@ -110,6 +110,7 @@ function main() {
                 "__documentCount": { "$sum": 1 }
             }
         });
+        print(pipeline);
         oplog.aggregate(pipeline, options).forEach(churnInfo => {
             size = churnInfo.__bsonDataSize;
             docs = churnInfo.__documentCount;
@@ -124,11 +125,7 @@ function main() {
     }
 
     // Get host info
-    // let instance = db.hello().me;
     let host = db.hostInfo().system.hostname;
-    // secondary: true,
-    // primary: 'localhost:27018',
-    // me: 'localhost:27017',
     let dbPath = db.serverCmdLineOpts().parsed.storage.dbPath;
     // Get oplog stats
     let stats = oplog.stats();
