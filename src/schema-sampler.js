@@ -1,13 +1,13 @@
 /*
  *  Name: "schema-sampler.js"
- *  Version: "0.2.1"
+ *  Version: "0.2.2"
  *  Description: generate schema with simulated mongosqld sampling commands
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "[mongo|mongosh] [connection options] --quiet schema-sampler.js > schema.json"
 
-let __script = { "name": "schema-sampler.js", "version": "0.2.1" };
+let __script = { "name": "schema-sampler.js", "version": "0.2.2" };
 print('\n', 'Running script', __script.name, 'v' + __script.version);
 
 let userOptions = {
@@ -17,7 +17,7 @@ let userOptions = {
     sampleSize: 1, // defaults to 1 for performance reasons, increase for sparse data
     // dbs: ['namespace'], // restrict list to known namespaces
     readPreference: 'secondaryPreferred'
-}
+};
 
 function main(userOptions) {
     /*
@@ -64,32 +64,32 @@ function getSchema(sampleSize) {
     return dbs.map(dbName => ({
             "db": dbName,
             "collections": db.getSiblingDB(dbName)
-                            .getCollectionInfos(...listColOpts)
-                            .map(collection => ({
+                             .getCollectionInfos(...listColOpts)
+                             .map(collection => ({
                                 "name": collection.name,
                                 "documents": db.getSiblingDB(dbName)
-                                                .getCollection(collection.name)
-                                                .stats().count,
+                                               .getCollection(collection.name)
+                                               .stats().count,
                                 "indexes": db.getSiblingDB(dbName)
-                                                .getCollection(collection.name)
-                                                .getIndexes(),
+                                             .getCollection(collection.name)
+                                             .getIndexes(),
                                 "$sample": db.getSiblingDB(dbName)
-                                                .getCollection(collection.name)
-                                                .aggregate(pipeline)
-                                                .toArray()
-                            })
+                                             .getCollection(collection.name)
+                                             .aggregate(pipeline)
+                                             .toArray()
+                             })
                         ),
             "views": db.getSiblingDB(dbName)
-                        .getCollectionInfos(...listViewOpts)
-                        .map(view => ({
+                       .getCollectionInfos(...listViewOpts)
+                       .map(view => ({
                             "name": view.name,
                             "options": view.options,
                             "$sample": db.getSiblingDB(dbName)
-                                        .getCollection(view.name)
-                                        .aggregate(pipeline)
-                                        .toArray()
+                                         .getCollection(view.name)
+                                         .aggregate(pipeline)
+                                         .toArray()
                             })
-                        )
+                       )
         })
     );
 }
