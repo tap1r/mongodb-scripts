@@ -81,7 +81,7 @@ let fuzzer = { // preferences
     "schemas": [],
     "ratios": [7, 2, 1]
 };
-let wc = (isReplSet()) ? { "w": "majority" } : { "w": 1 }; // write concern
+let wc = (isReplSet()) ? { "w": "majority", "j": true } : { "w": 1, "j": true }; // write concern
 var sampleSize = 9, docSize = 0;
 fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
 sampleSize *= sampleSize;
@@ -342,8 +342,7 @@ function genDocument() {
             // var secondsOffset = +(getRandomExp(fuzzer.offset, fuzzer.offset + fuzzer.range, 128) * 86400)|0;
             // break;
         default:
-            print('\nUnsupported distribution type:',
-                  fuzzer.distribution,
+            print('\nUnsupported distribution type:', fuzzer.distribution,
                   '\nDefaulting to "uniform"'
             );
             var secondsOffset = +(getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
@@ -405,8 +404,7 @@ function genDocument() {
         "decimal128": $NumberDecimal(
                         getRandomNumber(
                             -(Math.pow(10, 127) - 1),
-                            Math.pow(10, 127) -1)
-                      ),
+                            Math.pow(10, 127) -1)),
         "regex": $getRandomRegex(),
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
