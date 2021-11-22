@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.15"
+ *  Version: "0.2.16"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') {
     var __lib = {
         "name": "mdblib.js",
-        "version": "0.2.15"
+        "version": "0.2.16"
     }
 }
 
@@ -508,6 +508,30 @@ function genArrayElements(len) {
     let array = [];
     for (let i = 0; i < len; ++i) {
         array.push(genRandomString(getRandomIntInclusive(6, 24)));
+    }
+
+    return array;
+}
+
+function genArrayStrings(len) {
+    /*
+     *  generate array of random strings
+     */
+    let array = [];
+    for (let i = 0; i < len; ++i) {
+        array.push(genRandomString(getRandomIntInclusive(6, 24)));
+    }
+
+    return array;
+}
+
+function genArrayInts(len) {
+    /*
+     *  generate array of random integers
+     */
+    let array = [];
+    for (let i = 0; i < len; ++i) {
+        array.push(getRandomIntInclusive(1, 1000));
     }
 
     return array;
