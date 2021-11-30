@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.2.8"
+ *  Version: "0.2.9"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,13 +12,13 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-let __script = { "name": "dbstats.js", "version": "0.2.8" };
+let __script = { "name": "dbstats.js", "version": "0.2.9" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
      *  Load helper library mdblib.js
      */
-    let __lib = { "name": "mdblib.js" };
+    let __lib = { "name": "mdblib.js", "paths": null, "path": null };
     if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
         __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
         __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
