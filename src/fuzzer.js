@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.3.9"
+ *  Version: "0.3.10"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,13 +13,13 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-let __script = { "name": "fuzzer.js", "version": "0.3.9" };
+let __script = { "name": "fuzzer.js", "version": "0.3.10" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
      *  Load helper library mdblib.js
      */
-    let __lib = { "name": "mdblib.js" };
+    let __lib = { "name": "mdblib.js", "paths": null, "path": null };
     if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
         __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
         __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
@@ -387,6 +387,7 @@ function genDocument() {
         },
         "array": genArrayElements(getRandomIntInclusive(0, 10)),
         "boolean": bool(),
+        "code": function(){},
         "date": date,
         "timestamp": ts,
         "null": null,
