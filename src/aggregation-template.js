@@ -12,12 +12,13 @@ var dbName = 'database', collName = 'collection',
         // "collation": { "locale": "simple" },
         // "hint": "_id_",
         "comment": "My aggregation query",
-        "writeConcern": { w: "majority", /* j: true, wtimeout: 10000 */ },
+        "writeConcern": { "w": "majority", /* j: true, wtimeout: 10000 */ },
         // "let": {} // Added in MongoDB v5.0
     },
     pipeline = [
-        // aggregation stage operators
-        {}
+        {
+            // aggregation stage operators
+        }
     ];
 
 db.getSiblingDB(dbName).getCollection(collName).aggregate(pipeline, options).forEach(printjson);
