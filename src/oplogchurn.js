@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.2.10"
+ *  Version: "0.2.11"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,17 +12,13 @@
  *  Save libs to the $MDBLIB or valid search path
  */
 
-__script = {
-    "name": "oplogchurn.js",
-    "version": "0.2.10"
-};
+let __script = { "name": "oplogchurn.js", "version": "0.2.11" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
-
 if (typeof __lib === 'undefined') {
     /*
      *  Load helper library mdblib.js
      */
-    __lib = { "name": "mdblib.js" };
+    let __lib = { "name": "mdblib.js", "paths": null, "path": null };
     if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
         __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
         __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
