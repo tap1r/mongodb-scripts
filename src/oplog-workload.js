@@ -1,6 +1,6 @@
 /*
  *  Name: "oplog-workload.js"
- *  Version: "0.1.0"
+ *  Version: "0.1.1"
  *  Description: oplog "workload" analysis script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -14,7 +14,7 @@
 
 __script = {
     "name": "oplog-workload.js",
-    "version": "0.1.0"
+    "version": "0.1.q"
 };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 
@@ -22,7 +22,7 @@ if (typeof __lib === 'undefined') {
     /*
      *  Load helper library mdblib.js
      */
-    __lib = { "name": "mdblib.js" };
+    let __lib = { "name": "mdblib.js", "paths": null, "path": null };
     if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
         __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
         __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
