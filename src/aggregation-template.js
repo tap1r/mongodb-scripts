@@ -2,7 +2,7 @@
  *  Aggregation template with extended options
  */
 var dbName = 'database', collName = 'collection',
-    // explainPlan = 'executionStats', // ["queryPlanner"|"executionStats"|"allPlansExecution"]
+    // explainPlan = 'executionStats', // ['queryPlanner'|'executionStats'|'allPlansExecution']
     options = {
         "allowDiskUse": true,
         "cursor": { "batchSize": 0 },
