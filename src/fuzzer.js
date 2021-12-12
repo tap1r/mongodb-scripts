@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.3.10"
+ *  Version: "0.3.11"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-let __script = { "name": "fuzzer.js", "version": "0.3.10" };
+let __script = { "name": "fuzzer.js", "version": "0.3.11" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -387,7 +387,8 @@ function genDocument() {
         },
         "array": genArrayElements(getRandomIntInclusive(0, 10)),
         "boolean": bool(),
-        "code": function(){},
+        "jsCode": Code(() => {}),
+        "jsCodeWScope": Code(() => {}, { "scope": true }),
         "date": date,
         "timestamp": ts,
         "null": null,
