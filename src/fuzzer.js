@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.3.11"
+ *  Version: "0.3.12"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-let __script = { "name": "fuzzer.js", "version": "0.3.11" };
+let __script = { "name": "fuzzer.js", "version": "0.3.12" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -132,9 +132,9 @@ let commitQuorum = (wc.w == 0) ? 1 : wc.w;
  */
 
 if (typeof readPref === 'undefined') var readPref = 'primary';
-var batch = 0, totalBatches = 1, residual = 0, doc = {};
-var now = new Date().getTime();
-var timestamp = (now/1000.0)|0;
+var batch = 0, totalBatches = 1, residual = 0,
+    now = new Date().getTime(),
+    timestamp = (now/1000.0)|0;
 
 function main() {
     /*
@@ -200,10 +200,7 @@ function main() {
         }
 
         var bulk = db.getSiblingDB(dbName).getCollection(collName).initializeUnorderedBulkOp();
-        for (let batch = 0; batch < batchSize; ++batch) {
-            doc = genDocument();
-            bulk.insert(doc);
-        }
+        for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument());
 
         try {
             var result = bulk.execute(wc);
@@ -388,7 +385,7 @@ function genDocument() {
         "array": genArrayElements(getRandomIntInclusive(0, 10)),
         "boolean": bool(),
         "jsCode": Code(() => {}),
-        "jsCodeWScope": Code(() => {}, { "scope": true }),
+        "jsCodeWScope": Code(() => {}, {}),
         "date": date,
         "timestamp": ts,
         "null": null,
