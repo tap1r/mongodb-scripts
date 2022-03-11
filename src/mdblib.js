@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.16"
+ *  Version: "0.2.17"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') {
     var __lib = {
         "name": "mdblib.js",
-        "version": "0.2.16"
+        "version": "0.2.17"
     }
 }
 
@@ -265,9 +265,10 @@ function slaveOk(readPref = 'primaryPreferred') {
     /*
      *  Backward compatability with rs.slaveOk() and MONGOSH-910
      */
-    if (typeof rs.prototype.slaveOk === 'undefined' && typeof rs.prototype.secondaryOk === 'undefined')
+    if (typeof rs.slaveOk === 'undefined' && typeof rs.secondaryOk !== 'undefined')
         return db.getMongo().setReadPref(readPref)
-    else if (shellVer() >= 4.4)
+    // else if (shellVer() >= 4.4)
+    else if (typeof rs.secondaryOk === 'function')
         return rs.secondaryOk()
     else
         return rs.slaveOk()
