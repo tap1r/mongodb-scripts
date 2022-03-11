@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.2.11"
+ *  Version: "0.2.12"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,7 @@
  *  Save libs to the $MDBLIB or valid search path
  */
 
-let __script = { "name": "oplogchurn.js", "version": "0.2.11" };
+let __script = { "name": "oplogchurn.js", "version": "0.2.12" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -59,7 +59,8 @@ if (typeof termWidth === 'undefined') var termWidth = 60;
 if (typeof columnWidth === 'undefined') var columnWidth = 25;
 if (typeof rowHeader === 'undefined') var rowHeader = 34;
 
-if (typeof readPref === 'undefined') var readPref = 'primaryPreferred';
+// connection preferences
+if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === false) ? 'primaryPreferred': 'secondaryPreferred';
 
 function main() {
     /*
@@ -94,7 +95,8 @@ function main() {
     };
 
     // Measure interval statistics
-    db.getMongo().setReadPref(readPref);
+    // db.getMongo().setReadPref(readPref);
+    slaveOk(readPref);
     let oplog = db.getSiblingDB('local').getCollection('oplog.rs');
 
     if (serverVer(4.4)) {
@@ -120,11 +122,7 @@ function main() {
     }
 
     // Get host info
-    // let instance = db.hello().me;
     let host = db.hostInfo().system.hostname;
-    // secondary: true,
-    // primary: 'localhost:27018',
-    // me: 'localhost:27017',
     let dbPath = db.serverCmdLineOpts().parsed.storage.dbPath;
     // Get oplog stats
     let stats = oplog.stats();
