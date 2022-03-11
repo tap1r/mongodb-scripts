@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.2.9"
+ *  Version: "0.2.10"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-let __script = { "name": "dbstats.js", "version": "0.2.9" };
+let __script = { "name": "dbstats.js", "version": "0.2.10" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -54,13 +54,15 @@ if (typeof termWidth === 'undefined') var termWidth = 124;
 if (typeof columnWidth === 'undefined') var columnWidth = 14;
 if (typeof rowHeader === 'undefined') var rowHeader = 40;
 
-if (typeof readPref === 'undefined') var readPref = 'primaryPreferred';
+// connection preferences
+if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === false) ? 'primaryPreferred': 'secondaryPreferred';
 
 function main() {
     /*
      *  main
      */
-    db.getMongo().setReadPref(readPref);
+    slaveOk(readPref);
+    // db.getMongo().setReadPref(readPref);
     let stats = getStats();
     printDbPath(stats);
 }
