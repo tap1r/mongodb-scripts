@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.2.10"
+ *  Version: "0.2.11"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-let __script = { "name": "dbstats.js", "version": "0.2.10" };
+let __script = { "name": "dbstats.js", "version": "0.2.11" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -55,7 +55,7 @@ if (typeof columnWidth === 'undefined') var columnWidth = 14;
 if (typeof rowHeader === 'undefined') var rowHeader = 40;
 
 // connection preferences
-if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === false) ? 'primaryPreferred': 'secondaryPreferred';
+if (typeof readPref === 'undefined') var readPref = (hello().secondary === false) ? 'primaryPreferred': 'secondaryPreferred';
 
 function main() {
     /*
