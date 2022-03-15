@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.3.12"
+ *  Version: "0.3.13"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-let __script = { "name": "fuzzer.js", "version": "0.3.12" };
+let __script = { "name": "fuzzer.js", "version": "0.3.13" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -180,9 +180,7 @@ function main() {
     }
 
     // recreate the namespace
-    dropNS(dropPref, dbName, collName,
-           compressor, collation, tsOptions
-    );
+    dropNS(dropPref, dbName, collName, compressor, collation, tsOptions);
 
     // generate and bulk write the documents
     print('\nSpecified date range time series:',
@@ -384,8 +382,8 @@ function genDocument() {
         },
         "array": genArrayElements(getRandomIntInclusive(0, 10)),
         "boolean": bool(),
-        "jsCode": Code(() => {}),
-        "jsCodeWScope": Code(() => {}, {}),
+        "code": Code('() => {}'),
+        "codeScoped": Code('() => {}', {}),
         "date": date,
         "timestamp": ts,
         "null": null,
