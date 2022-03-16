@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.17"
+ *  Version: "0.2.18"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') {
     var __lib = {
         "name": "mdblib.js",
-        "version": "0.2.17"
+        "version": "0.2.18"
     }
 }
 
@@ -30,7 +30,7 @@ const idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', '
  *  https://github.com/tc39/proposal-object-values-entries
  */
 
-if (String.prototype.padStart === 'undefined') {
+if (typeof String.prototype.padStart === 'undefined') {
     /*
      *  Add to older legacy shells
      */
@@ -49,7 +49,7 @@ if (String.prototype.padStart === 'undefined') {
     }
 }
 
-if (String.prototype.padEnd === 'undefined') {
+if (typeof String.prototype.padEnd === 'undefined') {
     /*
      *  Add to older legacy shells
      */
@@ -68,7 +68,7 @@ if (String.prototype.padEnd === 'undefined') {
     }
 }
 
-if (Object.prototype.entries === 'undefined') {
+if (typeof Object.prototype.entries === 'undefined') {
     /*
      *  Add to older legacy shells
      */
@@ -76,13 +76,13 @@ if (Object.prototype.entries === 'undefined') {
         var ownProps = Object.keys(obj),
             i = ownProps.length,
             resArray = new Array(i); // preallocate the Array
-        while (--i)
+        while (i--)
             resArray[i] = [ownProps[i], obj[ownProps[i]]];
 
         return resArray;
-    };
+    }
 }
-  
+
 /*
  *  Helper classes
  */
@@ -123,7 +123,7 @@ class AutoFactor {
         this.ZB = this.metric('zettabytes', 'ZB', 'Z', 7, 2, 1);
         this.YB = this.metric('yottabytes', 'YB', 'Y', 8, 2, 1);
 
-        if (typeof(input) === String) {
+        if (typeof input === 'string') {
             switch (input.toUpperCase()) {
                 case  'B': return this.B;
                 case 'KB': return this.KB;
@@ -158,23 +158,10 @@ class MetaStats {
      *  Storage statistics metadata class
      */
     constructor(name = '', dataSize = 0, storageSize = 0, objects = 0, blocksFree = 0, compressor = '', indexSize = 0, indexFree = 0) {
-        /*
-         *  detect shell type
-         */
-        if (typeof process !== 'undefined') {
-            // workaround mongosh async constructor limits
-            // this.instance = (async() => db.hello().me)();
-            this.hostname = (async() => db.hostInfo().system.hostname)();
-            this.proc = (async() => db.serverStatus().process)();
-            this.dbPath = ((async() => db.serverStatus().process === 'mongod')()) ? (async() => db.serverCmdLineOpts().parsed.storage.dbPath)() : null;
-        } else {
-            // legacy shell sync methods
-            // this.instance = hello().me;
-            this.hostname = db.hostInfo().system.hostname;
-            this.proc = db.serverStatus().process;
-            this.dbPath = (db.serverStatus().process === 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : null;
-        }
-
+        this.instance = null;
+        this.hostname = null;
+        this.proc = null;
+        this.dbPath = null;
         this.name = name;
         this.dataSize = dataSize;
         this.storageSize = storageSize;
@@ -183,6 +170,13 @@ class MetaStats {
         this.indexSize = indexSize;
         this.indexFree = indexFree;
         this.compressor = compressor;
+    }
+
+    init() {
+        this.instance = hello().me;
+        this.hostname = db.hostInfo().system.hostname;
+        this.proc = db.serverStatus().process;
+        this.dbPath = (db.serverStatus().process === 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : null;
     }
 
     compression() {
