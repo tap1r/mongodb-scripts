@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.2.11"
+ *  Version: "0.2.12"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-let __script = { "name": "dbstats.js", "version": "0.2.11" };
+let __script = { "name": "dbstats.js", "version": "0.2.12" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -72,9 +72,11 @@ function getStats() {
      *  Gather DB stats (and print)
      */
     let dbPath = new MetaStats();
+    dbPath.init();
     db.getMongo().getDBNames().map(dbName => {
         let dbStats = db.getSiblingDB(dbName).stats();
         let database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, '', dbStats.indexSize);
+        database.init();
         let collections = db.getSiblingDB(dbName).getCollectionInfos({ "type": "collection" }, true);
         printDbHeader(database.name);
         printCollHeader(collections.length);
@@ -83,6 +85,7 @@ function getStats() {
             let collection = new MetaStats(collInfo.name, collStats.size, collStats.wiredTiger['block-manager']['file size in bytes'],
                                            collStats.count, collStats.wiredTiger['block-manager']['file bytes available for reuse'],
                                            collStats.wiredTiger.creationString.match(/block_compressor=[a-z]+/)[0].slice(17));
+            collection.init();
             Object.keys(collStats.indexDetails).map(indexName => {
                 collection.indexSize += collStats.indexDetails[indexName]['block-manager']['file size in bytes'];
                 collection.indexFree += collStats.indexDetails[indexName]['block-manager']['file bytes available for reuse'];
