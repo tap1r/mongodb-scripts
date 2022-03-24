@@ -407,6 +407,7 @@ function genDocument() {
         "uuid": UUID(),
         "md5": MD5(genRandomHex(32)),
         "fle": BinData(6, UUID().base64()),
+        // "column": BinData(7, <int>, {}),
         "random": +getRandomNumber(0, totalDocs).toFixed(4),
         "symbol": genRandomSymbol()
     });
