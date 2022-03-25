@@ -53,7 +53,7 @@ sudo sysctl -w net.inet6.ip6.forwarding=0
 Start with a standard deployment with TLS enabled (required for split-horizon support), here using the _`mongodb.pk8`_ certificate (see [sample certificates](SSL%20commands.md#generating-common-use-certificates))
 
 ```bash
-mlaunch init --replicaset --nodes=3 --sslMode preferSSL --sslCAFile mongodb.pk8 --sslPEMKeyFile mongodb.pk8 --sslAllowConnectionsWithoutCertificates
+mlaunch init --replicaset --tlsMode preferTLS --tlsCAFile mongodb.pk8 --tlsPEMKeyFile mongodb.pk8 --tlsAllowConnectionsWithoutCertificates
 ```
 
 ### Ensure correct hostname resolution
@@ -62,19 +62,19 @@ Modify _`/etc/hosts`_ if required, using "_`external`_" at the external PAT boun
 
 ### Update the replica set topology
 
-As reported by _`db.isMaster()`_
+As reported by _`db.hello()`_
 
-Connect without SSL:
+Connect without TLS:
 
 ```bash
-mongo mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=replset
+mongo mongodb://localhost:27017/?replicaSet=replset&readPreference=primary
 ```
 
 Add the split-horizon topology definitions
 
 ```javascript
 var config = rs.conf();
-config.version += 1;
+config.version++;
 config.members[0].horizons = { "external": "external:37017" };
 config.members[1].horizons = { "external": "external:37018" };
 config.members[2].horizons = { "external": "external:37019" };
@@ -86,7 +86,7 @@ rs.reconfig(config);
 Connect to the native port:
 
 ```bash
-mongo "mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=replset" --sslCAFile mongodb.pk8 --ssl --eval 'db.isMaster()["hosts"]'
+mongo "mongodb://localhost:27017/?replicaSet=replset" --tlsCAFile mongodb.pk8 --tls --eval 'db.hello().hosts'
 ```
 
 The SDAM topology should appear as:
@@ -98,7 +98,7 @@ The SDAM topology should appear as:
 Connect to the translated port:
 
 ```bash
-mongo "mongodb://external:37017,external:37018,external:37019/?replicaSet=replset" --sslCAFile mongodb.pk8 --ssl --eval 'db.isMaster()["hosts"]'
+mongo "mongodb://external:37017,external:37018,external:37019/?replicaSet=replset" --tlsCAFile mongodb.pk8 --tls --eval 'db.hello().hosts'
 ```
 
 The SDAM topology should appear as:
