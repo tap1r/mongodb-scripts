@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.18"
+ *  Version: "0.2.19"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') {
     var __lib = {
         "name": "mdblib.js",
-        "version": "0.2.18"
+        "version": "0.2.19"
     }
 }
 
@@ -140,16 +140,16 @@ class AutoFactor {
             let scale = (Math.log2(input) / 10)|0;
             return (input / Math.pow(1024, scale)).toFixed(2) + [this.B, this.KB, this.MB, this.GB, this.TB, this.PB, this.EB, this.ZB, this.YB][scale];
         } else {
-            return print('Invalid parameter type');
+            return print('Invalid parameter type')
         }
     }
 
     metric(name, unit, symbol, factor, precision, pctPoint) {
-        return { "name": name, "unit": unit, "symbol": symbol, "factor": Math.pow(1024, factor), "precision": precision, "pctPoint": pctPoint };
+        return { "name": name, "unit": unit, "symbol": symbol, "factor": Math.pow(1024, factor), "precision": precision, "pctPoint": pctPoint }
     }
 
     static formatted(number) {
-        return (number / this.factor).toFixed(this.precision) + this.unit;
+        return (number / this.factor).toFixed(this.precision) + this.unit
     }
 }
 
@@ -161,6 +161,7 @@ class MetaStats {
         this.instance = null;
         this.hostname = null;
         this.proc = null;
+        this.dbPath = null;
         this.dbPath = null;
         this.name = name;
         this.dataSize = dataSize;
@@ -177,14 +178,15 @@ class MetaStats {
         this.hostname = db.hostInfo().system.hostname;
         this.proc = db.serverStatus().process;
         this.dbPath = (db.serverStatus().process === 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : null;
+        this.shards = (db.serverStatus().process === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
     }
 
     compression() {
-        return this.dataSize / (this.storageSize - this.blocksFree);
+        return this.dataSize / (this.storageSize - this.blocksFree)
     }
 
     totalSize() {
-        return this.storageSize + this.indexSize;
+        return this.storageSize + this.indexSize
     }
 }
 
@@ -216,30 +218,22 @@ function serverVer(ver) {
      *  Evaluate server version
      */
     let svrVer = () => +db.version().match(/^[0-9]+\.[0-9]+/);
-    if (ver !== 'undefined' && ver <= svrVer())
-        return true
-    else if (ver !== 'undefined' && ver > svrVer())
-        return false
-    else
-        return svrVer()
+    return (ver !== 'undefined' && ver <= svrVer()) ? true
+         : (ver !== 'undefined' && ver > svrVer()) ? false
+         : svrVer();
 }
 
 function fCV(ver) {
     /*
      *  Evaluate feature compatibility version
      */
-    let fCV = () => {
-        if (db.serverStatus().process === 'mongod')
-            return +db.adminCommand({ "getParameter": 1, "featureCompatibilityVersion": 1 }).featureCompatibilityVersion.version
-        else
-            return serverVer(ver)
+    let featureVer = () => {
+        return (db.serverStatus().process === 'mongod') ? +db.adminCommand({ "getParameter": 1, "featureCompatibilityVersion": 1 }).featureCompatibilityVersion.version
+             : serverVer(ver)
     }
-    if (ver !== 'undefined' && ver <= fCV())
-        return true
-    else if (ver !== 'undefined' && ver > fCV())
-        return false
-    else
-        return fCV()
+    return (ver !== 'undefined' && ver <= featureVer()) ? true
+         : (ver !== 'undefined' && ver > featureVer()) ? false
+         : featureVer();
 }
 
 function shellVer(ver) {
@@ -247,61 +241,44 @@ function shellVer(ver) {
      *  Evaluate shell version
      */
     let shell = () => +version().match(/^[0-9]+\.[0-9]+/);
-    if (ver !== 'undefined' && ver <= shell())
-        return true
-    else if (ver !== 'undefined' && ver > shell())
-        return false
-    else
-        return shell()
+    return (ver !== 'undefined' && ver <= shell()) ? true
+         : (ver !== 'undefined' && ver > shell()) ? false
+         : shell();
 }
 
 function slaveOk(readPref = 'primaryPreferred') {
     /*
      *  Backward compatability with rs.slaveOk() and MONGOSH-910
      */
-    if (typeof rs.slaveOk === 'undefined' && typeof rs.secondaryOk !== 'undefined')
-        return db.getMongo().setReadPref(readPref)
+    return (typeof rs.slaveOk === 'undefined' && typeof rs.secondaryOk !== 'undefined') ? db.getMongo().setReadPref(readPref)
     // else if (shellVer() >= 4.4)
-    else if (typeof rs.secondaryOk === 'function')
-        return rs.secondaryOk()
-    else
-        return rs.slaveOk()
+         : (typeof rs.secondaryOk === 'function') ? rs.secondaryOk()
+         : rs.slaveOk()
 }
 
 function isMaster() {
     /*
      *  Backward compatability with db.isMaster()
      */
-    if (typeof db.prototype.hello === 'undefined')
-        return db.isMaster()
-    else
-        return db.hello()
+    return (typeof db.prototype.hello === 'undefined') ? db.isMaster() : db.hello()
 }
 
 function hello() {
     /*
      *  Forward compatability with db.hello()
      */
-    if (typeof db.prototype.hello !== 'function')
-        return db.isMaster()
-    else
-        return db.hello()
+    return (typeof db.prototype.hello !== 'function') ? db.isMaster() : db.hello()
 }
 
 function isAtlasPlatform(type) {
     /*
-     *  Evaluate Atlas deployment platform
+     *  Evaluate Atlas deployment platform type
      */
-    if (db.hello().msg === 'isdbgrid' && db.adminCommand({ atlasVersion: 1 }).ok === 1)
-        return 'serverless'
-    else if (type === 'serverless' && db.hello().msg === 'isdbgrid' && db.adminCommand({ "atlasVersion": 1 }).ok === 1)
-        return true
-    else if (db.hello().msg !== 'isdbgrid' && db.adminCommand({ "atlasVersion": 1 }).ok === 1)
-        return 'sharedTier||dedicatedReplicaSet'
-    else if (db.hello().msg === 'isdbgrid' && db.serverStatus().atlasVersion === 'undefined')
-        return 'dedicatedShardedCluster'
-    else
-        return false
+    return (db.hello().msg === 'isdbgrid' && db.adminCommand({ "atlasVersion": 1 }).ok === 1) ? 'serverless'
+         : (type === 'serverless' && db.hello().msg === 'isdbgrid' && db.adminCommand({ "atlasVersion": 1 }).ok === 1) ? true
+         : (db.hello().msg !== 'isdbgrid' && db.adminCommand({ "atlasVersion": 1 }).ok === 1) ? 'sharedTier||dedicatedReplicaSet'
+         : (db.hello().msg === 'isdbgrid' && db.serverStatus().atlasVersion === 'undefined') ? 'dedicatedShardedCluster'
+         : false
 }
 
 if (typeof db.prototype.isMaster === 'undefined') {
@@ -330,13 +307,6 @@ if (typeof process !== 'undefined') {
      *  mongosh wrappers
      */
 
-    // if (typeof Object.prototype.bsonsize === 'undefined') {
-        /*
-         *  Backward compatability with Object.bsonsize(), this method doesn't work with mongosh
-         */
-        // Object.prototype.bsonsize = function bsonsize(arg) { return bsonsize(arg); };
-    // }
-
     if (typeof Object.getPrototypeOf(UUID()).base64 === 'undefined') {
         /*
          *  Backward compatability with UUID().base64()
@@ -362,20 +332,14 @@ function $NumberLong(arg) {
     /*
      *  NumberLong() wrapper
      */
-    if (typeof process !== 'undefined')
-        return Long.fromNumber(arg)
-    else
-        return NumberLong(arg)
+    return (typeof process !== 'undefined') ? Long.fromNumber(arg) : NumberLong(arg)
 }
 
 function $NumberDecimal(arg) {
     /*
      *  NumberDecimal() wrapper
      */
-    if (typeof process !== 'undefined')
-        return Decimal128.fromString(arg.toString())
-    else
-        return NumberDecimal(arg)
+    return (typeof process !== 'undefined') ? Decimal128.fromString(arg.toString()) : NumberDecimal(arg)
 }
 
 function $getRandomRegex() {
@@ -567,7 +531,7 @@ function genExponential(lambda = 1) {
     /*
      *  exponential distribution function
      */
-    return -Math.log(1.0 - rand()) / lambda;
+    return -Math.log(1.0 - rand()) / lambda
 }
 
 function ftoc(fahrenheit) {
@@ -632,7 +596,7 @@ function benford() {
             ) / array.length, Math.log10(1 + 1 / val)
         ]);
     
-        return array;
+    return array;
 }
 
 // EOF
