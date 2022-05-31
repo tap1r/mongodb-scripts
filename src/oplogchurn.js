@@ -96,7 +96,7 @@ function main() {
 
     // Measure interval statistics
     // db.getMongo().setReadPref(readPref);
-    slaveOk(readPref);
+    slaveOk(readPref); // not support on shared tiers
     let oplog = db.getSiblingDB('local').getCollection('oplog.rs');
 
     if (serverVer(4.4)) {
