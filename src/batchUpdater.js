@@ -1,6 +1,6 @@
 /*
  *  Name: "batchUpdater.js"
- *  Version: "0.1.0"
+ *  Version: "0.1.2"
  *  Description: batch updater with ranged based pagination
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,10 +12,10 @@ var dbName = 'database',
     collName = 'collection',
     batchSize = 10000,
     sleepIntervalMS = 5000,
-    update = [{
-        "$set": { "x": { "$toInt": "$x" } }
-    }],
+    update = [{ "$set": { "x": { "$toInt": "$x" } } }],
     comment = 'run by script batchUpdater.js';
+
+let namespace = db.getSiblingDB(dbName).getCollection(collName);
 
 // script variables
 var sort = { "_id": 1 },
@@ -37,7 +37,13 @@ async function updateStrings(startValue, nPerPage) {
             "x": { "$type": "string" }
         };
 
-    await db.getSiblingDB(dbName).getCollection(collName).find(findFilter).sort(sort).limit(nPerPage).readConcern(readConcern).comment(comment).returnKey().forEach(doc => endValue = doc._id);
+    await namespace.find(findFilter)
+                   .sort(sort)
+                   .limit(nPerPage)
+                   .readConcern(readConcern)
+                   .comment(comment)
+                   .returnKey()
+                   .forEach(doc => endValue = doc._id);
     updateFilter = {
         "$and": [
             { "_id": { "$gt": startValue, "$lte": endValue } },
@@ -46,11 +52,9 @@ async function updateStrings(startValue, nPerPage) {
     };
     console.log(`UpdateMany from _id: ${startValue.toString()} to ${endValue.toString()}`);
     try {
-        let result = await db.getSiblingDB(dbName).getCollection(collName).updateMany(updateFilter, update, options);
+        let result = await namespace.updateMany(updateFilter, update, options);
         console.log(`UpdateMany results: ${JSON.stringify(result, null, '\t')}`);
-    } catch (e) {
-        console.log(`Update failed with: ${e}`);
-    }
+    } catch(e) { console.log(`Update failed with: ${e}`) }
 
     return endValue;
 }
