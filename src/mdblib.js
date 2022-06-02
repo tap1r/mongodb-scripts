@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.19"
+ *  Version: "0.2.20"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') {
     var __lib = {
         "name": "mdblib.js",
-        "version": "0.2.19"
+        "version": "0.2.20"
     }
 }
 
@@ -223,7 +223,7 @@ function serverVer(ver) {
          : svrVer();
 }
 
-function fCV(ver) {
+function fCV(ver) { // update for shared tier compat
     /*
      *  Evaluate feature compatibility version
      */
@@ -367,7 +367,7 @@ function getRandomExp(exponent = 0) {
     /*
      *  generate random exponential number
      */
-    return Math.ceil(getRandomNumber(1, 10) * Math.pow(10, exponent))
+    return Math.ceil(getRandomNumber(0, 9) * Math.pow(10, exponent))
 }
 
 function getRandomInt(min = 0, max = 1) {
