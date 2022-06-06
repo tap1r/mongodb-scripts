@@ -1,25 +1,20 @@
 /*
  *  Name: "docsizes.js"
- *  Version: "0.1.1"
+ *  Version: "0.1.2"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "[mongo|mongosh] [connection options] --quiet docsizes.js"
+// Usage: "mongosh [connection options] --quiet docsizes.js"
 
-/*
- *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
- *  Save libs to the $MDBLIB or valid search path
- */
-
-let __script = { "name": "docsizes.js", "version": "0.1.1" };
+let __script = { "name": "docsizes.js", "version": "0.1.2" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
  *  User defined parameters
  */
 
-let docOptions = {
+let options = {
     "dbName": "database",
     "collName": "collection",
     "sampleSize": 1000,
@@ -32,18 +27,17 @@ if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === fa
     ? 'primaryPreferred'
     : 'secondaryPreferred';
 
+db.getMongo().setReadPref(readPref);
+
 function main() {
     /*
      *  main
      */
-    let namespace = db.getSiblingDB(docOptions.dbName).getCollection(docOptions.collName),
-        readPref = 'secondaryPreferred',
-        options = {
+    let namespace = db.getSiblingDB(options.dbName).getCollection(options.collName),
+        aggOptions = {
             "allowDiskUse": true,
             "cursor": { "batchSize": 0 },
-            // "maxTimeMS": 0,
             "readConcern": { "level": "local" },
-            // "hint": { "_id": 1 },
             "comment": "Performing document distribution analysis with "
                 + this.__script.name
                 + " v"
@@ -62,7 +56,7 @@ function main() {
         ratio = +(dataSize / (storageSize - blocksFree - overhead)).toFixed(2);
 
     let pipeline = [
-            { "$sample": { "size": docOptions.sampleSize } },
+            { "$sample": { "size": options.sampleSize } },
             { "$facet": {
                 "SampleTotals": [
                     { "$group": {
@@ -70,9 +64,10 @@ function main() {
                         "dataSize": { "$sum": { "$bsonSize": "$$ROOT" } }
                     } },
                     { "$set": {
-                        "avgDocSize": { "$round": [{ "$divide": ["$dataSize", docOptions.sampleSize] }, 0] },
-                        "sampleSize": docOptions.sampleSize,
+                        "avgDocSize": { "$round": [{ "$divide": ["$dataSize", options.sampleSize] }, 0] },
+                        "sampleSize": options.sampleSize,
                         "compressionRatio": ratio,
+                        "compressor": compressor,
                         "estStorageSize": { "$round": [{ "$divide": ["$dataSize", ratio] }, 0] }
                     } },
                     { "$unset": "_id" }
@@ -80,7 +75,7 @@ function main() {
                 "BSONdistribution": [
                     { "$bucket": {
                         "groupBy": { "$bsonSize": "$$ROOT" },
-                        "boundaries": docOptions.buckets,
+                        "boundaries": options.buckets,
                         "default": "Unknown",
                         "output": {
                             "totalDataSize": { "$sum": { "$bsonSize": "$$ROOT" } },
@@ -93,7 +88,7 @@ function main() {
                 "PageDistribution": [
                     { "$bucket": {
                         "groupBy": { "$round": { "$divide": [{ "$bsonSize": "$$ROOT" }, ratio] } },
-                        "boundaries": docOptions.pages,
+                        "boundaries": options.pages,
                         "default": "Unknown",
                         "output": {
                             "totalStorageSize": { "$sum": { "$round": { "$divide": [{ "$bsonSize": "$$ROOT" }, ratio] } } },
@@ -119,8 +114,7 @@ function main() {
             } } */
         ];
 
-    db.getMongo().setReadPref(readPref);
-    namespace.aggregate(pipeline, options).forEach(printjson);
+    namespace.aggregate(pipeline, aggOptions).forEach(printjson);
 }
 
 main();
