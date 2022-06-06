@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.2.12"
+ *  Version: "0.2.13"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,7 @@
  *  Save libs to the $MDBLIB or valid search path
  */
 
-let __script = { "name": "oplogchurn.js", "version": "0.2.12" };
+let __script = { "name": "oplogchurn.js", "version": "0.2.13" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -127,7 +127,7 @@ function main() {
     // Get oplog stats
     let stats = oplog.stats();
     let blocksFree = stats.wiredTiger['block-manager']['file bytes available for reuse'];
-    let ratio = (stats.size / (stats.storageSize - blocksFree)).toFixed(2);
+    let ratio = +(stats.size / (stats.storageSize - blocksFree)).toFixed(2);
     let intervalDataSize = size / scale.factor;
     let intervalStorageSize = size / (scale.factor * ratio);
     let oplogChurn = size / (scale.factor * ratio * hrs);
