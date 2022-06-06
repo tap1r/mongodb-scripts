@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.20"
+ *  Version: "0.2.21"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') {
     var __lib = {
         "name": "mdblib.js",
-        "version": "0.2.20"
+        "version": "0.2.21"
     }
 }
 
@@ -171,6 +171,7 @@ class MetaStats {
         this.indexSize = indexSize;
         this.indexFree = indexFree;
         this.compressor = compressor;
+        this.overhead = 0; // 2 * 1024 * 1024;
     }
 
     init() {
@@ -182,7 +183,7 @@ class MetaStats {
     }
 
     compression() {
-        return this.dataSize / (this.storageSize - this.blocksFree)
+        return this.dataSize / (this.storageSize - this.blocksFree - this.overhead)
     }
 
     totalSize() {
