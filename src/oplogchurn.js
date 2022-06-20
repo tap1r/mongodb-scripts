@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.2.13"
+ *  Version: "0.2.14"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,13 +12,13 @@
  *  Save libs to the $MDBLIB or valid search path
  */
 
-let __script = { "name": "oplogchurn.js", "version": "0.2.13" };
+let __script = { "name": "oplogchurn.js", "version": "0.2.14" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
      *  Load helper library mdblib.js
      */
-    let __lib = { "name": "mdblib.js", "paths": null, "path": null };
+    var __lib = { "name": "mdblib.js", "paths": null, "path": null };
     if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
         __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
         __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
@@ -55,9 +55,9 @@ if (typeof scale === 'undefined') {
  */
 
 // formatting preferences
-if (typeof termWidth === 'undefined') var termWidth = 60;
+if (typeof termWidth === 'undefined') var termWidth = 62;
 if (typeof columnWidth === 'undefined') var columnWidth = 25;
-if (typeof rowHeader === 'undefined') var rowHeader = 34;
+if (typeof rowHeader === 'undefined') var rowHeader = 36;
 
 // connection preferences
 if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === false) ? 'primaryPreferred': 'secondaryPreferred';
@@ -158,7 +158,7 @@ function main() {
           scale.unit).padStart(columnWidth)
     );
     print('-'.repeat(termWidth));
-    print('Estimated current oplog churn:'.padEnd(rowHeader),
+    print('Estimated current oplog data churn:'.padEnd(rowHeader),
           (oplogChurn.toFixed(2) + ' ' + scale.unit +
           '/hr').padStart(columnWidth)
     );
