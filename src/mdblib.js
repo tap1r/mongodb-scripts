@@ -1,14 +1,14 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.21"
+ *  Version: "0.2.22"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 if (typeof __lib === 'undefined') {
-    var __lib = {
+    let __lib = {
         "name": "mdblib.js",
-        "version": "0.2.21"
+        "version": "0.2.22"
     }
 }
 
@@ -249,7 +249,7 @@ function shellVer(ver) {
 
 function slaveOk(readPref = 'primaryPreferred') {
     /*
-     *  Backward compatability with rs.slaveOk() and MONGOSH-910
+     *  Backward compatibility with rs.slaveOk() and MONGOSH-910
      */
     return (typeof rs.slaveOk === 'undefined' && typeof rs.secondaryOk !== 'undefined') ? db.getMongo().setReadPref(readPref)
     // else if (shellVer() >= 4.4)
@@ -259,14 +259,14 @@ function slaveOk(readPref = 'primaryPreferred') {
 
 function isMaster() {
     /*
-     *  Backward compatability with db.isMaster()
+     *  Backward compatibility with db.isMaster()
      */
     return (typeof db.prototype.hello === 'undefined') ? db.isMaster() : db.hello()
 }
 
 function hello() {
     /*
-     *  Forward compatability with db.hello()
+     *  Forward compatibility with db.hello()
      */
     return (typeof db.prototype.hello !== 'function') ? db.isMaster() : db.hello()
 }
@@ -284,21 +284,21 @@ function isAtlasPlatform(type) {
 
 if (typeof db.prototype.isMaster === 'undefined') {
     /*
-     *  Backward compatability with db.isMaster()
+     *  Backward compatibility with db.isMaster()
      */
     db.isMaster = () => this.hello()
 }
 
 if (typeof db.prototype.hello === 'undefined') {
     /*
-     *  Forward compatability with db.hello()
+     *  Forward compatibility with db.hello()
      */
     db.hello = () => this.isMaster()
 }
 
 if (typeof bsonsize === 'undefined') {
     /*
-     *  Forward compatability with bsonsize()
+     *  Forward compatibility with bsonsize()
      */
     bsonsize = arg => Object.prototype.bsonsize(arg)
 }
@@ -310,14 +310,14 @@ if (typeof process !== 'undefined') {
 
     if (typeof Object.getPrototypeOf(UUID()).base64 === 'undefined') {
         /*
-         *  Backward compatability with UUID().base64()
+         *  Backward compatibility with UUID().base64()
          */
         UUID.prototype.base64 = () => this.toString('base64')
     }
 
     if (typeof hex_md5 === 'undefined') {
         /*
-         *  Backward compatability with hex_md5()
+         *  Backward compatibility with hex_md5()
          */
         hex_md5 = arg => crypto.createHash('md5').update(arg).digest('hex')
     }
