@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.3.13"
+ *  Version: "0.3.14"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,13 +13,13 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-let __script = { "name": "fuzzer.js", "version": "0.3.13" };
-var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
+let __script = { "name": "fuzzer.js", "version": "0.3.14" };
+let __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
      *  Load helper library mdblib.js
      */
-    let __lib = { "name": "mdblib.js", "paths": null, "path": null };
+    var __lib = { "name": "mdblib.js", "paths": null, "path": null };
     if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
         __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
         __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
@@ -82,7 +82,7 @@ let fuzzer = { // preferences
     "ratios": [7, 2, 1]
 };
 let wc = (isReplSet()) ? { "w": "majority", "j": true } : { "w": 1, "j": true }; // write concern
-var sampleSize = 9, docSize = 0;
+let sampleSize = 9, docSize = 0;
 fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
 sampleSize *= sampleSize;
 let indexes = [ // index keys
@@ -125,14 +125,14 @@ let specialIndexOptions = { // exceptional index options
     "collation": { "locale": "simple" },
     "default_language": idioma
 };
-let commitQuorum = (wc.w == 0) ? 1 : wc.w;
+let commitQuorum = (wc.w === 0) ? 1 : wc.w;
 
 /*
  *  Global defaults
  */
 
 if (typeof readPref === 'undefined') var readPref = 'primary';
-var batch = 0, totalBatches = 1, residual = 0,
+let batch = 0, totalBatches = 1, residual = 0,
     now = new Date().getTime(),
     timestamp = (now/1000.0)|0;
 
@@ -197,11 +197,11 @@ function main() {
             batchSize = residual;
         }
 
-        var bulk = db.getSiblingDB(dbName).getCollection(collName).initializeUnorderedBulkOp();
+        let bulk = db.getSiblingDB(dbName).getCollection(collName).initializeUnorderedBulkOp();
         for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument());
 
         try {
-            var result = bulk.execute(wc);
+            let result = bulk.execute(wc);
             let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
             print('\tbulk inserted', bInserted,
                   'document' + ((bInserted === 1) ? '' : 's'),
@@ -269,7 +269,7 @@ function main() {
                 for (let [key, value] of Object.entries(index)) {
                     print('\tkey:', key, '/',
                           (value === 'text') ? value + ' / ' + idioma : value
-                    );
+                    )
                 }
             });
             let sindexing = () => {
@@ -318,37 +318,39 @@ function genDocument() {
     /*
      *  generate pseudo-random key values
      */
+    let secondsOffset;
     switch (fuzzer.distribution) {
         case 'uniform':
-            var secondsOffset = +(getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
+            secondsOffset = +(getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
             break;
         case 'normal': // genNormal(mu, sigma)
-            var secondsOffset = +(genNormal(fuzzer.offset + fuzzer.range/2, fuzzer.range/2) * 86400)|0;
+            secondsOffset = +(genNormal(fuzzer.offset + fuzzer.range/2, fuzzer.range/2) * 86400)|0;
             break;
         case 'bimodal': // not implemented yet
-            // var secondsOffset = +(getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
+            // secondsOffset = +(getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
             // break;
         case 'pareto': // not implemented yet
             // genRandomInclusivePareto(min, alpha = 1.161) {
-            // var secondsOffset = +(genRandomInclusivePareto(fuzzer.offset + fuzzer.range) * 86400)|0;
+            // secondsOffset = +(genRandomInclusivePareto(fuzzer.offset + fuzzer.range) * 86400)|0;
             // break;
         case 'exponential': // not implemented yet
             // getRandomExp()
-            // var secondsOffset = +(getRandomExp(fuzzer.offset, fuzzer.offset + fuzzer.range, 128) * 86400)|0;
+            // secondsOffset = +(getRandomExp(fuzzer.offset, fuzzer.offset + fuzzer.range, 128) * 86400)|0;
             // break;
         default:
             print('\nUnsupported distribution type:', fuzzer.distribution,
                   '\nDefaulting to "uniform"'
             );
-            var secondsOffset = +(getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
+            secondsOffset = +(getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
     }
 
+    let oid;
     switch (fuzzer._id) {
         case 'oid':
-            var oid = new ObjectId();
+            oid = new ObjectId();
             break;
         default: // the 'ts' option
-            var oid = new ObjectId(
+            oid = new ObjectId(
                 Math.floor(timestamp + secondsOffset).toString(16) +
                 genRandomHex(16)
                 // employ native mongosh method
@@ -578,7 +580,7 @@ function dropNS(dropPref = false, dbName = false, collName = false,
     /*
      *  drop and recreate target namespace
      */
-    var msg = '';
+    let msg = '';
     switch(compressor.toLowerCase()) {
         case 'best':
             compressor = fCV(4.2) ? 'zstd' : 'zlib';
@@ -594,7 +596,7 @@ function dropNS(dropPref = false, dbName = false, collName = false,
                 compressor = 'zstd';
             } else {
                 compressor = 'zlib';
-                var msg = '("zstd" requires mongod v4.2+)';
+                msg = '("zstd" requires mongod v4.2+)';
             }
             break;
         default:
@@ -646,11 +648,8 @@ function createNS(dbName = false, collName = false, msg = '',
         );
     }
 
-    try {
-        db.getSiblingDB(dbName).createCollection(collName, options);
-    } catch (e) {
-        print('\nNamespace creation failed:', e);
-    }
+    try { db.getSiblingDB(dbName).createCollection(collName, options) }
+    catch(e) { print('\nNamespace creation failed:', e) }
 
     return;
 }
