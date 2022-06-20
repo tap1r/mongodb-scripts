@@ -1,13 +1,13 @@
 /*
  *  Name: "docsizes.js"
- *  Version: "0.1.2"
+ *  Version: "0.1.3"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet docsizes.js"
 
-let __script = { "name": "docsizes.js", "version": "0.1.2" };
+let __script = { "name": "docsizes.js", "version": "0.1.3" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
@@ -38,11 +38,9 @@ function main() {
             "allowDiskUse": true,
             "cursor": { "batchSize": 0 },
             "readConcern": { "level": "local" },
-            "comment": "Performing document distribution analysis with "
-                + this.__script.name
-                + " v"
-                + this.__script.version,
-            // "let": { } // Added in MongoDB v5.0
+            "comment": `Performing document distribution analysis with 
+                ${this.__script.name} v ${this.__script.version}`,
+            // "let": {}
         },
         host = db.hostInfo().system.hostname,
         dbPath = db.serverCmdLineOpts().parsed.storage.dbPath,
@@ -50,7 +48,7 @@ function main() {
         dataSize = stats.size,
         blocksFree = stats.wiredTiger['block-manager']['file bytes available for reuse'],
         storageSize = stats.wiredTiger['block-manager']['file size in bytes'],
-        compressor = stats.wiredTiger.creationString.match(/block_compressor=[a-z]+/)[0].slice(17),
+        compressor = stats.wiredTiger.creationString.match(/block_compressor=(?<compressor>\w+)/).groups.compressor,
         documentCount = stats.count,
         overhead = 0, // 2 * 1024 * 1024;
         ratio = +(dataSize / (storageSize - blocksFree - overhead)).toFixed(2);
@@ -66,9 +64,7 @@ function main() {
                     { "$set": {
                         "avgDocSize": { "$round": [{ "$divide": ["$dataSize", options.sampleSize] }, 0] },
                         "sampleSize": options.sampleSize,
-                        "compressionRatio": ratio,
-                        "compressor": compressor,
-                        "estStorageSize": { "$round": [{ "$divide": ["$dataSize", ratio] }, 0] }
+                        "estStorageSize": { "$round": [{ "$divide": ["$dataSize", ratio] }, 0] },
                     } },
                     { "$unset": "_id" }
                 ],
@@ -99,19 +95,22 @@ function main() {
                     { "$unset": "_id" }
                 ]
             } },
-            /* { "$set": {
+            { "$set": {
                 "CollectionTotals": {
-                    "$set": {
-                        "host": host,
-                        "dbPath": dbPath,
-                        "namespace": namespace,
-                        "dataSize": dataSize,
-                        "storageSize": storageSize,
-                        "compressor": compressor,
-                        "compressionRatio": ratio,
-                        "documentCount": documentCount
-                } }
-            } } */
+                    "host": host,
+                    "dbPath": dbPath,
+                    "namespace": `${options.dbName}.${options.collName}`,
+                    "dataSize": dataSize,
+                    "storageSize": storageSize,
+                    "freePages": blocksFree,
+                    "utilised": storageSize - blocksFree - overhead,
+                    "compressor": compressor,
+                    "compressionRatio": ratio,
+                    "documentCount": documentCount,
+                    "consumed32kPages": Math.ceil((storageSize - blocksFree - overhead)/32768),
+                    "avgDocsPer32kPage": +(documentCount/((storageSize - blocksFree - overhead)/32768)).toFixed(2)
+                }
+            } }
         ];
 
     namespace.aggregate(pipeline, aggOptions).forEach(printjson);
