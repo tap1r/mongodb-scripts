@@ -1,14 +1,14 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.22"
+ *  Version: "0.2.23"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 if (typeof __lib === 'undefined') {
-    let __lib = {
+    var __lib = {
         "name": "mdblib.js",
-        "version": "0.2.22"
+        "version": "0.2.23"
     }
 }
 
