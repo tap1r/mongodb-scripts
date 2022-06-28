@@ -1,13 +1,13 @@
 /*
  *  Name: "schema-sampler.js"
- *  Version: "0.2.2"
+ *  Version: "0.2.3"
  *  Description: generate schema with simulated mongosqld sampling commands
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "[mongo|mongosh] [connection options] --quiet schema-sampler.js > schema.json"
 
-let __script = { "name": "schema-sampler.js", "version": "0.2.2" };
+const __script = { "name": "schema-sampler.js", "version": "0.2.3" };
 print('\n', 'Running script', __script.name, 'v' + __script.version);
 
 let userOptions = {
@@ -35,11 +35,12 @@ function getSchema(sampleSize) {
     /*
      *  generate a synthetic schema with metadata
      */
-    let pipeline = [{ "$sample": { "size": sampleSize } }];
+    let collectionPipeline = [{ "$sample": { "size": sampleSize } }];
+    let viewPipeline = [{ "$sample": { "size": 1} }];
     // let comment = 'Executed by ' + __script.name + ' v' + __script.version;
     let listDbOpts = [{
             "listDatabases": 1,
-            "filter": { "name": /^(?!(admin|config|local)$)/ },
+            "filter": { "name": /(?:^(?!admin$|config$|local$)).+/ },
             "nameOnly": true,
             "authorizedDatabases": true
         },
@@ -48,14 +49,14 @@ function getSchema(sampleSize) {
     // db.runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true });
     let listColOpts = [{
             "type": "collection",
-            "name": { "$not": { "$regex": /^system\./ } }
+            "name": { "$regex": /(?!^(?:system\\.))/ }
         },
         true,
         true
     ];
     let listViewOpts = [{
             "type": "view",
-            "name": { "$not": { "$regex": /^system\./ } }
+            "name": { "$regex": /(?!^(?:system\\.))/ }
         },
         true,
         true
@@ -66,43 +67,37 @@ function getSchema(sampleSize) {
             "collections": db.getSiblingDB(dbName)
                              .getCollectionInfos(...listColOpts)
                              .map(collection => ({
-                                "name": collection.name,
-                                "documents": db.getSiblingDB(dbName)
-                                               .getCollection(collection.name)
-                                               .stats().count,
-                                "indexes": db.getSiblingDB(dbName)
-                                             .getCollection(collection.name)
-                                             .getIndexes(),
-                                "$sample": db.getSiblingDB(dbName)
-                                             .getCollection(collection.name)
-                                             .aggregate(pipeline)
-                                             .toArray()
-                             })
-                        ),
+                                    "name":         collection.name,
+                                    "documents":    db.getSiblingDB(dbName)
+                                                      .getCollection(collection.name)
+                                                      .stats().count,
+                                    "indexes":      db.getSiblingDB(dbName)
+                                                      .getCollection(collection.name)
+                                                      .getIndexes(),
+                                    "$sample":      db.getSiblingDB(dbName)
+                                                      .getCollection(collection.name)
+                                                      .aggregate(collectionPipeline)
+                                                      .toArray()
+            })),
             "views": db.getSiblingDB(dbName)
                        .getCollectionInfos(...listViewOpts)
                        .map(view => ({
-                            "name": view.name,
-                            "options": view.options,
-                            "$sample": db.getSiblingDB(dbName)
-                                         .getCollection(view.name)
-                                         .aggregate(pipeline)
-                                         .toArray()
-                            })
-                       )
-        })
-    );
+                            "name":     view.name,
+                            "options":  view.options,
+                            "$sample":  db.getSiblingDB(dbName)
+                                          .getCollection(view.name)
+                                          .aggregate(viewPipeline)
+                                          .toArray()
+            }))
+    }));
 }
 
 function genReport(schema) {
     /*
      *  report
      */
-    print('\n');
-    print(JSON.stringify(schema, null, '  '));
-    print('\n');
 
-    return;
+    return print('\n' + JSON.stringify(schema, null, '  ') + '\n');
 }
 
 main(userOptions);
