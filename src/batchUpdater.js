@@ -1,29 +1,31 @@
 /*
  *  Name: "batchUpdater.js"
- *  Version: "0.1.2"
+ *  Version: "0.1.3"
  *  Description: batch updater with ranged based pagination
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet batchUpdater.js"
 
+const __script = { "name": "batchUpdater.js", "version": "0.1.3" };
+
 // user defined variables
-var dbName = 'database',
+let dbName = 'database',
     collName = 'collection',
     batchSize = 10000,
     sleepIntervalMS = 5000,
     update = [{ "$set": { "x": { "$toInt": "$x" } } }],
-    comment = 'run by script batchUpdater.js';
+    comment = `run by script ${__script.name} v${__script.version}`;
 
 let namespace = db.getSiblingDB(dbName).getCollection(collName);
 
 // script variables
-var sort = { "_id": 1 },
+let sort = { "_id": 1 },
     options = {
         "upsert": false,
         "writeConcern": { "w": "majority", "j": true }
     },
-    currentKey = MinKey,
+    currentKey = MinKey(),
     readPref = 'primary',
     readConcern = 'local';
 
@@ -44,7 +46,8 @@ async function updateStrings(startValue, nPerPage) {
                    .comment(comment)
                    .returnKey()
                    .forEach(doc => endValue = doc._id);
-    updateFilter = {
+
+    let updateFilter = {
         "$and": [
             { "_id": { "$gt": startValue, "$lte": endValue } },
             { "$expr": { "x": { "$type": "string" } } }
@@ -59,17 +62,13 @@ async function updateStrings(startValue, nPerPage) {
     return endValue;
 }
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 async function batchUpdate() {
     while (currentKey !== null) {
         currentKey = await updateStrings(currentKey, batchSize);
-        console.log(`Sleeping ${sleepIntervalMS}ms\n`);
-        await sleep(sleepIntervalMS);
+        console.log(`Sleeping for ${sleepIntervalMS}ms\n`);
+        sleep(sleepIntervalMS);
     }
 }
 
-console.log(`\nBatch ${batchSize} updates on ${dbName}.${collName} at ${sleepIntervalMS}ms intervals\n`);
+console.log(`\nBatch ${batchSize} updates on ${namespace} at ${sleepIntervalMS}ms intervals\n`);
 batchUpdate();
