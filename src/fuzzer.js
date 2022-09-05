@@ -401,7 +401,18 @@ function genDocument() {
         "uuid": UUID(),
         "md5": MD5($genRandomHex(32)),
         "fle": BinData(6, UUID().base64()),
-        // "column": BinData(7, <int>, {}),
+        /* "columnStore": fCV(5.2)
+                     ? BinData(7, NumberInt($getRandomIntInclusive(0, Math.pow(10, 4))),
+                        {
+                            "unit": +$getRandomNumber(0, Math.pow(10, 6)).toFixed(2),
+                            "qty": NumberInt($getRandomIntInclusive(0, Math.pow(10, 4))),
+                            "price": [
+                                +$getRandomNumber(0, Math.pow(10, 4)).toFixed(2),
+                                $genRandomCurrency()
+                            ]
+                        }
+                       )
+                     : 'requires v5.2+', */
         "random": +$getRandomNumber(0, totalDocs).toFixed(4),
         "symbol": $genRandomSymbol()
     });
