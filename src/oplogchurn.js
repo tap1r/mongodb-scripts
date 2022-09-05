@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.2.16"
+ *  Version: "0.2.17"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,7 @@
  *  Save libs to the $MDBLIB or valid search path
  */
 
-const __script = { "name": "oplogchurn.js", "version": "0.2.16" };
+var __script = { "name": "oplogchurn.js", "version": "0.2.17" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -66,33 +66,34 @@ function main() {
     /*
      *  main
      */
-    var size = 0, docs = 0;
-    let date = new Date();
-    let t2 = (date.getTime() / 1000.0)|0; // end timestamp
-    let d2 = date.toISOString(); // end datetime
-    let t1 = (date.setHours(date.getHours() - hrs) / 1000.0)|0; // start timestamp
-    let d1 = date.toISOString(); // start datetime
-    let $match = (typeof process !== 'undefined') // MONGOSH-930
-        ? { "$match": { "ts": {
-            "$gt": Timestamp({ "t": t1, "i": 0 }),
-            "$lte": Timestamp({ "t": t2, "i": 0 })
-          } } }
-        : { "$match": { "ts": {
-            "$gt": Timestamp(t1, 0),
-            "$lte": Timestamp(t2, 0)
-          } } };
-    let $project = serverVer(4.2)
-        ? { "$unset": "_id" }
-        : { "$addFields": { "_id": "$$REMOVE" } };
-    let pipeline = [$match, $project];
-    let options = {
-        "allowDiskUse": true,
-        "cursor": { "batchSize": 0 },
-        "comment": "Performing oplog analysis with "
-                   + this.__script.name
-                   + " v"
-                   + this.__script.version
-    };
+    let size = 0,
+        docs = 0,
+        date = new Date(),
+        t2 = (date.getTime() / 1000.0)|0, // end timestamp
+        d2 = date.toISOString(), // end datetime
+        t1 = (date.setHours(date.getHours() - hrs) / 1000.0)|0, // start timestamp
+        d1 = date.toISOString(), // start datetime
+        $match = (typeof process !== 'undefined') // MONGOSH-930
+             ? { "$match": { "ts": {
+                "$gt": Timestamp({ "t": t1, "i": 0 }),
+                "$lte": Timestamp({ "t": t2, "i": 0 })
+             } } }
+             : { "$match": { "ts": {
+                "$gt": Timestamp(t1, 0),
+                "$lte": Timestamp(t2, 0)
+             } } },
+        $project = serverVer(4.2)
+               ? { "$unset": "_id" }
+               : { "$addFields": { "_id": "$$REMOVE" } },
+        pipeline = [$match, $project],
+        options = {
+            "allowDiskUse": true,
+            "cursor": { "batchSize": 0 },
+            "comment": "Performing oplog analysis with "
+                + this.__script.name
+                + " v"
+                + this.__script.version
+        };
 
     // Measure interval statistics
     // db.getMongo().setReadPref(readPref);
@@ -121,15 +122,15 @@ function main() {
     }
 
     // Get host info
-    let host = db.hostInfo().system.hostname;
-    let dbPath = db.serverCmdLineOpts().parsed.storage.dbPath;
-    // Get oplog stats
-    let stats = oplog.stats();
-    let blocksFree = stats.wiredTiger['block-manager']['file bytes available for reuse'];
-    let ratio = +(stats.size / (stats.storageSize - blocksFree)).toFixed(2);
-    let intervalDataSize = size / scale.factor;
-    let intervalStorageSize = size / (scale.factor * ratio);
-    let oplogChurn = size / (scale.factor * ratio * hrs);
+    let host = db.hostInfo().system.hostname,
+        dbPath = db.serverCmdLineOpts().parsed.storage.dbPath,
+        // Get oplog stats
+        stats = oplog.stats(),
+        blocksFree = stats.wiredTiger['block-manager']['file bytes available for reuse'],
+        ratio = +(stats.size / (stats.storageSize - blocksFree)).toFixed(2),
+        intervalDataSize = size / scale.factor,
+        intervalStorageSize = size / (scale.factor * ratio),
+        oplogChurn = size / (scale.factor * ratio * hrs);
 
     // Print results
     print('\n');
