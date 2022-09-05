@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.3.17"
+ *  Version: "0.3.18"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-const __script = { "name": "fuzzer.js", "version": "0.3.17" };
+const __script = { "name": "fuzzer.js", "version": "0.3.18" };
 let __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -41,48 +41,52 @@ print(__comment);
  *  User defined parameters
  */
 
-let dbName = 'database', collName = 'collection';
-let compressor = 'best'; // ["none"|"snappy"|"zlib"|"zstd"|"default"|"best"]
-let idioma = 'en';
-let collation = { // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
-    "locale": "simple",
-    // caseLevel: <boolean>,
-    // caseFirst: <string>,
-    // strength: <int>,
-    // numericOrdering: <boolean>,
-    // alternate: <string>,
-    // maxVariable: <string>,
-    // backwards: <boolean>
-};
-let dropPref = false; // drop collection prior to generating data
-let buildIndexes = true; // build index preferences
-let timeseries = false; // build time series collection type
-let tsOptions = {
-    "timeField": "timestamp",
-    "metaField": "data",
-    "granularity": "hours"
-};
-let expireAfterSeconds = 0; // TTL and time series options
-let totalDocs = getRandomExp(4); // number of documents to generate per namespace
-let fuzzer = { // preferences
-    "_id": "ts", // ["ts"|"oid"] - timeseries OID | client generated OID
-    "range": 365.2422, // date range in days
-    "offset": -300, // date offset in days from now() (neg = past, pos = future)
-    "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
-    "polymorphic": { // experimental
-        "enabled": false,
-        "vary_types": false, // fuzz types
-        "nests": 0, // nested subdocs
-        "entropy": 100, // 0 - 100%
-        "cardinality": 1, // ratio:1
-        "sparsity": 0, // 0 - 100%
-        "weighting": 50 // 0 - 100%
+let dbName = 'database',
+    collName = 'collection',
+    totalDocs = $getRandomExp(4), // number of documents to generate per namespace
+    dropPref = false, // drop collection prior to generating data
+    compressor = 'best', // ["none"|"snappy"|"zlib"|"zstd"|"default"|"best"]
+    idioma = 'en',
+    collation = { // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
+        "locale": "simple",
+        // caseLevel: <boolean>,
+        // caseFirst: <string>,
+        // strength: <int>,
+        // numericOrdering: <boolean>,
+        // alternate: <string>,
+        // maxVariable: <string>,
+        // backwards: <boolean>
     },
-    "schemas": [],
-    "ratios": [7, 2, 1]
-};
-let wc = (isReplSet()) ? { "w": "majority", "j": true } : { "w": 1, "j": true }; // write concern
-let sampleSize = 9, docSize = 0;
+    buildIndexes = true, // build index preferences
+    timeseries = false, // build time series collection type
+    tsOptions = {
+        "timeField": "timestamp",
+        "metaField": "data",
+        "granularity": "hours"
+    },
+    expireAfterSeconds = 0, // TTL and time series options
+    fuzzer = { // preferences
+        "_id": "ts", // ["ts"|"oid"] - timeseries OID | client generated OID
+        "range": 365.2422, // date range in days
+        "offset": -300, // date offset in days from now() (neg = past, pos = future)
+        "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
+        "polymorphic": { // experimental
+            "enabled": false,
+            "vary_types": false, // fuzz types
+            "nests": 0, // nested subdocs
+            "entropy": 100, // 0 - 100%
+            "cardinality": 1, // ratio:1
+            "sparsity": 0, // 0 - 100%
+            "weighting": 50 // 0 - 100%
+        },
+        "schemas": [],
+        "ratios": [7, 2, 1]
+    },
+    writeConcern = (isReplSet()) ? { "w": "majority", "j": true } : { "w": 1, "j": true },
+    commitQuorum = (writeConcern.w === 0) ? 1 : writeConcern.w;
+    sampleSize = 9,
+    docSize = 0;
+
 fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
 sampleSize *= sampleSize;
 let indexes = [ // index keys
@@ -125,7 +129,6 @@ let specialIndexOptions = { // exceptional index options
     "collation": { "locale": "simple" },
     "default_language": idioma
 };
-let commitQuorum = (wc.w === 0) ? 1 : wc.w;
 
 /*
  *  Global defaults
@@ -191,21 +194,18 @@ function main() {
           'in', totalBatches, 'batch' + ((totalBatches === 1) ? '' : 'es') + ':'
     );
     for (let i = 0; i < totalBatches; ++i) {
-        if (i === totalBatches - 1 && residual > 0) {
-            batchSize = residual;
-        }
-
+        if (i === totalBatches - 1 && residual > 0) batchSize = residual;
         let bulk = db.getSiblingDB(dbName).getCollection(collName).initializeUnorderedBulkOp();
         for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument());
 
         try {
-            let result = bulk.execute(wc);
+            let result = bulk.execute(writeConcern);
             let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
             print('\tbulk inserted', bInserted,
                   'document' + ((bInserted === 1) ? '' : 's'),
                   'in batch', 1 + i, 'of', totalBatches
             );
-        } catch (e) {
+        } catch(e) {
             print('Generation failed with:', e);
         }
     }
@@ -268,28 +268,28 @@ function main() {
                     )
                 }
             });
-            let sindexing = () => {
-                let soptions = (isReplSet() && shellVer(4.2))
+            let sIndexing = () => {
+                let sOptions = (isReplSet() && shellVer(4.2))
                            ? [specialIndexes, specialIndexOptions, commitQuorum]
                            : [specialIndexes, specialIndexOptions];
 
-                return db.getSiblingDB(dbName).getCollection(collName).createIndexes(...soptions);
+                return db.getSiblingDB(dbName).getCollection(collName).createIndexes(...sOptions);
             }
 
-            let sidxResult = sindexing();
+            let sIdxResult = sIndexing();
             let sidxMsg = () => {
-                if (typeof sidxResult.errmsg !== 'undefined')
-                    return 'Special indexing operation failed: ' + sidxResult.errmsg
-                else if (typeof sidxResult.note !== 'undefined') {
-                    let diff = sidxResult.numIndexesAfter - sidxResult.numIndexesBefore
-                    return 'Special indexing completed with note: ' + sidxResult.note +
+                if (typeof sIdxResult.errmsg !== 'undefined')
+                    return 'Special indexing operation failed: ' + sIdxResult.errmsg
+                else if (typeof sIdxResult.note !== 'undefined') {
+                    let diff = sIdxResult.numIndexesAfter - sIdxResult.numIndexesBefore
+                    return 'Special indexing completed with note: ' + sIdxResult.note +
                            ' with ' + diff + ' index changes.' }
-                else if (typeof sidxResult.ok !== 'undefined')
+                else if (typeof sIdxResult.ok !== 'undefined')
                     return 'Special indexing completed!'
-                else if (typeof sidxResult.msg !== 'undefined')
-                    return 'Special indexing build failed with message: ' + sidxResult.msg
+                else if (typeof sIdxResult.msg !== 'undefined')
+                    return 'Special indexing build failed with message: ' + sIdxResult.msg
                 else
-                    return 'Special indexing completed with results:\t' + sidxResult
+                    return 'Special indexing completed with results:\t' + sIdxResult
             }
 
             print(sidxMsg());
@@ -313,27 +313,27 @@ function genDocument() {
     let secondsOffset;
     switch (fuzzer.distribution) {
         case 'uniform':
-            secondsOffset = +(getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
+            secondsOffset = +($getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
             break;
         case 'normal': // genNormal(mu, sigma)
-            secondsOffset = +(genNormal(fuzzer.offset + fuzzer.range/2, fuzzer.range/2) * 86400)|0;
+            secondsOffset = +($genNormal(fuzzer.offset + fuzzer.range/2, fuzzer.range/2) * 86400)|0;
             break;
         case 'bimodal': // not implemented yet
-            // secondsOffset = +(getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
+            // secondsOffset = +($getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
             // break;
         case 'pareto': // not implemented yet
-            // genRandomInclusivePareto(min, alpha = 1.161) {
-            // secondsOffset = +(genRandomInclusivePareto(fuzzer.offset + fuzzer.range) * 86400)|0;
+            // $genRandomInclusivePareto(min, alpha = 1.161) {
+            // secondsOffset = +($genRandomInclusivePareto(fuzzer.offset + fuzzer.range) * 86400)|0;
             // break;
         case 'exponential': // not implemented yet
-            // getRandomExp()
-            // secondsOffset = +(getRandomExp(fuzzer.offset, fuzzer.offset + fuzzer.range, 128) * 86400)|0;
+            // $getRandomExp()
+            // secondsOffset = +($getRandomExp(fuzzer.offset, fuzzer.offset + fuzzer.range, 128) * 86400)|0;
             // break;
         default:
             print('\nUnsupported distribution type:', fuzzer.distribution,
                   '\nDefaulting to "uniform"'
             );
-            secondsOffset = +(getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
+            secondsOffset = +($getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
     }
 
     let oid;
@@ -344,7 +344,7 @@ function genDocument() {
         default: // the 'ts' option
             oid = new ObjectId(
                 Math.floor(timestamp + secondsOffset).toString(16) +
-                genRandomHex(16)
+                $genRandomHex(16)
                 // employ native mongosh method
             );
     }
@@ -359,51 +359,51 @@ function genDocument() {
         "schema": "A",
         "comment": "General purpose schema shape",
         "language": idioma,
-        "string": genRandomString(getRandomIntInclusive(6, 24)),
+        "string": $genRandomString($getRandomIntInclusive(6, 24)),
         "quote": {
             "language": idiomas[
-                getRandomRatioInt([80, 0, 0, 5, 0, 3, 2])
+                $getRandomRatioInt([80, 0, 0, 5, 0, 3, 2])
             ],
-            "txt": genRandomString(getRandomIntInclusive(6, 24)),
+            "txt": $genRandomString($getRandomIntInclusive(6, 24)),
         },
         "object": {
             "oid": oid,
-            "str": genRandomAlpha(getRandomIntInclusive(8, 16)),
-            "num": +getRandomNumber(
+            "str": $genRandomAlpha($getRandomIntInclusive(8, 16)),
+            "num": +$getRandomNumber(
                         -Math.pow(2, 12),
                         Math.pow(2, 12)
                    ).toFixed(4)
         },
-        "array": genArrayElements(getRandomIntInclusive(0, 10)),
-        "boolean": bool(),
+        "array": $genArrayElements($getRandomIntInclusive(0, 10)),
+        "boolean": $bool(),
         "code": Code('() => {}'),
         "codeScoped": Code('() => {}', {}),
         "date": date,
         "timestamp": ts,
         "null": null,
         "int32": NumberInt(
-                    getRandomIntInclusive(
+                    $getRandomIntInclusive(
                         -(Math.pow(2, 31) - 1),
                         Math.pow(2, 31) - 1)),
         "int64": $NumberLong(
-                    getRandomIntInclusive(
+                    $getRandomIntInclusive(
                         -(Math.pow(2, 63) - 1),
                         Math.pow(2, 63) - 1)),
-        "double": getRandomNumber(
+        "double": $getRandomNumber(
                     -Math.pow(2, 12),
                     Math.pow(2, 12)),
         "decimal128": $NumberDecimal(
-                        getRandomNumber(
+                        $getRandomNumber(
                             -(Math.pow(10, 127) - 1),
                             Math.pow(10, 127) -1)),
         "regex": $getRandomRegex(),
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
-        "md5": MD5(genRandomHex(32)),
+        "md5": MD5($genRandomHex(32)),
         "fle": BinData(6, UUID().base64()),
         // "column": BinData(7, <int>, {}),
-        "random": +getRandomNumber(0, totalDocs).toFixed(4),
-        "symbol": genRandomSymbol()
+        "random": +$getRandomNumber(0, totalDocs).toFixed(4),
+        "symbol": $genRandomSymbol()
     });
     fuzzer.schemas.push({
         "_id": oid,
@@ -415,49 +415,45 @@ function genDocument() {
                 'Series 1',
                 'Series 2',
                 'Series 3'
-            ][getRandomRatioInt([70, 20, 10])],
+            ][$getRandomRatioInt([70, 20, 10])],
         "granularity": "hours",
-        "unit": +getRandomNumber(0, Math.pow(10, 6)).toFixed(2),
-        "qty": NumberInt(getRandomIntInclusive(0, Math.pow(10, 4))),
+        "unit": +$getRandomNumber(0, Math.pow(10, 6)).toFixed(2),
+        "qty": NumberInt($getRandomIntInclusive(0, Math.pow(10, 4))),
         "price": [
-            +getRandomNumber(0, Math.pow(10, 4)).toFixed(2),
-            genRandomCurrency()
-        ]
-    });
+            +$getRandomNumber(0, Math.pow(10, 4)).toFixed(2),
+            $genRandomCurrency()
+    ] });
     fuzzer.schemas.push({
         "_id": oid,
         "schema": "C",
         "comment": "GeoJSON schema examples",
         "language": idioma,
         "temperature": [
-            +genNormal(15, 10).toFixed(1),
-            ['K', '°F', '°C'][getRandomIntInclusive(0, 2)]
+            +$genNormal(15, 10).toFixed(1),
+            ['K', '°F', '°C'][$getRandomIntInclusive(0, 2)]
         ],
-        "dB": +genNormal(20, 10).toFixed(3),
+        "dB": +$genNormal(20, 10).toFixed(3),
         "status": [
             'Active',
             'Inactive',
             null
-            ][getRandomRatioInt([80, 20, 1])],
+            ][$getRandomRatioInt([80, 20, 1])],
         "location": { // GeoJSON Point
             "type": "Point",
             "coordinates": [
-                +getRandomNumber(-180, 180).toFixed(4),
-                +getRandomNumber(-90, 90).toFixed(4)
-            ]
-        },
+                +$getRandomNumber(-180, 180).toFixed(4),
+                +$getRandomNumber(-90, 90).toFixed(4)
+        ] },
         "lineString": { // GeoJSON LineString
             "type": "LineString",
             "coordinates": [
                 [
-                    +getRandomNumber(-180, 180).toFixed(4),
-                    +getRandomNumber(-90, 90).toFixed(4)
+                    +$getRandomNumber(-180, 180).toFixed(4),
+                    +$getRandomNumber(-90, 90).toFixed(4)
                 ],[
-                    +getRandomNumber(-180, 180).toFixed(4),
-                    +getRandomNumber(-90, 90).toFixed(4)
-                ]
-            ]
-        },
+                    +$getRandomNumber(-180, 180).toFixed(4),
+                    +$getRandomNumber(-90, 90).toFixed(4)
+        ]] },
         "polygon": { // polygon with a single ring
             "type": "Polygon",
             "coordinates": [
@@ -466,8 +462,7 @@ function genDocument() {
                     [3, 6],
                     [6, 1],
                     [0, 0]]
-            ]
-        },
+        ] },
         "polygonMulti": { // polygons with multiple rings
             "type": "Polygon",
             "coordinates": [
@@ -481,9 +476,7 @@ function genDocument() {
                     [3, 3],
                     [4, 2],
                     [2, 2]
-                ]
-            ]
-        },
+        ]] },
         "multiPoint": { // GeoJSON MultiPoint
             "type": "MultiPoint",
             "coordinates": [
@@ -491,8 +484,7 @@ function genDocument() {
                 [-73.9498, 40.7968],
                 [-73.9737, 40.7648],
                 [-73.9814, 40.7681]
-            ]
-        },
+        ] },
         "multiLineString": { // GeoJSON MultiLineString
             "type": "MultiLineString",
             "coordinates": [
@@ -508,9 +500,7 @@ function genDocument() {
                 ],[
                     [-73.97880, 40.77247],
                     [-73.97036, 40.76811]
-                ]
-            ]
-        },
+        ]] },
         "multiPolygon": { // GeoJSON MultiPolygon
             "type": "MultiPolygon",
             "coordinates": [
@@ -528,10 +518,7 @@ function genDocument() {
                         [-73.9498, 40.7968],
                         [-73.9737, 40.7648],
                         [-73.958, 40.8003]
-                    ]
-                ]
-            ]
-        },
+        ]]] },
         "geoCollection": { // GeoJSON GeometryCollection
             "type": "GeometryCollection",
             "geometries": [{
@@ -541,8 +528,8 @@ function genDocument() {
                     [-73.9498, 40.7968],
                     [-73.9737, 40.7648],
                     [-73.9814, 40.7681]
-                ]
-            },{
+            ] },
+            {
                 "type": "MultiLineString",
                 "coordinates": [
                     [
@@ -557,13 +544,10 @@ function genDocument() {
                     ],[
                         [-73.9788, 40.7724],
                         [-73.9703, 40.7681]
-                    ]
-                ]
-            }]
-        }
+        ]] }] }
     });
 
-    return fuzzer.schemas[getRandomRatioInt(fuzzer.ratios)];
+    return fuzzer.schemas[$getRandomRatioInt(fuzzer.ratios)];
 }
 
 function dropNS(dropPref = false, dbName = false, collName = false,
@@ -627,10 +611,9 @@ function createNS(dbName = false, collName = false, msg = '',
         "storageEngine": {
             "wiredTiger": {
                 "configString": "block_compressor=" + compressor
-            }
-        },
+        } },
         "collation": collation,
-        "writeConcern": wc
+        "writeConcern": writeConcern
     };
     if (timeseries && fCV(5.0) && !isAtlasPlatform('serverless')) {
         options.timeseries = tsOptions;
