@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.3.18"
+ *  Version: "0.3.19"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-const __script = { "name": "fuzzer.js", "version": "0.3.18" };
+const __script = { "name": "fuzzer.js", "version": "0.3.19" };
 let __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -169,7 +169,10 @@ function main() {
           'each with BSON size averaging', avgSize,
           'byte' + ((avgSize === 1) ? '' : 's')
     );
-    let batchSize = (bsonMax * 0.95 / avgSize)|0;
+    let batchSize = (() => {
+        let sampledSize = (bsonMax * 0.95 / avgSize)|0;
+        return (maxWriteBatchSize < sampledSize) ? maxWriteBatchSize : sampledSize;
+    })()
     print('Estimated optimal batch capacity', batchSize,
           'document' + ((batchSize === 1) ? '' : 's')
     );
