@@ -20,9 +20,6 @@ var bsonMax = (typeof hello().maxBsonObjectSize === 'undefined')
             : hello().maxBsonObjectSize;
 const idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', 'pt', 'ro', 'ru', 'es', 'sv', 'tr'];
 
-// Random.setRandomSeed(); 
-// pcg32.srandom(42, 52); // seed
-
 /*
  *  Helper functions, derived from:
  *  https://github.com/uxitten/polyfill/blob/master/string.polyfill.js
@@ -33,7 +30,7 @@ const idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', '
 
 if (typeof String.prototype.padStart === 'undefined') {
     /*
-     *  Add to older legacy shells
+     *  Add to legacy shell
      */
     String.prototype.padStart = (targetLength, padString) => {
         targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
@@ -52,7 +49,7 @@ if (typeof String.prototype.padStart === 'undefined') {
 
 if (typeof String.prototype.padEnd === 'undefined') {
     /*
-     *  Add to older legacy shells
+     *  Add to legacy shell
      */
     String.prototype.padEnd = (targetLength, padString) => {
         targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
@@ -71,16 +68,16 @@ if (typeof String.prototype.padEnd === 'undefined') {
 
 if (typeof Object.prototype.entries === 'undefined') {
     /*
-     *  Add to older legacy shells
+     *  Add to legacy shell
      */
     Object.entries = obj => {
-        var ownProps = Object.keys(obj),
+        let ownProps = Object.keys(obj),
             i = ownProps.length,
-            resArray = new Array(i); // preallocate the Array
+            entries = new Array(i); // preallocate the Array
         while (i--)
-            resArray[i] = [ownProps[i], obj[ownProps[i]]];
+            entries[i] = [ownProps[i], obj[ownProps[i]]];
 
-        return resArray;
+        return entries;
     }
 }
 
@@ -146,7 +143,14 @@ class AutoFactor {
     }
 
     metric(name, unit, symbol, factor, precision, pctPoint) {
-        return { "name": name, "unit": unit, "symbol": symbol, "factor": Math.pow(1024, factor), "precision": precision, "pctPoint": pctPoint }
+        return {
+            "name": name,
+            "unit": unit,
+            "symbol": symbol,
+            "factor": Math.pow(1024, factor),
+            "precision": precision,
+            "pctPoint": pctPoint
+        }
     }
 
     static formatted(number) {
@@ -192,7 +196,7 @@ class MetaStats {
     }
 }
 
-function rand() {
+function $rand() {
     /*
      *  Choose your preferred RNG
      */
@@ -208,11 +212,17 @@ function rand() {
     }
     // crypto.webcrypto.getRandomValues(new Uint32Array(1))[0]/(Math.pow(2, 32) -1);
     // return _rand(); // the shell's prng
-    // return Math.random(); // node's prng
-    // return pcg32.random() / (Math.pow(2, 32) - 1); // PCG-XSH-RR // load('pcg-xsh-rr.js');
     // return Math.abs(_srand()) / (Math.pow(2, 63) - 1); // SecureRandom() method
-    // return Random.rand(); // SecureRandom() method
+    // return Math.random(); // node's prng
+    /* 
+     * pcg32.srandom(42, 52); // seed
+     * return pcg32.random() / (Math.pow(2, 32) - 1); // PCG-XSH-RR // load('pcg-xsh-rr.js');
+     */
     // return Fortuna();
+    /*
+     * Random.setRandomSeed();
+     * return Random.rand(); // SecureRandom() method
+     */
 }
 
 function isReplSet() {
@@ -377,44 +387,44 @@ function $getRandomRegex() {
         /[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/
     ];
 
-    return regexes[getRandomInt(0, regexes.length)];
+    return regexes[$getRandomInt(0, regexes.length)];
 }
 
-function getRandomNumber(min = 0, max = 1) {
+function $getRandomNumber(min = 0, max = 1) {
     /*
      *  generate random number
      */
-    return rand() * (max - min) + min
+    return $rand() * (max - min) + min
 }
 
-function getRandomExp(exponent = 0) {
+function $getRandomExp(exponent = 0) {
     /*
      *  generate random exponential number
      */
-    return Math.ceil(getRandomNumber(0, 9) * Math.pow(10, exponent))
+    return Math.ceil($getRandomNumber(0, 9) * Math.pow(10, exponent))
 }
 
-function getRandomInt(min = 0, max = 1) {
+function $getRandomInt(min = 0, max = 1) {
     /*
      *  generate random integer
      */
     min = Math.ceil(min);
     max = Math.floor(max);
 
-    return (rand() * (max - min) + min)|0;
+    return ($rand() * (max - min) + min)|0;
 }
 
-function getRandomIntInclusive(min = 0, max = 1) {
+function $getRandomIntInclusive(min = 0, max = 1) {
     /*
      *  generate random integer inclusive of the maximum
      */
     min = Math.ceil(min);
     max = Math.floor(max);
 
-    return (rand() * (max - min + 1) + min)|0;
+    return ($rand() * (max - min + 1) + min)|0;
 }
 
-function getRandomRatioInt(ratios = [1]) {
+function $getRandomRatioInt(ratios = [1]) {
     /*
      *  generate ratioed random integer
      */
@@ -425,189 +435,189 @@ function getRandomRatioInt(ratios = [1]) {
         }
     });
 
-    return weightedIndex[rand() * weightedIndex.length|0];
+    return weightedIndex[$rand() * weightedIndex.length|0];
 }
 
-function genRandomHex(len = 1) {
+function $genRandomHex(len = 1) {
     /*
      *  generate random hexadecimal string
      */
     let res = '';
     for (let i = 0; i < len; ++i) {
-        res += (rand() * 16|0).toString(16);
+        res += ($rand() * 16|0).toString(16);
     }
 
     return res;
 }
 
-function genRandomString(len = 1) {
+function $genRandomString(len = 1) {
     /*
      *  generate random alpha-numeric string
      */
     let res = '';
     let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     for (let i = 0; i < len; ++i) {
-       res += chars.charAt(rand() * chars.length|0);
+       res += chars.charAt($rand() * chars.length|0);
     }
 
     return res;
 }
 
-function genRandomAlpha(len = 1) {
+function $genRandomAlpha(len = 1) {
     /*
      *  generate random alpha-character string
      */
     let res = '';
     let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
     for (let i = 0; i < len; ++i) {
-       res += chars.charAt(getRandomInt(0, chars.length));
+       res += chars.charAt($getRandomInt(0, chars.length));
     }
 
     return res;
 }
 
-function genRandomSymbol() {
+function $genRandomSymbol() {
     /*
      *  generate random symbol
      */
     let symbol = '!#%&\'()+,-;=@[]^_`{}~¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ';
 
-    return symbol.charAt(rand() * symbol.length|0);
+    return symbol.charAt($rand() * symbol.length|0);
 }
 
-function genRandomCurrency() {
+function $genRandomCurrency() {
     /*
      *  generate random curreny symbol
      */
     let currencies = ['$', '€', '₡', '£', '₪', '₹', '¥', '₩', '₦', '₱zł', '₲', '฿', '₴', '₫'];
 
-    return currencies[getRandomInt(0, currencies.length)];
+    return currencies[$getRandomInt(0, currencies.length)];
 }
 
-function genArrayElements(len) {
+function $genArrayElements(len) {
     /*
      *  generate array of random strings
      */
     let array = [];
     for (let i = 0; i < len; ++i) {
-        array.push(genRandomString(getRandomIntInclusive(6, 24)));
+        array.push($genRandomString($getRandomIntInclusive(6, 24)));
     }
 
     return array;
 }
 
-function genArrayStrings(len) {
+function $genArrayStrings(len) {
     /*
      *  generate array of random strings
      */
     let array = [];
     for (let i = 0; i < len; ++i) {
-        array.push(genRandomString(getRandomIntInclusive(6, 24)));
+        array.push($genRandomString($getRandomIntInclusive(6, 24)));
     }
 
     return array;
 }
 
-function genArrayInts(len) {
+function $genArrayInts(len) {
     /*
      *  generate array of random integers
      */
     let array = [];
     for (let i = 0; i < len; ++i) {
-        array.push(getRandomIntInclusive(1, 1000));
+        array.push($getRandomIntInclusive(1, 1000));
     }
 
     return array;
 }
 
-function genRandomInclusivePareto(min, alpha = 1.161) {
+function $genRandomInclusivePareto(min, alpha = 1.161) {
     /*
      *  min is the lowest possible value that can be returned
      *  alpha controls the "shape" of the distribution
      */
-    let u = 1.0 - rand();
+    let u = 1.0 - $rand();
 
     return min / Math.pow(u, (1.0 / alpha));
 }
 
-function genRandomIntInclusivePareto(min, max, alpha = 1.161) {
+function $genRandomIntInclusivePareto(min, max, alpha = 1.161) {
     /*
      *  min is the lowest possible value that can be returned
      *  alpha controls the "shape" of the distribution
      */
-    let k = max * (1.0 - rand()) + min;
+    let k = max * (1.0 - $rand()) + min;
     let v = Math.pow(k, alpha);
 
     return v + min;
 }
 
-function genNormal(mu, sigma) {
+function $genNormal(mu, sigma) {
     /*
      *  mu = mean
      *  sigma = standard deviation
      */
-    let x = Math.sqrt(-2.0 * Math.log(rand())) * Math.cos(Math.PI*2 * rand());
+    let x = Math.sqrt(-2.0 * Math.log($rand())) * Math.cos(Math.PI*2 * $rand());
 
     return x * sigma + mu;
 }
 
-function genExponential(lambda = 1) {
+function $genExponential(lambda = 1) {
     /*
      *  exponential distribution function
      */
-    return -Math.log(1.0 - rand()) / lambda
+    return -Math.log(1.0 - $rand()) / lambda
 }
 
-function ftoc(fahrenheit) {
+function $ftoc(fahrenheit) {
     /*
      *  convert Fahrenheit to Celsius temparature unit
      */
     return (fahrenheit - 32) / 1.8
 }
 
-function ctof(celsius) {
+function $ctof(celsius) {
     /*
      *  convert Celsius to Fahrenheit temparature unit
      */
     return celsius * 1.8 + 32
 }
 
-function ctok(celsius) {
+function $ctok(celsius) {
     /*
      *  convert Celsius to Kelvin temparature unit
      */
     return celsius + K
 }
 
-function ktoc(kelvin) {
+function $ktoc(kelvin) {
     /*
      *  convert Kelvin to Celsius temparature unit
      */
     return kelvin - K
 }
 
-function ftok(fahrenheit) {
+function $ftok(fahrenheit) {
     /*
      *  convert Fahrenheit to Kelvin temparature unit
      */
     return ((fahrenheit - 32) / 1.8) + K
 }
 
-function ktof(kelvin) {
+function $ktof(kelvin) {
     /*
      *  convert Kelvin to Fahrenheit temparature unit
      */
     return (kelvin - K) * 1.8 + 32
 }
 
-function bool(chance = 0.5) {
+function $bool(chance = 0.5) {
     /*
      *  return true/false
      */
-    return rand() < chance
+    return $rand() < chance
 }
 
-function benford() {
+function $benford() {
     /*
      *  Benford's law (experimental)
      */
