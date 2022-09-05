@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.23"
+ *  Version: "0.2.24"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,15 +8,16 @@
 if (typeof __lib === 'undefined') {
     var __lib = {
         "name": "mdblib.js",
-        "version": "0.2.23"
-    }
-}
+        "version": "0.2.24"
+} }
 
 /*
  *  Global defaults
  */
 
-var bsonMax = (typeof hello().maxBsonObjectSize === 'undefined') ? 16 * Math.pow(1024, 2) : hello().maxBsonObjectSize;
+var bsonMax = (typeof hello().maxBsonObjectSize === 'undefined')
+            ? 16 * Math.pow(1024, 2)
+            : hello().maxBsonObjectSize;
 const idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', 'pt', 'ro', 'ru', 'es', 'sv', 'tr'];
 
 // Random.setRandomSeed(); 
@@ -193,10 +194,21 @@ class MetaStats {
 
 function rand() {
     /*
-     *  Choose your preferred randomiser
+     *  Choose your preferred RNG
      */
+    if (typeof process !== 'undefined') {
+        /*
+         *  mongosh/nodejs detected
+         */
+        return crypto.webcrypto.getRandomValues(new Uint32Array(1))[0]/(Math.pow(2, 32) -1);
+
+    } else {
+        // default RNG
+        return Math.random();
+    }
+    // crypto.webcrypto.getRandomValues(new Uint32Array(1))[0]/(Math.pow(2, 32) -1);
     // return _rand(); // the shell's prng
-    return Math.random(); // node's prng
+    // return Math.random(); // node's prng
     // return pcg32.random() / (Math.pow(2, 32) - 1); // PCG-XSH-RR // load('pcg-xsh-rr.js');
     // return Math.abs(_srand()) / (Math.pow(2, 63) - 1); // SecureRandom() method
     // return Random.rand(); // SecureRandom() method
@@ -229,7 +241,11 @@ function fCV(ver) { // update for shared tier compat
      *  Evaluate feature compatibility version
      */
     let featureVer = () => {
-        return (db.serverStatus().process === 'mongod') ? +db.adminCommand({ "getParameter": 1, "featureCompatibilityVersion": 1 }).featureCompatibilityVersion.version
+        return (db.serverStatus().process === 'mongod')
+             ? +db.adminCommand({
+                "getParameter": 1,
+                "featureCompatibilityVersion": 1
+            }).featureCompatibilityVersion.version
              : serverVer(ver)
     }
     return (ver !== 'undefined' && ver <= featureVer()) ? true
@@ -242,7 +258,8 @@ function shellVer(ver) {
      *  Evaluate shell version
      */
     let shell = () => +version().match(/^[0-9]+\.[0-9]+/);
-    return (ver !== 'undefined' && ver <= shell()) ? true
+    return (typeof process !== 'undefined') ? true
+         : (ver !== 'undefined' && ver <= shell()) ? true
          : (ver !== 'undefined' && ver > shell()) ? false
          : shell();
 }
@@ -251,7 +268,8 @@ function slaveOk(readPref = 'primaryPreferred') {
     /*
      *  Backward compatibility with rs.slaveOk() and MONGOSH-910
      */
-    return (typeof rs.slaveOk === 'undefined' && typeof rs.secondaryOk !== 'undefined') ? db.getMongo().setReadPref(readPref)
+    return (typeof rs.slaveOk === 'undefined' && typeof rs.secondaryOk !== 'undefined')
+         ? db.getMongo().setReadPref(readPref)
     // else if (shellVer() >= 4.4)
          : (typeof rs.secondaryOk === 'function') ? rs.secondaryOk()
          : rs.slaveOk()
@@ -261,14 +279,18 @@ function isMaster() {
     /*
      *  Backward compatibility with db.isMaster()
      */
-    return (typeof db.prototype.hello === 'undefined') ? db.isMaster() : db.hello()
+    return (typeof db.prototype.hello === 'undefined')
+         ? db.isMaster()
+         : db.hello()
 }
 
 function hello() {
     /*
      *  Forward compatibility with db.hello()
      */
-    return (typeof db.prototype.hello !== 'function') ? db.isMaster() : db.hello()
+    return (typeof db.prototype.hello !== 'function')
+         ? db.isMaster()
+         : db.hello()
 }
 
 function isAtlasPlatform(type) {
@@ -351,6 +373,7 @@ function $getRandomRegex() {
         /[a-z0-9]/,
         /[a-z]/,
         /[0-9]/,
+        /[a-zA-Z0-9]/,
         /[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/
     ];
 
