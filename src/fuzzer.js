@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.3.16"
+ *  Version: "0.3.17"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-const __script = { "name": "fuzzer.js", "version": "0.3.16" };
+const __script = { "name": "fuzzer.js", "version": "0.3.17" };
 let __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -154,11 +154,9 @@ function main() {
     let avgSize = (docSize / sampleSize)|0;
     if (avgSize > bsonMax * 0.95) {
         print('\n');
-        print('Warning: The average document size of',
-              avgSize,
+        print('Warning: The average document size of', avgSize,
               'bytes approaches or exceeeds the BSON max size of',
-              bsonMax,
-              'bytes'
+              bsonMax, 'bytes'
         );
     }
 
@@ -219,7 +217,9 @@ function main() {
     if (buildIndexes) {
         if (indexes.length > 0) {
             print('Building index' + ((indexes.length === 1) ? '' : 'es'),
-                  'with collation locale "' + collation.locale + '":'
+                  'with collation locale "' + collation.locale + '"',
+                  'with commit quorum "' + ((isReplSet() && shellVer(4.2)) ? commitQuorum : 'disabled')
+                  + '":'
             );
             indexes.forEach(index => {
                 for (let [key, value] of Object.entries(index)) {
@@ -227,15 +227,11 @@ function main() {
                 }
             });
             let indexing = () => {
-                if (isReplSet()) {
-                    return db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-                        indexes, indexOptions, commitQuorum
-                    )
-                } else {
-                    return db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-                        indexes, indexOptions
-                    )
-                }
+                let options = (isReplSet() && shellVer(4.2))
+                            ? [indexes, indexOptions, commitQuorum]
+                            : [indexes, indexOptions];
+
+                return db.getSiblingDB(dbName).getCollection(collName).createIndexes(...options);
             }
 
             let idxResult = indexing();
@@ -261,9 +257,9 @@ function main() {
 
         print('\n');
         if (specialIndexes.length > 0) {
-            print('Building exceptional index' +
-                  ((specialIndexes.length === 1) ? '' : 'es'),
-                  'without collation support:'
+            print('Building exceptional index' + ((specialIndexes.length === 1) ? '' : 'es'),
+                  '(no collation support) with commit quorum "' +
+                  ((isReplSet() && shellVer(4.2)) ? commitQuorum : 'disabled') + '":'
             );
             specialIndexes.forEach(index => {
                 for (let [key, value] of Object.entries(index)) {
@@ -273,15 +269,11 @@ function main() {
                 }
             });
             let sindexing = () => {
-                if (isReplSet()) {
-                    return db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-                        specialIndexes, specialIndexOptions, commitQuorum
-                    )
-                } else {
-                    return db.getSiblingDB(dbName).getCollection(collName).createIndexes(
-                        specialIndexes, specialIndexOptions
-                    )
-                }
+                let soptions = (isReplSet() && shellVer(4.2))
+                           ? [specialIndexes, specialIndexOptions, commitQuorum]
+                           : [specialIndexes, specialIndexOptions];
+
+                return db.getSiblingDB(dbName).getCollection(collName).createIndexes(...soptions);
             }
 
             let sidxResult = sindexing();
