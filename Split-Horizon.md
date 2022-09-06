@@ -67,14 +67,13 @@ As reported by _`db.hello()`_
 Connect without TLS:
 
 ```bash
-mongo mongodb://localhost:27017/?replicaSet=replset&readPreference=primary
+mongosh "mongodb://localhost:27017/?replicaSet=replset&readPreference=primary"
 ```
 
 Add the split-horizon topology definitions
 
 ```javascript
-var config = rs.conf();
-config.version++;
+let config = rs.conf();
 config.members[0].horizons = { "external": "external:37017" };
 config.members[1].horizons = { "external": "external:37018" };
 config.members[2].horizons = { "external": "external:37019" };
@@ -86,7 +85,7 @@ rs.reconfig(config);
 Connect to the native port:
 
 ```bash
-mongo "mongodb://localhost:27017/?replicaSet=replset" --tlsCAFile mongodb.pk8 --tls --eval 'db.hello().hosts'
+mongosh "mongodb://localhost:27017/?replicaSet=replset" --tlsCAFile mongodb.pk8 --tls --eval 'db.hello().hosts'
 ```
 
 The SDAM topology should appear as:
@@ -98,7 +97,7 @@ The SDAM topology should appear as:
 Connect to the translated port:
 
 ```bash
-mongo "mongodb://external:37017,external:37018,external:37019/?replicaSet=replset" --tlsCAFile mongodb.pk8 --tls --eval 'db.hello().hosts'
+mongosh "mongodb://external:37017,external:37018,external:37019/?replicaSet=replset" --tlsCAFile mongodb.pk8 --tls --eval 'db.hello().hosts'
 ```
 
 The SDAM topology should appear as:
