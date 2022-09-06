@@ -2,7 +2,7 @@
  *  Aggregation template with extended options
  */
 
-var dbName = 'database',
+let dbName = 'database',
     collName = 'collection',
     readPref = 'primary',
     options = {
@@ -30,7 +30,8 @@ db.getSiblingDB(dbName).getCollection(collName).aggregate(pipeline, options).for
  *  Aggregation template with explain options
  */
 
-var dbName = 'database', collName = 'collection',
+let dbName = 'database',
+    collName = 'collection',
     readPref = 'primary',
     explainPlan = 'executionStats', // ['queryPlanner'|'executionStats'|'allPlansExecution']
     options = {
@@ -55,11 +56,12 @@ db.getMongo().setReadPref(readPref);
 db.getSiblingDB(dbName).getCollection(collName).explain(explainPlan).aggregate(pipeline, options);
 
 /*
- *  Aggregation template for ADL SQL queries
+ *  Aggregation template for $sql queries
  */
 
-var dbName = 'database', collName = 'collection',
-    options = { "comment": "My ADL $sql query" },
+let dbName = 'database',
+    collName = 'collection',
+    options = { "comment": "My $sql query" },
     sql = `
         SELECT *
         FROM ${collName}
@@ -78,7 +80,7 @@ db.getSiblingDB(dbName).aggregate(pipeline, options).forEach(printjson);
 
 // Aggregation template for $currentOp
 
-var options = {
+let options = {
         "cursor": { "batchSize": 0 },
         "comment": "$currentOp command template",
         // "let": { } // v5.0+ only
