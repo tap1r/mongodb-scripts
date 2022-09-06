@@ -73,11 +73,18 @@ mongosh "mongodb://localhost:27017/?replicaSet=replset&readPreference=primary"
 Add the split-horizon topology definitions
 
 ```javascript
-let config = rs.conf();
-config.members[0].horizons = { "external": "external:37017" };
-config.members[1].horizons = { "external": "external:37018" };
-config.members[2].horizons = { "external": "external:37019" };
-rs.reconfig(config);
+let horizons = [
+    { "external": "external:37017" },
+    { "external": "external:37018" },
+    { "external": "external:37019" }
+];
+rs.reconfig(Object.assign(
+    rs.conf(),
+    { "members": rs.conf().members.map(
+        member => { return Object.assign(
+            member,
+            { "horizons": horizons[member._id] }
+) }) }));
 ```
 
 ## Testing
