@@ -78,13 +78,13 @@ let horizons = [
     { "external": "external:37018" },
     { "external": "external:37019" }
 ];
-rs.reconfig(Object.assign(
-    rs.conf(),
-    { "members": rs.conf().members.map(
-        member => { return Object.assign(
-            member,
-            { "horizons": horizons[member._id] }
-) }) }));
+rs.reconfig({
+	...rs.conf(),
+	"members": rs.conf().members.map((member) => ({
+		...member,
+		"horizons": horizons[member._id]
+	}))
+});
 ```
 
 ## Testing
