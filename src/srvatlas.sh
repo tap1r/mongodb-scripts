@@ -1,8 +1,8 @@
 #!/bin/bash
 #
 # Name: "srvatlas.sh"
-# Version: "0.2.2"
-# Description: Atlas cluster name validator
+# Version: "0.2.3"
+# Description: Atlas cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
 _clusterName="${1:?Usage: srvatlas.sh atlas-cluster-name}"
@@ -21,7 +21,7 @@ _policy='HIGH:!EXPORT:!aNULL@STRENGTH' # MongoDB compiled default
 _compressors="compressors=snappy,zstd,zlib" # MongoDB compiled default
 
 # test OpenSSL ABI
-[ -x $(which $_openssl) ] || { echo "ERROR: OpenSSL binary $_openssl is NOT in PATH" 1>&2; exit 1; }
+[ -x $(which $_openssl) ] || { echo -e "ERROR: OpenSSL binary ${_openssl} is NOT in PATH" 1>&2; exit 1; }
 [[ $($_openssl version) =~ ^OpenSSL ]] || { echo -e "ERROR: Unexpected OpenSSL binary $($_openssl version)"; exit 1; }
 
 # test shells
@@ -63,7 +63,7 @@ echo -e "\nDNS tests done."
 echo -e "\nValidating replSet consistency:\n"
 
 for _target in "${_targets[@]}"; do
-    _uri="mongodb://${_target}/"
+    _uri="mongodb://${_target}/?directConnection=true&appName=srvatlas.sh"
     echo -e "Evaluating $_target\n"
     echo -e "\tIdentifier hello().me:\t$(${_shell} ${_uri} ${_shellOpts} --eval 'db.hello().me')"
     echo -e "\treplset name:\t\t$(${_shell} ${_uri} ${_shellOpts} --eval 'db.hello().setName')"
@@ -76,11 +76,11 @@ echo -e "\nReplSet tests done."
 echo -e "\nValidating connectivity to individual nodes:"
 
 for _target in "${_targets[@]}"; do
-    _uri="mongodb://${_target}/"
+    _uri="mongodb://${_target}/?directConnection=true&appName=srvatlas.sh"
     _saslCmd="db.runCommand({'hello':1,'saslSupportedMechs':'${_authUser}'}).saslSupportedMechs"
     echo -e "\nEvaluating $_target\n"
     echo -e "\tsaslSupportedMechs:\t$(${_shell} ${_uri} ${_shellOpts} --eval ${_saslCmd})"
-    echo -e "\tcompression mechanisms:\t$(${_legacyShell} ${_uri}?${_compressors} ${_shellOpts} --eval 'db.hello().compression')"
+    echo -e "\tcompression mechanisms:\t$(${_legacyShell} ${_uri}\&${_compressors} ${_shellOpts} --eval 'db.hello().compression')"
     echo -e "\tmaxWireVersion:\t$(${_shell} ${_uri} ${_shellOpts} --eval 'db.hello().maxWireVersion')"
     echo -e "\tTLS cipher scanning:"
     for _suite in ${_cipherSuites[@]}; do
@@ -90,7 +90,6 @@ for _target in "${_targets[@]}"; do
         done
         [[ ${#_ciphers[@]} -gt 1 ]] && unset _ciphers[0]
         echo -e "\n\t$_suite: ${_ciphers[@]}"
-        # _ciphers=()
         unset _ciphers
     done
 done
