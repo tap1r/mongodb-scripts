@@ -13,19 +13,35 @@ _shell="mongosh" # alternatively use the legacy mongo shell
 _legacyShell="mongo"
 _shellOpts="--tls --norc --quiet"
 _openssl="openssl"
+_lookupCmd="dig"
 _authUser="admin.mms-automation" # alternatively can use local.__system
 _cipherSuites=('tls1' 'tls1_1' 'tls1_2' 'tls1_3')
 _tls1_3_suites='TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256' # OpenSSL default
 _policy='HIGH:!EXPORT:!aNULL@STRENGTH' # MongoDB compiled default
 _compressors="compressors=snappy,zstd,zlib" # MongoDB compiled default
-_txt=$(dig +short $_clusterName TXT)
 
-[ -z $_txt ] && { echo -e "Error: lookup failed for cluster name $_clusterName "; exit 1; }
-# test if shells exist
-# test if openssl exists
+# test OpenSSL ABI
+[ -x $(which $_openssl) ] || { echo "ERROR: OpenSSL binary $_openssl is NOT in PATH" 1>&2; exit 1; }
+[[ $($_openssl version) =~ ^OpenSSL ]] || { echo -e "ERROR: Unexpected OpenSSL binary $($_openssl version)"; exit 1; }
+
+# test shells
+if [ ! -x $(which $_shell) ]; then
+    echo -e "WARNING: Shell ${_shell} is NOT in PATH, attempting to substitute for the legacy shell"
+    _shell=$_legacyShell
+fi
+[ -x $(which $_legacyShell) ] || { echo -e "ERROR: Legacy shell ${_legacyShell} is NOT in PATH" 1>&2; exit 1; }
+
+# lookup binary test
+[ -x $(which $_lookupCmd) ] || { echo -e "ERROR: ${_lookupCmd} is NOT in PATH" 1>&2; exit 1; }
+
+# verify supplied cluster-name is valid
+_txt=$($_lookupCmd +short $_clusterName TXT)
+_a=$($_lookupCmd +short $_clusterName A)
+[ ! -z $_txt ] || { echo -e "ERROR: TXT lookup failed for ${_clusterName}, is it a valid cluster name?"; exit 1; }
+[[ ! -z $_txt && -z $_a ]] || { echo -e "WARNING: record resolves to a valid host ${_a}, ensure the correct cluster name is used for SRV resolution"; exit 1; }
 
 echo -e "\nValidating Atlas cluster name:\t${_clusterName}"
-echo -e "\nTXT resource record:\t\t${_txt}"
+echo -e "\n\tTXT resource record:\t\t${_txt}"
 
 for _srv in $(dig +short _mongodb._tcp.${_clusterName} SRV); do
     if [[ $_srv =~ ^[0-9]+$ ]]; then
@@ -35,9 +51,9 @@ for _srv in $(dig +short _mongodb._tcp.${_clusterName} SRV); do
     fi
     if [[ ${_srv: -13} == ".mongodb.net." ]]; then
         _host=$_srv
-	    echo -e "\nSRV resource record:\t\t${_host}"
-        echo -e "Resolves to CNAME/A record:\t$(dig +short ${_host} A)"
-        echo -e "Service parameter: \t\tTCP/${_port}"
+	    echo -e "\n\tSRV resource record:\t\t${_host}"
+        echo -e "\tResolves to CNAME/A record:\t$(dig +short ${_host} A)"
+        echo -e "\tService parameter: \t\tTCP/${_port}"
         _targets+=(${_host%\.}:${_port})
     fi
 done
@@ -49,10 +65,10 @@ echo -e "\nValidating replSet consistency:\n"
 for _target in "${_targets[@]}"; do
     _uri="mongodb://${_target}/"
     echo -e "Evaluating $_target\n"
-    echo -e "Self-identifier hello().me:\t$(${_shell} ${_uri} ${_shellOpts} --eval 'db.hello().me')"
-    echo -e "Advertised replset name:\t$(${_shell} ${_uri} ${_shellOpts} --eval 'db.hello().setName')"
-    echo -e "Advertised replset hosts:\n$(${_shell} ${_uri} ${_shellOpts} --eval 'db.hello().hosts')"
-    echo -e "Advertised replset tags:\n$(${_shell} ${_uri} ${_shellOpts} --eval 'db.hello().tags')"
+    echo -e "\tIdentifier hello().me:\t$(${_shell} ${_uri} ${_shellOpts} --eval 'db.hello().me')"
+    echo -e "\treplset name:\t\t$(${_shell} ${_uri} ${_shellOpts} --eval 'db.hello().setName')"
+    echo -e "\treplset hosts:\n$(${_shell} ${_uri} ${_shellOpts} --eval 'db.hello().hosts')"
+    echo -e "\treplset tags:\n$(${_shell} ${_uri} ${_shellOpts} --eval 'db.hello().tags')"
 done
 
 echo -e "\nReplSet tests done."
@@ -63,23 +79,20 @@ for _target in "${_targets[@]}"; do
     _uri="mongodb://${_target}/"
     _saslCmd="db.runCommand({'hello':1,'saslSupportedMechs':'${_authUser}'}).saslSupportedMechs"
     echo -e "\nEvaluating $_target\n"
-    echo -e "Advertised saslSupportedMechs:\t$(${_shell} ${_uri} ${_shellOpts} --eval ${_saslCmd})"
-    echo -e "Advertised compression mechanisms:\t$(${_legacyShell} ${_uri}?${_compressors} ${_shellOpts} --eval 'db.hello().compression')"
-    echo -e "Advertised maxWireVersion:\t$(${_shell} ${_uri} ${_shellOpts} --eval 'db.hello().maxWireVersion')"
-    echo -e "\nTLS scanning ${_target}"
+    echo -e "\tsaslSupportedMechs:\t$(${_shell} ${_uri} ${_shellOpts} --eval ${_saslCmd})"
+    echo -e "\tcompression mechanisms:\t$(${_legacyShell} ${_uri}?${_compressors} ${_shellOpts} --eval 'db.hello().compression')"
+    echo -e "\tmaxWireVersion:\t$(${_shell} ${_uri} ${_shellOpts} --eval 'db.hello().maxWireVersion')"
+    echo -e "\tTLS cipher scanning:"
     for _suite in ${_cipherSuites[@]}; do
         _ciphers="None"
         for _cipher in $(${_openssl} ciphers -s -${_suite} -ciphersuites ${_tls1_3_suites} ${_policy} | tr ':' ' '); do
             ${_openssl} s_client -connect "${_target}" -cipher $_cipher -$_suite < /dev/null > /dev/null 2>&1 && _ciphers+=($_cipher)
         done
-        for _cipher in "${_ciphers[@]}"; do
-            function join_by { local IFS="$1"; shift; echo "$*"; }
-            _joined=$(join_by , ${_ciphers[@]})
-        done
-        echo -e "\n$_suite:\t$_joined"
-        _ciphers=()
+        [[ ${#_ciphers[@]} -gt 1 ]] && unset _ciphers[0]
+        echo -e "\n\t$_suite: ${_ciphers[@]}"
+        # _ciphers=()
+        unset _ciphers
     done
-    echo -e "\n"
 done
 
-echo -e "Connectivity tests done.\n"
+echo -e "\nConnectivity tests done.\n"
