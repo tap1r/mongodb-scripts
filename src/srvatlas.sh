@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Name: "srvatlas.sh"
-# Version: "0.2.3"
+# Version: "0.2.4"
 # Description: Atlas cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
@@ -18,7 +18,7 @@ _authUser="admin.mms-automation" # alternatively can use local.__system
 _cipherSuites=('tls1' 'tls1_1' 'tls1_2' 'tls1_3')
 _tls1_3_suites='TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256' # OpenSSL default
 _policy='HIGH:!EXPORT:!aNULL@STRENGTH' # MongoDB compiled default
-_compressors="compressors=snappy,zstd,zlib" # MongoDB compiled default
+_compressors="snappy,zstd,zlib" # MongoDB compiled default
 
 # test OpenSSL ABI
 [ -x $(which $_openssl) ] || { echo -e "ERROR: OpenSSL binary ${_openssl} is NOT in PATH" 1>&2; exit 1; }
@@ -71,7 +71,7 @@ for _target in "${_targets[@]}"; do
     echo -e "\treplset tags:\n$(${_shell} ${_uri} ${_shellOpts} --eval 'db.hello().tags')"
 done
 
-echo -e "\nReplSet tests done."
+echo -e "\nReplica Set tests done."
 
 echo -e "\nValidating connectivity to individual nodes:"
 
@@ -80,7 +80,7 @@ for _target in "${_targets[@]}"; do
     _saslCmd="db.runCommand({'hello':1,'saslSupportedMechs':'${_authUser}'}).saslSupportedMechs"
     echo -e "\nEvaluating $_target\n"
     echo -e "\tsaslSupportedMechs:\t$(${_shell} ${_uri} ${_shellOpts} --eval ${_saslCmd})"
-    echo -e "\tcompression mechanisms:\t$(${_legacyShell} ${_uri}\&${_compressors} ${_shellOpts} --eval 'db.hello().compression')"
+    echo -e "\tcompression mechanisms:\t$(${_legacyShell} ${_uri}\&compressors=${_compressors} ${_shellOpts} --eval 'db.hello().compression')"
     echo -e "\tmaxWireVersion:\t$(${_shell} ${_uri} ${_shellOpts} --eval 'db.hello().maxWireVersion')"
     echo -e "\tTLS cipher scanning:"
     for _suite in ${_cipherSuites[@]}; do
