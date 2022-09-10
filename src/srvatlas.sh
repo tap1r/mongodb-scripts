@@ -1,40 +1,41 @@
 #!/bin/bash
 #
 # Name: "srvatlas.sh"
-# Version: "0.3.1"
+# Version: "0.3.2"
 # Description: Atlas cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
 _clusterName="${1:?Usage: srvatlas.sh atlas-cluster-name}"
 
-###
-
+#
+# script defaults
+#
 _shell="mongosh" # alternatively use the legacy mongo shell
 _legacyShell="mongo" # required for network compression tests
 _shellOpts=("--norc" "--quiet") # add --tls if required
 _openssl="openssl"
-_lookupCmd="dig"
-_authUser="admin.mms-automation" # alternatively can use local.__system
+_lookupCmd="dig" # nslookup not implemented (yet)
+_authUser="local.__system" # defaults to on-prem use case
 _cipherSuites=('tls1' 'tls1_1' 'tls1_2' 'tls1_3')
 _tls1_3_suites='TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256' # OpenSSL default
 _policy='HIGH:!EXPORT:!aNULL@STRENGTH' # MongoDB compiled default
 _compressors="snappy,zstd,zlib" # MongoDB compiled default
 
-# test OpenSSL ABI
+# test the OpenSSL ABI
 [ -x $(which $_openssl) ] || { echo -e "ERROR: OpenSSL binary ${_openssl} is NOT in PATH" 1>&2; exit 1; }
 [[ $($_openssl version) =~ ^OpenSSL ]] || { echo -e "ERROR: Unexpected OpenSSL binary $($_openssl version)"; exit 1; }
 
-# test shells
+# test for valide mongo/mongosh shells
 if [ ! -x $(which $_shell) ]; then
     echo -e "WARNING: Shell ${_shell} is NOT in PATH, attempting to substitute for the legacy shell"
     _shell=$_legacyShell
 fi
 [ -x $(which $_legacyShell) ] || { echo -e "ERROR: Legacy shell ${_legacyShell} is NOT in PATH" 1>&2; exit 1; }
 
-# lookup binary test
+# DNS lookup binary test
 [ -x $(which $_lookupCmd) ] || { echo -e "ERROR: ${_lookupCmd} is NOT in PATH" 1>&2; exit 1; }
 
-# verify supplied cluster-name is valid
+# verify if the supplied cluster-name is valid
 _txt=$($_lookupCmd -r +short $_clusterName TXT)
 _a=$($_lookupCmd -r +short $_clusterName A)
 [ ! -z $_txt ] || { echo -e "ERROR: TXT lookup failed for ${_clusterName}, is it a valid cluster name?"; exit 1; }
@@ -80,8 +81,8 @@ echo -e "\n\tTotal DNS query latency: ${_totalQuery}ms\n"
 
 echo -e "\nDNS tests done.\n"
 
-# detect Atlas namespace and add TLS option
-[[ ${_clusterName%\.} =~ \.mongodb\.net$ ]] && { echo "Atlas detected: adding shell --tls option"; _shellOpts+=("--tls"); }
+# detect Atlas namespace and add TLS and auth options
+[[ ${_clusterName%\.} =~ \.mongodb\.net$ ]] && { echo "Atlas detected: adding '--tls' and auth options"; _shellOpts+=("--tls"); _authUser="admin.mms-automation"; }
 
 echo -e "\nValidating replSet consistency:\n"
 
