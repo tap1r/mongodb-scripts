@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Name: "srvatlas.sh"
-# Version: "0.3.3"
+# Version: "0.3.4"
 # Description: Atlas cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
@@ -22,30 +22,48 @@ _policy='HIGH:!EXPORT:!aNULL@STRENGTH' # MongoDB compiled default
 _compressors="snappy,zstd,zlib" # MongoDB compiled default
 
 # test the OpenSSL ABI
-[ -x $(which $_openssl) ] || { echo -e "ERROR: OpenSSL binary ${_openssl} is NOT in PATH" 1>&2; exit 1; }
-[[ $($_openssl version) =~ ^OpenSSL ]] || { echo -e "ERROR: Unexpected OpenSSL binary $($_openssl version)"; exit 1; }
+[ -x $(which $_openssl) ] || {
+    echo -e "ERROR: OpenSSL binary ${_openssl} is NOT in PATH" 1>&2
+    exit 1
+}
+[[ $($_openssl version) =~ ^OpenSSL ]] || {
+    echo -e "ERROR: Unexpected OpenSSL binary $($_openssl version)"
+    exit 1
+}
 
 # test for valide mongo/mongosh shells
 if [ ! -x $(which $_shell) ]; then
     echo -e "WARNING: Shell ${_shell} is NOT in PATH, attempting to substitute for the legacy shell"
     _shell=$_legacyShell
 fi
-[ -x $(which $_legacyShell) ] || { echo -e "ERROR: Legacy shell ${_legacyShell} is NOT in PATH" 1>&2; exit 1; }
+[ -x $(which $_legacyShell) ] || {
+    echo -e "ERROR: Legacy shell ${_legacyShell} is NOT in PATH" 1>&2
+    exit 1
+}
 
 # DNS lookup binary test
-[ -x $(which $_lookupCmd) ] || { echo -e "ERROR: ${_lookupCmd} is NOT in PATH" 1>&2; exit 1; }
+[ -x $(which $_lookupCmd) ] || {
+    echo -e "ERROR: ${_lookupCmd} is NOT in PATH" 1>&2
+    exit 1
+}
 
 # verify if the supplied cluster-name is valid
 _txt=$($_lookupCmd -r +short $_clusterName TXT)
 _a=$($_lookupCmd -r +short $_clusterName A)
-[ ! -z $_txt ] || { echo -e "ERROR: TXT lookup failed for ${_clusterName}, is it a valid cluster name?"; exit 1; }
-[[ ! -z $_txt && -z $_a ]] || { echo -e "WARNING: record resolves to a valid host ${_a}, ensure the correct cluster name is used for SRV resolution"; exit 1; }
+[ ! -z $_txt ] || {
+    echo -e "ERROR: TXT lookup failed for ${_clusterName}, is it a valid cluster name?"
+    exit 1
+}
+[[ ! -z $_txt && -z $_a ]] || {
+    echo -e "WARNING: record resolves to a valid host ${_a}, ensure the correct cluster name is used for SRV resolution"
+    exit 1
+}
 
 echo -e "\nValidating Atlas cluster name:\t${_clusterName}"
 echo -e "\n\tTXT resource record:\t\t${_txt}"
 
 while IFS=' ' read -a line; do
-    for ((n=0; n<=11; n+=4)); do
+    for ((n=0; n<${#line[@]}; n+=4)); do
         _host=${line[$n+3]}
         _port=${line[$n+2]}
         echo -e "\n\tSRV resource record:\t\t${_host}"
@@ -53,7 +71,7 @@ while IFS=' ' read -a line; do
         echo -e "\tService parameter: \t\tTCP/${_port}"
         _targets+=(${_host%\.}:${_port})
     done
-    break;
+    break
 done <<< $($_lookupCmd -r +short _mongodb._tcp.${_clusterName} SRV)
 
 # measure DNS latency of batched lookups
@@ -63,16 +81,25 @@ _txtQuery="$($_lookupCmd -r +stats $_clusterName TXT)"
 _srvQuery="$($_lookupCmd -r +stats _mongodb._tcp.${_clusterName} SRV)"
 _totalQuery=0
 
-[[ ${_txtQuery} =~ $_queryRegex ]] && { echo -e "\tTXT query latency: ${BASH_REMATCH[1]}ms"; let "_totalQuery+=${BASH_REMATCH[1]}"; }
-[[ ${_srvQuery} =~ $_queryRegex ]] && { echo -e "\tSRV query latency: ${BASH_REMATCH[1]}ms"; let "_totalQuery+=${BASH_REMATCH[1]}"; }
+[[ ${_txtQuery} =~ $_queryRegex ]] && {
+    echo -e "\tTXT query latency: ${BASH_REMATCH[1]}ms"
+    let "_totalQuery+=${BASH_REMATCH[1]}"
+}
+[[ ${_srvQuery} =~ $_queryRegex ]] && {
+    echo -e "\tSRV query latency: ${BASH_REMATCH[1]}ms"
+    let "_totalQuery+=${BASH_REMATCH[1]}"
+}
 
 while IFS=' ' read -a line; do
     for ((n=0; n<${#line[@]}; n+=4)); do
         _host=${line[$n+3]}
         _hostQuery="$($_lookupCmd -r +stats ${_host} A)"
-        [[ ${_hostQuery} =~ $_queryRegex ]] && { echo -e "\tA query latency: ${BASH_REMATCH[1]}ms"; let "_totalQuery+=${BASH_REMATCH[1]}"; }
+        [[ ${_hostQuery} =~ $_queryRegex ]] && {
+            echo -e "\tA query latency: ${BASH_REMATCH[1]}ms"
+            let "_totalQuery+=${BASH_REMATCH[1]}"
+        }
     done
-    break;
+    break
 done <<< $($_lookupCmd -r +short _mongodb._tcp.${_clusterName} SRV)
 
 echo -e "\n\tTotal DNS query latency: ${_totalQuery}ms\n"
@@ -80,7 +107,11 @@ echo -e "\n\tTotal DNS query latency: ${_totalQuery}ms\n"
 echo -e "\nDNS tests done.\n"
 
 # detect Atlas namespace and add TLS and auth options
-[[ ${_clusterName%\.} =~ \.mongodb\.net$ ]] && { echo "Atlas detected: adding '--tls' and auth options"; _shellOpts+=("--tls"); _authUser="admin.mms-automation"; }
+[[ ${_clusterName%\.} =~ \.mongodb\.net$ ]] && {
+    echo "Atlas detected: adding '--tls' and auth options"
+    _shellOpts+=("--tls")
+    _authUser="admin.mms-automation"
+}
 
 echo -e "\nValidating replSet consistency:\n"
 
@@ -106,8 +137,8 @@ for _target in "${_targets[@]}"; do
     echo -e "\tcompression mechanisms:\t$(${_legacyShell} ${_uri}\&compressors=${_compressors} ${_shellOpts[@]} --eval 'db.hello().compression')" &
     echo -e "\tmaxWireVersion:\t$(${_shell} ${_uri} ${_shellOpts[@]} --eval 'db.hello().maxWireVersion')" &
     wait
-    echo -e "\tTLS cipher scanning:"
-    for _suite in ${_cipherSuites[@]}; do
+    echo -e "\tTLS cipher scanning:";
+    for _suite in ${_cipherSuites[@]}; do {
         _ciphers="None"
         for _cipher in $(${_openssl} ciphers -s -${_suite} -ciphersuites ${_tls1_3_suites} ${_policy} | tr ':' ' '); do
             ${_openssl} s_client -connect "${_target}" -cipher $_cipher -$_suite < /dev/null > /dev/null 2>&1 && _ciphers+=($_cipher)
@@ -115,7 +146,9 @@ for _target in "${_targets[@]}"; do
         [[ ${#_ciphers[@]} -gt 1 ]] && unset _ciphers[0]
         echo -e "\n\t${_suite}: ${_ciphers[@]}"
         unset _ciphers
+    } &
     done
+    wait
 done
 
 echo -e "\nConnectivity tests done.\n"
