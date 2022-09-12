@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Name: "srvatlas.sh"
-# Version: "0.3.2"
+# Version: "0.3.3"
 # Description: Atlas cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
@@ -63,16 +63,14 @@ _txtQuery="$($_lookupCmd -r +stats $_clusterName TXT)"
 _srvQuery="$($_lookupCmd -r +stats _mongodb._tcp.${_clusterName} SRV)"
 _totalQuery=0
 
-[[ ${_txtQuery} =~ $_queryRegex ]] && echo -e "\tTXT query latency: ${BASH_REMATCH[1]}ms" && let "_totalQuery+=${BASH_REMATCH[1]}"
-[[ ${_srvQuery} =~ $_queryRegex ]] && echo -e "\tSRV query latency: ${BASH_REMATCH[1]}ms" && let "_totalQuery+=${BASH_REMATCH[1]}"
+[[ ${_txtQuery} =~ $_queryRegex ]] && { echo -e "\tTXT query latency: ${BASH_REMATCH[1]}ms"; let "_totalQuery+=${BASH_REMATCH[1]}"; }
+[[ ${_srvQuery} =~ $_queryRegex ]] && { echo -e "\tSRV query latency: ${BASH_REMATCH[1]}ms"; let "_totalQuery+=${BASH_REMATCH[1]}"; }
 
 while IFS=' ' read -a line; do
-    #echo -e "elements: ${#line[@]}"
     for ((n=0; n<${#line[@]}; n+=4)); do
         _host=${line[$n+3]}
         _hostQuery="$($_lookupCmd -r +stats ${_host} A)"
-        [[ ${_hostQuery} =~ $_queryRegex ]] && echo -e "\tA query latency: ${BASH_REMATCH[1]}ms"
-        let "_totalQuery+=${BASH_REMATCH[1]}"
+        [[ ${_hostQuery} =~ $_queryRegex ]] && { echo -e "\tA query latency: ${BASH_REMATCH[1]}ms"; let "_totalQuery+=${BASH_REMATCH[1]}"; }
     done
     break;
 done <<< $($_lookupCmd -r +short _mongodb._tcp.${_clusterName} SRV)
@@ -89,10 +87,11 @@ echo -e "\nValidating replSet consistency:\n"
 for _target in "${_targets[@]}"; do
     _uri="mongodb://${_target}/?directConnection=true&appName=srvatlas.sh"
     echo -e "Evaluating ${_target}\n"
-    echo -e "\tIdentifier hello().me:\t$(${_shell} ${_uri} ${_shellOpts[@]} --eval 'db.hello().me')"
-    echo -e "\treplset name:\t\t$(${_shell} ${_uri} ${_shellOpts[@]} --eval 'db.hello().setName')"
-    echo -e "\treplset hosts:\n$(${_shell} ${_uri} ${_shellOpts[@]} --eval 'db.hello().hosts')"
-    echo -e "\treplset tags:\n$(${_shell} ${_uri} ${_shellOpts[@]} --eval 'db.hello().tags')"
+    echo -e "\tIdentity hello().me:\t$(${_shell} ${_uri} ${_shellOpts[@]} --eval 'db.hello().me')" &
+    echo -e "\treplset name:\t\t$(${_shell} ${_uri} ${_shellOpts[@]} --eval 'db.hello().setName')" &
+    echo -e "\treplset hosts:\n$(${_shell} ${_uri} ${_shellOpts[@]} --eval 'db.hello().hosts')" &
+    echo -e "\treplset tags:\n$(${_shell} ${_uri} ${_shellOpts[@]} --eval 'db.hello().tags')" &
+    wait
 done
 
 echo -e "\nReplica Set tests done."
@@ -103,9 +102,10 @@ for _target in "${_targets[@]}"; do
     _uri="mongodb://${_target}/?directConnection=true&appName=srvatlas.sh"
     _saslCmd="db.runCommand({'hello':1,'saslSupportedMechs':'${_authUser}'}).saslSupportedMechs"
     echo -e "\nEvaluating $_target\n"
-    echo -e "\tsaslSupportedMechs:\t$(${_shell} ${_uri} ${_shellOpts[@]} --eval ${_saslCmd})"
-    echo -e "\tcompression mechanisms:\t$(${_legacyShell} ${_uri}\&compressors=${_compressors} ${_shellOpts[@]} --eval 'db.hello().compression')"
-    echo -e "\tmaxWireVersion:\t$(${_shell} ${_uri} ${_shellOpts[@]} --eval 'db.hello().maxWireVersion')"
+    echo -e "\tsaslSupportedMechs:\t$(${_shell} ${_uri} ${_shellOpts[@]} --eval ${_saslCmd})" &
+    echo -e "\tcompression mechanisms:\t$(${_legacyShell} ${_uri}\&compressors=${_compressors} ${_shellOpts[@]} --eval 'db.hello().compression')" &
+    echo -e "\tmaxWireVersion:\t$(${_shell} ${_uri} ${_shellOpts[@]} --eval 'db.hello().maxWireVersion')" &
+    wait
     echo -e "\tTLS cipher scanning:"
     for _suite in ${_cipherSuites[@]}; do
         _ciphers="None"
