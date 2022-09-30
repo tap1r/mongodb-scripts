@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.1.0"
+ *  Version: "0.1.1"
  *  Description: driver and network latency telemetry PoC
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -20,14 +20,15 @@ let slowms = db.getSiblingDB('admin').getProfilingStatus().slowms,
                         sleep(ms);
                         return ms;
                     },
-                    "args": ["$$delayms"],
+                    // "args": ["$$delayms"],
+                    "args": [slowms],
                     "lang": "js"
         } } } }],
     options = {
         "comment": filter,
         "cursor": { "batchSize": 1 },
         "readConcern": { "level": "local" },
-        "let": { "delayms": slowms }
+        // "let": { "delayms": slowms }
     },
     res = {}, t0, t1, t2, t3, totalTime;
 
