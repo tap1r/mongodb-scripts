@@ -1,13 +1,14 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.1.2"
+ *  Version: "0.1.3"
  *  Description: driver and network latency telemetry PoC
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet latency.js"
 
-let slowms = db.getSiblingDB('admin').getProfilingStatus().slowms,
+let tableWidth = 40,
+    slowms = db.getSiblingDB('admin').getProfilingStatus().slowms,
     filter = `Synthetic slow operation at ${performance.now()}`,
     pipeline = [
         { "$currentOp": {} },
@@ -30,15 +31,13 @@ let slowms = db.getSiblingDB('admin').getProfilingStatus().slowms,
         "readConcern": { "level": "local" },
         // "let": { "delayms": slowms }
     },
-    res = {}, t0, t1, t2, t3, totalTime;
+    report = ``, res = {}, rtt, t0, t1, t2, t3, totalTime;
 
 t0 = process.hrtime();
 try { res = db.getSiblingDB('admin').aggregate(pipeline, options).toArray()[0] }
 catch(e) { printjson(e) }
 t1 = process.hrtime(t0);
-let { t,
-      "attr": { "command": { "$clusterTime": { "clusterTime": clusterTime } } },
-      "attr": { "durationMillis": durationMillis }
+let { t, "attr": { "durationMillis": durationMillis }
     } = db.adminCommand(
         { "getLog": "global" }
     ).log.map(logString => {
@@ -46,23 +45,35 @@ let { t,
     }).filter(log => {
         return log?.attr?.command?.comment == filter
     })[0];
-totalTime = t1[0] * 1000 + (t1[1] / 1000000);
 t2 = process.hrtime();
-try { (db.hello().ok) }
+try { db.hello().ok }
 catch(e) { printjson(e) }
 t3 = process.hrtime(t2);
+
+totalTime = t1[0] * 1000 + (t1[1] / 1000000);
 rtt = t3[0] * 1000 + (t3[1] / 1000000);
 
-console.log(`
-    ===================================
-    Delay/slowms factor:\t${slowms}ms
-    Total query time:\t\t${durationMillis}ms
-    Total App/network time:\t${(totalTime - durationMillis).toFixed(2)}ms
-    -----------------------------------
-    Total measurement time:\t${totalTime.toFixed(2)}ms
-    -----------------------------------
-    Server execution time:\t${durationMillis - slowms}ms
-    Network Latency (RTT):\t${rtt.toFixed(2)}ms
-    Driver execution time:\t${(totalTime - durationMillis - rtt).toFixed(2)}ms
-    ===================================
-`);
+function fomatted(duration) {
+    return Intl.NumberFormat('en', {
+        "minimumIntegerDigits": 1,
+        "minimumFractionDigits": 2,
+        "maximumFractionDigits": 2,
+        "style": "unit",
+        "unit": "millisecond",
+        "unitDisplay": "short" // "narrow"
+    }).format(duration);
+}
+
+report = `
+${'='.repeat(tableWidth)}
+Delay/slowms factor:\t${fomatted(slowms).padStart(16)}
+Total measurement time:\t${fomatted(totalTime).padStart(16)}
+${'-'.repeat(tableWidth)}
+Latency breakdown:\n
+Server execution time:\t${fomatted(durationMillis - slowms).padStart(16)}
+Network Latency (RTT):\t${fomatted(rtt).padStart(16)}
+Driver execution time:\t${fomatted(totalTime - durationMillis - rtt).padStart(16)}
+${'='.repeat(tableWidth)}
+`;
+
+console.log(report);
