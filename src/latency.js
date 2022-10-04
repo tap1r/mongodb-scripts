@@ -1,14 +1,13 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.1.3"
+ *  Version: "0.1.4"
  *  Description: driver and network latency telemetry PoC
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet latency.js"
 
-let tableWidth = 40,
-    slowms = db.getSiblingDB('admin').getProfilingStatus().slowms,
+let slowms = db.getSiblingDB('admin').getProfilingStatus().slowms,
     filter = `Synthetic slow operation at ${performance.now()}`,
     pipeline = [
         { "$currentOp": {} },
@@ -31,11 +30,13 @@ let tableWidth = 40,
         "readConcern": { "level": "local" },
         // "let": { "delayms": slowms }
     },
-    report = ``, res = {}, rtt, t0, t1, t2, t3, totalTime;
+    result, rtt, t0, t1, t2, t3, totalTime,
+    report, tableWidth, padding, longestValue,
+    columnWidth = 24, spacing = 2;
 
 t0 = process.hrtime();
-try { res = db.getSiblingDB('admin').aggregate(pipeline, options).toArray()[0] }
-catch(e) { printjson(e) }
+try { result = db.getSiblingDB('admin').aggregate(pipeline, options).toArray()[0] }
+catch(error) { throw error }
 t1 = process.hrtime(t0);
 let { t, "attr": { "durationMillis": durationMillis }
     } = db.adminCommand(
@@ -47,7 +48,7 @@ let { t, "attr": { "durationMillis": durationMillis }
     })[0];
 t2 = process.hrtime();
 try { db.hello().ok }
-catch(e) { printjson(e) }
+catch(error) { throw error }
 t3 = process.hrtime(t2);
 
 totalTime = t1[0] * 1000 + (t1[1] / 1000000);
@@ -61,18 +62,23 @@ function fomatted(duration) {
         "style": "unit",
         "unit": "millisecond",
         "unitDisplay": "short" // "narrow"
-    }).format(duration);
+    }).format(duration)
 }
+
+longestValue = fomatted(totalTime).length;
+tableWidth = columnWidth + longestValue + spacing;
+padding = longestValue + spacing;
 
 report = `
 ${'='.repeat(tableWidth)}
-Delay/slowms factor:\t${fomatted(slowms).padStart(16)}
-Total measurement time:\t${fomatted(totalTime).padStart(16)}
+${'Delay/slowms factor:'.padEnd(columnWidth) + fomatted(slowms).padStart(padding)}
+${'Total measurement time:'.padEnd(columnWidth) + fomatted(totalTime).padStart(padding)}
+${'='.repeat(tableWidth)}
+Latency breakdown
 ${'-'.repeat(tableWidth)}
-Latency breakdown:\n
-Server execution time:\t${fomatted(durationMillis - slowms).padStart(16)}
-Network Latency (RTT):\t${fomatted(rtt).padStart(16)}
-Driver execution time:\t${fomatted(totalTime - durationMillis - rtt).padStart(16)}
+${'Server execution time:'.padEnd(columnWidth) + fomatted(durationMillis - slowms).padStart(padding)}
+${'Network Latency (RTT):'.padEnd(columnWidth) + fomatted(rtt).padStart(padding)}
+${'Driver execution time:'.padEnd(columnWidth) + fomatted(totalTime - durationMillis - rtt).padStart(padding)}
 ${'='.repeat(tableWidth)}
 `;
 
