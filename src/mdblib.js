@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.25"
+ *  Version: "0.2.26"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') {
     var __lib = {
         "name": "mdblib.js",
-        "version": "0.2.25"
+        "version": "0.2.26"
 } }
 
 /*
@@ -233,6 +233,56 @@ function isReplSet() {
      *  Determine if current host is a replSet member
      */
     return typeof hello().hosts !== 'undefined'
+}
+
+function getAllNonSystemNamespaces() {
+    /*
+     *  getAllNonSystemNamespaces
+     */
+    let listDbOpts = [{
+        "listDatabases": 1,
+        "filter": { "name": /(?:^(?!admin$|config$|local$)).+/ },
+        "nameOnly": true,
+        "authorizedDatabases": true
+    }];
+    // db.runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true });
+    let listColOpts = [{
+            "type": "collection",
+            "name": { "$regex": /(?!^(?:system\\.))/ }
+        },
+        true,
+        true
+    ];
+    let listViewOpts = [{
+            "type": "view",
+            "name": { "$regex": /(?!^(?:system\\.))/ }
+        },
+        true,
+        true
+    ];
+    // return dbs = db.adminCommand(...listDbOpts).databases.map(dbName => dbName.name);
+    return null;
+}
+
+function getAllNonSystemCollections() {
+    /*
+     *  getAllNonSystemCollections
+     */
+    return null
+}
+
+function getAllNonSystemViews() {
+    /*
+     *  getAllNonSystemViews()
+     */
+    return null
+}
+
+function getAllSystemNamespaces() {
+    /*
+     *  getAllSystemNamespaces
+     */
+    return null
 }
 
 /*
