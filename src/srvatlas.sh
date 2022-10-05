@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Name: "srvatlas.sh"
-# Version: "0.3.10"
+# Version: "0.3.11"
 # Description: Atlas/SRV cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
@@ -10,21 +10,21 @@ _clusterName="${1:?Usage: srvatlas.sh atlas-cluster-name}"
 #
 # script defaults
 #
-_shell="mongosh" # alternatively use the legacy mongo shell
-_legacyShell="mongo" # required for network compression tests
-_shellOpts=("--norc" "--quiet") # add --tls if required
+_shell='mongosh' # alternatively use the legacy mongo shell
+_legacyShell='mongo' # required for network compression tests
+_shellOpts=('--norc' '--quiet') # add --tls if required
 _connectTimeout=2 # seconds
 let _timeoutMS=$(( _connectTimeout * 1000 ))
 _uriOpts="directConnection=true&appName=ndiag&connectTimeoutMS=${_timeoutMS}&serverSelectionTimeoutMS=${_timeoutMS}"
-_openssl="openssl"
-_lookupCmd="dig" # nslookup not implemented (yet)
-_networkCmd="nc"
-_authUser="local.__system" # defaults to on-prem use case
+_openssl='openssl'
+_lookupCmd='dig' # nslookup not implemented yet
+_networkCmd='nc'
+_authUser='local.__system' # defaults to on-prem use case
 _cipherSuites=('tls1' 'tls1_1' 'tls1_2' 'tls1_3')
 _tls1_3_suites='TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256' # OpenSSL default
 _policy='HIGH:!EXPORT:!aNULL@STRENGTH' # MongoDB compiled default
-_compressors="snappy,zstd,zlib" # MongoDB compiled default
-_zlibLevel="9"
+_compressors='snappy,zstd,zlib' # MongoDB compiled default
+_zlibLevel=9
 
 # test the OpenSSL ABI
 [ -x $(which $_openssl) ] || {
@@ -172,7 +172,7 @@ for _target in "${_targets[@]}"; do {
         wait
         echo -e "\treplset name:\t${_rsName}"
         echo -e "\treplset hosts:\t${_rsHosts//[$'\n'\[\] \'\"]/}"
-        echo -e "\treplset tags:\t${_rsTags//$'\n'/}"
+        echo -e "\treplset tags:\t${_rsTags//[$'\n' \'\"]/}"
     else
         echo -e "\tHost is of type ${_proc}, skipping replica set tests."
     fi
