@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Name: "srvatlas.sh"
-# Version: "0.3.7"
+# Version: "0.3.8"
 # Description: Atlas/SRV cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
@@ -78,8 +78,9 @@ while IFS=' ' read -a line; do
     for ((n=0; n<${#line[@]}; n+=4)); do
         _host=${line[$n+3]}
         _port=${line[$n+2]}
+        _resolved=$($_lookupCmd -r +short $_host A)
         echo -e "\n\tSRV resource record:\t$_host"
-        echo -e "\tResolves to CNAME/A:\t$($_lookupCmd -r +short $_host A)"
+        echo -e "\tResolves to CNAME/A:\t${_resolved//$'\n'/ / }"
         echo -e "\tService parameter:\tTCP/$_port"
         _targets+=(${_host%\.}:${_port})
     done
@@ -95,18 +96,14 @@ _txtQuery=$($_lookupCmd -r +stats $_clusterName TXT &)
 _srvQuery=$($_lookupCmd -r +stats _mongodb._tcp.$_clusterName SRV &)
 wait
 
-{
-    [[ ${_txtQuery} =~ $_queryRegex ]] && {
-        let "_txtLatency=${BASH_REMATCH[1]}"
-        echo -e "\tTXT query latency:\t${_txtLatency}ms"
-    }
+[[ ${_txtQuery} =~ $_queryRegex ]] && {
+    _txtLatency=${BASH_REMATCH[1]}
+    echo -e "\tTXT query latency:\t${_txtLatency}ms"
 }
 
-{
-    [[ ${_srvQuery} =~ $_queryRegex ]] && {
-        let "_srvLatency=${BASH_REMATCH[1]}"
-        echo -e "\tSRV query latency:\t${_srvLatency}ms"
-    }
+[[ ${_srvQuery} =~ $_queryRegex ]] && {
+    _srvLatency=${BASH_REMATCH[1]}
+    echo -e "\tSRV query latency:\t${_srvLatency}ms"
 }
 
 while IFS=' ' read -a line; do
@@ -140,8 +137,7 @@ echo -e "\nDNS tests done.\n"
 }
 
 # detect open socket & detect TLS & detect mongod/mongos
-echo -e "\nHost connectivity tests:\n"
-echo -e "\tEvaluating targets: ${_targets[@]}"
+echo -e "\nHost connectivity tests on: ${_targets[@]}"
 for _target in "${_targets[@]}"; do {
     _uri="mongodb://${_target}/?${_uriOpts}"
     _isTLSenabled=$(timeout $_connectTimeout $_openssl s_client -connect ${_target} -brief < /dev/null 2>&1 &)
@@ -153,7 +149,7 @@ for _target in "${_targets[@]}"; do {
     [[ ${_isReachable} =~ $_queryRegex ]] && _reachable=${BASH_REMATCH[1]}
     _queryRegex="CONNECTION (ESTABLISHED)"
     [[ ${_isTLSenabled} =~ $_queryRegex ]] &&  _tlsEnabled=${BASH_REMATCH[1]}
-    echo -e "\n\t\tnode:\t\t\t${_target}\n\t\tTCP connectivity:\t${_reachable}\n\t\tTLS enablement:\t\t${_tlsEnabled}"
+    echo -e "\n\tnode:\t\t\t${_target}\n\tTCP connectivity:\t${_reachable}\n\tTLS enablement:\t\t${_tlsEnabled}"
 } &
 done
 wait
@@ -162,53 +158,58 @@ wait
 echo -e "\nReplica set consistency tests:"
 for _target in "${_targets[@]}"; do {
     _uri="mongodb://${_target}/?${_uriOpts}"
-    echo -e "\n\tEvaluating node $_target\n"
-    [[ -n $($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().hosts;') ]] && _proc="mongod"
-    [[ $($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().msg;') == "isdbgrid" ]] && _proc="mongos"
-    echo -e "\t\tHost process type:\t${_proc}"
-    if [[ "${_proc}" = "mongod" ]]; then
-        echo -e "\t\treplset name:\t\t$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().setName;')" &
-        echo -e "\t\treplset hosts:\n$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().hosts;')" &
-        echo -e "\t\treplset tags:\n$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().tags;')" &
-    else
-        echo -e "\t\tHost is of type ${_proc}, skipping replica set tests."
-    fi
-    echo -e "\t\tIdentity hello().me:\t$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().me;')" &
+    echo -e "\n\tEvaluating:\t$_target\n"
+    _identity=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().me;' &)
+    _rsHosts=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().hosts;' &)
+    _mongos=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().msg;' &)
     wait
+    [[ -n ${_rsHosts} ]] && _proc="mongod"
+    [[ ${_mongos} == "isdbgrid" ]] && _proc="mongos"
+    echo -e "\tHost type:\t${_proc}"
+    echo -e "\tIdentity:\t${_identity}"
+    if [[ "${_proc}" = "mongod" ]]; then
+        _rsName=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().setName;' &)
+        _rsTags=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().tags;' &)
+        wait
+        echo -e "\treplset name:\t${_rsName}"
+        echo -e "\treplset hosts:\t${_rsHosts//$'\n'/ }"
+        echo -e "\treplset tags:\t${_rsTags//$'\n'/ }"
+    else
+        echo -e "\tHost is of type ${_proc}, skipping replica set tests."
+    fi
 } # &
 done
-wait
+# wait
 
 echo -e "\nReplica set tests done."
 
-echo -e "\nEvaluating connection properties to individual nodes:"
-
+echo -e "\nEvaluating connection properties to individual nodes: ${_targets[@]}"
 for _target in "${_targets[@]}"; do {
     _uri="mongodb://${_target}/?${_uriOpts}"
     _saslCmd="db.runCommand({ \"hello\": 1, \"saslSupportedMechs\": \"${_authUser}\", \"comment\": \"run by ${0##*/}\" }).saslSupportedMechs;"
-    echo -e "\n\tEvaluating node $_target\n"
     _saslSupportedMechs=$($_shell "$_uri" ${_shellOpts[@]} --eval "$_saslCmd" &)
     _compressionMechs=$($_legacyShell "${_uri}&compressors=${_compressors}&zlibCompressionLevel=${_zlibLevel}" ${_shellOpts[@]} --eval 'db.hello().compression;' &)
     _maxWireVersion=$($_shell "$_uri" ${_shellOpts[@]} --eval 'db.hello().maxWireVersion;' &)
     wait
-    echo -e "\t\tsaslSupportedMechs:\t$_saslSupportedMechs"
-    echo -e "\t\tcompression mechs:\t$_compressionMechs"
-    echo -e "\t\tmaxWireVersion:\t\t$_maxWireVersion"
-    echo -e "\t\tTLS cipher scanning\n";
+    echo -e "\n\tnode:\t\t\t$_target"
+    echo -e "\tsaslSupportedMechs:\t$_saslSupportedMechs"
+    echo -e "\tcompression mechs:\t$_compressionMechs"
+    echo -e "\tmaxWireVersion:\t\t$_maxWireVersion"
+    echo -e "\tTLS cipher scanning:";
     for _suite in ${_cipherSuites[@]}; do {
         _ciphers="None"
         for _cipher in $($_openssl ciphers -s -$_suite -ciphersuites $_tls1_3_suites $_policy | tr ':' ' '); do
             timeout $_connectTimeout $_openssl s_client -connect "$_target" -cipher $_cipher -$_suite -async < /dev/null > /dev/null 2>&1 && _ciphers+=($_cipher)
         done
         [[ ${#_ciphers[@]} -gt 1 ]] && unset _ciphers[0]
-        echo -e "\t\t\t$_suite: ${_ciphers[@]}"
+        echo -e "\n\t\t$_suite: ${_ciphers[@]}"
         unset _ciphers
-    } &
+    } # &
     done
-    wait
+    # wait
 } # &
 done
-wait
+# wait
 
 echo -e "\nConnectivity tests done."
 
