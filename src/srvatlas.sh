@@ -1,8 +1,8 @@
 #!/bin/bash
 #
 # Name: "srvatlas.sh"
-# Version: "0.3.6"
-# Description: Atlas cluster name/connection validator
+# Version: "0.3.7"
+# Description: Atlas/SRV cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
 _clusterName="${1:?Usage: srvatlas.sh atlas-cluster-name}"
@@ -140,77 +140,68 @@ echo -e "\nDNS tests done.\n"
 }
 
 # detect open socket & detect TLS & detect mongod/mongos
-echo -e "\nTesting host connectivity:\n"
+echo -e "\nHost connectivity tests:\n"
+echo -e "\tEvaluating targets: ${_targets[@]}"
 for _target in "${_targets[@]}"; do {
     _uri="mongodb://${_target}/?${_uriOpts}"
-    # echo -e "\nTesting host connectivity on:\t${_target}\n"
     _isTLSenabled=$(timeout $_connectTimeout $_openssl s_client -connect ${_target} -brief < /dev/null 2>&1 &)
     _isReachable=$($_networkCmd -4dzv -G ${_connectTimeout} ${_target%%:*}. ${_target##*:} 2>&1 &)
     _isMongos=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().msg;' &)
     _isMongod=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().hosts;' &)
     wait
     _queryRegex="Connection.+(succeeded)"
-    {
-        [[ ${_isReachable} =~ $_queryRegex ]] && {
-            _reachable=${BASH_REMATCH[1]}
-            # echo -e "\tEvaluating TCP connectivity:\t${_reachable}"
-        }
-    }
-
+    [[ ${_isReachable} =~ $_queryRegex ]] && _reachable=${BASH_REMATCH[1]}
     _queryRegex="CONNECTION (ESTABLISHED)"
-    {
-        [[ ${_isTLSenabled} =~ $_queryRegex ]] && {
-            _tlsEnabled=${BASH_REMATCH[1]}
-            # echo -e "\tEvaluating TLS enablement:\t${_tlsEnabled}"
-        }
-    }
-
-    [[ $($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().msg;') == "isdbgrid" ]] && _proc="mongos"
-    [[ -n $($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().hosts;') ]] && _proc="mongod"
-    # { [[ -n _isMongod ]] && _proc="mongod" } || { [[ _isMongos == "isdbgrid" ]] && _proc="mongos" }
-    # echo -e "\tEvaluating host process type:\t$_proc"
-    echo -e "\tEvaluating target:\t${_target}\n\tTCP connectivity:\t${_reachable}\n\tTLS enablement:\t\t${_tlsEnabled}\n\thost process type:\t${_proc}\n"
+    [[ ${_isTLSenabled} =~ $_queryRegex ]] &&  _tlsEnabled=${BASH_REMATCH[1]}
+    echo -e "\n\t\tnode:\t\t\t${_target}\n\t\tTCP connectivity:\t${_reachable}\n\t\tTLS enablement:\t\t${_tlsEnabled}"
 } &
 done
 wait
 
-echo -e "\nValidating replSet consistency:\n"
-
+# detect mongod/mongos and replset consistency
+echo -e "\nReplica set consistency tests:"
 for _target in "${_targets[@]}"; do {
     _uri="mongodb://${_target}/?${_uriOpts}"
-    echo -e "Evaluating $_target\n"
-    echo -e "\tIdentity hello().me:\t$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().me;')" &
-    echo -e "\treplset name:\t\t$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().setName;')" &
-    echo -e "\treplset hosts:\n$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().hosts;')" &
-    echo -e "\treplset tags:\n$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().tags;')" &
+    echo -e "\n\tEvaluating node $_target\n"
+    [[ -n $($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().hosts;') ]] && _proc="mongod"
+    [[ $($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().msg;') == "isdbgrid" ]] && _proc="mongos"
+    echo -e "\t\tHost process type:\t${_proc}"
+    if [[ "${_proc}" = "mongod" ]]; then
+        echo -e "\t\treplset name:\t\t$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().setName;')" &
+        echo -e "\t\treplset hosts:\n$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().hosts;')" &
+        echo -e "\t\treplset tags:\n$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().tags;')" &
+    else
+        echo -e "\t\tHost is of type ${_proc}, skipping replica set tests."
+    fi
+    echo -e "\t\tIdentity hello().me:\t$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().me;')" &
     wait
 } # &
 done
 wait
 
-echo -e "\nReplica Set tests done."
+echo -e "\nReplica set tests done."
 
-echo -e "\nValidating connectivity to individual nodes:"
+echo -e "\nEvaluating connection properties to individual nodes:"
 
 for _target in "${_targets[@]}"; do {
     _uri="mongodb://${_target}/?${_uriOpts}"
     _saslCmd="db.runCommand({ \"hello\": 1, \"saslSupportedMechs\": \"${_authUser}\", \"comment\": \"run by ${0##*/}\" }).saslSupportedMechs;"
-    echo -e "\nEvaluating $_target\n"
+    echo -e "\n\tEvaluating node $_target\n"
     _saslSupportedMechs=$($_shell "$_uri" ${_shellOpts[@]} --eval "$_saslCmd" &)
     _compressionMechs=$($_legacyShell "${_uri}&compressors=${_compressors}&zlibCompressionLevel=${_zlibLevel}" ${_shellOpts[@]} --eval 'db.hello().compression;' &)
     _maxWireVersion=$($_shell "$_uri" ${_shellOpts[@]} --eval 'db.hello().maxWireVersion;' &)
     wait
-    echo -e "\tsaslSupportedMechs:\t$_saslSupportedMechs"
-    echo -e "\tcompression mechs:\t$_compressionMechs"
-    echo -e "\tmaxWireVersion:\t\t$_maxWireVersion"
-    echo -e "\tTLS cipher scanning";
+    echo -e "\t\tsaslSupportedMechs:\t$_saslSupportedMechs"
+    echo -e "\t\tcompression mechs:\t$_compressionMechs"
+    echo -e "\t\tmaxWireVersion:\t\t$_maxWireVersion"
+    echo -e "\t\tTLS cipher scanning\n";
     for _suite in ${_cipherSuites[@]}; do {
         _ciphers="None"
         for _cipher in $($_openssl ciphers -s -$_suite -ciphersuites $_tls1_3_suites $_policy | tr ':' ' '); do
             timeout $_connectTimeout $_openssl s_client -connect "$_target" -cipher $_cipher -$_suite -async < /dev/null > /dev/null 2>&1 && _ciphers+=($_cipher)
         done
         [[ ${#_ciphers[@]} -gt 1 ]] && unset _ciphers[0]
-        echo -e "\n\t\t$_suite: ${_ciphers[@]}"
+        echo -e "\t\t\t$_suite: ${_ciphers[@]}"
         unset _ciphers
     } &
     done
@@ -219,4 +210,6 @@ for _target in "${_targets[@]}"; do {
 done
 wait
 
-echo -e "\nConnectivity tests done!\n"
+echo -e "\nConnectivity tests done."
+
+echo -e "\nComplete!\n"
