@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Name: "srvatlas.sh"
-# Version: "0.3.9"
+# Version: "0.3.10"
 # Description: Atlas/SRV cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
@@ -15,7 +15,6 @@ _legacyShell="mongo" # required for network compression tests
 _shellOpts=("--norc" "--quiet") # add --tls if required
 _connectTimeout=2 # seconds
 let _timeoutMS=$(( _connectTimeout * 1000 ))
-# _uriOpts="directConnection=true&appName=ndiag&connectTimeoutMS=2000&serverSelectionTimeoutMS=2000"
 _uriOpts="directConnection=true&appName=ndiag&connectTimeoutMS=${_timeoutMS}&serverSelectionTimeoutMS=${_timeoutMS}"
 _openssl="openssl"
 _lookupCmd="dig" # nslookup not implemented (yet)
@@ -172,8 +171,8 @@ for _target in "${_targets[@]}"; do {
         _rsTags=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().tags;' &)
         wait
         echo -e "\treplset name:\t${_rsName}"
-        echo -e "\treplset hosts:\t${_rsHosts//$'\n'/ }"
-        echo -e "\treplset tags:\t${_rsTags//$'\n'/ }"
+        echo -e "\treplset hosts:\t${_rsHosts//[$'\n'\[\] \'\"]/}"
+        echo -e "\treplset tags:\t${_rsTags//$'\n'/}"
     else
         echo -e "\tHost is of type ${_proc}, skipping replica set tests."
     fi
@@ -192,16 +191,14 @@ for _target in "${_targets[@]}"; do {
     _maxWireVersion=$($_shell "$_uri" ${_shellOpts[@]} --eval 'db.hello().maxWireVersion;' &)
     wait
     echo -e "\n\tnode:\t\t\t$_target"
-    echo -e "\tsaslSupportedMechs:\t$_saslSupportedMechs"
-    echo -e "\tcompression mechs:\t$_compressionMechs"
+    echo -e "\tsaslSupportedMechs:\t${_saslSupportedMechs//[\[\] \'\"]/}"
+    echo -e "\tcompression mechs:\t${_compressionMechs//[\[\] \'\"]/}"
     echo -e "\tmaxWireVersion:\t\t$_maxWireVersion"
     echo -e "\tTLS cipher scanning:";
     for _suite in ${_cipherSuites[@]}; do {
         _negotiatedCiphers="None"
-        # for _cipher in $($_openssl ciphers -s -$_suite -ciphersuites $_tls1_3_suites $_policy | tr ':' ' '); do
-        _ciphers=$($_openssl ciphers -s -$_suite -ciphersuites $_tls1_3_suites $_policy | tr ':' ' ')
-        # for _cipher in ${$_ciphers//\:/ }; do
-        for _cipher in ${_ciphers}; do
+        _ciphers=$($_openssl ciphers -s -$_suite -ciphersuites $_tls1_3_suites $_policy)
+        for _cipher in ${_ciphers//:/ }; do
             timeout $_connectTimeout $_openssl s_client -connect "$_target" -cipher $_cipher -$_suite -async < /dev/null > /dev/null 2>&1 && _negotiatedCiphers+=($_cipher)
         done
         [[ ${#_negotiatedCiphers[@]} -gt 1 ]] && unset _negotiatedCiphers[0]
