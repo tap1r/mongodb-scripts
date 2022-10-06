@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Name: "srvatlas.sh"
-# Version: "0.3.11"
+# Version: "0.3.12"
 # Description: Atlas/SRV cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
@@ -31,10 +31,7 @@ _zlibLevel=9
     echo -e "ERROR: OpenSSL binary $_openssl is NOT in PATH" 1>&2
     exit 1
 }
-[[ $($_openssl version) =~ ^OpenSSL ]] || {
-    echo -e "ERROR: Unexpected OpenSSL binary $($_openssl version)"
-    exit 1
-}
+[[ $($_openssl version) =~ ^OpenSSL ]] || echo -e "WARNING: Unexpected OpenSSL binary $($_openssl version), results may vary"
 
 # test for valide mongo/mongosh shells
 if [ ! -x $(which $_shell) ]; then
