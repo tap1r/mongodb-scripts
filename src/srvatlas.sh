@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Name: "srvatlas.sh"
-# Version: "0.3.13"
+# Version: "0.3.14"
 # Description: Atlas/SRV cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
@@ -47,13 +47,13 @@ _zlibLevel=9
 
 # DNS lookup binary test
 [[ -x $(which $_lookupCmd) ]] || {
-    echo -e "ERROR: $_lookupCmd is NOT in PATH" 1>&2
+    echo -e "ERROR: $_lookupCmd is NOT in \$PATH" 1>&2
     exit 1
 }
 
 # network command binary test
 [[ -x $(which $_networkCmd) ]] || {
-    echo -e "ERROR: $_networkCmd is NOT in PATH" 1>&2
+    echo -e "ERROR: $_networkCmd is NOT in \$PATH" 1>&2
     exit 1
 }
 
