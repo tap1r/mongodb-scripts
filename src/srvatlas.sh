@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Name: "srvatlas.sh"
-# Version: "0.3.12"
+# Version: "0.3.13"
 # Description: Atlas/SRV cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
@@ -27,30 +27,32 @@ _compressors='snappy,zstd,zlib' # MongoDB compiled default
 _zlibLevel=9
 
 # test the OpenSSL ABI
-[ -x $(which $_openssl) ] || {
-    echo -e "ERROR: OpenSSL binary $_openssl is NOT in PATH" 1>&2
+[[ -x $(which $_openssl) ]] || {
+    echo -e "ERROR: OpenSSL binary $_openssl is NOT in \$PATH" 1>&2
     exit 1
 }
-[[ $($_openssl version) =~ ^OpenSSL ]] || echo -e "WARNING: Unexpected OpenSSL binary $($_openssl version), results may vary"
+[[ $($_openssl version) =~ ^OpenSSL ]] || {
+    echo -e "WARNING: Unexpected OpenSSL binary $($_openssl version), results may vary" 1>&2
+}
 
 # test for valide mongo/mongosh shells
-if [ ! -x $(which $_shell) ]; then
-    echo -e "WARNING: Shell $_shell is NOT in PATH, attempting to substitute for the legacy shell"
+[[ -x $(which $_shell) ]] || {
+    echo -e "WARNING: Shell $_shell is NOT in \$PATH, attempting to substitute for the legacy shell" 1>&2
     _shell=$_legacyShell
-fi
-[ -x $(which $_legacyShell) ] || {
-    echo -e "ERROR: Legacy shell $_legacyShell is NOT in PATH" 1>&2
+}
+[[ -x $(which $_legacyShell) ]] || {
+    echo -e "ERROR: Legacy shell $_legacyShell is NOT in \$PATH, a valid mongo shell is required" 1>&2
     exit 1
 }
 
 # DNS lookup binary test
-[ -x $(which $_lookupCmd) ] || {
+[[ -x $(which $_lookupCmd) ]] || {
     echo -e "ERROR: $_lookupCmd is NOT in PATH" 1>&2
     exit 1
 }
 
 # network command binary test
-[ -x $(which $_networkCmd) ] || {
+[[ -x $(which $_networkCmd) ]] || {
     echo -e "ERROR: $_networkCmd is NOT in PATH" 1>&2
     exit 1
 }
@@ -58,12 +60,12 @@ fi
 # verify if the supplied cluster-name is valid
 _txt=$($_lookupCmd +short $_clusterName TXT)
 _a=$($_lookupCmd +short $_clusterName A)
-[ ! -z $_txt ] || {
-    echo -e "ERROR: TXT lookup failed for $_clusterName, is it a valid cluster name?"
+[[ ! -z $_txt ]] || {
+    echo -e "ERROR: TXT lookup failed for $_clusterName, is it a valid cluster name?" 1>&2
     exit 1
 }
 [[ ! -z $_txt && -z $_a ]] || {
-    echo -e "WARNING: record resolves to a valid host ${_a}, ensure the correct cluster name is used for SRV resolution"
+    echo -e "WARNING: record resolves to a valid host ${_a}, ensure the correct cluster name is used for SRV resolution" 1>&2
     exit 1
 }
 
@@ -107,7 +109,6 @@ while IFS=' ' read -a line; do
         _host=${line[$n+3]}
         _hostQuery=$($_lookupCmd +stats ${_host} A)
         [[ ${_hostQuery} =~ $_queryRegex ]] && {
-            # echo -e "\tA query latency:\t${BASH_REMATCH[1]}ms"
             let "_totalQuery+=${BASH_REMATCH[1]}"
             _aLookups+=(${BASH_REMATCH[1]})
         }
@@ -115,7 +116,6 @@ while IFS=' ' read -a line; do
     break
 done <<< $($_lookupCmd +short _mongodb._tcp.$_clusterName SRV)
 
-# echo -e "\tA query latency:\t${_aLookups[@]} ms"
 IFS=$'\n'
 _slowest=$(echo -e "${_aLookups[*]}" | sort -nr | head -n1)
 echo -e "\tA query latency:\t${_slowest}ms (slowest lookup)"
@@ -144,11 +144,11 @@ for _target in "${_targets[@]}"; do {
     _queryRegex="Connection.+(succeeded)"
     [[ ${_isReachable} =~ $_queryRegex ]] && _reachable=${BASH_REMATCH[1]}
     _queryRegex="CONNECTION (ESTABLISHED)"
-    [[ ${_isTLSenabled} =~ $_queryRegex ]] &&  _tlsEnabled=${BASH_REMATCH[1]}
+    [[ ${_isTLSenabled} =~ $_queryRegex ]] && _tlsEnabled=${BASH_REMATCH[1]}
     echo -e "\n\tnode:\t\t\t${_target}\n\tTCP connectivity:\t${_reachable}\n\tTLS enablement:\t\t${_tlsEnabled}"
-} &
+} # &
 done
-wait
+# wait
 
 # detect mongod/mongos and replset consistency
 echo -e "\nReplica set consistency tests:"
