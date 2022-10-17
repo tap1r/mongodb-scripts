@@ -1,7 +1,6 @@
-#!/bin/bash
-#
+#!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.3.14"
+# Version: "0.4.0"
 # Description: Atlas/SRV cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
@@ -15,7 +14,8 @@ _legacyShell='mongo' # required for network compression tests
 _shellOpts=('--norc' '--quiet') # add --tls if required
 _connectTimeout=2 # seconds
 let _timeoutMS=$(( _connectTimeout * 1000 ))
-_uriOpts="directConnection=true&appName=ndiag&connectTimeoutMS=${_timeoutMS}&serverSelectionTimeoutMS=${_timeoutMS}"
+_uriOpts="appName=ndiag&connectTimeoutMS=${_timeoutMS}&serverSelectionTimeoutMS=${_timeoutMS}"
+_lb=false # serverless testing
 _openssl='openssl'
 _lookupCmd='dig' # nslookup not implemented yet
 _networkCmd='nc'
@@ -87,9 +87,9 @@ done <<< $($_lookupCmd +short _mongodb._tcp.$_clusterName SRV)
 
 # measure DNS latency of batched lookups
 echo -e "\nDNS query latency:\n"
-_queryRegex="Query time\: ([0-9]*) msec"
 _totalQuery=0
 _batchLatency=0
+_queryRegex="Query time\: ([0-9]*) msec"
 _txtQuery=$($_lookupCmd +stats $_clusterName TXT &)
 _srvQuery=$($_lookupCmd +stats _mongodb._tcp.$_clusterName SRV &)
 wait
@@ -132,6 +132,14 @@ echo -e "\nDNS tests done.\n"
     _authUser="admin.mms-automation"
 }
 
+# detect Atlas serverless and add "loadBalanced=true" + "apiVersion=1" options
+[[ ${_txt} =~ loadBalanced\=true ]] && {
+    echo "Atlas serverless detected: adding 'loadBalanced' and 'apiVersion' options"
+    _shellOpts+=('--apiVersion 1')
+    _uriOpts+="&loadBalanced=true"
+    _lb=true
+}
+
 # detect open socket & detect TLS & detect mongod/mongos
 echo -e "\nHost connectivity tests on: ${_targets[@]}"
 for _target in "${_targets[@]}"; do {
@@ -150,41 +158,39 @@ for _target in "${_targets[@]}"; do {
 done
 # wait
 
-# detect mongod/mongos and replset consistency
-echo -e "\nReplica set consistency tests:"
-for _target in "${_targets[@]}"; do {
-    _uri="mongodb://${_target}/?${_uriOpts}"
-    echo -e "\n\tEvaluating:\t$_target\n"
-    _identity=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().me;' &)
-    _rsHosts=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().hosts;' &)
-    _mongos=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().msg;' &)
-    wait
-    [[ -n ${_rsHosts} ]] && _proc="mongod"
-    [[ ${_mongos} == "isdbgrid" ]] && _proc="mongos"
-    echo -e "\tHost type:\t${_proc}"
-    echo -e "\tIdentity:\t${_identity}"
-    if [[ "${_proc}" = "mongod" ]]; then
-        _rsName=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().setName;' &)
-        _rsTags=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().tags;' &)
-        wait
-        echo -e "\treplset name:\t${_rsName}"
-        echo -e "\treplset hosts:\t${_rsHosts//[$'\n'\[\] \'\"]/}"
-        echo -e "\treplset tags:\t${_rsTags//[$'\n' \'\"]/}"
-    else
-        echo -e "\tHost is of type ${_proc}, skipping replica set tests."
-    fi
-} # &
-done
-# wait
+# node tests
+#for _suite in ${_cipherSuites[@]}; do {
+#    TLSsuite="$($_openssl ciphers -s -$_suite -ciphersuites $_tls1_3_suites $_policy)"
+#    echo -e "suite name: ${TLSsuite}"
+    # echo -e "variable name: ${_${_suite}Ciphers}"
+    # echo -e "variable name: ${_${_suite[@]}"
+#} # &
+#done
 
-echo -e "\nReplica set tests done."
+# _TLS1_0="$($_openssl ciphers -s -tls1   $_policy)"
+# _TLS1_1="$($_openssl ciphers -s -tls1_1 $_policy)"
+# _TLS1_2="$($_openssl ciphers -s -tls1_2 $_policy)"
+# _TLS1_3="$($_openssl ciphers -s -tls1_3 -ciphersuites $_tls1_3_suites $_policy)"
+
+# echo -e "\n"
+# echo -e "TLS1_0: ${_TLS1_0}"
+# echo -e "TLS1_1: ${_TLS1_1}"
+# echo -e "TLS1_2: ${_TLS1_2}"
+# echo -e "TLS1_3: ${_TLS1_3}"
+# echo -e "\n"
+
+# exit 1
 
 echo -e "\nEvaluating connection properties to individual nodes: ${_targets[@]}"
 for _target in "${_targets[@]}"; do {
     _uri="mongodb://${_target}/?${_uriOpts}"
     _saslCmd="db.runCommand({ \"hello\": 1, \"saslSupportedMechs\": \"${_authUser}\", \"comment\": \"run by ${0##*/}\" }).saslSupportedMechs;"
     _saslSupportedMechs=$($_shell "$_uri" ${_shellOpts[@]} --eval "$_saslCmd" &)
-    _compressionMechs=$($_legacyShell "${_uri}&compressors=${_compressors}&zlibCompressionLevel=${_zlibLevel}" ${_shellOpts[@]} --eval 'db.hello().compression;' &)
+    if $_lb; then
+        _compressionMechs="unsupported_mongosh_test"
+    else
+        _compressionMechs=$($_legacyShell "${_uri}&compressors=${_compressors}&zlibCompressionLevel=${_zlibLevel}" ${_shellOpts[@]} --eval 'db.hello().compression;' &)
+    fi
     _maxWireVersion=$($_shell "$_uri" ${_shellOpts[@]} --eval 'db.hello().maxWireVersion;' &)
     wait
     echo -e "\n\tnode:\t\t\t$_target"
@@ -209,5 +215,39 @@ done
 # wait
 
 echo -e "\nConnectivity tests done."
+
+# detect mongod/mongos and replset consistency
+echo -e "\nReplica set consistency tests:"
+for _target in "${_targets[@]}"; do {
+    _uri="mongodb://${_target}/?${_uriOpts}"
+    echo -e "\n\tEvaluating:\t$_target\n"
+    if $_lb; then
+        _identity="unsupported_on_serverless"
+    else
+        _identity=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().me;' &)
+    fi
+    
+    _rsHosts=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().hosts;' &)
+    _mongos=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().msg;' &)
+    wait
+    [[ -n ${_rsHosts} ]] && _proc="mongod"
+    [[ ${_mongos} == "isdbgrid" ]] && _proc="mongos"
+    echo -e "\tHost type:\t${_proc}"
+    echo -e "\tIdentity:\t${_identity}"
+    if [[ "${_proc}" = "mongod" ]]; then
+        _rsName=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().setName;' &)
+        _rsTags=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().tags;' &)
+        wait
+        echo -e "\treplset name:\t${_rsName}"
+        echo -e "\treplset hosts:\t${_rsHosts//[$'\n'\[\] \'\"]/}"
+        echo -e "\treplset tags:\t${_rsTags//[$'\n' \'\"]/}"
+    else
+        echo -e "\tHost is of type ${_proc}, skipping replica set tests."
+    fi
+} # &
+done
+# wait
+
+echo -e "\nReplica set tests done."
 
 echo -e "\nComplete!\n"
