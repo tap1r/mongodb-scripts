@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.4.1"
+# Version: "0.4.2"
 # Description: Atlas/SRV cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
@@ -13,7 +13,7 @@ _shell='mongosh' # alternatively use the legacy mongo shell
 _legacyShell='mongo' # required for network compression tests
 _shellOpts=('--norc' '--quiet') # add --tls if required
 _connectTimeout=2 # seconds
-_timeoutMS=$(( _connectTimeout * 1000 ))
+_timeoutMS=$((_connectTimeout * 1000))
 _uriOpts="appName=ndiag&connectTimeoutMS=${_timeoutMS}&serverSelectionTimeoutMS=${_timeoutMS}"
 _lb=false # serverless testing
 _openssl='openssl'
@@ -31,6 +31,7 @@ _zlibLevel=9
     echo -e "ERROR: OpenSSL binary $_openssl is NOT in \$PATH" 1>&2
     exit 1
 }
+
 [[ $($_openssl version) =~ ^OpenSSL ]] || {
     echo -e "WARNING: Unexpected OpenSSL binary $($_openssl version), results may vary" 1>&2
 }
@@ -40,6 +41,7 @@ _zlibLevel=9
     echo -e "WARNING: Shell $_shell is NOT in \$PATH, attempting to substitute for the legacy shell" 1>&2
     _shell=$_legacyShell
 }
+
 [[ -x $(which $_legacyShell) ]] || {
     echo -e "ERROR: Legacy shell $_legacyShell is NOT in \$PATH, a valid mongo shell is required" 1>&2
     exit 1
@@ -64,6 +66,7 @@ _a=$($_lookupCmd +short $_clusterName A)
     echo -e "ERROR: TXT lookup failed for $_clusterName, is it a valid cluster name?" 1>&2
     exit 1
 }
+
 [[ ! -z $_txt && -z $_a ]] || {
     echo -e "WARNING: record resolves to a valid host ${_a}, ensure the correct cluster name is used for SRV resolution" 1>&2
     exit 1
@@ -118,11 +121,9 @@ done <<< $($_lookupCmd +short _mongodb._tcp.$_clusterName SRV)
 
 IFS=$'\n'
 _slowest=$(echo -e "${_aLookups[*]}" | sort -nr | head -n1)
-echo -e "\tA query latency:\t${_slowest}ms (slowest lookup)"
-_batchLatency=$(( _txtLatency + _srvLatency + _slowest ))
-
+echo -e "\tA query latency:\t${_slowest}ms (slowest A lookup)"
+_batchLatency=$((_txtLatency + _srvLatency + _slowest))
 echo -e "\n\tDNS batch latency:\t${_batchLatency}ms"
-
 echo -e "\nDNS tests done.\n"
 
 # detect Atlas namespace and add TLS + auth options
@@ -133,7 +134,7 @@ echo -e "\nDNS tests done.\n"
 }
 
 # detect Atlas serverless and add "loadBalanced=true" + "apiVersion=1" options
-[[ ${_txt} =~ loadBalanced\=true ]] && {
+[[ ${_txt} =~ loadBalanced=true ]] && {
     echo "Atlas serverless detected: adding 'loadBalanced' and 'apiVersion' options"
     _shellOpts+=('--apiVersion 1')
     _uriOpts+="&loadBalanced=true"
@@ -186,12 +187,13 @@ for _target in "${_targets[@]}"; do {
     _uri="mongodb://${_target}/?${_uriOpts}"
     _saslCmd="db.runCommand({ \"hello\": 1, \"saslSupportedMechs\": \"${_authUser}\", \"comment\": \"run by ${0##*/}\" }).saslSupportedMechs;"
     _saslSupportedMechs=$($_shell "$_uri" ${_shellOpts[@]} --eval "$_saslCmd" &)
+    _maxWireVersion=$($_shell "$_uri" ${_shellOpts[@]} --eval 'db.hello().maxWireVersion;' &)
     if ! $_lb; then
         _compressionMechs=$($_legacyShell "${_uri}&compressors=${_compressors}&zlibCompressionLevel=${_zlibLevel}" ${_shellOpts[@]} --eval 'db.hello().compression;' &)
     else
         _compressionMechs="unsupported_mongosh_test"
     fi
-    _maxWireVersion=$($_shell "$_uri" ${_shellOpts[@]} --eval 'db.hello().maxWireVersion;' &)
+
     wait
     echo -e "\n\tnode:\t\t\t$_target"
     echo -e "\tsaslSupportedMechs:\t${_saslSupportedMechs//[\[\] \'\"]/}"
