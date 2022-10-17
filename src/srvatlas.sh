@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.4.0"
+# Version: "0.4.1"
 # Description: Atlas/SRV cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
@@ -13,7 +13,7 @@ _shell='mongosh' # alternatively use the legacy mongo shell
 _legacyShell='mongo' # required for network compression tests
 _shellOpts=('--norc' '--quiet') # add --tls if required
 _connectTimeout=2 # seconds
-let _timeoutMS=$(( _connectTimeout * 1000 ))
+_timeoutMS=$(( _connectTimeout * 1000 ))
 _uriOpts="appName=ndiag&connectTimeoutMS=${_timeoutMS}&serverSelectionTimeoutMS=${_timeoutMS}"
 _lb=false # serverless testing
 _openssl='openssl'
@@ -127,7 +127,7 @@ echo -e "\nDNS tests done.\n"
 
 # detect Atlas namespace and add TLS + auth options
 [[ ${_clusterName%\.} =~ \.mongodb\.net$ ]] && {
-    echo "Atlas detected: adding '--tls' and auth options"
+    echo "Atlas detected: adding TLS and Auth options"
     _shellOpts+=("--tls")
     _authUser="admin.mms-automation"
 }
@@ -186,10 +186,10 @@ for _target in "${_targets[@]}"; do {
     _uri="mongodb://${_target}/?${_uriOpts}"
     _saslCmd="db.runCommand({ \"hello\": 1, \"saslSupportedMechs\": \"${_authUser}\", \"comment\": \"run by ${0##*/}\" }).saslSupportedMechs;"
     _saslSupportedMechs=$($_shell "$_uri" ${_shellOpts[@]} --eval "$_saslCmd" &)
-    if $_lb; then
-        _compressionMechs="unsupported_mongosh_test"
-    else
+    if ! $_lb; then
         _compressionMechs=$($_legacyShell "${_uri}&compressors=${_compressors}&zlibCompressionLevel=${_zlibLevel}" ${_shellOpts[@]} --eval 'db.hello().compression;' &)
+    else
+        _compressionMechs="unsupported_mongosh_test"
     fi
     _maxWireVersion=$($_shell "$_uri" ${_shellOpts[@]} --eval 'db.hello().maxWireVersion;' &)
     wait
@@ -221,10 +221,10 @@ echo -e "\nReplica set consistency tests:"
 for _target in "${_targets[@]}"; do {
     _uri="mongodb://${_target}/?${_uriOpts}"
     echo -e "\n\tEvaluating:\t$_target\n"
-    if $_lb; then
-        _identity="unsupported_on_serverless"
-    else
+    if ! $_lb; then
         _identity=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().me;' &)
+    else
+        _identity="unsupported_on_serverless"
     fi
     
     _rsHosts=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().hosts;' &)
