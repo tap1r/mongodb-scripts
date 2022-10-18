@@ -2,8 +2,8 @@
  *  Aggregation template with extended options
  */
 
-let dbName = 'database',
-    collName = 'collection',
+let dbName = 'database', collName = 'collection',
+    namespace = db.getSiblingDB(dbName).getCollection(collName),
     readPref = 'primary',
     options = {
         "allowDiskUse": true,
@@ -24,14 +24,14 @@ let dbName = 'database',
     ];
 
 db.getMongo().setReadPref(readPref);
-db.getSiblingDB(dbName).getCollection(collName).aggregate(pipeline, options).forEach(printjson);
+namespace.aggregate(pipeline, options).forEach(printjson);
 
 /*
  *  Aggregation template with explain options
  */
 
-let dbName = 'database',
-    collName = 'collection',
+let dbName = 'database', collName = 'collection',
+    namespace = db.getSiblingDB(dbName).getCollection(collName),
     readPref = 'primary',
     explainPlan = 'executionStats', // ['queryPlanner'|'executionStats'|'allPlansExecution']
     options = {
@@ -53,14 +53,13 @@ let dbName = 'database',
     ];
 
 db.getMongo().setReadPref(readPref);
-db.getSiblingDB(dbName).getCollection(collName).explain(explainPlan).aggregate(pipeline, options);
+namespace.explain(explainPlan).aggregate(pipeline, options);
 
 /*
  *  Aggregation template for $sql queries
  */
 
-let dbName = 'database',
-    collName = 'collection',
+let dbName = 'database', collName = 'collection',
     options = { "comment": "My $sql query" },
     sql = `
         SELECT *
