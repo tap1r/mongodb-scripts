@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.4.2"
+# Version: "0.4.3"
 # Description: Atlas/SRV cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
@@ -17,7 +17,7 @@ _timeoutMS=$((_connectTimeout * 1000))
 _uriOpts="appName=ndiag&connectTimeoutMS=${_timeoutMS}&serverSelectionTimeoutMS=${_timeoutMS}"
 _lb=false # serverless testing
 _openssl='openssl'
-_lookupCmd='dig' # nslookup not implemented yet
+_lookupCmd='dig' # nslookup doesn't support the +stats option
 _networkCmd='nc'
 _authUser='local.__system' # defaults to on-prem use case
 _cipherSuites=('tls1' 'tls1_1' 'tls1_2' 'tls1_3')
@@ -36,7 +36,7 @@ _zlibLevel=9
     echo -e "WARNING: Unexpected OpenSSL binary $($_openssl version), results may vary" 1>&2
 }
 
-# test for valide mongo/mongosh shells
+# test for valid mongo/mongosh shells
 [[ -x $(which $_shell) ]] || {
     echo -e "WARNING: Shell $_shell is NOT in \$PATH, attempting to substitute for the legacy shell" 1>&2
     _shell=$_legacyShell
@@ -143,13 +143,14 @@ echo -e "\nDNS tests done.\n"
 
 # detect open socket & detect TLS & detect mongod/mongos
 echo -e "\nHost connectivity tests on: ${_targets[@]}"
-for _target in "${_targets[@]}"; do {
+for _target in ${_targets[@]}; do {
     _uri="mongodb://${_target}/?${_uriOpts}"
     _isTLSenabled=$(timeout $_connectTimeout $_openssl s_client -connect ${_target} -brief < /dev/null 2>&1 &)
     _isReachable=$($_networkCmd -4dzv -G ${_connectTimeout} ${_target%%:*}. ${_target##*:} 2>&1 &)
     _isMongos=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().msg;' &)
     _isMongod=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().hosts;' &)
     wait
+    # _queryRegex="(MongoServerSelectionError\: Server selection timed out after [0-9]* ms)"
     _queryRegex="Connection.+(succeeded)"
     [[ ${_isReachable} =~ $_queryRegex ]] && _reachable=${BASH_REMATCH[1]}
     _queryRegex="CONNECTION (ESTABLISHED)"
@@ -159,31 +160,8 @@ for _target in "${_targets[@]}"; do {
 done
 # wait
 
-# node tests
-#for _suite in ${_cipherSuites[@]}; do {
-#    TLSsuite="$($_openssl ciphers -s -$_suite -ciphersuites $_tls1_3_suites $_policy)"
-#    echo -e "suite name: ${TLSsuite}"
-    # echo -e "variable name: ${_${_suite}Ciphers}"
-    # echo -e "variable name: ${_${_suite[@]}"
-#} # &
-#done
-
-# _TLS1_0="$($_openssl ciphers -s -tls1   $_policy)"
-# _TLS1_1="$($_openssl ciphers -s -tls1_1 $_policy)"
-# _TLS1_2="$($_openssl ciphers -s -tls1_2 $_policy)"
-# _TLS1_3="$($_openssl ciphers -s -tls1_3 -ciphersuites $_tls1_3_suites $_policy)"
-
-# echo -e "\n"
-# echo -e "TLS1_0: ${_TLS1_0}"
-# echo -e "TLS1_1: ${_TLS1_1}"
-# echo -e "TLS1_2: ${_TLS1_2}"
-# echo -e "TLS1_3: ${_TLS1_3}"
-# echo -e "\n"
-
-# exit 1
-
 echo -e "\nEvaluating connection properties to individual nodes: ${_targets[@]}"
-for _target in "${_targets[@]}"; do {
+for _target in ${_targets[@]}; do {
     _uri="mongodb://${_target}/?${_uriOpts}"
     _saslCmd="db.runCommand({ \"hello\": 1, \"saslSupportedMechs\": \"${_authUser}\", \"comment\": \"run by ${0##*/}\" }).saslSupportedMechs;"
     _saslSupportedMechs=$($_shell "$_uri" ${_shellOpts[@]} --eval "$_saslCmd" &)
