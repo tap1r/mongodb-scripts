@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.1.4"
+ *  Version: "0.1.5"
  *  Description: driver and network latency telemetry PoC
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -47,10 +47,10 @@ let { t, "attr": { "durationMillis": durationMillis }
         return log?.attr?.command?.comment == filter
     })[0];
 t2 = process.hrtime();
-try { db.hello().ok }
+// try { db.hello().ok }
+try { (db.adminCommand({ "ping": 1 }).ok == 1) }
 catch(error) { throw error }
 t3 = process.hrtime(t2);
-
 totalTime = t1[0] * 1000 + (t1[1] / 1000000);
 rtt = t3[0] * 1000 + (t3[1] / 1000000);
 
@@ -60,7 +60,7 @@ function fomatted(duration) {
         "minimumFractionDigits": 2,
         "maximumFractionDigits": 2,
         "style": "unit",
-        "unit": "millisecond",
+        "unit": "millisecond", // https://tc39.es/proposal-unified-intl-numberformat/section6/locales-currencies-tz_proposed_out.html#sec-issanctionedsimpleunitidentifier
         "unitDisplay": "short" // "narrow"
     }).format(duration)
 }
