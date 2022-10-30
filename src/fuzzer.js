@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.3.20"
+ *  Version: "0.4.0"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-const __script = { "name": "fuzzer.js", "version": "0.3.20" };
+const __script = { "name": "fuzzer.js", "version": "0.4.0" };
 let __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -41,14 +41,15 @@ print(__comment);
  *  User defined parameters
  */
 
-let dbName = 'database',
-    collName = 'collection',
-    totalDocs = $getRandomExp(4), // number of documents to generate per namespace
-    dropPref = false, // drop collection prior to generating data
-    compressor = 'best', // ["none"|"snappy"|"zlib"|"zstd"|"default"|"best"]
-    idioma = 'en',
-    collation = { // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
-        "locale": "simple",
+let dbName = 'database',        // database name
+    collName = 'collection',    // collection name
+    totalDocs = $getRandomExp(4),   // number of documents to generate per namespace
+    dropPref = true, // false,           // drop collection prior to generating data
+    compressor = 'best',        // ["none"|"snappy"|"zlib"|"zstd"|"default"|"best"]
+    // compressionOptions = -1,     // compression level
+    idioma = 'en',              // ["en"|"es"|"de"|"fr"|"zh"]
+    collation = {               /* colleation options */
+        "locale": "simple",     // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
         // caseLevel: <boolean>,
         // caseFirst: <string>,
         // strength: <int>,
@@ -57,39 +58,45 @@ let dbName = 'database',
         // maxVariable: <string>,
         // backwards: <boolean>
     },
-    buildIndexes = true, // build index preferences
-    timeseries = false, // build time series collection type
+    // words = '/usr/share/dict/words',  // /path/to/dictionary
+    indexPrefs = {          /* build index preferences */
+        "build": true,      // [true|false]
+        "order": "pro", // "post",    // [pre|post] collection population
+        // commitQuorum = (writeConcern.w === 0) ? 1 : writeConcern.w
+    },
+    timeSeries = false,     // build time series collection type
     tsOptions = {
         "timeField": "timestamp",
         "metaField": "data",
         "granularity": "hours"
     },
-    expireAfterSeconds = 0, // TTL and time series options
-    fuzzer = { // preferences
-        "_id": "ts", // ["ts"|"oid"] - timeseries OID | client generated OID
-        "range": 365.2422, // date range in days
-        "offset": -300, // date offset in days from now() (neg = past, pos = future)
+    expireAfterSeconds = 0,     // TTL and time series options
+    fuzzer = {                  /* preferences */
+        "_id": "ts",            // ["ts"|"oid"] - timeseries OID | client generated OID
+        "range": 365.2422,      // date range in days
+        "offset": -300,         // date offset in days from now() (neg = past, pos = future)
         "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
-        "polymorphic": { // experimental
+        /* "polymorphic": {        // experimental
             "enabled": false,
-            "vary_types": false, // fuzz types
-            "nests": 0, // nested subdocs
-            "entropy": 100, // 0 - 100%
-            "cardinality": 1, // ratio:1
-            "sparsity": 0, // 0 - 100%
-            "weighting": 50 // 0 - 100%
-        },
+            "varyTypes": false, // fuzz types
+            "nests": 0,         // nested subdocs
+            "entropy": 100,     // 0 - 100%
+            "cardinality": 1,   // ratio:1
+            "sparsity": 0,      // 0 - 100%
+            "weighting": 50     // 0 - 100%
+        }, */
         "schemas": [],
         "ratios": [7, 2, 1]
     },
     writeConcern = (isReplSet()) ? { "w": "majority", "j": true } : { "w": 1, "j": true },
-    commitQuorum = (writeConcern.w === 0) ? 1 : writeConcern.w;
+    commitQuorum = (writeConcern.w === 0) ? 1 : writeConcern.w,
+    namespace = db.getSiblingDB(dbName).getCollection(collName),
     sampleSize = 9,
     docSize = 0;
 
 fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
 sampleSize *= sampleSize;
-let indexes = [ // index keys
+let indexes = [     // index keys
     { "date": 1 },
     { "language": 1, "schema": 1 },
     { "random": 1 },
@@ -106,7 +113,7 @@ let indexes = [ // index keys
     { "geoCollection": "2dsphere" },
     fCV(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
-let indexOptions = { // createIndexes options
+let indexOptions = {    /* createIndexes options */
     "background": fCV(4.0) ? true : false,
     // "unique": false,
     // "partialFilterExpression": { "$exists": true },
@@ -115,11 +122,11 @@ let indexOptions = { // createIndexes options
     // "hidden": hidden,
     "collation": collation
 };
-let specialIndexes = [ // index types unsupported by collations
+let specialIndexes = [  // index types unsupported by collations
     { "location.coordinates": "2d" },
     { "quote.txt": "text" }
 ];
-let specialIndexOptions = { // exceptional index options
+let specialIndexOptions = { /* exceptional index options */
     "background": fCV(4.0) ? true : false,
     // "unique": false,
     // "partialFilterExpression": { "$exists": true },
@@ -183,128 +190,32 @@ function main() {
         residual = (totalDocs % batchSize)|0;
     }
 
-    // recreate the namespace
+    // (re)create the namespace
     dropNS(dropPref, dbName, collName, compressor, collation, tsOptions);
 
-    // generate and bulk write the documents
-    print('\nSpecified date range time series:',
-          '\n\tfrom:\t\t',
-          new Date(now + fuzzer.offset * 86400000).toISOString(),
-          '\n\tto:\t\t',
-          new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString(),
-          '\n\tdistribution:\t', fuzzer.distribution,
-          '\n\nGenerating', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'),
-          'in', totalBatches, 'batch' + ((totalBatches === 1) ? '' : 'es') + ':'
-    );
-    for (let i = 0; i < totalBatches; ++i) {
-        if (i === totalBatches - 1 && residual > 0) batchSize = residual;
-        let bulk = db.getSiblingDB(dbName).getCollection(collName).initializeUnorderedBulkOp();
-        for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument());
-
-        try {
-            let result = bulk.execute(writeConcern);
-            let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
-            print('\tbulk inserted', bInserted,
-                  'document' + ((bInserted === 1) ? '' : 's'),
-                  'in batch', 1 + i, 'of', totalBatches
+    // set collection/index build order, generate and bulk write the documents, create indexes
+    print('\nIndex build order preference:', indexPrefs.order);
+    switch (indexPrefs.order.toLowerCase()) {
+        case 'pre':
+            print('Building indexing metadata first');
+            buildIndexes();
+            genBulk(batchSize);
+            break;
+        case 'post':
+            print('Populating collection first');
+            genBulk(batchSize);
+            buildIndexes();
+            break;
+        default:
+            print('Unsupported index build preference:', indexPrefs.order,
+                  '- Defaulting to "post"'
             );
-        } catch(e) {
-            print('Generation failed with:', e);
-        }
-    }
-
-    print('Generation completed.');
-
-    // create indexes
-    print('\n');
-    if (buildIndexes) {
-        if (indexes.length > 0) {
-            print('Building index' + ((indexes.length === 1) ? '' : 'es'),
-                  'with collation locale "' + collation.locale + '"',
-                  'with commit quorum "' + ((isReplSet() && shellVer(4.2)) ? commitQuorum : 'disabled')
-                  + '":'
-            );
-            indexes.forEach(index => {
-                for (let [key, value] of Object.entries(index)) {
-                    print('\tkey:', key, '/', value);
-                }
-            });
-            let indexing = () => {
-                let options = (isReplSet() && shellVer(4.2))
-                            ? [indexes, indexOptions, commitQuorum]
-                            : [indexes, indexOptions];
-
-                return db.getSiblingDB(dbName).getCollection(collName).createIndexes(...options);
-            }
-
-            let idxResult = indexing();
-            let idxMsg = () => {
-                if (typeof idxResult.errmsg !== 'undefined')
-                    return 'Indexing operation failed: ' + idxResult.errmsg
-                else if (typeof idxResult.note !== 'undefined') {
-                    let diff = idxResult.numIndexesAfter - idxResult.numIndexesBefore
-                    return 'Indexing completed with note: ' + idxResult.note +
-                           ' with ' + diff + ' index changes.' }
-                else if (typeof idxResult.ok !== 'undefined')
-                    return 'Indexing completed!'
-                else if (typeof idxResult.msg !== 'undefined')
-                    return 'Indexing build failed with message: ' + idxResult.msg
-                else
-                    return 'Indexing completed with results:\t' + idxResult
-            }
-
-            print(idxMsg());
-        } else {
-            print('No regular index builds specified.')
-        }
-
-        print('\n');
-        if (specialIndexes.length > 0) {
-            print('Building exceptional index' + ((specialIndexes.length === 1) ? '' : 'es'),
-                  '(no collation support) with commit quorum "' +
-                  ((isReplSet() && shellVer(4.2)) ? commitQuorum : 'disabled') + '":'
-            );
-            specialIndexes.forEach(index => {
-                for (let [key, value] of Object.entries(index)) {
-                    print('\tkey:', key, '/',
-                          (value === 'text') ? value + ' / ' + idioma : value
-                    )
-                }
-            });
-            let sIndexing = () => {
-                let sOptions = (isReplSet() && shellVer(4.2))
-                           ? [specialIndexes, specialIndexOptions, commitQuorum]
-                           : [specialIndexes, specialIndexOptions];
-
-                return db.getSiblingDB(dbName).getCollection(collName).createIndexes(...sOptions);
-            }
-
-            let sIdxResult = sIndexing();
-            let sidxMsg = () => {
-                if (typeof sIdxResult.errmsg !== 'undefined')
-                    return 'Special indexing operation failed: ' + sIdxResult.errmsg
-                else if (typeof sIdxResult.note !== 'undefined') {
-                    let diff = sIdxResult.numIndexesAfter - sIdxResult.numIndexesBefore
-                    return 'Special indexing completed with note: ' + sIdxResult.note +
-                           ' with ' + diff + ' index changes.' }
-                else if (typeof sIdxResult.ok !== 'undefined')
-                    return 'Special indexing completed!'
-                else if (typeof sIdxResult.msg !== 'undefined')
-                    return 'Special indexing build failed with message: ' + sIdxResult.msg
-                else
-                    return 'Special indexing completed with results:\t' + sIdxResult
-            }
-
-            print(sidxMsg());
-        } else {
-            print('No special index builds specified.');
-        }
-    } else {
-        print('Building indexes: "false"');
+            genBulk(batchSize);
+            buildIndexes();
     }
 
     // end
-    print('\nFuzzing completed!\n\n');
+    print('\n\tFuzzing completed!\n\n');
 
     return;
 }
@@ -314,7 +225,7 @@ function genDocument() {
      *  generate pseudo-random key values
      */
     let secondsOffset;
-    switch (fuzzer.distribution) {
+    switch (fuzzer.distribution.toLowerCase()) {
         case 'uniform':
             secondsOffset = +($getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
             break;
@@ -340,7 +251,7 @@ function genDocument() {
     }
 
     let oid;
-    switch (fuzzer._id) {
+    switch (fuzzer._id.toLowerCase()) {
         case 'oid':
             oid = new ObjectId();
             break;
@@ -382,6 +293,7 @@ function genDocument() {
         "code": Code('() => {}'),
         "codeScoped": Code('() => {}', {}),
         "date": date,
+        "dateString": date.toString(),
         "timestamp": ts,
         "null": null,
         "int32": NumberInt(
@@ -596,11 +508,11 @@ function dropNS(dropPref = false, dbName = false, collName = false,
     print('\n');
     if (dropPref && !!dbName && !!collName) {
         print('Dropping namespace "' + dbName + '.' + collName + '"\n');
-        db.getSiblingDB(dbName).getCollection(collName).drop();
+        namespace.drop();
         createNS(dbName, collName, msg, compressor,
                  expireAfterSeconds, collation, tsOptions
         );
-    } else if (!dropPref && !db.getSiblingDB(dbName).getCollection(collName).exists()) {
+    } else if (!dropPref && !namespace.exists()) {
         print('Nominated namespace "' + dbName + '.' + collName + '" does not exist\n');
         createNS(dbName, collName, msg, compressor,
                  expireAfterSeconds, collation, tsOptions
@@ -629,8 +541,8 @@ function createNS(dbName = false, collName = false, msg = '',
         "collation": collation,
         "writeConcern": writeConcern
     };
-    if (timeseries && fCV(5.0) && !isAtlasPlatform('serverless')) {
-        options.timeseries = tsOptions;
+    if (timeSeries && fCV(5.0) && !isAtlasPlatform('serverless')) {
+        options.timeSeries = tsOptions;
         options.expireAfterSeconds = expireAfterSeconds;
         print('\tand time series options:',
               JSON.stringify(options, null, '\t')
@@ -639,6 +551,129 @@ function createNS(dbName = false, collName = false, msg = '',
 
     try { db.getSiblingDB(dbName).createCollection(collName, options) }
     catch(e) { print('\nNamespace creation failed:', e) }
+
+    return;
+}
+
+function buildIndexes() {
+    print('\n');
+    if (indexPrefs.build) {
+        if (indexes.length > 0) {
+            print('Building index' + ((indexes.length === 1) ? '' : 'es'),
+                  'with collation locale "' + collation.locale + '"',
+                  'with commit quorum "' + ((isReplSet() && serverVer(4.4)) ? commitQuorum : 'disabled')
+                  + '":'
+            );
+            indexes.forEach(index => {
+                for (let [key, value] of Object.entries(index)) {
+                    print('\tkey:', key, '/', value);
+                }
+            });
+            let indexing = () => {
+                let options = (isReplSet() && serverVer(4.4))
+                            ? [indexes, indexOptions, commitQuorum]
+                            : [indexes, indexOptions];
+
+                return namespace.createIndexes(...options);
+            }
+
+            let idxResult = indexing();
+            let idxMsg = () => {
+                if (typeof idxResult.errmsg !== 'undefined')
+                    return 'Indexing operation failed: ' + idxResult.errmsg
+                else if (typeof idxResult.note !== 'undefined') {
+                    let diff = idxResult.numIndexesAfter - idxResult.numIndexesBefore
+                    return 'Indexing completed with note: ' + idxResult.note +
+                           ' with ' + diff + ' index changes.' }
+                else if (typeof idxResult.ok !== 'undefined')
+                    return 'Indexing completed!'
+                else if (typeof idxResult.msg !== 'undefined')
+                    return 'Indexing build failed with message: ' + idxResult.msg
+                else
+                    return 'Indexing completed with results:\t' + idxResult
+            }
+
+            print(idxMsg());
+        } else {
+            print('No regular index builds specified.')
+        }
+
+        print('\n');
+        if (specialIndexes.length > 0) {
+            print('Building exceptional index' + ((specialIndexes.length === 1) ? '' : 'es'),
+                  '(no collation support) with commit quorum "' +
+                  ((isReplSet() && serverVer(4.4)) ? commitQuorum : 'disabled') + '":'
+            );
+            specialIndexes.forEach(index => {
+                for (let [key, value] of Object.entries(index)) {
+                    print('\tkey:', key, '/',
+                          (value === 'text') ? value + ' / ' + idioma : value
+                    )
+                }
+            });
+            let sIndexing = () => {
+                let sOptions = (isReplSet() && serverVer(4.4))
+                           ? [specialIndexes, specialIndexOptions, commitQuorum]
+                           : [specialIndexes, specialIndexOptions];
+
+                return namespace.createIndexes(...sOptions);
+            }
+
+            let sIdxResult = sIndexing();
+            let sidxMsg = () => {
+                if (typeof sIdxResult.errmsg !== 'undefined')
+                    return 'Special indexing operation failed: ' + sIdxResult.errmsg
+                else if (typeof sIdxResult.note !== 'undefined') {
+                    let diff = sIdxResult.numIndexesAfter - sIdxResult.numIndexesBefore
+                    return 'Special indexing completed with note: ' + sIdxResult.note +
+                           ' with ' + diff + ' index changes.' }
+                else if (typeof sIdxResult.ok !== 'undefined')
+                    return 'Special indexing completed!'
+                else if (typeof sIdxResult.msg !== 'undefined')
+                    return 'Special indexing build failed with message: ' + sIdxResult.msg
+                else
+                    return 'Special indexing completed with results:\t' + sIdxResult
+            }
+
+            print(sidxMsg());
+        } else {
+            print('No special index builds specified.');
+        }
+    } else {
+        print('Building indexes: "false"');
+    }
+
+    return;
+}
+
+function genBulk(batchSize) {
+    print('\nSpecified date range time series:',
+        '\n\tfrom:\t\t',
+        new Date(now + fuzzer.offset * 86400000).toISOString(),
+        '\n\tto:\t\t',
+        new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString(),
+        '\n\tdistribution:\t', fuzzer.distribution,
+        '\n\nGenerating', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'),
+        'in', totalBatches, 'batch' + ((totalBatches === 1) ? '' : 'es') + ':'
+    );
+    for (let i = 0; i < totalBatches; ++i) {
+        if (i === totalBatches - 1 && residual > 0) batchSize = residual;
+        let bulk = namespace.initializeUnorderedBulkOp();
+        for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument());
+
+        try {
+            let result = bulk.execute(writeConcern);
+            let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
+            print('\tbulk inserted', bInserted,
+                    'document' + ((bInserted === 1) ? '' : 's'),
+                    'in batch', 1 + i, 'of', totalBatches
+            );
+        } catch(e) {
+            print('Generation failed with:', e);
+        }
+    }
+
+    print('Generation completed.');
 
     return;
 }
