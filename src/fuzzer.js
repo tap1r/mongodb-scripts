@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.0"
+ *  Version: "0.4.1"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-const __script = { "name": "fuzzer.js", "version": "0.4.0" };
+const __script = { "name": "fuzzer.js", "version": "0.4.1" };
 let __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -44,7 +44,7 @@ print(__comment);
 let dbName = 'database',        // database name
     collName = 'collection',    // collection name
     totalDocs = $getRandomExp(4),   // number of documents to generate per namespace
-    dropPref = true, // false,           // drop collection prior to generating data
+    dropPref = false,           // drop collection prior to generating data
     compressor = 'best',        // ["none"|"snappy"|"zlib"|"zstd"|"default"|"best"]
     // compressionOptions = -1,     // compression level
     idioma = 'en',              // ["en"|"es"|"de"|"fr"|"zh"]
@@ -61,7 +61,7 @@ let dbName = 'database',        // database name
     // words = '/usr/share/dict/words',  // /path/to/dictionary
     indexPrefs = {          /* build index preferences */
         "build": true,      // [true|false]
-        "order": "pro", // "post",    // [pre|post] collection population
+        "order": "post", // "post",    // [pre|post] collection population
         // commitQuorum = (writeConcern.w === 0) ? 1 : writeConcern.w
     },
     timeSeries = false,     // build time series collection type
@@ -96,7 +96,7 @@ let dbName = 'database',        // database name
 
 fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
 sampleSize *= sampleSize;
-let indexes = [     // index keys
+let indexes = [     // index definitions
     { "date": 1 },
     { "language": 1, "schema": 1 },
     { "random": 1 },
@@ -151,8 +151,7 @@ function main() {
      *  main
      */
     db.getMongo().setReadPref(readPref);
-    print('\n');
-    print('Synthesising', totalDocs,
+    print('\nSynthesising', totalDocs,
           'document' + ((totalDocs === 1) ? '' : 's')
     );
 
@@ -163,15 +162,13 @@ function main() {
 
     let avgSize = (docSize / sampleSize)|0;
     if (avgSize > bsonMax * 0.95) {
-        print('\n');
-        print('Warning: The average document size of', avgSize,
+        print('\nWarning: The average document size of', avgSize,
               'bytes approaches or exceeeds the BSON max size of',
               bsonMax, 'bytes'
         );
     }
 
-    print('\n');
-    print('Sampling', sampleSize,
+    print('\nSampling', sampleSize,
           'document' + ((sampleSize === 1) ? '' : 's'),
           'each with BSON size averaging', avgSize,
           'byte' + ((avgSize === 1) ? '' : 's')
@@ -215,7 +212,7 @@ function main() {
     }
 
     // end
-    print('\n\tFuzzing completed!\n\n');
+    print('\n Fuzzing completed!\n');
 
     return;
 }
@@ -505,20 +502,19 @@ function dropNS(dropPref = false, dbName = false, collName = false,
             compressor = 'snappy';
     }
 
-    print('\n');
     if (dropPref && !!dbName && !!collName) {
-        print('Dropping namespace "' + dbName + '.' + collName + '"\n');
+        print('\nDropping namespace "' + dbName + '.' + collName + '"\n');
         namespace.drop();
         createNS(dbName, collName, msg, compressor,
                  expireAfterSeconds, collation, tsOptions
         );
     } else if (!dropPref && !namespace.exists()) {
-        print('Nominated namespace "' + dbName + '.' + collName + '" does not exist\n');
+        print('\nNominated namespace "' + dbName + '.' + collName + '" does not exist\n');
         createNS(dbName, collName, msg, compressor,
                  expireAfterSeconds, collation, tsOptions
         );
     } else
-        print('Preserving existing namespace "' + dbName + '.' + collName + '"')
+        print('\nPreserving existing namespace "' + dbName + '.' + collName + '"')
 
     return;
 }
@@ -556,10 +552,9 @@ function createNS(dbName = false, collName = false, msg = '',
 }
 
 function buildIndexes() {
-    print('\n');
     if (indexPrefs.build) {
         if (indexes.length > 0) {
-            print('Building index' + ((indexes.length === 1) ? '' : 'es'),
+            print('\nBuilding index' + ((indexes.length === 1) ? '' : 'es'),
                   'with collation locale "' + collation.locale + '"',
                   'with commit quorum "' + ((isReplSet() && serverVer(4.4)) ? commitQuorum : 'disabled')
                   + '":'
@@ -598,9 +593,8 @@ function buildIndexes() {
             print('No regular index builds specified.')
         }
 
-        print('\n');
         if (specialIndexes.length > 0) {
-            print('Building exceptional index' + ((specialIndexes.length === 1) ? '' : 'es'),
+            print('\nBuilding exceptional index' + ((specialIndexes.length === 1) ? '' : 'es'),
                   '(no collation support) with commit quorum "' +
                   ((isReplSet() && serverVer(4.4)) ? commitQuorum : 'disabled') + '":'
             );
@@ -637,10 +631,10 @@ function buildIndexes() {
 
             print(sidxMsg());
         } else {
-            print('No special index builds specified.');
+            print('\nNo special index builds specified.');
         }
     } else {
-        print('Building indexes: "false"');
+        print('\nBuilding indexes: "false"');
     }
 
     return;
