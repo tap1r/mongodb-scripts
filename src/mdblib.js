@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.26"
+ *  Version: "0.2.27"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') {
     var __lib = {
         "name": "mdblib.js",
-        "version": "0.2.26"
+        "version": "0.2.27"
 } }
 
 /*
@@ -208,7 +208,6 @@ function $rand() {
          *  mongosh/nodejs detected
          */
         return crypto.webcrypto.getRandomValues(new Uint32Array(1))[0]/(Math.pow(2, 32) -1);
-
     } else {
         // default RNG
         return Math.random();
@@ -294,8 +293,8 @@ function serverVer(ver) {
      *  Evaluate server version
      */
     let svrVer = () => +db.version().match(/^[0-9]+\.[0-9]+/);
-    return (ver !== 'undefined' && ver <= svrVer()) ? true
-         : (ver !== 'undefined' && ver > svrVer()) ? false
+    return (typeof ver !== 'undefined' && ver <= svrVer()) ? true
+         : (typeof ver !== 'undefined' && ver > svrVer()) ? false
          : svrVer();
 }
 
@@ -311,8 +310,8 @@ function fCV(ver) { // update for shared tier compat
             }).featureCompatibilityVersion.version
              : serverVer(ver)
     }
-    return (ver !== 'undefined' && ver <= featureVer()) ? true
-         : (ver !== 'undefined' && ver > featureVer()) ? false
+    return (typeof ver !== 'undefined' && ver <= featureVer()) ? true
+         : (typeof ver !== 'undefined' && ver > featureVer()) ? false
          : featureVer();
 }
 
@@ -322,8 +321,8 @@ function shellVer(ver) {
      */
     let shell = () => +version().match(/^[0-9]+\.[0-9]+/);
     return (typeof process !== 'undefined') ? true
-         : (ver !== 'undefined' && ver <= shell()) ? true
-         : (ver !== 'undefined' && ver > shell()) ? false
+         : (typeof ver !== 'undefined' && ver <= shell()) ? true
+         : (typeof ver !== 'undefined' && ver > shell()) ? false
          : shell();
 }
 
@@ -333,7 +332,7 @@ function slaveOk(readPref = 'primaryPreferred') {
      */
     return (typeof rs.slaveOk === 'undefined' && typeof rs.secondaryOk !== 'undefined')
          ? db.getMongo().setReadPref(readPref)
-    // else if (shellVer() >= 4.4)
+         // else if (shellVer() >= 4.4)
          : (typeof rs.secondaryOk === 'function') ? rs.secondaryOk()
          : rs.slaveOk()
 }
@@ -363,7 +362,7 @@ function isAtlasPlatform(type) {
     return (db.hello().msg === 'isdbgrid' && db.adminCommand({ "atlasVersion": 1 }).ok === 1) ? 'serverless'
          : (type === 'serverless' && db.hello().msg === 'isdbgrid' && db.adminCommand({ "atlasVersion": 1 }).ok === 1) ? true
          : (db.hello().msg !== 'isdbgrid' && db.adminCommand({ "atlasVersion": 1 }).ok === 1) ? 'sharedTier||dedicatedReplicaSet'
-         : (db.hello().msg === 'isdbgrid' && db.serverStatus().atlasVersion === 'undefined') ? 'dedicatedShardedCluster'
+         : (db.hello().msg === 'isdbgrid' && typeof db.serverStatus().atlasVersion === 'undefined') ? 'dedicatedShardedCluster'
          : false
 }
 
