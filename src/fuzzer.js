@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.1"
+ *  Version: "0.4.2"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-const __script = { "name": "fuzzer.js", "version": "0.4.1" };
+const __script = { "name": "fuzzer.js", "version": "0.4.2" };
 let __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -27,7 +27,7 @@ if (typeof __lib === 'undefined') {
         __lib.paths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
         __lib.path = __lib.paths.find(path => fs.existsSync(path + '/' + __lib.name)) + '/' + __lib.name;
     } else {
-        print('[WARN] Legacy shell methods detected, must load', __lib.name, 'from the current working directory');
+        print('\n\t[WARN] Legacy shell methods detected, must load', __lib.name, 'from the current working directory');
         __lib.path = __lib.name;
     }
 
@@ -41,15 +41,15 @@ print(__comment);
  *  User defined parameters
  */
 
-let dbName = 'database',        // database name
-    collName = 'collection',    // collection name
+let dbName = 'database',            // database name
+    collName = 'collection',        // collection name
     totalDocs = $getRandomExp(4),   // number of documents to generate per namespace
-    dropPref = false,           // drop collection prior to generating data
-    compressor = 'best',        // ["none"|"snappy"|"zlib"|"zstd"|"default"|"best"]
+    dropPref = false,               // drop collection prior to generating data
+    compressor = 'best',            // ["none"|"snappy"|"zlib"|"zstd"|"default"|"best"]
     // compressionOptions = -1,     // compression level
-    idioma = 'en',              // ["en"|"es"|"de"|"fr"|"zh"]
-    collation = {               /* colleation options */
-        "locale": "simple",     // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
+    idioma = 'en',                  // ["en"|"es"|"de"|"fr"|"zh"]
+    collation = {   /* colleation options */
+        "locale": "simple",          // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
         // caseLevel: <boolean>,
         // caseFirst: <string>,
         // strength: <int>,
@@ -58,45 +58,47 @@ let dbName = 'database',        // database name
         // maxVariable: <string>,
         // backwards: <boolean>
     },
-    // words = '/usr/share/dict/words',  // /path/to/dictionary
-    indexPrefs = {          /* build index preferences */
-        "build": true,      // [true|false]
-        "order": "post", // "post",    // [pre|post] collection population
-        // commitQuorum = (writeConcern.w === 0) ? 1 : writeConcern.w
+    writeConcern = (isReplSet())
+               ? { "w": "majority", "j": true }
+               : { "w": 1, "j": true },
+    indexPrefs = {  /* build index preferences */
+        "build": true,              // [true|false]
+        "order": "post",            // [pre|post] collection population
+        "commitQuorum": (writeConcern.w === 0)
+                      ? 1
+                      : writeConcern.w
     },
-    timeSeries = false,     // build time series collection type
+    timeSeries = false,             // build time series collection type
     tsOptions = {
         "timeField": "timestamp",
         "metaField": "data",
         "granularity": "hours"
     },
-    expireAfterSeconds = 0,     // TTL and time series options
-    fuzzer = {                  /* preferences */
-        "_id": "ts",            // ["ts"|"oid"] - timeseries OID | client generated OID
-        "range": 365.2422,      // date range in days
-        "offset": -300,         // date offset in days from now() (neg = past, pos = future)
-        "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
-        /* "polymorphic": {        // experimental
+    expireAfterSeconds = 0,         // TTL and time series options
+    fuzzer = {  /* preferences */
+        "_id": "ts",                // ["ts"|"oid"] - timeseries OID | client generated OID
+        "range": 365.2422,          // date range in days
+        "offset": -300,             // date offset in days from now() (neg = past, pos = future)
+        "distribution": "uniform",  // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
+        "polymorphic": { /* experimental */
             "enabled": false,
-            "varyTypes": false, // fuzz types
-            "nests": 0,         // nested subdocs
-            "entropy": 100,     // 0 - 100%
-            "cardinality": 1,   // ratio:1
-            "sparsity": 0,      // 0 - 100%
-            "weighting": 50     // 0 - 100%
-        }, */
+            // "varyTypes": false,     // fuzz types
+            // "nests": 0,             // nested subdocs
+            // "entropy": 100,         // 0 - 100%
+            // "cardinality": 1,       // ratio:1
+            // "sparsity": 0,          // 0 - 100%
+            // "weighting": 50         // 0 - 100%
+        },
         "schemas": [],
         "ratios": [7, 2, 1]
     },
-    writeConcern = (isReplSet()) ? { "w": "majority", "j": true } : { "w": 1, "j": true },
-    commitQuorum = (writeConcern.w === 0) ? 1 : writeConcern.w,
     namespace = db.getSiblingDB(dbName).getCollection(collName),
     sampleSize = 9,
     docSize = 0;
 
 fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
 sampleSize *= sampleSize;
-let indexes = [     // index definitions
+let indexes = [ /* index definitions */
     { "date": 1 },
     { "language": 1, "schema": 1 },
     { "random": 1 },
@@ -122,7 +124,7 @@ let indexOptions = {    /* createIndexes options */
     // "hidden": hidden,
     "collation": collation
 };
-let specialIndexes = [  // index types unsupported by collations
+let specialIndexes = [  /* index types unsupported by collations */
     { "location.coordinates": "2d" },
     { "quote.txt": "text" }
 ];
@@ -156,16 +158,15 @@ function main() {
     );
 
     // sampling synthethic documents and estimating batch size
-    for (let i = 0; i < sampleSize; ++i) {
-        docSize += bsonsize(genDocument());
-    }
+    for (let i = 0; i < sampleSize; ++i)
+        docSize += bsonsize(genDocument())
 
     let avgSize = (docSize / sampleSize)|0;
     if (avgSize > bsonMax * 0.95) {
         print('\nWarning: The average document size of', avgSize,
               'bytes approaches or exceeeds the BSON max size of',
               bsonMax, 'bytes'
-        );
+        )
     }
 
     print('\nSampling', sampleSize,
@@ -180,9 +181,9 @@ function main() {
     print('Estimated optimal batch capacity of', batchSize,
           'document' + ((batchSize === 1) ? '' : 's')
     );
-    if (totalDocs < batchSize) {
-        batchSize = totalDocs;
-    } else {
+    if (totalDocs < batchSize)
+        batchSize = totalDocs
+    else {
         totalBatches += (totalDocs / batchSize)|0;
         residual = (totalDocs % batchSize)|0;
     }
@@ -211,7 +212,6 @@ function main() {
             buildIndexes();
     }
 
-    // end
     print('\n Fuzzing completed!\n');
 
     return;
@@ -556,7 +556,7 @@ function buildIndexes() {
         if (indexes.length > 0) {
             print('\nBuilding index' + ((indexes.length === 1) ? '' : 'es'),
                   'with collation locale "' + collation.locale + '"',
-                  'with commit quorum "' + ((isReplSet() && serverVer(4.4)) ? commitQuorum : 'disabled')
+                  'with commit quorum "' + ((isReplSet() && serverVer(4.4)) ? indexPrefs.commitQuorum : 'disabled')
                   + '":'
             );
             indexes.forEach(index => {
@@ -566,7 +566,7 @@ function buildIndexes() {
             });
             let indexing = () => {
                 let options = (isReplSet() && serverVer(4.4))
-                            ? [indexes, indexOptions, commitQuorum]
+                            ? [indexes, indexOptions, indexPrefs.commitQuorum]
                             : [indexes, indexOptions];
 
                 return namespace.createIndexes(...options);
@@ -596,7 +596,7 @@ function buildIndexes() {
         if (specialIndexes.length > 0) {
             print('\nBuilding exceptional index' + ((specialIndexes.length === 1) ? '' : 'es'),
                   '(no collation support) with commit quorum "' +
-                  ((isReplSet() && serverVer(4.4)) ? commitQuorum : 'disabled') + '":'
+                  ((isReplSet() && serverVer(4.4)) ? indexPrefs.commitQuorum : 'disabled') + '":'
             );
             specialIndexes.forEach(index => {
                 for (let [key, value] of Object.entries(index)) {
@@ -607,7 +607,7 @@ function buildIndexes() {
             });
             let sIndexing = () => {
                 let sOptions = (isReplSet() && serverVer(4.4))
-                           ? [specialIndexes, specialIndexOptions, commitQuorum]
+                           ? [specialIndexes, specialIndexOptions, indexPrefs.commitQuorum]
                            : [specialIndexes, specialIndexOptions];
 
                 return namespace.createIndexes(...sOptions);
@@ -630,12 +630,11 @@ function buildIndexes() {
             }
 
             print(sidxMsg());
-        } else {
-            print('\nNo special index builds specified.');
-        }
-    } else {
-        print('\nBuilding indexes: "false"');
-    }
+        } else
+            print('\nNo special index builds specified.')
+
+    } else
+        print('\nBuilding indexes: "false"')
 
     return;
 }
