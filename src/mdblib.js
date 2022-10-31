@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.27"
+ *  Version: "0.2.28"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') {
     var __lib = {
         "name": "mdblib.js",
-        "version": "0.2.27"
+        "version": "0.2.28"
 } }
 
 /*
@@ -307,7 +307,7 @@ function fCV(ver) { // update for shared tier compat
              ? +db.adminCommand({
                 "getParameter": 1,
                 "featureCompatibilityVersion": 1
-            }).featureCompatibilityVersion.version
+               }).featureCompatibilityVersion.version
              : serverVer(ver)
     }
     return (typeof ver !== 'undefined' && ver <= featureVer()) ? true
@@ -483,7 +483,7 @@ function $getRandomRatioInt(ratios = [1]) {
     let weightedIndex = [];
     ratios.forEach((ratio, idx) => {
         for (let i = 0; i < ratio; ++i) {
-            weightedIndex.push(idx);
+            weightedIndex.push(idx)
         }
     });
 
@@ -496,7 +496,7 @@ function $genRandomHex(len = 1) {
      */
     let res = '';
     for (let i = 0; i < len; ++i) {
-        res += ($rand() * 16|0).toString(16);
+        res += ($rand() * 16|0).toString(16)
     }
 
     return res;
@@ -509,10 +509,20 @@ function $genRandomString(len = 1) {
     let res = '';
     let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     for (let i = 0; i < len; ++i) {
-       res += chars.charAt($rand() * chars.length|0);
+       res += chars.charAt($rand() * chars.length|0)
     }
 
     return res;
+}
+
+function $genRandomWord() {
+    /*
+     *  generate random word from a dictionary
+     */
+    let dict = '/usr/share/dict/words';  // /path/to/dictionary
+    let word = '';
+
+    return word;
 }
 
 function $genRandomAlpha(len = 1) {
@@ -522,7 +532,7 @@ function $genRandomAlpha(len = 1) {
     let res = '';
     let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
     for (let i = 0; i < len; ++i) {
-       res += chars.charAt($getRandomInt(0, chars.length));
+       res += chars.charAt($getRandomInt(0, chars.length))
     }
 
     return res;
@@ -552,7 +562,7 @@ function $genArrayElements(len) {
      */
     let array = [];
     for (let i = 0; i < len; ++i) {
-        array.push($genRandomString($getRandomIntInclusive(6, 24)));
+        array.push($genRandomString($getRandomIntInclusive(6, 24)))
     }
 
     return array;
@@ -564,7 +574,7 @@ function $genArrayStrings(len) {
      */
     let array = [];
     for (let i = 0; i < len; ++i) {
-        array.push($genRandomString($getRandomIntInclusive(6, 24)));
+        array.push($genRandomString($getRandomIntInclusive(6, 24)))
     }
 
     return array;
@@ -576,7 +586,7 @@ function $genArrayInts(len) {
      */
     let array = [];
     for (let i = 0; i < len; ++i) {
-        array.push($getRandomIntInclusive(1, 1000));
+        array.push($getRandomIntInclusive(1, 1000))
     }
 
     return array;
