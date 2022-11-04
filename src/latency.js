@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.1.5"
+ *  Version: "0.1.6"
  *  Description: driver and network latency telemetry PoC
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -16,10 +16,10 @@ let slowms = db.getSiblingDB('admin').getProfilingStatus().slowms,
             "_id": 0,
             "slowms": {
                 "$function": {
-                    "body": function(ms) {
+                    "body": `function(ms) {
                         sleep(ms);
                         return ms;
-                    },
+                    }`,
                     // "args": ["$$delayms"],
                     "args": [slowms],
                     "lang": "js"
@@ -35,9 +35,13 @@ let slowms = db.getSiblingDB('admin').getProfilingStatus().slowms,
     columnWidth = 24, spacing = 2;
 
 t0 = process.hrtime();
-try { result = db.getSiblingDB('admin').aggregate(pipeline, options).toArray()[0] }
-catch(error) { throw error }
+try {
+    result = db.getSiblingDB('admin').aggregate(pipeline, options).toArray()[0];
+} catch(error) {
+    throw error;
+}
 t1 = process.hrtime(t0);
+
 let { t, "attr": { "durationMillis": durationMillis }
     } = db.adminCommand(
         { "getLog": "global" }
@@ -46,11 +50,16 @@ let { t, "attr": { "durationMillis": durationMillis }
     }).filter(log => {
         return log?.attr?.command?.comment == filter
     })[0];
+
 t2 = process.hrtime();
 // try { db.hello().ok }
-try { (db.adminCommand({ "ping": 1 }).ok == 1) }
-catch(error) { throw error }
+try {
+    (db.adminCommand({ "ping": 1 }).ok == 1);
+} catch(error) {
+    throw error;
+}
 t3 = process.hrtime(t2);
+
 totalTime = t1[0] * 1000 + (t1[1] / 1000000);
 rtt = t3[0] * 1000 + (t3[1] / 1000000);
 
@@ -62,7 +71,7 @@ function fomatted(duration) {
         "style": "unit",
         "unit": "millisecond", // https://tc39.es/proposal-unified-intl-numberformat/section6/locales-currencies-tz_proposed_out.html#sec-issanctionedsimpleunitidentifier
         "unitDisplay": "short" // "narrow"
-    }).format(duration)
+    }).format(duration);
 }
 
 longestValue = fomatted(totalTime).length;
