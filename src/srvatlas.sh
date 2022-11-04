@@ -1,30 +1,33 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.4.3"
+# Version: "0.4.4"
 # Description: Atlas/SRV cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 
-_clusterName="${1:?Usage: srvatlas.sh atlas-cluster-name}"
+_clusterName="${1:?'Usage: srvatlas.sh atlas-cluster-name'}"
 
+### script defaults
 #
-# script defaults
-#
+# helper command dependencies
 _shell='mongosh' # alternatively use the legacy mongo shell
 _legacyShell='mongo' # required for network compression tests
+_openssl='openssl'
+_lookupCmd='dig' # nslookup doesn't support the +stats option
+_networkCmd='nc'
+# connection options
 _shellOpts=('--norc' '--quiet') # add --tls if required
 _connectTimeout=2 # seconds
 _timeoutMS=$((_connectTimeout * 1000))
 _uriOpts="appName=ndiag&connectTimeoutMS=${_timeoutMS}&serverSelectionTimeoutMS=${_timeoutMS}"
-_lb=false # serverless testing
-_openssl='openssl'
-_lookupCmd='dig' # nslookup doesn't support the +stats option
-_networkCmd='nc'
 _authUser='local.__system' # defaults to on-prem use case
 _cipherSuites=('tls1' 'tls1_1' 'tls1_2' 'tls1_3')
 _tls1_3_suites='TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256' # OpenSSL default
 _policy='HIGH:!EXPORT:!aNULL@STRENGTH' # MongoDB compiled default
 _compressors='snappy,zstd,zlib' # MongoDB compiled default
-_zlibLevel=9
+_zlibLevel=-1
+_lb=false # serverless testing
+
+### main
 
 # test the OpenSSL ABI
 [[ -x $(which $_openssl) ]] || {
@@ -146,7 +149,7 @@ echo -e "\nHost connectivity tests on: ${_targets[@]}"
 for _target in ${_targets[@]}; do {
     _uri="mongodb://${_target}/?${_uriOpts}"
     _isTLSenabled=$(timeout $_connectTimeout $_openssl s_client -connect ${_target} -brief < /dev/null 2>&1 &)
-    _isReachable=$($_networkCmd -4dzv -G ${_connectTimeout} ${_target%%:*}. ${_target##*:} 2>&1 &)
+    _isReachable=$($_networkCmd -zv -G ${_connectTimeout} ${_target%%:*}. ${_target##*:} 2>&1 &)
     _isMongos=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().msg;' &)
     _isMongod=$($_shell $_uri ${_shellOpts[@]} --eval 'db.hello().hosts;' &)
     wait
