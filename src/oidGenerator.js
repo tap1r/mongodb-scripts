@@ -1,6 +1,6 @@
 /*
  *  Name: "oidGenerator.js"
- *  Version: "0.1.0"
+ *  Version: "0.1.1"
  *  Description: Aggregation based OID generator (requires v5.0+)
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -64,21 +64,21 @@ let options = {
         { "$set": {
             "epoch": {
                 "$map": {
-                        "input": ["$epoch"],
-                        "as": "epoch",
-                        "in": { 
-                            "$switch": {
-                                "branches": [
-                                    { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 7] }, "then": { "$concat": ["0", "$$epoch"] } },
-                                    { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 6] }, "then": { "$concat": ["00", "$$epoch"] } },
-                                    { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 5] }, "then": { "$concat": ["000", "$$epoch"] } },
-                                    { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 4] }, "then": { "$concat": ["0000", "$$epoch"] } },
-                                    { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 3] }, "then": { "$concat": ["00000", "$$epoch"] } },
-                                    { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 2] }, "then": { "$concat": ["000000", "$$epoch"] } },
-                                    { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 1] }, "then": { "$concat": ["0000000", "$$epoch"] } },
-                                    { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 0] }, "then": "00000000" }
-                                ],
-                                "default": "$$epoch"
+                    "input": ["$epoch"],
+                    "as": "epoch",
+                    "in": { 
+                        "$switch": {
+                            "branches": [
+                                { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 7] }, "then": { "$concat": ["0", "$$epoch"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 6] }, "then": { "$concat": ["00", "$$epoch"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 5] }, "then": { "$concat": ["000", "$$epoch"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 4] }, "then": { "$concat": ["0000", "$$epoch"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 3] }, "then": { "$concat": ["00000", "$$epoch"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 2] }, "then": { "$concat": ["000000", "$$epoch"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 1] }, "then": { "$concat": ["0000000", "$$epoch"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$epoch" }, 0] }, "then": "00000000" }
+                            ],
+                            "default": "$$epoch"
         } } } } } },
         { "$set": { "epoch": { "$first": "$epoch" } } },
         { "$set": { "nonce": "$$nonce" } }, // 5-byte machine nonce
@@ -124,19 +124,19 @@ let options = {
         { "$set": {
             "counter": {
                 "$map": {
-                        "input": ["$counter"],
-                        "as": "counter",
-                        "in": { 
-                            "$switch": {
-                                "branches": [
-                                    { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 5] }, "then": { "$concat": ["0", "$$counter"] } },
-                                    { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 4] }, "then": { "$concat": ["00", "$$counter"] } },
-                                    { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 3] }, "then": { "$concat": ["000", "$$counter"] } },
-                                    { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 2] }, "then": { "$concat": ["0000", "$$counter"] } },
-                                    { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 1] }, "then": { "$concat": ["00000", "$$counter"] } },
-                                    { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 0] }, "then": "000000" }
-                                ],
-                                "default": "$$counter"
+                    "input": ["$counter"],
+                    "as": "counter",
+                    "in": { 
+                        "$switch": {
+                            "branches": [
+                                { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 5] }, "then": { "$concat": ["0", "$$counter"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 4] }, "then": { "$concat": ["00", "$$counter"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 3] }, "then": { "$concat": ["000", "$$counter"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 2] }, "then": { "$concat": ["0000", "$$counter"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 1] }, "then": { "$concat": ["00000", "$$counter"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 0] }, "then": "000000" }
+                            ],
+                            "default": "$$counter"
         } } } } } },
         { "$set": { "counter": { "$first": "$counter" } } },
         { "$set": { "ObjectId": { "$convert": { "input": { "$concat": ["$epoch", "$$nonce", "$counter"] }, "to": "objectId" } } } }
