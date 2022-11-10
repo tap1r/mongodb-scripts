@@ -1,6 +1,6 @@
 /*
  *  Name: "oidGenerator.js"
- *  Version: "0.1.1"
+ *  Version: "0.1.2"
  *  Description: Aggregation based OID generator (requires v5.0+)
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -17,19 +17,19 @@ let options = {
             { "timestamp": "1000" },
             { "timestamp": 65536 },
             { "timestamp": Math.pow(2, 32) },
-            { "timestamp": "$$NOW" },
+            { "timestamp": "$$NOW" }
         ] },
-        { "$set": { "epoch": { "$convert": { "input": "$timestamp", "to": "long" } } } }, // 4-byte epoch timestamp
-        { "$set": { "epoch": { "$trunc": ["$epoch", -3] } } },
-        { "$set": { "epoch": { "$divide": ["$epoch", 1000] } } },
-        { "$set": { "epoch": { "$convert": { "input": "$epoch", "to": "int" } } } },
+        { "$set": { "_epoch": { "$convert": { "input": "$timestamp", "to": "long" } } } }, // 4-byte _epoch timestamp
+        { "$set": { "_epoch": { "$trunc": ["$_epoch", -3] } } },
+        { "$set": { "_epoch": { "$divide": ["$_epoch", 1000] } } },
+        { "$set": { "_epoch": { "$convert": { "input": "$_epoch", "to": "int" } } } },
         { "$set": {
-            "epoch": {
+            "_epoch": {
                 "$reduce": {
-                    "input": { "$range": [0, { "$ceil": { "$log": [{ "$add": [{ "$abs": "$epoch" }, 1] }, 16] } }]}, // scale
+                    "input": { "$range": [0, { "$ceil": { "$log": [{ "$add": ["$_epoch", 1] }, 16] } }]}, // scale
                     "initialValue": {
-                        "quotient": { "$floor": { "$divide": ["$epoch", 16] } }, // quotient
-                        "remainder": { "$mod": ["$epoch", 16] }, // remainder
+                        "quotient": { "$floor": { "$divide": ["$_epoch", 16] } }, // quotient
+                        "remainder": { "$mod": ["$_epoch", 16] }, // remainder
                         "hexArray": []
                     },
                     "in": {
@@ -38,33 +38,32 @@ let options = {
                         "hexArray": { "$concatArrays": ["$$value.hexArray", [{ "$floor": "$$value.remainder" }]] }
         } } } } },
         { "$set": {
-            "epoch": {
+            "_epoch": {
                 "$map": {
-                    "input": { "$reverseArray": "$epoch.hexArray" },
-                    "as": "digit",
+                    "input": { "$reverseArray": "$_epoch.hexArray" },
                     "in": { 
                         "$switch": {
                             "branches": [
-                                { "case": { "$eq": ["$$digit", 10] }, "then": "a" },
-                                { "case": { "$eq": ["$$digit", 11] }, "then": "b" },
-                                { "case": { "$eq": ["$$digit", 12] }, "then": "c" },
-                                { "case": { "$eq": ["$$digit", 13] }, "then": "d" },
-                                { "case": { "$eq": ["$$digit", 14] }, "then": "e" },
-                                { "case": { "$eq": ["$$digit", 15] }, "then": "f" }
+                                { "case": { "$eq": ["$$this", 10] }, "then": "a" },
+                                { "case": { "$eq": ["$$this", 11] }, "then": "b" },
+                                { "case": { "$eq": ["$$this", 12] }, "then": "c" },
+                                { "case": { "$eq": ["$$this", 13] }, "then": "d" },
+                                { "case": { "$eq": ["$$this", 14] }, "then": "e" },
+                                { "case": { "$eq": ["$$this", 15] }, "then": "f" }
                             ],
-                            "default": { "$toString": "$$digit" }
+                            "default": { "$toString": "$$this" }
         } } } } } },
         { "$set": {
-            "epoch": {
+            "_epoch": {
                 "$reduce": {
-                    "input": "$epoch",
+                    "input": "$_epoch",
                     "initialValue": "",
                     "in": { "$concat": ["$$value", "$$this"] }
         } } } },
         { "$set": {
-            "epoch": {
+            "_epoch": {
                 "$map": {
-                    "input": ["$epoch"],
+                    "input": ["$_epoch"],
                     "as": "epoch",
                     "in": { 
                         "$switch": {
@@ -80,16 +79,16 @@ let options = {
                             ],
                             "default": "$$epoch"
         } } } } } },
-        { "$set": { "epoch": { "$first": "$epoch" } } },
-        { "$set": { "nonce": "$$nonce" } }, // 5-byte machine nonce
-        { "$set": { "counter": { "$floor": { "$multiply": [{ "$rand": {} }, { "$pow": [2, 24] }] } } } }, // 3-byte counter
+        { "$set": { "_epoch": { "$first": "$_epoch" } } },
+        { "$set": { "_nonce": "$$nonce" } }, // 5-byte machine nonce
+        { "$set": { "_counter": { "$floor": { "$multiply": [{ "$rand": {} }, { "$pow": [2, 24] }] } } } }, // 3-byte counter
         { "$set": {
-            "counter": {
+            "_counter": {
                 "$reduce": {
-                    "input": { "$range": [0, { "$ceil": { "$log": [{ "$add": ["$counter", 1] }, 16] } }]}, // scale
+                    "input": { "$range": [0, { "$ceil": { "$log": [{ "$add": ["$_counter", 1] }, 16] } }]}, // scale
                     "initialValue": {
-                        "quotient": { "$floor": { "$divide": ["$counter", 16] } }, // quotient
-                        "remainder": { "$mod": ["$counter", 16] }, // remainder
+                        "quotient": { "$floor": { "$divide": ["$_counter", 16] } }, // quotient
+                        "remainder": { "$mod": ["$_counter", 16] }, // remainder
                         "hexArray": []
                     },
                     "in": {
@@ -98,48 +97,46 @@ let options = {
                         "hexArray": { "$concatArrays": ["$$value.hexArray", [{ "$floor": "$$value.remainder" }]] }
         } } } } },
         { "$set": {
-            "counter": {
+            "_counter": {
                 "$map": {
-                    "input": { "$reverseArray": "$counter.hexArray" },
-                    "as": "digit",
+                    "input": { "$reverseArray": "$_counter.hexArray" },
                     "in": { 
                         "$switch": {
                             "branches": [
-                                { "case": { "$eq": ["$$digit", 10] }, "then": "a" },
-                                { "case": { "$eq": ["$$digit", 11] }, "then": "b" },
-                                { "case": { "$eq": ["$$digit", 12] }, "then": "c" },
-                                { "case": { "$eq": ["$$digit", 13] }, "then": "d" },
-                                { "case": { "$eq": ["$$digit", 14] }, "then": "e" },
-                                { "case": { "$eq": ["$$digit", 15] }, "then": "f" }
+                                { "case": { "$eq": ["$$this", 10] }, "then": "a" },
+                                { "case": { "$eq": ["$$this", 11] }, "then": "b" },
+                                { "case": { "$eq": ["$$this", 12] }, "then": "c" },
+                                { "case": { "$eq": ["$$this", 13] }, "then": "d" },
+                                { "case": { "$eq": ["$$this", 14] }, "then": "e" },
+                                { "case": { "$eq": ["$$this", 15] }, "then": "f" }
                             ],
-                            "default": { "$toString": "$$digit" }
+                            "default": { "$toString": "$$this" }
         } } } } } },
         { "$set": {
-            "counter": {
+            "_counter": {
                 "$reduce": {
-                    "input": "$counter",
+                    "input": "$_counter",
                     "initialValue": "",
                     "in": { "$concat": ["$$value", "$$this"] }
         } } } },
         { "$set": {
-            "counter": {
+            "_counter": {
                 "$map": {
-                    "input": ["$counter"],
-                    "as": "counter",
+                    "input": ["$_counter"],
                     "in": { 
                         "$switch": {
                             "branches": [
-                                { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 5] }, "then": { "$concat": ["0", "$$counter"] } },
-                                { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 4] }, "then": { "$concat": ["00", "$$counter"] } },
-                                { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 3] }, "then": { "$concat": ["000", "$$counter"] } },
-                                { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 2] }, "then": { "$concat": ["0000", "$$counter"] } },
-                                { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 1] }, "then": { "$concat": ["00000", "$$counter"] } },
-                                { "case": { "$eq": [{ "$strLenCP": "$$counter" }, 0] }, "then": "000000" }
+                                { "case": { "$eq": [{ "$strLenCP": "$$this" }, 5] }, "then": { "$concat": ["0", "$$this"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$this" }, 4] }, "then": { "$concat": ["00", "$$this"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$this" }, 3] }, "then": { "$concat": ["000", "$$this"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$this" }, 2] }, "then": { "$concat": ["0000", "$$this"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$this" }, 1] }, "then": { "$concat": ["00000", "$$this"] } },
+                                { "case": { "$eq": [{ "$strLenCP": "$$this" }, 0] }, "then": "000000" }
                             ],
-                            "default": "$$counter"
+                            "default": "$$this"
         } } } } } },
-        { "$set": { "counter": { "$first": "$counter" } } },
-        { "$set": { "ObjectId": { "$convert": { "input": { "$concat": ["$epoch", "$$nonce", "$counter"] }, "to": "objectId" } } } }
+        { "$set": { "_counter": { "$first": "$_counter" } } },
+        { "$set": { "ObjectId": { "$convert": { "input": { "$concat": ["$_epoch", "$$nonce", "$_counter"] }, "to": "objectId" } } } }
     ];
 
 db.aggregate(pipeline, options);
