@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.3"
+ *  Version: "0.4.4"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-const __script = { "name": "fuzzer.js", "version": "0.4.3" };
+const __script = { "name": "fuzzer.js", "version": "0.4.4" };
 let __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -43,10 +43,10 @@ print(__comment);
 
 let dbName = 'database',            // database name
     collName = 'collection',        // collection name
-    totalDocs = $getRandomExp(4),   // number of documents to generate per namespace
+    totalDocs = $getRandomExp(3.5), // number of documents to generate per namespace
     dropPref = false,               // drop collection prior to generating data
     compressor = 'best',            // ["none"|"snappy"|"zlib"|"zstd"|"default"|"best"]
-    // compressionOptions = -1,     // compression level
+    // compressionOptions = -1,     // [-1|0|1|2|3|4|5|6|7|8|9] compression level
     idioma = 'en',                  // ["en"|"es"|"de"|"fr"|"zh"]
     collation = {   /* collation options */
         "locale": "simple",          // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
@@ -159,7 +159,7 @@ function main() {
           'document' + ((totalDocs === 1) ? '' : 's')
     );
 
-    // sampling synthethic documents and estimating batch size
+    // sampling synthetic documents and estimating batch size
     for (let i = 0; i < sampleSize; ++i)
         docSize += bsonsize(genDocument())
 
@@ -297,19 +297,19 @@ function genDocument() {
         "null": null,
         "int32": NumberInt(
                     $getRandomIntInclusive(
-                        -(Math.pow(2, 31) - 1),
-                        Math.pow(2, 31))),
+                        -Math.pow(2, 31),
+                        Math.pow(2, 31) - 1)),
         "int64": $NumberLong(
                     $getRandomIntInclusive(
-                        -(Math.pow(2, 63) - 1),
-                        Math.pow(2, 63))),
+                        -Math.pow(2, 63),
+                        Math.pow(2, 63) - 1)),
         "double": $getRandomNumber(
                     -Math.pow(2, 12),
                     Math.pow(2, 12)),
         "decimal128": $NumberDecimal(
                         $getRandomNumber(
-                            -(Math.pow(10, 127) - 1),
-                            Math.pow(10, 127))),
+                            -10 * Math.pow(2, 110),
+                            10 * Math.pow(2, 110) - 1)),
         "regex": $getRandomRegex(),
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
@@ -363,7 +363,7 @@ function genDocument() {
             'Inactive',
             null
             ][$getRandomRatioInt([80, 20, 1])],
-        "location": { // GeoJSON Point
+        "location": {   // GeoJSON Point
             "type": "Point",
             "coordinates": [
                 +$getRandomNumber(-180, 180).toFixed(4),
@@ -379,7 +379,7 @@ function genDocument() {
                     +$getRandomNumber(-180, 180).toFixed(4),
                     +$getRandomNumber(-90, 90).toFixed(4)
         ]] },
-        "polygon": { // polygon with a single ring
+        "polygon": {    // polygon with a single ring
             "type": "Polygon",
             "coordinates": [
                 [
@@ -388,7 +388,7 @@ function genDocument() {
                     [6, 1],
                     [0, 0]]
         ] },
-        "polygonMulti": { // polygons with multiple rings
+        "polygonMulti": {   // polygons with multiple rings
             "type": "Polygon",
             "coordinates": [
                 [
@@ -410,7 +410,7 @@ function genDocument() {
                 [-73.9737, 40.7648],
                 [-73.9814, 40.7681]
         ] },
-        "multiLineString": { // GeoJSON MultiLineString
+        "multiLineString": {    // GeoJSON MultiLineString
             "type": "MultiLineString",
             "coordinates": [
                 [
@@ -426,7 +426,7 @@ function genDocument() {
                     [-73.97880, 40.77247],
                     [-73.97036, 40.76811]
         ]] },
-        "multiPolygon": { // GeoJSON MultiPolygon
+        "multiPolygon": {   // GeoJSON MultiPolygon
             "type": "MultiPolygon",
             "coordinates": [
                 [
@@ -444,7 +444,7 @@ function genDocument() {
                         [-73.9737, 40.7648],
                         [-73.958, 40.8003]
         ]]] },
-        "geoCollection": { // GeoJSON GeometryCollection
+        "geoCollection": {  // GeoJSON GeometryCollection
             "type": "GeometryCollection",
             "geometries": [{
                 "type": "MultiPoint",
