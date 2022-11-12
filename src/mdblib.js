@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.28"
+ *  Version: "0.2.29"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') {
     var __lib = {
         "name": "mdblib.js",
-        "version": "0.2.28"
+        "version": "0.2.29"
 } }
 
 /*
@@ -22,6 +22,7 @@ var bsonMax = (typeof hello().maxBsonObjectSize === 'undefined')
             ? 100000
             : hello().maxWriteBatchSize;
 const idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', 'pt', 'ro', 'ru', 'es', 'sv', 'tr'];
+const nonce = (+((+db.adminCommand({ "features": 1 }).oidMachine).toString() + (+db.serverStatus().pid).toString())).toString(16).substring(0, 10);
 
 /*
  *  Helper functions, derived from:
@@ -137,7 +138,7 @@ class AutoFactor {
                 case 'YB': return this.YB;
                 default:   return this.MB;
             }
-        } else if (typeof(input) === Number && input >= 0) {
+        } else if (typeof input === 'number' && input >= 0) {
             let scale = (Math.log2(input) / 10)|0;
             return (input / Math.pow(1024, scale)).toFixed(2) + [this.B, this.KB, this.MB, this.GB, this.TB, this.PB, this.EB, this.ZB, this.YB][scale];
         } else {
@@ -298,7 +299,7 @@ function serverVer(ver) {
          : svrVer();
 }
 
-function fCV(ver) { // update for shared tier compat
+function fCV(ver) { // update for shared tier compatability
     /*
      *  Evaluate feature compatibility version
      */
@@ -310,8 +311,8 @@ function fCV(ver) { // update for shared tier compat
                }).featureCompatibilityVersion.version
              : serverVer(ver)
     }
-    return (typeof ver !== 'undefined' && ver <= featureVer()) ? true
-         : (typeof ver !== 'undefined' && ver > featureVer()) ? false
+    return (typeof ver !== 'undefined' && ver < featureVer()) ? true
+         : (typeof ver !== 'undefined' && ver >= featureVer()) ? false
          : featureVer();
 }
 
