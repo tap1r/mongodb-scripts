@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.2"
+ *  Version: "0.4.3"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-const __script = { "name": "fuzzer.js", "version": "0.4.2" };
+const __script = { "name": "fuzzer.js", "version": "0.4.3" };
 let __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -48,7 +48,7 @@ let dbName = 'database',            // database name
     compressor = 'best',            // ["none"|"snappy"|"zlib"|"zstd"|"default"|"best"]
     // compressionOptions = -1,     // compression level
     idioma = 'en',                  // ["en"|"es"|"de"|"fr"|"zh"]
-    collation = {   /* colleation options */
+    collation = {   /* collation options */
         "locale": "simple",          // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
         // caseLevel: <boolean>,
         // caseFirst: <string>,
@@ -68,7 +68,7 @@ let dbName = 'database',            // database name
                       ? 1
                       : writeConcern.w
     },
-    timeSeries = false,             // build time series collection type
+    timeSeries = false,             // build timeseries collection type
     tsOptions = {
         "timeField": "timestamp",
         "metaField": "data",
@@ -116,7 +116,8 @@ let indexes = [ /* index definitions */
     fCV(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
 let indexOptions = {    /* createIndexes options */
-    "background": fCV(4.0) ? true : false,
+    // "background": fCV(4.0) ? true : false,
+    // "background": true,
     // "unique": false,
     // "partialFilterExpression": { "$exists": true },
     // "sparse": true,
@@ -129,7 +130,8 @@ let specialIndexes = [  /* index types unsupported by collations */
     { "quote.txt": "text" }
 ];
 let specialIndexOptions = { /* exceptional index options */
-    "background": fCV(4.0) ? true : false,
+    // "background": fCV(4.0) ? true : false,
+    // "background": true,
     // "unique": false,
     // "partialFilterExpression": { "$exists": true },
     // "sparse": true,
@@ -296,18 +298,18 @@ function genDocument() {
         "int32": NumberInt(
                     $getRandomIntInclusive(
                         -(Math.pow(2, 31) - 1),
-                        Math.pow(2, 31) - 1)),
+                        Math.pow(2, 31))),
         "int64": $NumberLong(
                     $getRandomIntInclusive(
                         -(Math.pow(2, 63) - 1),
-                        Math.pow(2, 63) - 1)),
+                        Math.pow(2, 63))),
         "double": $getRandomNumber(
                     -Math.pow(2, 12),
                     Math.pow(2, 12)),
         "decimal128": $NumberDecimal(
                         $getRandomNumber(
                             -(Math.pow(10, 127) - 1),
-                            Math.pow(10, 127) -1)),
+                            Math.pow(10, 127))),
         "regex": $getRandomRegex(),
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
@@ -589,9 +591,8 @@ function buildIndexes() {
             }
 
             print(idxMsg());
-        } else {
+        } else
             print('No regular index builds specified.')
-        }
 
         if (specialIndexes.length > 0) {
             print('\nBuilding exceptional index' + ((specialIndexes.length === 1) ? '' : 'es'),
