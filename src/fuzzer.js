@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.4"
+ *  Version: "0.4.5"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-const __script = { "name": "fuzzer.js", "version": "0.4.4" };
+const __script = { "name": "fuzzer.js", "version": "0.4.5" };
 let __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -99,7 +99,7 @@ let dbName = 'database',            // database name
 fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
 sampleSize *= sampleSize;
 let indexes = [ /* index definitions */
-    { "date": 1 },
+    { "date": -1 },
     { "language": 1, "schema": 1 },
     { "random": 1 },
     { "string": "hashed" },
@@ -292,7 +292,7 @@ function genDocument() {
         "code": Code('() => {}'),
         "codeScoped": Code('() => {}', {}),
         "date": date,
-        "dateString": date.toString(),
+        "dateString": date.toISOString(),
         "timestamp": ts,
         "null": null,
         "int32": NumberInt(
@@ -561,11 +561,7 @@ function buildIndexes() {
                   'with commit quorum "' + ((isReplSet() && serverVer(4.4)) ? indexPrefs.commitQuorum : 'disabled')
                   + '":'
             );
-            indexes.forEach(index => {
-                for (let [key, value] of Object.entries(index)) {
-                    print('\tkey:', key, '/', value);
-                }
-            });
+            indexes.forEach(index => print('\tkey:', JSON.stringify(index)));
             let indexing = () => {
                 let options = (isReplSet() && serverVer(4.4))
                             ? [indexes, indexOptions, indexPrefs.commitQuorum]
@@ -599,13 +595,7 @@ function buildIndexes() {
                   '(no collation support) with commit quorum "' +
                   ((isReplSet() && serverVer(4.4)) ? indexPrefs.commitQuorum : 'disabled') + '":'
             );
-            specialIndexes.forEach(index => {
-                for (let [key, value] of Object.entries(index)) {
-                    print('\tkey:', key, '/',
-                          (value === 'text') ? value + ' / ' + idioma : value
-                    )
-                }
-            });
+            specialIndexes.forEach(index => print('\tkey:', JSON.stringify(index)));
             let sIndexing = () => {
                 let sOptions = (isReplSet() && serverVer(4.4))
                            ? [specialIndexes, specialIndexOptions, indexPrefs.commitQuorum]
