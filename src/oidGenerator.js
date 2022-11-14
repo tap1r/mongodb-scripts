@@ -1,6 +1,6 @@
 /*
  *  Name: "oidGenerator.js"
- *  Version: "0.2.1"
+ *  Version: "0.2.2"
  *  Description: Aggregation based OID generator (requires v5.0+)
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -14,7 +14,7 @@ let options = {
    pipeline = [
       { "$documents": [ // sample timestamps for conversion
          { "timestamp": 0 },
-         { "timestamp": "1000" },
+         { "timestamp": "1234" },
          { "timestamp": 65536 },
          { "timestamp": Math.pow(2, 32) },
          { "timestamp": "$$NOW" }
@@ -22,30 +22,30 @@ let options = {
       // 4-byte _epoch timestamp
       { "$set": {
          "_epoch": {
-               "$convert": {
-                  "input": {
-                     "$divide": [
-                           { "$trunc": [
-                              { "$convert": { "input": "$timestamp", "to": "long" } },
-                              -3
-                           ] },
-                           1000
+            "$convert": {
+               "input": {
+                  "$divide": [
+                     { "$trunc": [
+                        { "$convert": { "input": "$timestamp", "to": "long" } },
+                        -3
                      ] },
-                  "to": "int"
+                     1000
+                  ] },
+               "to": "int"
       } } } },
       { "$set": {
          "_epoch": {
-               "$reduce": {
-                  "input": { "$range": [0, { "$ceil": { "$log": [{ "$add": ["$_epoch", 1] }, 16] } }]}, // scale
-                  "initialValue": {
-                     "quotient": { "$floor": { "$divide": ["$_epoch", 16] } }, // quotient
-                     "remainder": { "$mod": ["$_epoch", 16] }, // remainder
-                     "hexArray": []
-                  },
-                  "in": {
-                     "quotient": { "$floor": { "$divide": ["$$value.quotient", 16] } },
-                     "remainder": { "$mod": ["$$value.quotient", 16] },
-                     "hexArray": { "$concatArrays": ["$$value.hexArray", [{ "$floor": "$$value.remainder" }]] }
+            "$reduce": {
+               "input": { "$range": [0, { "$ceil": { "$log": [{ "$add": ["$_epoch", 1] }, 16] } }]}, // scale
+               "initialValue": {
+                  "quotient": { "$floor": { "$divide": ["$_epoch", 16] } }, // quotient
+                  "remainder": { "$mod": ["$_epoch", 16] }, // remainder
+                  "hexArray": []
+               },
+               "in": {
+                  "quotient": { "$floor": { "$divide": ["$$value.quotient", 16] } },
+                  "remainder": { "$mod": ["$$value.quotient", 16] },
+                  "hexArray": { "$concatArrays": ["$$value.hexArray", [{ "$floor": "$$value.remainder" }]] }
       } } } } },
       { "$set": {
          "_epoch": {
