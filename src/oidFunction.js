@@ -1,6 +1,6 @@
 /*
  *  Name: "oidFunction.js"
- *  Version: "0.1.0"
+ *  Version: "0.1.1"
  *  Description: aggregation based OID "view function" reproduction (requires v5.0+)
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -23,7 +23,7 @@ nonceGenerator.updateOne(
 
 let oidPipeline = [
    { "$collStats": {} },
-   // 4-byte _epoch timestamp
+   // 4-byte epoch timestamp
    { "$set": {
       "_epoch": {
          "$convert": {
@@ -42,8 +42,8 @@ let oidPipeline = [
          "$reduce": {
             "input": { "$range": [0, { "$ceil": { "$log": [{ "$add": ["$_epoch", 1] }, 16] } }]}, // scale
             "initialValue": {
-               "quotient": { "$floor": { "$divide": ["$_epoch", 16] } }, // quotient
-               "remainder": { "$mod": ["$_epoch", 16] }, // remainder
+               "quotient": { "$floor": { "$divide": ["$_epoch", 16] } },
+               "remainder": { "$mod": ["$_epoch", 16] },
                "hexArray": []
             },
             "in": {
@@ -94,15 +94,15 @@ let oidPipeline = [
    { "$lookup": { "from": "_nonceGenerator", "pipeline": [], "as": "_nonce" } },
    { "$set": { "_nonce": { "$first": "$_nonce.nonce" } } },
    // { "$set": { "_nonce": nonce } }, // optionally directly set the nonce
-   // 3-byte counter
+   // 3-byte randomly initialised 'counter'
    { "$set": { "_counter": { "$floor": { "$multiply": [{ "$rand": {} }, { "$pow": [2, 24] }] } } } },
    { "$set": {
       "_counter": {
          "$reduce": {
             "input": { "$range": [0, { "$ceil": { "$log": [{ "$add": ["$_counter", 1] }, 16] } }]}, // scale
             "initialValue": {
-               "quotient": { "$floor": { "$divide": ["$_counter", 16] } }, // quotient
-               "remainder": { "$mod": ["$_counter", 16] }, // remainder
+               "quotient": { "$floor": { "$divide": ["$_counter", 16] } },
+               "remainder": { "$mod": ["$_counter", 16] },
                "hexArray": []
             },
             "in": {
@@ -153,7 +153,7 @@ let oidPipeline = [
 ];
 
 view.drop();
-db.createView(oidView, 'any', oidPipeline,);
+db.createView(oidView, 'any', oidPipeline);
 // db.getCollectionInfos();
 // view.find({});
 
@@ -168,7 +168,7 @@ let pipeline = [
       { "_id": new ObjectId(), "name": "Eve", "activity": { "date": "$$NOW" } }
    ] },
    { "$lookup": { "from": "_oidGenerator", "pipeline": [], "as": "_oid" } },
-   { "$set": { "activity._id": { "$first": "$_oid.oid" } } },
-   { "$unset": "_oid" }
+   { "$set": { "activity._id": { "$first": "$_oid.oid" } } }, // apply the OID to the new field of choice
+   { "$unset": "_oid" } // remove transient field
 ];
 db.aggregate(pipeline);
