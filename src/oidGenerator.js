@@ -1,6 +1,6 @@
 /*
  *  Name: "oidGenerator.js"
- *  Version: "0.2.2"
+ *  Version: "0.2.3"
  *  Description: Aggregation based OID generator (requires v5.0+)
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -19,7 +19,7 @@ let options = {
          { "timestamp": Math.pow(2, 32) },
          { "timestamp": "$$NOW" }
       ] },
-      // 4-byte _epoch timestamp
+      // 4-byte epoch timestamp
       { "$set": {
          "_epoch": {
             "$convert": {
@@ -38,8 +38,8 @@ let options = {
             "$reduce": {
                "input": { "$range": [0, { "$ceil": { "$log": [{ "$add": ["$_epoch", 1] }, 16] } }]}, // scale
                "initialValue": {
-                  "quotient": { "$floor": { "$divide": ["$_epoch", 16] } }, // quotient
-                  "remainder": { "$mod": ["$_epoch", 16] }, // remainder
+                  "quotient": { "$floor": { "$divide": ["$_epoch", 16] } },
+                  "remainder": { "$mod": ["$_epoch", 16] },
                   "hexArray": []
                },
                "in": {
@@ -86,17 +86,17 @@ let options = {
                         ],
                         "default": "$$epoch"
       } } } } } } },
-      // 5-byte machine nonce
-      // { "$set": { "_nonce": "$$nonce" } },
-      // 3-byte counter
+      // 5-byte machine nonce - set via $let option
+      // { "$set": { "_nonce": "$$nonce" } }, // alternatively set directly
+      // 3-byte randomly initialised 'counter'
       { "$set": { "_counter": { "$floor": { "$multiply": [{ "$rand": {} }, { "$pow": [2, 24] }] } } } },
       { "$set": {
          "_counter": {
             "$reduce": {
                "input": { "$range": [0, { "$ceil": { "$log": [{ "$add": ["$_counter", 1] }, 16] } }]}, // scale
                "initialValue": {
-                  "quotient": { "$floor": { "$divide": ["$_counter", 16] } }, // quotient
-                  "remainder": { "$mod": ["$_counter", 16] }, // remainder
+                  "quotient": { "$floor": { "$divide": ["$_counter", 16] } },
+                  "remainder": { "$mod": ["$_counter", 16] },
                   "hexArray": []
                },
                "in": {
