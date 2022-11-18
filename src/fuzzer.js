@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.5"
+ *  Version: "0.4.6"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-const __script = { "name": "fuzzer.js", "version": "0.4.5" };
+const __script = { "name": "fuzzer.js", "version": "0.4.6" };
 let __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -59,8 +59,8 @@ let dbName = 'database',            // database name
         // backwards: <boolean>
     },
     writeConcern = (isReplSet())
-               ? { "w": "majority", "j": true }
-               : { "w": 1, "j": true },
+                 ? { "w": "majority", "j": true }
+                 : { "w": 1, "j": true },
     indexPrefs = {  /* build index preferences */
         "build": true,              // [true|false]
         "order": "post",            // [pre|post] collection population
@@ -285,9 +285,13 @@ function genDocument() {
             "num": +$getRandomNumber(
                         -Math.pow(2, 12),
                         Math.pow(2, 12)
-                   ).toFixed(4)
+                   ).toFixed(4),
+            "nestedArray": [$genArrayElements($getRandomIntInclusive(0, 10))]
         },
         "array": $genArrayElements($getRandomIntInclusive(0, 10)),
+        "objectArray": [
+            { "nestedArray": $genArrayElements($getRandomIntInclusive(0, 10)) }
+        ],
         "boolean": $bool(),
         "code": Code('() => {}'),
         "codeScoped": Code('() => {}', {}),
@@ -598,8 +602,8 @@ function buildIndexes() {
             specialIndexes.forEach(index => print('\tkey:', JSON.stringify(index)));
             let sIndexing = () => {
                 let sOptions = (isReplSet() && serverVer(4.4))
-                           ? [specialIndexes, specialIndexOptions, indexPrefs.commitQuorum]
-                           : [specialIndexes, specialIndexOptions];
+                             ? [specialIndexes, specialIndexOptions, indexPrefs.commitQuorum]
+                             : [specialIndexes, specialIndexOptions];
 
                 return namespace.createIndexes(...sOptions);
             }
