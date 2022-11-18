@@ -1,5 +1,5 @@
 /*
- *  Aggregation templates
+ *    Aggregation templates
  */
 
 (() => {
