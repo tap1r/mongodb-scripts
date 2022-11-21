@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.6"
+ *  Version: "0.4.7"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-const __script = { "name": "fuzzer.js", "version": "0.4.6" };
+const __script = { "name": "fuzzer.js", "version": "0.4.7" };
 let __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -45,9 +45,9 @@ let dbName = 'database',            // database name
     collName = 'collection',        // collection name
     totalDocs = $getRandomExp(3.5), // number of documents to generate per namespace
     dropPref = false,               // drop collection prior to generating data
-    compressor = 'best',            // ["none"|"snappy"|"zlib"|"zstd"|"default"|"best"]
+    compressor = 'best',            // ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
     // compressionOptions = -1,     // [-1|0|1|2|3|4|5|6|7|8|9] compression level
-    idioma = 'en',                  // ["en"|"es"|"de"|"fr"|"zh"]
+    idioma = 'en',                  // ['en'|'es'|'de'|'fr'|'zh']
     collation = {   /* collation options */
         "locale": "simple",          // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
         // caseLevel: <boolean>,
@@ -63,7 +63,7 @@ let dbName = 'database',            // database name
                  : { "w": 1, "j": true },
     indexPrefs = {  /* build index preferences */
         "build": true,              // [true|false]
-        "order": "post",            // [pre|post] collection population
+        "order": "post",            // ["pre"|"post"] collection population
         "commitQuorum": (writeConcern.w === 0)
                       ? 1
                       : writeConcern.w
@@ -78,7 +78,8 @@ let dbName = 'database',            // database name
     fuzzer = {  /* preferences */
         "_id": "ts",                // ["ts"|"oid"] - timeseries OID | client generated OID
         "range": 365.2422,          // date range in days
-        "offset": -300,             // date offset in days from now() (neg = past, pos = future)
+        "offset": -300,             // date offset in days from now() (negative = past, positive = future)
+        "interval": 7,              // date interval in days
         "distribution": "uniform",  // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
         "polymorphic": { /* experimental */
             "enabled": false,
@@ -106,13 +107,13 @@ let indexes = [ /* index definitions */
     { "array": 1 },
     { "timestamp": 1 },
     { "location": "2dsphere" },
-    { "lineString": "2dsphere" },
-    { "polygon": "2dsphere" },
-    { "polygonMulti": "2dsphere" },
-    { "multiPoint": "2dsphere" },
-    { "multiLineString": "2dsphere" },
-    { "multiPolygon": "2dsphere" },
-    { "geoCollection": "2dsphere" },
+    // { "lineString": "2dsphere" },
+    // { "polygon": "2dsphere" },
+    // { "polygonMulti": "2dsphere" },
+    // { "multiPoint": "2dsphere" },
+    // { "multiLineString": "2dsphere" },
+    // { "multiPolygon": "2dsphere" },
+    // { "geoCollection": "2dsphere" },
     fCV(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
 ];
 let indexOptions = {    /* createIndexes options */
@@ -145,7 +146,6 @@ let specialIndexOptions = { /* exceptional index options */
  *  Global defaults
  */
 
-if (typeof readPref === 'undefined') var readPref = 'primary';
 let batch = 0, totalBatches = 1, residual = 0,
     now = new Date().getTime(),
     timestamp = (now/1000.0)|0;
@@ -154,7 +154,7 @@ function main() {
     /*
      *  main
      */
-    db.getMongo().setReadPref(readPref);
+    db.getMongo().setReadPref('primary');
     print('\nSynthesising', totalDocs,
           'document' + ((totalDocs === 1) ? '' : 's')
     );
@@ -264,8 +264,8 @@ function genDocument() {
 
     let date = new Date(now + (secondsOffset * 1000));
     let ts = (typeof process !== 'undefined') // MONGOSH-930
-        ? new Timestamp({ "t": timestamp + secondsOffset, "i": 0 })
-        : new Timestamp(timestamp + secondsOffset, 0);
+           ? new Timestamp({ "t": timestamp + secondsOffset, "i": 0 })
+           : new Timestamp(timestamp + secondsOffset, 0);
     fuzzer.schemas = new Array();
     fuzzer.schemas.push({
         "_id": oid,
@@ -277,15 +277,15 @@ function genDocument() {
             "language": idiomas[
                 $getRandomRatioInt([80, 0, 0, 5, 0, 3, 2])
             ],
-            "txt": $genRandomString($getRandomIntInclusive(6, 24)),
+            "txt": $genRandomString($getRandomIntInclusive(6, 24))
         },
         "object": {
             "oid": oid,
             "str": $genRandomAlpha($getRandomIntInclusive(8, 16)),
             "num": +$getRandomNumber(
-                        -Math.pow(2, 12),
-                        Math.pow(2, 12)
-                   ).toFixed(4),
+                -Math.pow(2, 12),
+                Math.pow(2, 12)
+            ).toFixed(4),
             "nestedArray": [$genArrayElements($getRandomIntInclusive(0, 10))]
         },
         "array": $genArrayElements($getRandomIntInclusive(0, 10)),
@@ -300,20 +300,24 @@ function genDocument() {
         "timestamp": ts,
         "null": null,
         "int32": NumberInt(
-                    $getRandomIntInclusive(
-                        -Math.pow(2, 31),
-                        Math.pow(2, 31) - 1)),
+            $getRandomIntInclusive(
+                -Math.pow(2, 31),
+                Math.pow(2, 31) - 1)
+        ),
         "int64": $NumberLong(
-                    $getRandomIntInclusive(
-                        -Math.pow(2, 63),
-                        Math.pow(2, 63) - 1)),
+            $getRandomIntInclusive(
+                -Math.pow(2, 63),
+                Math.pow(2, 63) - 1)
+        ),
         "double": $getRandomNumber(
-                    -Math.pow(2, 12),
-                    Math.pow(2, 12)),
+            -Math.pow(2, 12),
+            Math.pow(2, 12)
+        ),
         "decimal128": $NumberDecimal(
-                        $getRandomNumber(
-                            -10 * Math.pow(2, 110),
-                            10 * Math.pow(2, 110) - 1)),
+            $getRandomNumber(
+                -10 * Math.pow(2, 110),
+                10 * Math.pow(2, 110) - 1)
+        ),
         "regex": $getRandomRegex(),
         "bin": BinData(0, UUID().base64()),
         "uuid": UUID(),
@@ -341,17 +345,18 @@ function genDocument() {
         "language": idioma,
         "timeField": date,
         "metaField": [
-                'Series 1',
-                'Series 2',
-                'Series 3'
-            ][$getRandomRatioInt([70, 20, 10])],
+            'Series 1',
+            'Series 2',
+            'Series 3'
+        ][$getRandomRatioInt([70, 20, 10])],
         "granularity": "hours",
         "unit": +$getRandomNumber(0, Math.pow(10, 6)).toFixed(2),
         "qty": NumberInt($getRandomIntInclusive(0, Math.pow(10, 4))),
         "price": [
             +$getRandomNumber(0, Math.pow(10, 4)).toFixed(2),
             $genRandomCurrency()
-    ] });
+        ]
+    });
     fuzzer.schemas.push({
         "_id": oid,
         "schema": "C",
@@ -366,7 +371,7 @@ function genDocument() {
             'Active',
             'Inactive',
             null
-            ][$getRandomRatioInt([80, 20, 1])],
+        ][$getRandomRatioInt([80, 20, 1])],
         "location": {   // GeoJSON Point
             "type": "Point",
             "coordinates": [
@@ -375,27 +380,26 @@ function genDocument() {
         ] },
         "lineString": { // GeoJSON LineString
             "type": "LineString",
-            "coordinates": [
-                [
+            "coordinates": [[
                     +$getRandomNumber(-180, 180).toFixed(4),
                     +$getRandomNumber(-90, 90).toFixed(4)
                 ],[
                     +$getRandomNumber(-180, 180).toFixed(4),
                     +$getRandomNumber(-90, 90).toFixed(4)
-        ]] },
+            ]]
+        },
         "polygon": {    // polygon with a single ring
             "type": "Polygon",
-            "coordinates": [
-                [
-                    [0, 0],
-                    [3, 6],
-                    [6, 1],
-                    [0, 0]]
-        ] },
+            "coordinates": [[
+                [0, 0],
+                [3, 6],
+                [6, 1],
+                [0, 0]
+            ]]
+        },
         "polygonMulti": {   // polygons with multiple rings
             "type": "Polygon",
-            "coordinates": [
-                [
+            "coordinates": [[
                     [0, 0],
                     [3, 6],
                     [6, 1],
@@ -405,7 +409,8 @@ function genDocument() {
                     [3, 3],
                     [4, 2],
                     [2, 2]
-        ]] },
+            ]]
+        },
         "multiPoint": { // GeoJSON MultiPoint
             "type": "MultiPoint",
             "coordinates": [
@@ -413,11 +418,11 @@ function genDocument() {
                 [-73.9498, 40.7968],
                 [-73.9737, 40.7648],
                 [-73.9814, 40.7681]
-        ] },
+            ]
+        },
         "multiLineString": {    // GeoJSON MultiLineString
             "type": "MultiLineString",
-            "coordinates": [
-                [
+            "coordinates": [[
                     [-73.96943, 40.78519],
                     [-73.96082, 40.78095]
                 ],[
@@ -429,25 +434,24 @@ function genDocument() {
                 ],[
                     [-73.97880, 40.77247],
                     [-73.97036, 40.76811]
-        ]] },
+            ]]
+        },
         "multiPolygon": {   // GeoJSON MultiPolygon
             "type": "MultiPolygon",
-            "coordinates": [
-                [
-                    [
-                        [-73.958, 40.8003],
-                        [-73.9498, 40.7968],
-                        [-73.9737, 40.7648],
-                        [-73.9814, 40.7681],
-                        [-73.958, 40.8003]
-                    ]
-                ],[
-                    [
-                        [-73.958, 40.8003],
-                        [-73.9498, 40.7968],
-                        [-73.9737, 40.7648],
-                        [-73.958, 40.8003]
-        ]]] },
+            "coordinates": [[[
+                    [-73.958, 40.8003],
+                    [-73.9498, 40.7968],
+                    [-73.9737, 40.7648],
+                    [-73.9814, 40.7681],
+                    [-73.958, 40.8003]
+                ]],
+                [[
+                    [-73.958, 40.8003],
+                    [-73.9498, 40.7968],
+                    [-73.9737, 40.7648],
+                    [-73.958, 40.8003]
+            ]]]
+        },
         "geoCollection": {  // GeoJSON GeometryCollection
             "type": "GeometryCollection",
             "geometries": [{
@@ -457,11 +461,10 @@ function genDocument() {
                     [-73.9498, 40.7968],
                     [-73.9737, 40.7648],
                     [-73.9814, 40.7681]
-            ] },
-            {
+                ]
+            },{
                 "type": "MultiLineString",
-                "coordinates": [
-                    [
+                "coordinates": [[
                         [-73.9694, 40.7851],
                         [-73.9608, 40.7809]
                     ],[
@@ -473,7 +476,9 @@ function genDocument() {
                     ],[
                         [-73.9788, 40.7724],
                         [-73.9703, 40.7681]
-        ]] }] }
+                ]]
+            }]
+        }
     });
 
     return fuzzer.schemas[$getRandomRatioInt(fuzzer.ratios)];
@@ -562,8 +567,9 @@ function buildIndexes() {
         if (indexes.length > 0) {
             print('\nBuilding index' + ((indexes.length === 1) ? '' : 'es'),
                   'with collation locale "' + collation.locale + '"',
-                  'with commit quorum "' + ((isReplSet() && serverVer(4.4)) ? indexPrefs.commitQuorum : 'disabled')
-                  + '":'
+                  'with commit quorum "' + ((isReplSet() && serverVer(4.4))
+                                         ? indexPrefs.commitQuorum
+                                         : 'disabled') + '":'
             );
             indexes.forEach(index => print('\tkey:', JSON.stringify(index)));
             let indexing = () => {
