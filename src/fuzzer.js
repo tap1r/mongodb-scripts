@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.7"
+ *  Version: "0.4.8"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-const __script = { "name": "fuzzer.js", "version": "0.4.7" };
+const __script = { "name": "fuzzer.js", "version": "0.4.8" };
 let __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
@@ -293,8 +293,8 @@ function genDocument() {
             { "nestedArray": $genArrayElements($getRandomIntInclusive(0, 10)) }
         ],
         "boolean": $bool(),
-        "code": Code('() => {}'),
-        "codeScoped": Code('() => {}', {}),
+        // "code": Code('() => {}'),
+        // "codeScoped": Code('() => {}', {}),
         "date": date,
         "dateString": date.toISOString(),
         "timestamp": ts,
@@ -567,13 +567,13 @@ function buildIndexes() {
         if (indexes.length > 0) {
             print('\nBuilding index' + ((indexes.length === 1) ? '' : 'es'),
                   'with collation locale "' + collation.locale + '"',
-                  'with commit quorum "' + ((isReplSet() && serverVer(4.4))
+                  'with commit quorum "' + ((isReplSet() && fCV(4.4))
                                          ? indexPrefs.commitQuorum
                                          : 'disabled') + '":'
             );
             indexes.forEach(index => print('\tkey:', JSON.stringify(index)));
             let indexing = () => {
-                let options = (isReplSet() && serverVer(4.4))
+                let options = (isReplSet() && fCV(4.4))
                             ? [indexes, indexOptions, indexPrefs.commitQuorum]
                             : [indexes, indexOptions];
 
@@ -603,11 +603,11 @@ function buildIndexes() {
         if (specialIndexes.length > 0) {
             print('\nBuilding exceptional index' + ((specialIndexes.length === 1) ? '' : 'es'),
                   '(no collation support) with commit quorum "' +
-                  ((isReplSet() && serverVer(4.4)) ? indexPrefs.commitQuorum : 'disabled') + '":'
+                  ((isReplSet() && fCV(4.4)) ? indexPrefs.commitQuorum : 'disabled') + '":'
             );
             specialIndexes.forEach(index => print('\tkey:', JSON.stringify(index)));
             let sIndexing = () => {
-                let sOptions = (isReplSet() && serverVer(4.4))
+                let sOptions = (isReplSet() && fCV(4.4))
                              ? [specialIndexes, specialIndexOptions, indexPrefs.commitQuorum]
                              : [specialIndexes, specialIndexOptions];
 
@@ -642,13 +642,13 @@ function buildIndexes() {
 
 function genBulk(batchSize) {
     print('\nSpecified date range time series:',
-        '\n\tfrom:\t\t',
-        new Date(now + fuzzer.offset * 86400000).toISOString(),
-        '\n\tto:\t\t',
-        new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString(),
-        '\n\tdistribution:\t', fuzzer.distribution,
-        '\n\nGenerating', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'),
-        'in', totalBatches, 'batch' + ((totalBatches === 1) ? '' : 'es') + ':'
+          '\n\tfrom:\t\t',
+          new Date(now + fuzzer.offset * 86400000).toISOString(),
+          '\n\tto:\t\t',
+          new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString(),
+          '\n\tdistribution:\t', fuzzer.distribution,
+          '\n\nGenerating', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'),
+          'in', totalBatches, 'batch' + ((totalBatches === 1) ? '' : 'es') + ':'
     );
     for (let i = 0; i < totalBatches; ++i) {
         if (i === totalBatches - 1 && residual > 0) batchSize = residual;
