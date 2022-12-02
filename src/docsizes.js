@@ -1,13 +1,13 @@
 /*
  *  Name: "docsizes.js"
- *  Version: "0.1.4"
+ *  Version: "0.1.5"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet docsizes.js"
 
-let __script = { "name": "docsizes.js", "version": "0.1.4" };
+let __script = { "name": "docsizes.js", "version": "0.1.5" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
@@ -27,31 +27,36 @@ if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === fa
    ? 'primaryPreferred'
    : 'secondaryPreferred';
 
-db.getMongo().setReadPref(readPref);
-
 (() => {
    /*
    *  main
    */
+   db.getMongo().setReadPref(readPref);
    let namespace = db.getSiblingDB(options.dbName).getCollection(options.collName),
       aggOptions = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
-         "comment": `Performing document distribution analysis with 
-                     ${this.__script.name} v ${this.__script.version}`
+         "comment": `Performing document distribution analysis with ${this.__script.name} v${this.__script.version}`
       },
       host = db.hostInfo().system.hostname,
       dbPath = db.serverCmdLineOpts().parsed.storage.dbPath,
-      stats = namespace.stats(),
-      dataSize = stats.size,
-      blocksFree = stats.wiredTiger['block-manager']['file bytes available for reuse'],
-      storageSize = stats.wiredTiger['block-manager']['file size in bytes'],
-      compressor = stats.wiredTiger.creationString.match(/block_compressor=(?<compressor>\w+)/).groups.compressor,
-      documentCount = stats.count,
       overhead = 0, // 2 * 1024 * 1024;
-      pageSize = 32768,
-      ratio = +(dataSize / (storageSize - blocksFree - overhead)).toFixed(2);
+      pageSize = 32768;
+
+   let {
+      'size': dataSize,
+      'wiredTiger': {
+         'block-manager': {
+            'file bytes available for reuse': blocksFree,
+            'file size in bytes': storageSize
+         },
+         creationString
+      },
+      'count': documentCount
+   } = namespace.stats();
+   let compressor = creationString.match(/block_compressor=(?<compressor>\w+)/).groups.compressor;
+   let ratio = +(dataSize / (storageSize - blocksFree - overhead)).toFixed(2);
 
    let pipeline = [
       { "$sample": { "size": options.sampleSize } },
