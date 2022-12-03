@@ -1,13 +1,13 @@
 /*
  *  Name: "docsizes.js"
- *  Version: "0.1.6"
+ *  Version: "0.1.7"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet docsizes.js"
 
-let __script = { "name": "docsizes.js", "version": "0.1.6" };
+let __script = { "name": "docsizes.js", "version": "0.1.7" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
@@ -17,30 +17,35 @@ console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 let options = {
    "dbName": "database",
    "collName": "collection",
-   "sampleSize": 1000,  // parameter to $sample
-   "buckets": Array.from([0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384], block => block * 1024),
-   "pages": Array.from([0, 1, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384], block => block * 1024)
-}
+   // "sampleSize": 1000,  // parameter to $sample
+};
 
-// connection preferences
-if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === false)
-   ? 'primaryPreferred'
-   : 'secondaryPreferred';
-
-(() => {
+(({
+      dbName,
+      collName,
+      sampleSize = 1000,
+      buckets = Array.from([0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384], block => block * 1024),
+      pages = Array.from([0, 1, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384], block => block * 1024)
+   }) => {
    /*
-   *  main
-   */
+    *  main
+    */
+
+   // connection preferences
+   if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === false)
+      ? 'primaryPreferred'
+      : 'secondaryPreferred';
    db.getMongo().setReadPref(readPref);
-   let namespace = db.getSiblingDB(options.dbName).getCollection(options.collName),
+   
+   let namespace = db.getSiblingDB(dbName).getCollection(collName),
       aggOptions = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
          "comment": `Performing document distribution analysis with ${this.__script.name} v${this.__script.version}`
       },
-      host = db.hostInfo().system.hostname,
-      dbPath = db.serverCmdLineOpts().parsed.storage.dbPath,
+      { 'system': { hostname } } = db.hostInfo(),
+      { 'parsed': { 'storage': { dbPath } } } = db.serverCmdLineOpts(),
       overhead = 0, // 2 * 1024 * 1024;
       pageSize = 32768;
 
@@ -60,7 +65,7 @@ if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === fa
    let ratio = +(dataSize / (storageSize - blocksFree - overhead)).toFixed(2);
 
    let pipeline = [
-      { "$sample": { "size": options.sampleSize } },
+      { "$sample": { "size": sampleSize } },
       { "$facet": {
          "SampleTotals": [
             { "$group": {
@@ -68,8 +73,8 @@ if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === fa
                "dataSize": { "$sum": { "$bsonSize": "$$ROOT" } }
             } },
             { "$set": {
-               "avgDocSize": { "$round": [{ "$divide": ["$dataSize", options.sampleSize] }, 0] },
-               "sampleSize": options.sampleSize,
+               "avgDocSize": { "$round": [{ "$divide": ["$dataSize", sampleSize] }, 0] },
+               "sampleSize": sampleSize,
                "estStorageSize": { "$round": [{ "$divide": ["$dataSize", ratio] }, 0] },
             } },
             { "$unset": "_id" }
@@ -77,7 +82,7 @@ if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === fa
          "BSONdistribution": [
             { "$bucket": {
                "groupBy": { "$bsonSize": "$$ROOT" },
-               "boundaries": options.buckets,
+               "boundaries": buckets,
                "default": "Unknown",
                "output": {
                   "totalDataSize": { "$sum": { "$bsonSize": "$$ROOT" } },
@@ -89,7 +94,7 @@ if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === fa
          "PageDistribution": [
             { "$bucket": {
                "groupBy": { "$round": { "$divide": [{ "$bsonSize": "$$ROOT" }, ratio] } },
-               "boundaries": options.pages,
+               "boundaries": pages,
                "default": "Unknown",
                "output": {
                   "totalStorageSize": { "$sum": { "$round": { "$divide": [{ "$bsonSize": "$$ROOT" }, ratio] } } },
@@ -101,10 +106,10 @@ if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === fa
       } },
       { "$set": {
          "CollectionTotals": {
-            "host": host,
+            "hostname": hostname,
             "dbPath": dbPath,
             "URI": dhandle,
-            "namespace": `${options.dbName}.${options.collName}`,
+            "namespace": `${dbName}.${collName}`,
             "dataSize": dataSize,
             "storageSize": storageSize,
             "freePages": blocksFree,
@@ -118,6 +123,6 @@ if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === fa
    ];
 
    namespace.aggregate(pipeline, aggOptions).forEach(printjson);
-})()
+})(options);
 
 // EOF
