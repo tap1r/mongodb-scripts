@@ -1,13 +1,13 @@
 /*
  *  Name: "docsizes.js"
- *  Version: "0.1.5"
+ *  Version: "0.1.6"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet docsizes.js"
 
-let __script = { "name": "docsizes.js", "version": "0.1.5" };
+let __script = { "name": "docsizes.js", "version": "0.1.6" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
@@ -51,6 +51,7 @@ if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === fa
             'file bytes available for reuse': blocksFree,
             'file size in bytes': storageSize
          },
+         'uri': dhandle,
          creationString
       },
       'count': documentCount
@@ -102,6 +103,7 @@ if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === fa
          "CollectionTotals": {
             "host": host,
             "dbPath": dbPath,
+            "URI": dhandle,
             "namespace": `${options.dbName}.${options.collName}`,
             "dataSize": dataSize,
             "storageSize": storageSize,
