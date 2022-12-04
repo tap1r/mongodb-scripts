@@ -1,13 +1,13 @@
 /*
  *  Name: "docsizes.js"
- *  Version: "0.1.7"
+ *  Version: "0.1.8"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet docsizes.js"
 
-let __script = { "name": "docsizes.js", "version": "0.1.7" };
+let __script = { "name": "docsizes.js", "version": "0.1.8" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
@@ -38,7 +38,19 @@ let options = {
    db.getMongo().setReadPref(readPref);
    
    let namespace = db.getSiblingDB(dbName).getCollection(collName),
-      aggOptions = {
+      {
+         'size': dataSize,
+         'wiredTiger': {
+            'block-manager': {
+               'file bytes available for reuse': blocksFree,
+               'file size in bytes': storageSize
+            },
+            'uri': dhandle,
+            creationString
+         },
+         'count': documentCount
+      } = namespace.stats();
+   let aggOptions = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
@@ -48,21 +60,8 @@ let options = {
       { 'parsed': { 'storage': { dbPath } } } = db.serverCmdLineOpts(),
       overhead = 0, // 2 * 1024 * 1024;
       pageSize = 32768;
-
-   let {
-      'size': dataSize,
-      'wiredTiger': {
-         'block-manager': {
-            'file bytes available for reuse': blocksFree,
-            'file size in bytes': storageSize
-         },
-         'uri': dhandle,
-         creationString
-      },
-      'count': documentCount
-   } = namespace.stats();
-   let compressor = creationString.match(/block_compressor=(?<compressor>\w+)/).groups.compressor;
-   let ratio = +(dataSize / (storageSize - blocksFree - overhead)).toFixed(2);
+      compressor = creationString.match(/block_compressor=(?<compressor>\w+)/).groups.compressor,
+      ratio = +(dataSize / (storageSize - blocksFree - overhead)).toFixed(2);
 
    let pipeline = [
       { "$sample": { "size": sampleSize } },
