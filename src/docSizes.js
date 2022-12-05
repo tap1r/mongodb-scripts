@@ -1,13 +1,13 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.9"
+ *  Version: "0.1.10"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet docSizes.js"
 
-let __script = { "name": "docSizes.js", "version": "0.1.9" };
+let __script = { "name": "docSizes.js", "version": "0.1.10" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
@@ -38,6 +38,12 @@ let options = {
       ? 'primaryPreferred'
       : 'secondaryPreferred';
    db.getMongo().setReadPref(readPref);
+   try {
+      if (db.getSiblingDB(dbName).getCollectionInfos({ "name": collName }, true)[0]?.name != collName)
+         throw 'namespace does not exist';
+   } catch(e) {
+      console.log(dbName + '.' + collName, e);
+   }
 
    let namespace = db.getSiblingDB(dbName).getCollection(collName);
    let {
