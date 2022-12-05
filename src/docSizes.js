@@ -1,13 +1,13 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.8"
+ *  Version: "0.1.9"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet docSizes.js"
 
-let __script = { "name": "docSizes.js", "version": "0.1.8" };
+let __script = { "name": "docSizes.js", "version": "0.1.9" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
@@ -48,10 +48,15 @@ let options = {
                'file size in bytes': storageSize
             },
             'uri': dhandle,
-            creationString
          },
-         'count': documentCount
-      } = namespace.stats();
+         'count': documentCount,
+         compressor
+   } = Object.assign(
+      { get compressor() {
+         return this['wiredTiger']['creationString'].match(/block_compressor=(?<compressor>\w+)/).groups.compressor
+      } },
+      namespace.stats()
+   );
    let aggOptions = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
@@ -62,7 +67,6 @@ let options = {
       { 'parsed': { 'storage': { dbPath } } } = db.serverCmdLineOpts(),
       overhead = 0, // 2 * 1024 * 1024;
       pageSize = 32768,
-      compressor = creationString.match(/block_compressor=(?<compressor>\w+)/).groups.compressor,
       ratio = +(dataSize / (storageSize - blocksFree - overhead)).toFixed(2);
 
    let pipeline = [
