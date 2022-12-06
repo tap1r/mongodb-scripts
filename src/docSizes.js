@@ -1,13 +1,13 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.10"
+ *  Version: "0.1.11"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet docSizes.js"
 
-let __script = { "name": "docSizes.js", "version": "0.1.10" };
+let __script = { "name": "docSizes.js", "version": "0.1.11" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
@@ -17,17 +17,13 @@ console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 let options = {
    "dbName": "database",
    "collName": "collection",
-   // "sampleSize": 1000,
-   // "buckets": [],
-   // "pages": []
+   // "sampleSize": 1000
 };
 
 (({
       dbName,
       collName,
-      sampleSize = 1000,   // parameter to $sample
-      buckets = Array.from([0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384], block => block * 1024),
-      pages = Array.from([0, 1, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384], block => block * 1024)
+      sampleSize = 1000   // parameter to $sample
    }) => {
    /*
     *  main
@@ -45,6 +41,7 @@ let options = {
       console.log(dbName + '.' + collName, e);
    }
 
+   // retrieve collection metadata
    let namespace = db.getSiblingDB(dbName).getCollection(collName);
    let {
          'size': dataSize,
@@ -56,13 +53,21 @@ let options = {
             'uri': dhandle,
          },
          'count': documentCount,
-         compressor
-   } = Object.assign(
-      { get compressor() {
-         return this['wiredTiger']['creationString'].match(/block_compressor=(?<compressor>\w+)/).groups.compressor
-      } },
-      namespace.stats()
-   );
+         compressor,
+         'internal_page_max': internalPageSize,
+         'leaf_page_max': dataPageSize
+   } = {
+      ...namespace.stats(),
+      get compressor() {
+         return this['wiredTiger']['creationString'].match(/block_compressor=(?<compressor>\w+)/).groups?.compressor
+      },
+      get internal_page_max() {
+         return this['wiredTiger']['creationString'].match(/internal_page_max=(?<internal_page_max>\d+)/).groups?.internal_page_max * 1024
+      },
+      get leaf_page_max() {
+         return this['wiredTiger']['creationString'].match(/leaf_page_max=(?<leaf_page_max>\d+)/).groups?.leaf_page_max * 1024
+      }
+   };
    let aggOptions = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
@@ -72,9 +77,19 @@ let options = {
       { 'system': { hostname } } = db.hostInfo(),
       { 'parsed': { 'storage': { dbPath } } } = db.serverCmdLineOpts(),
       overhead = 0, // 2 * 1024 * 1024;
-      pageSize = 32768,
       ratio = +(dataSize / (storageSize - blocksFree - overhead)).toFixed(2);
 
+   // Distribution buckets
+   let range = (start, stop, step) => {
+      return Array.from(
+         { "length": (stop - start) / step + 1 },
+         (_, idx) => start + idx * step
+      );
+   };
+   let { maxBsonObjectSize } = db.hello();
+   let buckets = range(0, maxBsonObjectSize, internalPageSize), pages = range(0, maxBsonObjectSize, dataPageSize);
+
+   // measure document and page distribution
    let pipeline = [
       { "$sample": { "size": sampleSize } },
       { "$facet": {
@@ -128,8 +143,8 @@ let options = {
             "compressor": compressor,
             "compressionRatio": ratio,
             "documentCount": documentCount,
-            "consumed32kPages": Math.ceil((storageSize - blocksFree - overhead) / pageSize),
-            "avgDocsPer32kPage": +(documentCount/((storageSize - blocksFree - overhead) / pageSize)).toFixed(2)
+            "consumed32kPages": Math.ceil((storageSize - blocksFree - overhead) / dataPageSize),
+            "avgDocsPer32kPage": +(documentCount/((storageSize - blocksFree - overhead) / dataPageSize)).toFixed(2)
       } } }
    ];
 
