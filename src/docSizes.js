@@ -1,13 +1,13 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.11"
+ *  Version: "0.1.12"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet docSizes.js"
 
-let __script = { "name": "docSizes.js", "version": "0.1.11" };
+let __script = { "name": "docSizes.js", "version": "0.1.12" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
@@ -20,8 +20,20 @@ let options = {
    // "sampleSize": 1000
 };
 
-(({
-      dbName,
+/*
+function fomatted(bytes) {
+   return Intl.NumberFormat('en', {
+      "minimumIntegerDigits": 1,
+      "minimumFractionDigits": 0,
+      "maximumFractionDigits": 2,
+      "style": "unit",
+      "unit": "byte", // https://tc39.es/proposal-unified-intl-numberformat/section6/locales-currencies-tz_proposed_out.html#sec-issanctionedsimpleunitidentifier
+      "unitDisplay": "narrow" // "short"
+   }).format(bytes);
+}
+*/
+
+(({   dbName,
       collName,
       sampleSize = 1000   // parameter to $sample
    }) => {
@@ -43,8 +55,7 @@ let options = {
 
    // retrieve collection metadata
    let namespace = db.getSiblingDB(dbName).getCollection(collName);
-   let {
-         'size': dataSize,
+   let { 'size': dataSize,
          'wiredTiger': {
             'block-manager': {
                'file bytes available for reuse': blocksFree,
@@ -56,18 +67,18 @@ let options = {
          compressor,
          'internal_page_max': internalPageSize,
          'leaf_page_max': dataPageSize
-   } = {
-      ...namespace.stats(),
-      get compressor() {
-         return this['wiredTiger']['creationString'].match(/block_compressor=(?<compressor>\w+)/).groups?.compressor
-      },
-      get internal_page_max() {
-         return this['wiredTiger']['creationString'].match(/internal_page_max=(?<internal_page_max>\d+)/).groups?.internal_page_max * 1024
-      },
-      get leaf_page_max() {
-         return this['wiredTiger']['creationString'].match(/leaf_page_max=(?<leaf_page_max>\d+)/).groups?.leaf_page_max * 1024
-      }
-   };
+      } = {
+         ...namespace.stats(),
+         get compressor() {
+            return this['wiredTiger']['creationString'].match(/block_compressor=(?<compressor>\w+)/).groups?.compressor
+         },
+         get internal_page_max() {
+            return this['wiredTiger']['creationString'].match(/internal_page_max=(?<internal_page_max>\d+)/).groups?.internal_page_max * 1024
+         },
+         get leaf_page_max() {
+            return this['wiredTiger']['creationString'].match(/leaf_page_max=(?<leaf_page_max>\d+)/).groups?.leaf_page_max * 1024
+         }
+      };
    let aggOptions = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
@@ -76,7 +87,7 @@ let options = {
       },
       { 'system': { hostname } } = db.hostInfo(),
       { 'parsed': { 'storage': { dbPath } } } = db.serverCmdLineOpts(),
-      overhead = 0, // 2 * 1024 * 1024;
+      overhead = 0, // TBA
       ratio = +(dataSize / (storageSize - blocksFree - overhead)).toFixed(2);
 
    // Distribution buckets
@@ -87,7 +98,9 @@ let options = {
       );
    };
    let { maxBsonObjectSize } = db.hello();
-   let buckets = range(0, maxBsonObjectSize, internalPageSize), pages = range(0, maxBsonObjectSize, dataPageSize);
+    // byte offset to reach bucket inclusive boundary
+   let buckets = range(1, maxBsonObjectSize + 1, internalPageSize),
+      pages = range(1, maxBsonObjectSize + 1, dataPageSize);
 
    // measure document and page distribution
    let pipeline = [
@@ -138,13 +151,14 @@ let options = {
             "namespace": `${dbName}.${collName}`,
             "dataSize": dataSize,
             "storageSize": storageSize,
-            "freePages": blocksFree,
-            "utilised": storageSize - blocksFree - overhead,
+            "freeBlocks": blocksFree,
+            "utilisedBytes": storageSize - blocksFree - overhead,
+            "utilisedPercentage": +(100 * (storageSize - blocksFree - overhead) / (storageSize - overhead)).toFixed(2), // + '%',
             "compressor": compressor,
             "compressionRatio": ratio,
             "documentCount": documentCount,
             "consumed32kPages": Math.ceil((storageSize - blocksFree - overhead) / dataPageSize),
-            "avgDocsPer32kPage": +(documentCount/((storageSize - blocksFree - overhead) / dataPageSize)).toFixed(2)
+            "avgDocsPer32kPage": +(documentCount / ((storageSize - blocksFree - overhead) / dataPageSize)).toFixed(0)
       } } }
    ];
 
