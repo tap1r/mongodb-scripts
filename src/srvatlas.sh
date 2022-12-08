@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.4.4"
+# Version: "0.4.5"
 # Description: Atlas/SRV cluster name/connection validator
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
+#
+# Usage: "bash srvatlas.sh <atlas-cluster-name>"
 
 _clusterName="${1:?'Usage: srvatlas.sh atlas-cluster-name'}"
 
