@@ -12,7 +12,7 @@
  *  Save libs to the $MDBLIB or valid search path
  */
 
-var __script = { "name": "oplogchurn.js", "version": "0.2.18" };
+var __script = { "name": "oplogchurn.js", "version": "0.2.19" };
 var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
    /*
@@ -68,8 +68,8 @@ function main() {
     */
    let opSize = 0,
       docs = 0,
-      date = new Date(),
-      t2 = (date.getTime() / 1000.0)|0, // end timestamp
+      date = new Date();
+   let t2 = (date.getTime() / 1000.0)|0, // end timestamp
       d2 = date.toISOString(), // end datetime
       t1 = (date.setHours(date.getHours() - hrs) / 1000.0)|0, // start timestamp
       d1 = date.toISOString(), // start datetime
@@ -86,8 +86,8 @@ function main() {
                } } },
       $project = serverVer(4.2)
                ? { "$unset": "_id" }
-               : { "$addFields": { "_id": "$$REMOVE" } },
-      pipeline = [$match, $project],
+               : { "$addFields": { "_id": "$$REMOVE" } };
+   let pipeline = [$match, $project],
       options = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
@@ -127,8 +127,8 @@ function main() {
          } }, size, storageSize
       } = oplog.stats();
    let ratio = +(size / (storageSize - blocksFree)).toFixed(2),
-      intervalDataSize = size / factor,
-      intervalStorageSize = size / (factor * ratio),
+      intervalDataSize = size / factor;
+   let intervalStorageSize = size / (factor * ratio),
       oplogChurn = size / (factor * ratio * hrs);
 
    // Print results
