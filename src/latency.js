@@ -1,13 +1,13 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.1.7"
+ *  Version: "0.1.8"
  *  Description: driver and network latency telemetry PoC
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet latency.js"
 
-let __script = { "name": "latency.js", "version": "0.1.7" };
+let __script = { "name": "latency.js", "version": "0.1.8" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 let { slowms } = db.getSiblingDB('admin').getProfilingStatus(),
@@ -46,7 +46,7 @@ try {
 }
 t1 = process.hrtime(t0);
 
-let { t, "attr": { "durationMillis": durationMillis }
+let { t, 'attr': { 'durationMillis': durationMillis }
    } = db.adminCommand(
       { "getLog": "global" }
    ).log.map(logString => {
@@ -95,3 +95,5 @@ ${'='.repeat(tableWidth)}
 `;
 
 console.log(report);
+
+// EOF
