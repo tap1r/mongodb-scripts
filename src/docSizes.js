@@ -1,13 +1,13 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.12"
+ *  Version: "0.1.13"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet docSizes.js"
 
-let __script = { "name": "docSizes.js", "version": "0.1.12" };
+let __script = { "name": "docSizes.js", "version": "0.1.13" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
@@ -83,7 +83,7 @@ function fomatted(bytes) {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
-         "comment": `Performing document distribution analysis with ${this.__script.name} v${this.__script.version}`
+         "comment": `Performing document distribution analysis with ${__script.name} v${__script.version}`
       },
       { 'system': { hostname } } = db.hostInfo(),
       { 'parsed': { 'storage': { dbPath } } } = db.serverCmdLineOpts(),
@@ -98,7 +98,7 @@ function fomatted(bytes) {
       );
    };
    let { maxBsonObjectSize } = db.hello();
-    // byte offset to reach bucket inclusive boundary
+   // byte offset to reach bucket inclusive boundary
    let buckets = range(1, maxBsonObjectSize + 1, internalPageSize),
       pages = range(1, maxBsonObjectSize + 1, dataPageSize);
 
