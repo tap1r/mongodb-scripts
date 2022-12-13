@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.2.17"
+ *  Version: "0.2.20"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,8 +12,8 @@
  *  Save libs to the $MDBLIB or valid search path
  */
 
-var __script = { "name": "oplogchurn.js", "version": "0.2.19" };
-var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
+let __script = { "name": "oplogchurn.js", "version": "0.2.20" };
+let __comment = `\n Running script ${__script.name} v${__script.version}`;
 if (typeof __lib === 'undefined') {
    /*
     *  Load helper library mdblib.js
@@ -26,28 +26,28 @@ if (typeof __lib === 'undefined') {
       __lib.paths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
       __lib.path = __lib.paths.find(path => fs.existsSync(path + '/' + __lib.name)) + '/' + __lib.name;
    } else {
-      print('[WARN] Legacy shell methods detected, must load', __lib.name, 'from the current working directory');
+      print(`[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory`);
       __lib.path = __lib.name;
    }
 
    load(__lib.path);
 }
 
-__comment += ' with ' + __lib.name + ' v' + __lib.version;
+__comment += ` with ${__lib.name} v${__lib.version}`;
 print(__comment);
 
 /*
  *  User defined parameters
  */
 
-if (typeof hrs === 'undefined') {
+if (typeof intervalHrs === 'undefined') {
    // set interval in hours
-   var hrs = 1;
+   (intervalHrs = 1);
 }
 
 if (typeof scale === 'undefined') {
    // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
-   var { unit, factor } = new ScaleFactor();
+   ({ unit, factor } = new ScaleFactor());
 }
 
 /*
@@ -55,23 +55,21 @@ if (typeof scale === 'undefined') {
  */
 
 // formatting preferences
-if (typeof termWidth === 'undefined') var termWidth = 62;
-if (typeof columnWidth === 'undefined') var columnWidth = 25;
-if (typeof rowHeader === 'undefined') var rowHeader = 36;
+if (typeof termWidth === 'undefined') (termWidth = 62);
+if (typeof columnWidth === 'undefined') (columnWidth = 25);
+if (typeof rowHeader === 'undefined') (rowHeader = 36);
 
 // connection preferences
-if (typeof readPref === 'undefined') var readPref = (hello().secondary === false) ? 'primaryPreferred': 'secondaryPreferred';
+if (typeof readPref === 'undefined') (readPref = (hello().secondary === false) ? 'primaryPreferred': 'secondaryPreferred');
 
 function main() {
    /*
     *  main
     */
-   let opSize = 0,
-      docs = 0,
-      date = new Date();
+   let opSize = 0, docs = 0, date = new Date();
    let t2 = (date.getTime() / 1000.0)|0, // end timestamp
       d2 = date.toISOString(), // end datetime
-      t1 = (date.setHours(date.getHours() - hrs) / 1000.0)|0, // start timestamp
+      t1 = (date.setHours(date.getHours() - intervalHrs) / 1000.0)|0, // start timestamp
       d1 = date.toISOString(), // start datetime
       $match = (typeof process !== 'undefined') // MONGOSH-930
              ? { "$match": {
@@ -91,7 +89,7 @@ function main() {
       options = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
-         "comment": `Performing oplog churn analysis with ${this.__script.name} v${this.__script.version}`
+         "comment": `Performing oplog churn analysis with ${__script.name} v${__script.version}`
       };
 
    // Measure interval statistics
@@ -127,9 +125,9 @@ function main() {
          } }, size, storageSize
       } = oplog.stats();
    let ratio = +(size / (storageSize - blocksFree)).toFixed(2),
-      intervalDataSize = size / factor;
-   let intervalStorageSize = size / (factor * ratio),
-      oplogChurn = size / (factor * ratio * hrs);
+      intervalDataSize = opSize / factor;
+   let intervalStorageSize = intervalDataSize / ratio;
+   let oplogChurn = intervalStorageSize / intervalHrs;
 
    // Print results
    print('\n');
@@ -140,7 +138,7 @@ function main() {
    print('Start time:'.padEnd(rowHeader), d1.padStart(columnWidth));
    print('End time:'.padEnd(rowHeader), d2.padStart(columnWidth));
    print('Interval duration:'.padEnd(rowHeader),
-         (hrs + ' hr' + ((hrs === 1) ? '' : 's')).padStart(columnWidth)
+         (intervalHrs + ' hr' + ((intervalHrs === 1) ? '' : 's')).padStart(columnWidth)
    );
    print('Average oplog compression ratio:'.padEnd(rowHeader),
          (ratio + ':1').padStart(columnWidth)
