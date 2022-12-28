@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.2.16"
+ *  Version: "0.2.17"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,8 +12,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-let __script = { "name": "dbstats.js", "version": "0.2.16" };
-// var __comment = '\n Running script ' + __script.name + ' v' + __script.version;
+let __script = { "name": "dbstats.js", "version": "0.2.17" };
 let __comment = `\n Running script ${__script.name} v${__script.version}`;
 
 if (typeof __lib === 'undefined') {
@@ -36,7 +35,7 @@ if (typeof __lib === 'undefined') {
 }
 
 __comment += ` with ${__lib.name} v${__lib.version}`;
-print(__comment);
+console.log(__comment);
 
 /*
  *  User defined parameters
@@ -57,7 +56,7 @@ if (typeof columnWidth === 'undefined') (columnWidth = 14);
 if (typeof rowHeader === 'undefined') (rowHeader = 40);
 
 // connection preferences
-if (typeof readPref === 'undefined') (readPref = (hello().secondary === false) ? 'primaryPreferred': 'secondaryPreferred');
+if (typeof readPref === 'undefined') (readPref = (hello().secondary === false) ? 'primaryPreferred' : 'secondaryPreferred');
 
 function main() {
    /*
@@ -178,7 +177,7 @@ function printCollection(collection) {
       formatUnit(collection.storageSize).padStart(columnWidth),
       (formatUnit(collection.blocksFree) +
          ('(' + formatPct(collection.blocksFree,
-      collection.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
+         collection.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
       collection.objects.toString().padStart(columnWidth)
    );
 }
@@ -203,7 +202,7 @@ function printDb(database) {
       formatUnit(database.storageSize).padStart(columnWidth),
       (formatUnit(database.blocksFree).padStart(columnWidth) +
          ('(' + formatPct(database.blocksFree,
-      database.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
+         database.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
       database.objects.toString().padStart(columnWidth)
    );
    print(
@@ -213,7 +212,7 @@ function printDb(database) {
       formatUnit(database.indexSize).padStart(columnWidth),
       (formatUnit(database.indexFree).padStart(columnWidth) +
          ('(' + formatPct(database.indexFree,
-      database.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
+         database.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
    );
    print('='.repeat(termWidth));
 }
@@ -240,7 +239,7 @@ function printDbPath(dbPath) {
       formatUnit(dbPath.storageSize).padStart(columnWidth),
       (formatUnit(dbPath.blocksFree) +
          ('(' + formatPct(dbPath.blocksFree,
-      dbPath.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
+         dbPath.storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
       dbPath.objects.toString().padStart(columnWidth)
    );
    print(
@@ -250,7 +249,7 @@ function printDbPath(dbPath) {
       formatUnit(dbPath.indexSize).padStart(columnWidth),
       (formatUnit(dbPath.indexFree) +
          ('(' + formatPct(dbPath.indexFree,
-      dbPath.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
+         dbPath.indexSize) + ')').padStart(8)).padStart(columnWidth + 8)
    );
    print('='.repeat(termWidth));
    print('Host:', dbPath.hostname, '\tType:', dbPath.proc, '\tdbPath:', dbPath.dbPath);
