@@ -1,28 +1,36 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.31"
+ *  Version: "0.2.32"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-if (typeof __lib === 'undefined') {
-   var __lib = {
+if (typeof __lib === 'undefined') (
+   __lib = {
       "name": "mdblib.js",
-      "version": "0.2.31"
-} }
+      "version": "0.2.32"
+})
 
 /*
  *  Global defaults
  */
 
-var bsonMax = (typeof hello().maxBsonObjectSize === 'undefined')
-            ? 16 * Math.pow(1024, 2)
-            : hello().maxBsonObjectSize,
+if (typeof bsonMax === 'undefined') (
+   bsonMax = (typeof hello().maxBsonObjectSize === 'undefined')
+           ? 16 * Math.pow(1024, 2)
+           : hello().maxBsonObjectSize
+);
+if (typeof maxWriteBatchSize === 'undefined') (
    maxWriteBatchSize = (typeof hello().maxWriteBatchSize === 'undefined')
                      ? 100000
-                     : hello().maxWriteBatchSize;
-const idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', 'pt', 'ro', 'ru', 'es', 'sv', 'tr'];
-const nonce = (+((+db.adminCommand({ "features": 1 }).oidMachine).toString() + (+db.serverStatus().pid).toString())).toString(16).substring(0, 10);
+                     : hello().maxWriteBatchSize
+);
+if (typeof idiomas === 'undefined') (
+   idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', 'pt', 'ro', 'ru', 'es', 'sv', 'tr']
+);
+if (typeof nonce === 'undefined') (
+   nonce = (+((+db.adminCommand({ "features": 1 }).oidMachine).toString() + (+db.serverStatus().pid).toString())).toString(16).substring(0, 10)
+);
 
 /*
  *  Helper functions, derived from:
@@ -83,6 +91,15 @@ if (typeof Object.prototype.entries === 'undefined') {
 
       return entries;
    }
+}
+
+if (typeof console === 'undefined') {
+   /*
+    *  legacy mongo detected
+    */
+   (console = {}),
+   // (console.log = text => print(text))
+   console.log = string => print(string)
 }
 
 /*
