@@ -12,29 +12,30 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-const __script = { "name": "fuzzer.js", "version": "0.4.9" };
-let __comment = '\n Running script ' + __script.name + ' v' + __script.version;
+let __script = { "name": "fuzzer.js", "version": "0.4.9" };
+let __comment = `\n Running script ${__script.name} v${__script.version}`;
+
 if (typeof __lib === 'undefined') {
     /*
      *  Load helper library mdblib.js
      */
     let __lib = { "name": "mdblib.js", "paths": null, "path": null };
     if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
-        __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
-        __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
+       __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
+       __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
     } else if (typeof process !== 'undefined') { // mongosh process.env[] method
-        __lib.paths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
-        __lib.path = __lib.paths.find(path => fs.existsSync(path + '/' + __lib.name)) + '/' + __lib.name;
+       __lib.paths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
+       __lib.path = __lib.paths.find(path => fs.existsSync(path + '/' + __lib.name)) + '/' + __lib.name;
     } else {
-        print('\n\t[WARN] Legacy shell methods detected, must load', __lib.name, 'from the current working directory');
-        __lib.path = __lib.name;
+       print(`[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory`);
+       __lib.path = __lib.name;
     }
-
+ 
     load(__lib.path);
-}
+ }
 
-__comment += ' with ' + __lib.name + ' v' + __lib.version;
-print(__comment);
+__comment += ` with ${__lib.name} v${__lib.version}`;
+console.log(__comment);
 
 /*
  *  User defined parameters
@@ -166,7 +167,7 @@ function main() {
     if (avgSize > bsonMax * 0.95) {
         print('\nWarning: The average document size of', avgSize,
               'bytes approaches or exceeeds the BSON max size of',
-              bsonMax, 'bytes'
+               bsonMax, 'bytes'
         )
     }
 
@@ -551,7 +552,7 @@ function createNS(dbName = false, collName = false, msg = '',
         options.timeSeries = tsOptions;
         options.expireAfterSeconds = expireAfterSeconds;
         print('\tand time series options:',
-              JSON.stringify(options, null, '\t')
+               JSON.stringify(options, null, '\t')
         );
     }
 
@@ -658,8 +659,8 @@ function genBulk(batchSize) {
             let result = bulk.execute(writeConcern);
             let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
             print('\tbulk inserted', bInserted,
-                    'document' + ((bInserted === 1) ? '' : 's'),
-                    'in batch', 1 + i, 'of', totalBatches
+                  'document' + ((bInserted === 1) ? '' : 's'),
+                  'in batch', 1 + i, 'of', totalBatches
             );
         } catch(e) {
             print('Generation failed with:', e);
