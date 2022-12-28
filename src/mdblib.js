@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.29"
+ *  Version: "0.2.30"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') {
     var __lib = {
         "name": "mdblib.js",
-        "version": "0.2.29"
+        "version": "0.2.30"
 } }
 
 /*
@@ -96,16 +96,16 @@ class ScaleFactor {
     constructor(unit = 'MB') {
         // default to MB
         switch (unit.toUpperCase()) {
-            case  'B': return { "name": "bytes",      "unit":  "B", "symbol":  "", "factor": Math.pow(1024, 0), "precision": 0, "pctPoint": 2 };
-            case 'KB': return { "name": "kilobytes",  "unit": "KB", "symbol": "k", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 };
-            case 'MB': return { "name": "megabytes",  "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
-            case 'GB': return { "name": "gigabytes",  "unit": "GB", "symbol": "G", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 };
-            case 'TB': return { "name": "terabytes",  "unit": "TB", "symbol": "T", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 };
-            case 'PB': return { "name": "petabytes",  "unit": "PB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 };
-            case 'EB': return { "name": "exabytes",   "unit": "EB", "symbol": "E", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 };
+            case  'B': return { "name":      "bytes", "unit":  "B", "symbol":  "", "factor": Math.pow(1024, 0), "precision": 0, "pctPoint": 2 };
+            case 'KB': return { "name":  "kilobytes", "unit": "KB", "symbol": "k", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 };
+            case 'MB': return { "name":  "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
+            case 'GB': return { "name":  "gigabytes", "unit": "GB", "symbol": "G", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 };
+            case 'TB': return { "name":  "terabytes", "unit": "TB", "symbol": "T", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 };
+            case 'PB': return { "name":  "petabytes", "unit": "PB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 };
+            case 'EB': return { "name":   "exabytes", "unit": "EB", "symbol": "E", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 };
             case 'ZB': return { "name": "zettabytes", "unit": "ZB", "symbol": "Z", "factor": Math.pow(1024, 7), "precision": 2, "pctPoint": 1 };
             case 'YB': return { "name": "yottabytes", "unit": "YB", "symbol": "Y", "factor": Math.pow(1024, 8), "precision": 2, "pctPoint": 1 };
-            default:   return { "name": "megabytes",  "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
+            default:   return { "name":  "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
         }
     }
 }
@@ -115,19 +115,19 @@ class AutoFactor {
      *  Determine scale factor automatically
      */
     constructor(input) {
-        this.B  = this.metric('bytes',       'B',  '', 0, 0, 2);
-        this.KB = this.metric('kilobytes',  'KB', 'k', 1, 2, 1);
-        this.MB = this.metric('megabytes',  'MB', 'M', 2, 2, 1);
-        this.GB = this.metric('gigabytes',  'GB', 'G', 3, 2, 1);
-        this.TB = this.metric('terabytes',  'TB', 'T', 4, 2, 1);
-        this.PB = this.metric('petabytes',  'PB', 'P', 5, 2, 1);
-        this.EB = this.metric('exabytes',   'EB', 'E', 6, 2, 1);
+        this.B  = this.metric(     'bytes',  'B',  '', 0, 0, 2);
+        this.KB = this.metric( 'kilobytes', 'KB', 'k', 1, 2, 1);
+        this.MB = this.metric( 'megabytes', 'MB', 'M', 2, 2, 1);
+        this.GB = this.metric( 'gigabytes', 'GB', 'G', 3, 2, 1);
+        this.TB = this.metric( 'terabytes', 'TB', 'T', 4, 2, 1);
+        this.PB = this.metric( 'petabytes', 'PB', 'P', 5, 2, 1);
+        this.EB = this.metric(  'exabytes', 'EB', 'E', 6, 2, 1);
         this.ZB = this.metric('zettabytes', 'ZB', 'Z', 7, 2, 1);
         this.YB = this.metric('yottabytes', 'YB', 'Y', 8, 2, 1);
 
         if (typeof input === 'string') {
             switch (input.toUpperCase()) {
-                case  'B': return this.B;
+                case  'B': return  this.B;
                 case 'KB': return this.KB;
                 case 'MB': return this.MB;
                 case 'GB': return this.GB;
@@ -208,20 +208,24 @@ function $rand() {
         /*
          *  mongosh/nodejs detected
          */
-        return crypto.webcrypto.getRandomValues(new Uint32Array(1))[0]/(Math.pow(2, 32) -1);
+        return crypto.webcrypto.getRandomValues(new Uint32Array(1))[0] / (Math.pow(2, 32) - 1);
     } else {
         // default RNG
-        return Math.random();
+        let pipeline = [
+                { "$collStats": {} },
+                { "$project": { "random": { "$rand": {} } } }
+            ],
+            options = {
+                "cursor": { "batchSize": 1 },
+                "readConcern": { "level": "local" },
+                "comment": "$rand number generator"
+        };
+        return db.getSiblingDB('admin').getCollection('any').aggregate(pipeline, options).toArray()[0].random;
     }
-    // crypto.webcrypto.getRandomValues(new Uint32Array(1))[0]/(Math.pow(2, 32) -1);
+
     // return _rand(); // the shell's prng
     // return Math.abs(_srand()) / (Math.pow(2, 63) - 1); // SecureRandom() method
     // return Math.random(); // node's prng
-    /* 
-     * pcg32.srandom(42, 52); // seed
-     * return pcg32.random() / (Math.pow(2, 32) - 1); // PCG-XSH-RR // load('pcg-xsh-rr.js');
-     */
-    // return Fortuna();
     /*
      * Random.setRandomSeed();
      * return Random.rand(); // SecureRandom() method
