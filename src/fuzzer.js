@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.8"
+ *  Version: "0.4.9"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,12 +8,11 @@
 // Usage: "[mongo|mongosh] [connection options] --quiet fuzzer.js"
 
 /*
- *  Load helper pcg-xsh-rr.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/pcg-xsh-rr.js)
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-const __script = { "name": "fuzzer.js", "version": "0.4.8" };
+const __script = { "name": "fuzzer.js", "version": "0.4.9" };
 let __comment = '\n Running script ' + __script.name + ' v' + __script.version;
 if (typeof __lib === 'undefined') {
     /*
