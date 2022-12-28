@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.9"
+ *  Version: "0.4.10"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,7 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-let __script = { "name": "fuzzer.js", "version": "0.4.9" };
+let __script = { "name": "fuzzer.js", "version": "0.4.10" };
 let __comment = `\n Running script ${__script.name} v${__script.version}`;
 
 if (typeof __lib === 'undefined') {
@@ -59,8 +59,14 @@ let dbName = 'database',            // database name
         // backwards: <boolean>
     },
     writeConcern = (isReplSet())
-                 ? { "w": "majority", "j": true }
-                 : { "w": 1, "j": true },
+                 ? {
+                    "w": "majority",
+                    // "j": true
+                   }
+                 : {
+                    "w": 1,
+                    // "j": true
+                   },
     indexPrefs = {  /* build index preferences */
         "build": true,              // [true|false]
         "order": "post",            // ["pre"|"post"] collection population
