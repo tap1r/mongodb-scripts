@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.2.32"
+ *  Version: "0.2.33"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.2.32"
+      "version": "0.2.33"
 })
 
 /*
@@ -98,7 +98,6 @@ if (typeof console === 'undefined') {
     *  legacy mongo detected
     */
    (console = {}),
-   // (console.log = text => print(text))
    console.log = string => print(string)
 }
 
@@ -159,7 +158,7 @@ class AutoFactor {
          let scale = (Math.log2(input) / 10)|0;
          return (input / Math.pow(1024, scale)).toFixed(2) + [this.B, this.KB, this.MB, this.GB, this.TB, this.PB, this.EB, this.ZB, this.YB][scale];
       } else {
-         return print('Invalid parameter type')
+         throw new Error('Invalid scale factor parameter type:', typeof input)
       }
    }
 
@@ -335,8 +334,8 @@ function fCV(ver) { // update for shared tier compatability
              }).featureCompatibilityVersion.version
            : serverVer(ver)
    }
-   return (typeof ver !== 'undefined' && ver < featureVer()) ? true
-        : (typeof ver !== 'undefined' && ver >= featureVer()) ? false
+   return (typeof ver !== 'undefined' && ver <= featureVer()) ? true
+        : (typeof ver !== 'undefined' && ver > featureVer()) ? false
         : featureVer();
 }
 
