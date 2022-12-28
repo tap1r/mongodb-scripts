@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.2.20"
+ *  Version: "0.2.21"
  *  Description: oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,7 @@
  *  Save libs to the $MDBLIB or valid search path
  */
 
-let __script = { "name": "oplogchurn.js", "version": "0.2.20" };
+let __script = { "name": "oplogchurn.js", "version": "0.2.21" };
 let __comment = `\n Running script ${__script.name} v${__script.version}`;
 if (typeof __lib === 'undefined') {
    /*
@@ -34,7 +34,7 @@ if (typeof __lib === 'undefined') {
 }
 
 __comment += ` with ${__lib.name} v${__lib.version}`;
-print(__comment);
+console.log(__comment);
 
 /*
  *  User defined parameters
@@ -60,7 +60,7 @@ if (typeof columnWidth === 'undefined') (columnWidth = 25);
 if (typeof rowHeader === 'undefined') (rowHeader = 36);
 
 // connection preferences
-if (typeof readPref === 'undefined') (readPref = (hello().secondary === false) ? 'primaryPreferred': 'secondaryPreferred');
+if (typeof readPref === 'undefined') (readPref = (hello().secondary === false) ? 'primaryPreferred' : 'secondaryPreferred');
 
 function main() {
    /*
@@ -144,15 +144,15 @@ function main() {
          (ratio + ':1').padStart(columnWidth)
    );
    print('Interval document count:'.padEnd(rowHeader),
-         docs.toString().padStart(columnWidth)
+          docs.toString().padStart(columnWidth)
    );
    print('Interval data size:'.padEnd(rowHeader),
          (intervalDataSize.toFixed(2) + ' ' +
-         unit).padStart(columnWidth)
+          unit).padStart(columnWidth)
    );
    print('Estimated interval storage size:'.padEnd(rowHeader),
          (intervalStorageSize.toFixed(2) + ' ' +
-         unit).padStart(columnWidth)
+          unit).padStart(columnWidth)
    );
    print('-'.repeat(termWidth));
    print('Estimated current oplog data churn:'.padEnd(rowHeader),
