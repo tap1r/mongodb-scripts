@@ -1,6 +1,6 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.13"
+ *  Version: "0.1.14"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -87,8 +87,8 @@ function fomatted(bytes) {
       },
       { 'system': { hostname } } = db.hostInfo(),
       { 'parsed': { 'storage': { dbPath } } } = db.serverCmdLineOpts(),
-      overhead = 0, // TBA
-      ratio = +(dataSize / (storageSize - blocksFree - overhead)).toFixed(2);
+      metadataSize = 16384, // outside of WT stats
+      ratio = +(dataSize / (storageSize - blocksFree - metadataSize)).toFixed(2);
 
    // Distribution buckets
    let range = (start, stop, step) => {
@@ -151,14 +151,15 @@ function fomatted(bytes) {
             "namespace": `${dbName}.${collName}`,
             "dataSize": dataSize,
             "storageSize": storageSize,
+            "metadataSize": metadataSize,
             "freeBlocks": blocksFree,
-            "utilisedBytes": storageSize - blocksFree - overhead,
-            "utilisedPercentage": +(100 * (storageSize - blocksFree - overhead) / (storageSize - overhead)).toFixed(2), // + '%',
+            "utilisedBytes": storageSize - blocksFree - metadataSize,
+            "utilisedPercentage": +(100 * (storageSize - blocksFree - metadataSize) / (storageSize - metadataSize)).toFixed(2), // + '%',
             "compressor": compressor,
             "compressionRatio": ratio,
             "documentCount": documentCount,
-            "consumed32kPages": Math.ceil((storageSize - blocksFree - overhead) / dataPageSize),
-            "avgDocsPer32kPage": +(documentCount / ((storageSize - blocksFree - overhead) / dataPageSize)).toFixed(0)
+            "consumed32kPages": Math.ceil((storageSize - blocksFree - metadataSize) / dataPageSize),
+            "avgDocsPer32kPage": +(documentCount / ((storageSize - blocksFree - metadataSize) / dataPageSize)).toFixed(0)
       } } }
    ];
 
