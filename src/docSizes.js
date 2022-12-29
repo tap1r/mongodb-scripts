@@ -42,15 +42,14 @@ function fomatted(bytes) {
     */
 
    // connection preferences
-   if (typeof readPref === 'undefined') var readPref = (db.hello().secondary === false)
-      ? 'primaryPreferred'
-      : 'secondaryPreferred';
+   if (typeof readPref === 'undefined')
+      (readPref = (db.hello().secondary === false) ? 'primaryPreferred' : 'secondaryPreferred');
    db.getMongo().setReadPref(readPref);
    try {
       if (db.getSiblingDB(dbName).getCollectionInfos({ "name": collName }, true)[0]?.name != collName)
          throw 'namespace does not exist';
    } catch(e) {
-      console.log(dbName + '.' + collName, e);
+      console.log(`${dbName}.${collName} ${e}`);
    }
 
    // retrieve collection metadata
@@ -87,7 +86,7 @@ function fomatted(bytes) {
       },
       { 'system': { hostname } } = db.hostInfo(),
       { 'parsed': { 'storage': { dbPath } } } = db.serverCmdLineOpts(),
-      metadataSize = 16384, // outside of WT stats
+      metadataSize = 4096, // outside of WT stats (4k-64MB)
       ratio = +(dataSize / (storageSize - blocksFree - metadataSize)).toFixed(2);
 
    // Distribution buckets
