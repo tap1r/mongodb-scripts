@@ -7,7 +7,7 @@
 
 // Usage: "mongosh [connection options] --quiet docSizes.js"
 
-let __script = { "name": "docSizes.js", "version": "0.1.13" };
+let __script = { "name": "docSizes.js", "version": "0.1.14" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
@@ -17,26 +17,23 @@ console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 let options = {
    "dbName": "database",
    "collName": "collection",
-   // "sampleSize": 1000
+   // "sampleSize": 1000 // parameter to $sample
 };
 
 /*
-function fomatted(bytes) {
-   return Intl.NumberFormat('en', {
-      "minimumIntegerDigits": 1,
-      "minimumFractionDigits": 0,
-      "maximumFractionDigits": 2,
-      "style": "unit",
-      "unit": "byte", // https://tc39.es/proposal-unified-intl-numberformat/section6/locales-currencies-tz_proposed_out.html#sec-issanctionedsimpleunitidentifier
-      "unitDisplay": "narrow" // "short"
-   }).format(bytes);
-}
+   function fomatted(bytes) {
+      return Intl.NumberFormat('en', {
+         "minimumIntegerDigits": 1,
+         "minimumFractionDigits": 0,
+         "maximumFractionDigits": 2,
+         "style": "unit",
+         "unit": "byte", // https://tc39.es/proposal-unified-intl-numberformat/section6/locales-currencies-tz_proposed_out.html#sec-issanctionedsimpleunitidentifier
+         "unitDisplay": "narrow" // "short"
+      }).format(bytes);
+   }
 */
 
-(({   dbName,
-      collName,
-      sampleSize = 1000   // parameter to $sample
-   }) => {
+(({ dbName, collName, sampleSize = 1000 }) => {
    /*
     *  main
     */
@@ -57,8 +54,8 @@ function fomatted(bytes) {
    let { 'size': dataSize,
          'wiredTiger': {
             'block-manager': {
-               'file bytes available for reuse': blocksFree,
-               'file size in bytes': storageSize
+               'file size in bytes': storageSize,
+               'file bytes available for reuse': blocksFree
             },
             'uri': dhandle,
          },
