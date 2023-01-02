@@ -1,13 +1,13 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.14"
+ *  Version: "0.1.15"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet docSizes.js"
 
-let __script = { "name": "docSizes.js", "version": "0.1.14" };
+let __script = { "name": "docSizes.js", "version": "0.1.15" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
@@ -53,28 +53,42 @@ let options = {
    let namespace = db.getSiblingDB(dbName).getCollection(collName);
    let { 'size': dataSize,
          'wiredTiger': {
+            creationString,
             'block-manager': {
                'file size in bytes': storageSize,
                'file bytes available for reuse': blocksFree
             },
-            'uri': dhandle,
+            'uri': dhandle
          },
          'count': documentCount,
-         compressor,
-         'internal_page_max': internalPageSize,
-         'leaf_page_max': dataPageSize
-      } = {
-         ...namespace.stats(),
-         get compressor() {
-            return this['wiredTiger']['creationString'].match(/block_compressor=(?<compressor>\w+)/).groups?.compressor
-         },
-         get internal_page_max() {
-            return this['wiredTiger']['creationString'].match(/internal_page_max=(?<internal_page_max>\d+)/).groups?.internal_page_max * 1024
-         },
-         get leaf_page_max() {
-            return this['wiredTiger']['creationString'].match(/leaf_page_max=(?<leaf_page_max>\d+)/).groups?.leaf_page_max * 1024
-         }
-      };
+         compressor = (creationString.match(/block_compressor=(?<compressor>\w+)/).groups?.compressor),
+         internalPageSize = (creationString.match(/internal_page_max=(?<internal_page_max>\d+)/).groups?.internal_page_max * 1024),
+         dataPageSize = (creationString.match(/leaf_page_max=(?<leaf_page_max>\d+)/).groups?.leaf_page_max * 1024)
+      } = namespace.stats();
+   // let { 'size': dataSize,
+   //       'wiredTiger': {
+   //          'block-manager': {
+   //             'file size in bytes': storageSize,
+   //             'file bytes available for reuse': blocksFree
+   //          },
+   //          'uri': dhandle,
+   //       },
+   //       'count': documentCount,
+   //       compressor,
+   //       'internal_page_max': internalPageSize,
+   //       'leaf_page_max': dataPageSize
+   //    } = {
+   //       ...namespace.stats(),
+   //       get compressor() {
+   //          return this['wiredTiger']['creationString'].match(/block_compressor=(?<compressor>\w+)/).groups?.compressor
+   //       },
+   //       get internal_page_max() {
+   //          return this['wiredTiger']['creationString'].match(/internal_page_max=(?<internal_page_max>\d+)/).groups?.internal_page_max * 1024
+   //       },
+   //       get leaf_page_max() {
+   //          return this['wiredTiger']['creationString'].match(/leaf_page_max=(?<leaf_page_max>\d+)/).groups?.leaf_page_max * 1024
+   //       }
+   //    };
    let aggOptions = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
