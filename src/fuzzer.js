@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.12"
+ *  Version: "0.4.13"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.4.12" };
+   let __script = { "name": "fuzzer.js", "version": "0.4.13" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -21,14 +21,14 @@
        */
       let __lib = { "name": "mdblib.js", "paths": null, "path": null };
       if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
-      __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
-      __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
+         __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
+         __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
       } else if (typeof process !== 'undefined') { // mongosh process.env[] method
-      __lib.paths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
-      __lib.path = __lib.paths.find(path => fs.existsSync(path + '/' + __lib.name)) + '/' + __lib.name;
+         __lib.paths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
+         __lib.path = __lib.paths.find(path => fs.existsSync(path + '/' + __lib.name)) + '/' + __lib.name;
       } else {
-      print(`[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory`);
-      __lib.path = __lib.name;
+         print(`[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory`);
+         __lib.path = __lib.name;
       }
       load(__lib.path);
    }
@@ -58,17 +58,17 @@
       },
       writeConcern = (isReplSet())
                    ? {
-                     "w": "majority",
-                     // "j": true
-                   }
+                        "w": "majority",
+                        // "j": true
+                     }
                    : {
-                     "w": 1,
-                     // "j": true
-                  },
+                        "w": 1,
+                        // "j": true
+                     },
       indexPrefs = {  /* build index preferences */
          "build": true,              // [true|false]
          "order": "post",            // ["pre"|"post"] collection population
-         "commitQuorum": (writeConcern.w === 0)
+         "commitQuorum": (writeConcern.w == 0)
                        ? 1
                        : writeConcern.w
       },
@@ -97,96 +97,83 @@
          "schemas": [],
          "ratios": [7, 2, 1]
       },
-      namespace = db.getSiblingDB(dbName).getCollection(collName),
-      sampleSize = 9,
-      docSize = 0;
-
-   fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
-   sampleSize *= sampleSize;
-   let indexes = [ /* index definitions */
-      { "date": -1 },
-      { "language": 1, "schema": 1 },
-      { "random": 1 },
-      { "string": "hashed" },
-      { "array": 1 },
-      { "timestamp": 1 },
-      { "location": "2dsphere" },
-      // { "lineString": "2dsphere" },
-      // { "polygon": "2dsphere" },
-      // { "polygonMulti": "2dsphere" },
-      // { "multiPoint": "2dsphere" },
-      // { "multiLineString": "2dsphere" },
-      // { "multiPolygon": "2dsphere" },
-      // { "geoCollection": "2dsphere" },
-      fCV(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
-   ];
-   let indexOptions = {    /* createIndexes options */
-      // "background": fCV(4.0) ? true : false,
-      // "background": true,
-      // "unique": false,
-      // "partialFilterExpression": { "$exists": true },
-      // "sparse": true,
-      // "expireAfterSeconds": expireAfterSeconds,
-      // "hidden": hidden,
-      "collation": collation
-   };
-   let specialIndexes = [  /* index types unsupported by collations */
-      { "location.coordinates": "2d" },
-      { "quote.txt": "text" }
-   ];
-   let specialIndexOptions = { /* exceptional index options */
-      // "background": fCV(4.0) ? true : false,
-      // "background": true,
-      // "unique": false,
-      // "partialFilterExpression": { "$exists": true },
-      // "sparse": true,
-      // "expireAfterSeconds": expireAfterSeconds,
-      // "hidden": hidden,
-      "collation": { "locale": "simple" },
-      "default_language": idioma
-   };
+      indexes = [ /* index definitions */
+         { "date": -1 },
+         { "language": 1, "schema": 1 },
+         { "random": 1 },
+         { "string": "hashed" },
+         { "array": 1 },
+         { "timestamp": 1 },
+         { "location": "2dsphere" },
+         // { "lineString": "2dsphere" },
+         // { "polygon": "2dsphere" },
+         // { "polygonMulti": "2dsphere" },
+         // { "multiPoint": "2dsphere" },
+         // { "multiLineString": "2dsphere" },
+         // { "multiPolygon": "2dsphere" },
+         // { "geoCollection": "2dsphere" },
+         fCV(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
+      ];
+      indexOptions = {    /* createIndexes options */
+         // "background": fCV(4.0) ? true : false,
+         // "background": true,
+         // "unique": false,
+         // "partialFilterExpression": { "$exists": true },
+         // "sparse": true,
+         // "expireAfterSeconds": expireAfterSeconds,
+         // "hidden": hidden,
+         "collation": collation
+      };
+      specialIndexes = [  /* index types unsupported by collations */
+         { "location.coordinates": "2d" },
+         { "quote.txt": "text" }
+      ];
+      specialIndexOptions = { /* exceptional index options */
+         // "background": fCV(4.0) ? true : false,
+         // "background": true,
+         // "unique": false,
+         // "partialFilterExpression": { "$exists": true },
+         // "sparse": true,
+         // "expireAfterSeconds": expireAfterSeconds,
+         // "hidden": hidden,
+         "collation": { "locale": "simple" },
+         "default_language": idioma
+      };
 
    /*
     *  Global defaults
     */
 
-   let batch = 0, totalBatches = 1, residual = 0,
+   let namespace = db.getSiblingDB(dbName).getCollection(collName),
+      sampleSize = 9, docSize = 0;
+      totalBatches = 1, residual = 0,
       now = new Date().getTime(),
       timestamp = (now/1000.0)|0;
+
+   fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
+   sampleSize *= sampleSize;
 
    function main() {
       /*
        *  main
        */
       db.getMongo().setReadPref('primary');
-      print('\nSynthesising', totalDocs,
-            'document' + ((totalDocs === 1) ? '' : 's')
-      );
+      console.log(`\nSynthesising ${totalDocs} document${((totalDocs == 1) ? '' : 's')}`);
 
       // sampling synthetic documents and estimating batch size
       for (let i = 0; i < sampleSize; ++i)
          docSize += bsonsize(genDocument())
 
       let avgSize = (docSize / sampleSize)|0;
-      if (avgSize > bsonMax * 0.95) {
-         print('\nWarning: The average document size of', avgSize,
-               'bytes approaches or exceeeds the BSON max size of',
-               bsonMax, 'bytes'
-         )
-      }
+      if (avgSize > bsonMax * 0.95)
+         console.log(`\nWarning: The average document size of ${avgSize} bytes approaches or exceeeds the BSON max size of ${bsonMax} bytes`)
 
-      print('\nSampling', sampleSize,
-            'document' + ((sampleSize === 1) ? '' : 's'),
-            'each with BSON size averaging', avgSize,
-            'byte' + ((avgSize === 1) ? '' : 's')
-      );
+      console.log(`\nSampling ${sampleSize} document${((sampleSize == 1) ? '' : 's')} each with BSON size averaging ${avgSize} byte${((avgSize == 1) ? '' : 's')}`);
       let batchSize = (() => {
          let sampledSize = (bsonMax * 0.95 / avgSize)|0;
          return (maxWriteBatchSize < sampledSize) ? maxWriteBatchSize : sampledSize;
       })()
-      print('Estimated optimal batch capacity of', batchSize,
-            'document' + ((batchSize === 1) ? '' : 's')
-      );
+      console.log(`Estimated optimal capacity of ${batchSize} document${((batchSize == 1) ? '' : 's')} per batch`);
       if (totalDocs < batchSize)
          batchSize = totalDocs
       else {
@@ -198,27 +185,25 @@
       dropNS(dropPref, dbName, collName, compressor, collation, tsOptions);
 
       // set collection/index build order, generate and bulk write the documents, create indexes
-      print('\nIndex build order preference:', indexPrefs.order);
+      console.log(`\nIndex build order preference "${indexPrefs.order}"`);
       switch (indexPrefs.order.toLowerCase()) {
          case 'pre':
-            print('Building indexing metadata first');
+            console.log('Building indexing metadata first');
             buildIndexes();
             genBulk(batchSize);
             break;
          case 'post':
-            print('Populating collection first');
+            console.log('Populating collection first');
             genBulk(batchSize);
             buildIndexes();
             break;
          default:
-            print('Unsupported index build preference:', indexPrefs.order,
-               '- Defaulting to "post"'
-            );
+            console.log(`Unsupported index build preference "${indexPrefs.order}": defaulting to "post"`);
             genBulk(batchSize);
             buildIndexes();
       }
 
-      print('\n Fuzzing completed!\n');
+      console.log('\n Fuzzing completed!\n');
 
       return;
    }
@@ -247,12 +232,9 @@
             // secondsOffset = +($getRandomExp(fuzzer.offset, fuzzer.offset + fuzzer.range, 128) * 86400)|0;
             // break;
          default:
-            print('\nUnsupported distribution type:', fuzzer.distribution,
-               '\nDefaulting to "uniform"'
-            );
+            console.log(`\nUnsupported distribution type: ${fuzzer.distribution}\nDefaulting to "uniform"`);
             secondsOffset = +($getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
       }
-
       let oid;
       switch (fuzzer._id.toLowerCase()) {
          case 'oid':
@@ -265,7 +247,6 @@
                // employ native mongosh method
             );
       }
-
       let date = new Date(now + (secondsOffset * 1000));
       let ts = (typeof process !== 'undefined') // MONGOSH-930
              ? new Timestamp({ "t": timestamp + secondsOffset, "i": 0 })
@@ -336,8 +317,7 @@
                                  +$getRandomNumber(0, Math.pow(10, 4)).toFixed(2),
                                  $genRandomCurrency()
                               ]
-                           }
-                        )
+                           })
                          : 'requires v5.2+', */
          "random": +$getRandomNumber(0, totalDocs).toFixed(4),
          "symbol": $genRandomSymbol()
@@ -361,7 +341,7 @@
             $genRandomCurrency()
          ]
       });
-        fuzzer.schemas.push({
+      fuzzer.schemas.push({
          "_id": oid,
          "schema": "C",
          "comment": "GeoJSON schema examples",
@@ -506,9 +486,9 @@
             compressor = 'zlib';
             break;
          case 'zstd':
-            if (fCV(4.2)) {
+            if (fCV(4.2))
                compressor = 'zstd';
-            } else {
+            else {
                compressor = 'zlib';
                msg = '("zstd" requires mongod v4.2+)';
             }
@@ -518,36 +498,36 @@
       }
 
       if (dropPref && !!dbName && !!collName) {
-         print('\nDropping namespace "' + dbName + '.' + collName + '"\n');
+         console.log(`\nDropping namespace "${dbName}.${collName}"\n`);
          namespace.drop();
          createNS(dbName, collName, msg, compressor,
                   expireAfterSeconds, collation, tsOptions
          );
       } else if (!dropPref && !namespace.exists()) {
-         print('\nNominated namespace "' + dbName + '.' + collName + '" does not exist\n');
+         console.log(`\nNominated namespace "${dbName}.${collName}" does not exist\n`);
          createNS(dbName, collName, msg, compressor,
                   expireAfterSeconds, collation, tsOptions
          );
       } else
-         print('\nPreserving existing namespace "' + dbName + '.' + collName + '"')
+      console.log(`\nPreserving existing namespace "${dbName}.${collName}"`)
 
       return;
    }
 
-   function createNS(dbName = false, collName = false, msg = '',
-                     compressor = 'best', expireAfterSeconds = 0,
-                     collation = { "locale": "simple" },
-                     tsOptions = { "timeField": "timestamp",
-                                    "metaField": "data",
-                                    "granularity": "hours" }) {
-      print('Creating namespace "' + dbName + '.' + collName + '"',
-            '\n\twith block compression:\t"' + compressor + '"', msg,
-            '\n\tand collation locale:\t"' + collation.locale + '"'
-      );
+   function createNS(
+         dbName = false, collName = false, msg = '',
+         compressor = 'best', expireAfterSeconds = 0,
+         collation = { "locale": "simple" },
+         tsOptions = {
+            "timeField": "timestamp",
+            "metaField": "data", "granularity": "hours"
+         }
+      ) {
+      console.log(`Creating namespace "${dbName}.${collName}"\n\twith block compression:\t"${compressor}" ${msg}\n\tand collation locale:\t"${collation.locale}"`);
       let options = {
          "storageEngine": {
-               "wiredTiger": {
-                  "configString": "block_compressor=" + compressor
+            "wiredTiger": {
+               "configString": `block_compressor=${compressor}`
          } },
          "collation": collation,
          "writeConcern": writeConcern
@@ -555,13 +535,11 @@
       if (timeSeries && fCV(5.0) && !isAtlasPlatform('serverless')) {
          options.timeSeries = tsOptions;
          options.expireAfterSeconds = expireAfterSeconds;
-         print('\tand time series options:',
-               JSON.stringify(options, null, '\t')
-         );
+         console.log(`\tand time series options: ${JSON.stringify(options, null, '\t')}`);
       }
 
       try { db.getSiblingDB(dbName).createCollection(collName, options) }
-      catch(e) { print('\nNamespace creation failed:', e) }
+      catch(e) { console.log(`\nNamespace creation failed: ${e}`) }
 
       return;
    }
@@ -569,45 +547,37 @@
    function buildIndexes() {
       if (indexPrefs.build) {
          if (indexes.length > 0) {
-               print('\nBuilding index' + ((indexes.length === 1) ? '' : 'es'),
-                     'with collation locale "' + collation.locale + '"',
-                     'with commit quorum "' + ((isReplSet() && fCV(4.4))
-                                            ? indexPrefs.commitQuorum
-                                            : 'disabled') + '":'
-               );
-               indexes.forEach(index => print('\tkey:', JSON.stringify(index)));
-               let indexing = () => {
-                  let options = (isReplSet() && fCV(4.4))
-                              ? [indexes, indexOptions, indexPrefs.commitQuorum]
-                              : [indexes, indexOptions];
+            console.log(`\nBuilding index${((indexes.length == 1) ? '' : 'es')} with collation locale "${collation.locale}" with commit quorum "${((isReplSet() && fCV(4.4)) ? indexPrefs.commitQuorum : 'disabled')}":`);
+            indexes.forEach(index => console.log(`\tkey: ${JSON.stringify(index)}`));
+            let indexing = () => {
+               let options = (isReplSet() && fCV(4.4))
+                           ? [indexes, indexOptions, indexPrefs.commitQuorum]
+                           : [indexes, indexOptions];
 
-                  return namespace.createIndexes(...options);
-               }
-               let idxResult = indexing();
-               let idxMsg = () => {
-                  if (typeof idxResult.errmsg !== 'undefined')
-                     return 'Indexing operation failed: ' + idxResult.errmsg
-                  else if (typeof idxResult.note !== 'undefined') {
-                     let diff = idxResult.numIndexesAfter - idxResult.numIndexesBefore
-                     return 'Indexing completed with note: ' + idxResult.note +
-                            ' with ' + diff + ' index changes.' }
-                  else if (typeof idxResult.ok !== 'undefined')
-                     return 'Indexing completed!'
-                  else if (typeof idxResult.msg !== 'undefined')
-                     return 'Indexing build failed with message: ' + idxResult.msg
-                  else
-                     return 'Indexing completed with results:\t' + idxResult
-               }
-               print(idxMsg());
+               return namespace.createIndexes(...options);
+            }
+            let idxResult = indexing();
+            let idxMsg = () => {
+               if (typeof idxResult.errmsg !== 'undefined')
+                  return 'Indexing operation failed: ' + idxResult.errmsg
+               else if (typeof idxResult.note !== 'undefined') {
+                  let diff = idxResult.numIndexesAfter - idxResult.numIndexesBefore
+                  return 'Indexing completed with note: ' + idxResult.note +
+                         ' with ' + diff + ' index changes.' }
+               else if (typeof idxResult.ok !== 'undefined')
+                  return 'Indexing completed!'
+               else if (typeof idxResult.msg !== 'undefined')
+                  return 'Indexing build failed with message: ' + idxResult.msg
+               else
+                  return 'Indexing completed with results:\t' + idxResult
+            }
+            console.log(idxMsg());
          } else
-               print('No regular index builds specified.')
+            console.log('No regular index builds specified.')
 
          if (specialIndexes.length > 0) {
-            print('\nBuilding exceptional index' + ((specialIndexes.length === 1) ? '' : 'es'),
-               '(no collation support) with commit quorum "' +
-               ((isReplSet() && fCV(4.4)) ? indexPrefs.commitQuorum : 'disabled') + '":'
-            );
-            specialIndexes.forEach(index => print('\tkey:', JSON.stringify(index)));
+            console.log(`\nBuilding exceptional index${((specialIndexes.length == 1) ? '' : 'es')} (no collation support) with commit quorum "${((isReplSet() && fCV(4.4)) ? indexPrefs.commitQuorum : 'disabled')}":`);
+            specialIndexes.forEach(index => console.log(`\tkey: ${JSON.stringify(index)}`));
             let sIndexing = () => {
                let sOptions = (isReplSet() && fCV(4.4))
                             ? [specialIndexes, specialIndexOptions, indexPrefs.commitQuorum]
@@ -615,7 +585,6 @@
 
                return namespace.createIndexes(...sOptions);
             }
-
             let sIdxResult = sIndexing();
             let sidxMsg = () => {
                if (typeof sIdxResult.errmsg !== 'undefined')
@@ -631,45 +600,33 @@
                else
                   return 'Special indexing completed with results:\t' + sIdxResult
             }
-
-            print(sidxMsg());
+            console.log(sidxMsg());
          } else
-               print('\nNo special index builds specified.')
+            console.log('\nNo special index builds specified.')
 
       } else
-         print('\nBuilding indexes: "false"')
+         console.log('\nBuilding indexes: "false"')
 
       return;
    }
 
    function genBulk(batchSize) {
-      print('\nSpecified date range time series:',
-            '\n\tfrom:\t\t',
-            new Date(now + fuzzer.offset * 86400000).toISOString(),
-            '\n\tto:\t\t',
-            new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString(),
-            '\n\tdistribution:\t', fuzzer.distribution,
-            '\n\nGenerating', totalDocs, 'document' + ((totalDocs === 1) ? '' : 's'),
-            'in', totalBatches, 'batch' + ((totalBatches === 1) ? '' : 'es') + ':'
-      );
+      console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} document${((totalDocs == 1) ? '' : 's')} in ${totalBatches} batch${((totalBatches == 1) ? '' : 'es')}:`);
       for (let i = 0; i < totalBatches; ++i) {
-         if (i === totalBatches - 1 && residual > 0) batchSize = residual;
+         if (i == totalBatches - 1 && residual > 0) batchSize = residual;
          let bulk = namespace.initializeUnorderedBulkOp();
          for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument());
 
          try {
             let result = bulk.execute(writeConcern);
             let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
-            print('\tbulk inserted', bInserted,
-                  'document' + ((bInserted === 1) ? '' : 's'),
-                  'in batch', 1 + i, 'of', totalBatches
-            );
+            console.log(`\t[Batch ${1 + i}/${totalBatches}] bulk inserted ${bInserted} document${((bInserted == 1) ? '' : 's')}`);
          } catch(e) {
-            print('Generation failed with:', e);
+            console.log(`Generation failed with: ${e}`);
          }
       }
 
-      print('Generation completed.');
+      console.log('Generation completed.');
 
       return;
    }
