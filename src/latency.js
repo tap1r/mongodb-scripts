@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.2.0"
+ *  Version: "0.2.1"
  *  Description: driver and network latency telemetry PoC
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@ console.clear();
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.2.0" };
+   let __script = { "name": "latency.js", "version": "0.2.1" };
    console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
    let { slowms } = db.getSiblingDB('admin').getProfilingStatus(),
@@ -62,13 +62,13 @@ console.clear();
          return log?.attr?.command?.comment == filter
       })[0];
 
-   t2 = process.hrtime();
    try {
+      t2 = process.hrtime();
       let { ok } = db.adminCommand({ "ping": 1 });
+      t3 = process.hrtime(t2);
    } catch(error) {
       throw error;
    }
-   t3 = process.hrtime(t2);
 
    totalTime = t1[0] * 1000 + (t1[1] / 1000000);
    rtt = t3[0] * 1000 + (t3[1] / 1000000);
@@ -97,7 +97,7 @@ console.clear();
    Latency breakdown
    ${'-'.repeat(tableWidth)}
    ${'Server execution time:'.padEnd(columnWidth)}${fomatted(durationMillis - slowms).padStart(padding)}
-   ${'Network Latency (RTT):'.padEnd(columnWidth)}${fomatted(rtt).padStart(padding)}
+   ${'Network latency (RTT):'.padEnd(columnWidth)}${fomatted(rtt).padStart(padding)}
    ${'Driver execution time:'.padEnd(columnWidth)}${fomatted(totalTime - durationMillis - rtt).padStart(padding)}
    ${'='.repeat(tableWidth)}
    `;
