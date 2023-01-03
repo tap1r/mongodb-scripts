@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.13"
+ *  Version: "0.4.14"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.4.13" };
+   let __script = { "name": "fuzzer.js", "version": "0.4.14" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -68,9 +68,7 @@
       indexPrefs = {  /* build index preferences */
          "build": true,              // [true|false]
          "order": "post",            // ["pre"|"post"] collection population
-         "commitQuorum": (writeConcern.w == 0)
-                       ? 1
-                       : writeConcern.w
+         "commitQuorum": (writeConcern.w == 0) ? 1 : writeConcern.w
       },
       timeSeries = false,            // build timeseries collection type
       tsOptions = {
@@ -202,7 +200,6 @@
             genBulk(batchSize);
             buildIndexes();
       }
-
       console.log('\n Fuzzing completed!\n');
 
       return;
@@ -496,7 +493,6 @@
          default:
             compressor = 'snappy';
       }
-
       if (dropPref && !!dbName && !!collName) {
          console.log(`\nDropping namespace "${dbName}.${collName}"\n`);
          namespace.drop();
@@ -559,17 +555,15 @@
             let idxResult = indexing();
             let idxMsg = () => {
                if (typeof idxResult.errmsg !== 'undefined')
-                  return 'Indexing operation failed: ' + idxResult.errmsg
-               else if (typeof idxResult.note !== 'undefined') {
-                  let diff = idxResult.numIndexesAfter - idxResult.numIndexesBefore
-                  return 'Indexing completed with note: ' + idxResult.note +
-                         ' with ' + diff + ' index changes.' }
+                  return `Indexing operation failed: ${idxResult.errmsg}`
+               else if (typeof idxResult.note !== 'undefined') 
+                  return `Indexing completed with note: ${idxResult.note} with ${idxResult.numIndexesAfter - idxResult.numIndexesBefore} index changes.`
                else if (typeof idxResult.ok !== 'undefined')
                   return 'Indexing completed!'
                else if (typeof idxResult.msg !== 'undefined')
-                  return 'Indexing build failed with message: ' + idxResult.msg
+                  return `Indexing build failed with message: ${idxResult.msg}`
                else
-                  return 'Indexing completed with results:\t' + idxResult
+                  return `Indexing completed with results:\t${idxResult}`
             }
             console.log(idxMsg());
          } else
@@ -588,17 +582,15 @@
             let sIdxResult = sIndexing();
             let sidxMsg = () => {
                if (typeof sIdxResult.errmsg !== 'undefined')
-                  return 'Special indexing operation failed: ' + sIdxResult.errmsg
-               else if (typeof sIdxResult.note !== 'undefined') {
-                  let diff = sIdxResult.numIndexesAfter - sIdxResult.numIndexesBefore
-                  return 'Special indexing completed with note: ' + sIdxResult.note +
-                         ' with ' + diff + ' index changes.' }
+                  return `Special indexing operation failed: ${sIdxResult.errmsg}`
+               else if (typeof sIdxResult.note !== 'undefined')
+                  return `Special indexing completed with note: ${sIdxResult.note} with ${sIdxResult.numIndexesAfter - sIdxResult.numIndexesBefore} index changes.`
                else if (typeof sIdxResult.ok !== 'undefined')
                   return 'Special indexing completed!'
                else if (typeof sIdxResult.msg !== 'undefined')
-                  return 'Special indexing build failed with message: ' + sIdxResult.msg
+                  return `Special indexing build failed with message: ${sIdxResult.msg}`
                else
-                  return 'Special indexing completed with results:\t' + sIdxResult
+                  return `Special indexing completed with results:\t${sIdxResult}`
             }
             console.log(sidxMsg());
          } else
