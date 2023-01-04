@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.3.0"
+ *  Version: "0.3.1"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,18 +8,19 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.3.0"
+      "version": "0.3.1"
 })
 
 /*
  *  Global defaults
  */
 
-if (typeof bsonMax === 'undefined') (
-   bsonMax = (typeof hello().maxBsonObjectSize === 'undefined')
-           ? 16 * Math.pow(1024, 2)
-           : hello().maxBsonObjectSize
-);
+// if (typeof bsonMax === 'undefined') (
+//    bsonMax = (typeof hello().maxBsonObjectSize === 'undefined')
+//            ? 16 * Math.pow(1024, 2)
+//            : hello().maxBsonObjectSize
+// );
+if (typeof bsonMax === 'undefined') (bsonMax = (hello()) ? hello().maxBsonObjectSize : 16 * Math.pow(1024, 2));
 if (typeof maxWriteBatchSize === 'undefined') (
    maxWriteBatchSize = (typeof hello().maxWriteBatchSize === 'undefined')
                      ? 100000
@@ -112,17 +113,18 @@ class ScaleFactor {
    constructor(unit = 'MB') {
       // default to MB
       switch (unit.toUpperCase()) {
-         case  'B': return { "name":      "bytes", "unit":  "B", "symbol":  "", "factor": Math.pow(1024, 0), "precision": 0, "pctPoint": 2 };
-         case 'KB': return { "name":  "kilobytes", "unit": "KB", "symbol": "k", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 };
-         case 'MB': return { "name":  "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
-         case 'GB': return { "name":  "gigabytes", "unit": "GB", "symbol": "G", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 };
-         case 'TB': return { "name":  "terabytes", "unit": "TB", "symbol": "T", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 };
-         case 'PB': return { "name":  "petabytes", "unit": "PB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 };
-         case 'EB': return { "name":   "exabytes", "unit": "EB", "symbol": "E", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 };
-         case 'ZB': return { "name": "zettabytes", "unit": "ZB", "symbol": "Z", "factor": Math.pow(1024, 7), "precision": 2, "pctPoint": 1 };
-         case 'YB': return { "name": "yottabytes", "unit": "YB", "symbol": "Y", "factor": Math.pow(1024, 8), "precision": 2, "pctPoint": 1 };
-         default:   return { "name":  "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
+         case  'B': this.factor = { "name":      "bytes", "unit":  "B", "symbol":  "", "factor": Math.pow(1024, 0), "precision": 0, "pctPoint": 2 };
+         case 'KB': this.factor = { "name":  "kilobytes", "unit": "KB", "symbol": "k", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 };
+         case 'MB': this.factor = { "name":  "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
+         case 'GB': this.factor = { "name":  "gigabytes", "unit": "GB", "symbol": "G", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 };
+         case 'TB': this.factor = { "name":  "terabytes", "unit": "TB", "symbol": "T", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 };
+         case 'PB': this.factor = { "name":  "petabytes", "unit": "PB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 };
+         case 'EB': this.factor = { "name":   "exabytes", "unit": "EB", "symbol": "E", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 };
+         case 'ZB': this.factor = { "name": "zettabytes", "unit": "ZB", "symbol": "Z", "factor": Math.pow(1024, 7), "precision": 2, "pctPoint": 1 };
+         case 'YB': this.factor = { "name": "yottabytes", "unit": "YB", "symbol": "Y", "factor": Math.pow(1024, 8), "precision": 2, "pctPoint": 1 };
+         default:   this.factor = { "name":  "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
       }
+      return this.factor;
    }
 }
 
@@ -130,51 +132,34 @@ class AutoFactor {
    /*
     *  Determine scale factor automatically
     */
-   constructor(input) {
-      this.B  = this.metric(     'bytes',  'B',  '', 0, 0, 2);
-      this.KB = this.metric( 'kilobytes', 'KB', 'k', 1, 2, 1);
-      this.MB = this.metric( 'megabytes', 'MB', 'M', 2, 2, 1);
-      this.GB = this.metric( 'gigabytes', 'GB', 'G', 3, 2, 1);
-      this.TB = this.metric( 'terabytes', 'TB', 'T', 4, 2, 1);
-      this.PB = this.metric( 'petabytes', 'PB', 'P', 5, 2, 1);
-      this.EB = this.metric(  'exabytes', 'EB', 'E', 6, 2, 1);
-      this.ZB = this.metric('zettabytes', 'ZB', 'Z', 7, 2, 1);
-      this.YB = this.metric('yottabytes', 'YB', 'Y', 8, 2, 1);
-
-      if (typeof input === 'string') {
-         switch (input.toUpperCase()) {
-            case  'B': return  this.B;
-            case 'KB': return this.KB;
-            case 'MB': return this.MB;
-            case 'GB': return this.GB;
-            case 'TB': return this.TB;
-            case 'PB': return this.PB;
-            case 'EB': return this.EB;
-            case 'ZB': return this.ZB;
-            case 'YB': return this.YB;
-            default:   return this.MB;
-         }
-      } else if (typeof input === 'number' && input >= 0) {
-         let scale = (Math.log2(input) / 10)|0;
-         return (input / Math.pow(1024, scale)).toFixed(2) + [this.B, this.KB, this.MB, this.GB, this.TB, this.PB, this.EB, this.ZB, this.YB][scale];
+   constructor(input = Math.pow(1024, 2)) {
+      if (typeof input === 'number' && input >= 0) {
+         this.scale = (Math.log2(input) / 10)|0;
+         this.metric = this.metrics[this.scale];
+         this.format = (input / this.metric.factor).toFixed(this.metric.precision) + this.metric.unit;
       } else {
-         throw new Error('Invalid scale factor parameter type:', typeof input)
+         throw new Error(`Invalid scale factor parameter: ${input}`)
       }
+      // return this.format
    }
 
-   metric(name, unit, symbol, factor, precision, pctPoint) {
-      return {
-         "name": name,
-         "unit": unit,
-         "symbol": symbol,
-         "factor": Math.pow(1024, factor),
-         "precision": precision,
-         "pctPoint": pctPoint
-      }
-   }
+   // format(number) {
+   //    return (number / this.metric.factor).toFixed(this.metric.precision) + this.metric.unit;
+   // }
 
-   static formatted(number) {
-      return (number / this.factor).toFixed(this.precision) + this.unit
+   get metrics() {
+      // array indexed by scale
+      return [
+         { "name":      "bytes", "unit":  "B", "symbol":  "", "factor": Math.pow(1024, 0), "precision": 0, "pctPoint": 2 },
+         { "name":  "kilobytes", "unit": "KB", "symbol": "k", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 },
+         { "name":  "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 },
+         { "name":  "gigabytes", "unit": "GB", "symbol": "G", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 },
+         { "name":  "terabytes", "unit": "TB", "symbol": "T", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 },
+         { "name":  "petabytes", "unit": "PB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 },
+         { "name":   "exabytes", "unit": "EB", "symbol": "E", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 },
+         { "name": "zettabytes", "unit": "ZB", "symbol": "Z", "factor": Math.pow(1024, 7), "precision": 2, "pctPoint": 1 },
+         { "name": "yottabytes", "unit": "YB", "symbol": "Y", "factor": Math.pow(1024, 8), "precision": 2, "pctPoint": 1 }
+      ]
    }
 }
 
@@ -183,11 +168,12 @@ class MetaStats {
     *  Storage statistics metadata class
     */
    constructor(name = '', dataSize = 0, storageSize = 0, objects = 0, blocksFree = 0, compressor = '', indexSize = 0, indexFree = 0) {
-      this.instance = null;
-      this.hostname = null;
-      this.proc = null;
-      this.dbPath = null;
-      this.dbPath = null;
+      // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
+      // this.instance = (async() => { return await hello().me })();
+      // this.hostname = (async() => { return db.hostInfo().system.hostname })();
+      // this.proc = (async() => { return db.serverStatus().process })();
+      // this.dbPath = (async() => { return (db.serverStatus().process === 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : null })();
+      // this.shards = (async() => { return (db.serverStatus().process === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null })();
       this.name = name;
       this.dataSize = dataSize;
       this.storageSize = storageSize;
@@ -199,7 +185,7 @@ class MetaStats {
       this.overhead = 4096 / 1024 / 1024; // 4KB in MB
    }
 
-   init() {
+   init() {  // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
       this.instance = hello().me;
       this.hostname = db.hostInfo().system.hostname;
       this.proc = db.serverStatus().process;
@@ -212,7 +198,7 @@ class MetaStats {
    }
 
    get totalSize() {
-      return this.storageSize + this.indexSize
+      return this.storageSize + this.indexSize + this.overhead
    }
 }
 
@@ -236,7 +222,7 @@ function $rand() {
    /*
       Random.setRandomSeed();
       return Random.rand(); // SecureRandom() method
-    */
+   */
    /*
       let pipeline = [
          { "$collStats": {} },
