@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.3.0"
+ *  Version: "0.3.1"
  *  Description: measure oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -20,7 +20,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.3.0" };
+   let __script = { "name": "oplogchurn.js", "version": "0.3.1" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -121,11 +121,15 @@
          { 'parsed': { 'storage': { dbPath } } } = db.serverCmdLineOpts(),
          // Get oplog stats
          { 'wiredTiger': {
+            creationString,
             'block-manager': {
+               'file size in bytes': storageSize,
                'file bytes available for reuse': blocksFree
-            } }, size, storageSize
+            } },
+            size,
+            internalPageSize = (creationString.match(/internal_page_max=(\d+)/)[1] * 1024)
          } = oplog.stats();
-      let overhead = 4096;
+      let overhead = internalPageSize;
       let ratio = +(size / (storageSize - blocksFree - overhead)).toFixed(2),
          intervalDataSize = opSize / factor;
       let intervalStorageSize = intervalDataSize / ratio;
@@ -135,7 +139,8 @@
       print('\n');
       print('='.repeat(termWidth));
       print('Hostname:'.padEnd(rowHeader), hostname.padStart(columnWidth));
-      print('dbPath:\t', dbPath.padStart(columnWidth));
+      // print('dbPath:\t', dbPath.padStart(columnWidth));
+      print('dbPath:\t', dbPath.padStart(termWidth - 'dbPath:\t'.length - 1));
       print('-'.repeat(termWidth));
       print('Start time:'.padEnd(rowHeader), d1.padStart(columnWidth));
       print('End time:'.padEnd(rowHeader), d2.padStart(columnWidth));
