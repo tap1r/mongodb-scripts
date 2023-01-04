@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.3.2"
+ *  Version: "0.3.3"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.3.2" },
+   let __script = { "name": "dbstats.js", "version": "0.3.3" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -41,7 +41,7 @@
 
    if (typeof scale === 'undefined') {
       // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
-      (scale = new ScaleFactor());
+      (scale = new ScaleFactor('MB'));
    }
 
    /*
@@ -54,7 +54,7 @@
    if (typeof rowHeader === 'undefined') (rowHeader = 40);
 
    // connection preferences
-   if (typeof readPref === 'undefined') (readPref = (hello().secondary === false) ? 'primaryPreferred' : 'secondaryPreferred');
+   if (typeof readPref === 'undefined') (readPref = (hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
 
    async function main() {
       /*
@@ -75,7 +75,6 @@
          let dbStats = db.getSiblingDB(dbName).stats();
          let database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, '', dbStats.indexSize);
          database.init();
-
          printDbHeader(database.name);
          let collections = db.getSiblingDB(dbName).getCollectionInfos({ "type": "collection" }, true);
          printCollHeader(collections.length);
@@ -97,7 +96,6 @@
             database.blocksFree += collection.blocksFree;
             database.indexFree += collection.indexFree;
          });
-
          let views = db.getSiblingDB(dbName).getCollectionInfos({ "type": "view" }, true);
          printViewHeader(views.length);
          views.map(viewInfo => printView(viewInfo.name));
@@ -139,25 +137,15 @@
        *  Print collection table header
        */
       console.log(`${'-'.repeat(termWidth)}`);
-      console.log(`${('Collection' + ((collTotal === 1) ? '' : 's') + ':\t' + collTotal).padEnd(rowHeader)}`);
+      console.log(`${('Collections:\t' + collTotal).padEnd(rowHeader)}`);
    }
 
    function printCollection({ name, dataSize, compression, compressor, storageSize, blocksFree, objects }) {
       /*
        *  Print collection level stats
        */
-      console.log(` ${'-'.repeat(termWidth)}`);
-      print(
-         (' ' + name).padEnd(rowHeader),
-         formatUnit(dataSize).padStart(columnWidth),
-         (formatRatio(compression) +
-            (compressor).padStart(7)).padStart(columnWidth + 1),
-         formatUnit(storageSize).padStart(columnWidth),
-         (formatUnit(blocksFree) +
-            ('(' + formatPct(blocksFree,
-            storageSize) + ')').padStart(8)).padStart(columnWidth + 8),
-         objects.toString().padStart(columnWidth)
-      );
+      console.log(` ${'-'.repeat(termWidth -1)}`);
+      console.log(`${(' ' + name).padEnd(rowHeader)} ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(7)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
    }
 
    function printViewHeader(viewTotal = 0) {
@@ -165,7 +153,7 @@
        *  Print view table header
        */
       console.log(`${'-'.repeat(termWidth)}`);
-      console.log(`${('View' + ((viewTotal === 1) ? '' : 's') + ':\t\t' + viewTotal).padEnd(rowHeader)}`);
+      console.log(`${('Views:\t\t' + viewTotal).padEnd(rowHeader)}`);
    }
 
    function printView(viewName) {
@@ -212,13 +200,12 @@
       console.log(`${'All DBs:'.padEnd(rowHeader)} ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
       console.log(`${'All indexes:'.padEnd(rowHeader)} ${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(indexSize).padStart(columnWidth)} ${(formatUnit(indexFree) + ('(' + formatPct(indexFree, indexSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
       console.log(`${'='.repeat(termWidth)}`);
-      console.log(`Host: ${hostname} \tType: ${proc}\tdbPath:${dbPath}`);
+      console.log(`Host: ${hostname}\tType: ${proc}\tdbPath:${dbPath}`);
       console.log(`${'='.repeat(termWidth)}`);
       console.log(`\n`);
    }
 
    await main();
-
 })()
 
 // EOF
