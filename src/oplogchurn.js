@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.3.1"
+ *  Version: "0.3.2"
  *  Description: measure oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,7 @@
  */
 
 // let intervalHrs = 1); // set interval in hours   
-// let { unit, factor } = new ScaleFactor(); // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
+// let scale = new ScaleFactor('MB'); // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
 
 (() => {
    /*
@@ -20,7 +20,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.3.1" };
+   let __script = { "name": "oplogchurn.js", "version": "0.3.2" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -53,7 +53,7 @@
 
    if (typeof scale === 'undefined') {
       // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
-      ({ unit, factor } = new ScaleFactor());
+      ({ unit, factor } = new ScaleFactor('MB'));
    }
 
    // formatting preferences
