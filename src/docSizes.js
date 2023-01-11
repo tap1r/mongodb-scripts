@@ -1,13 +1,13 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.15"
+ *  Version: "0.1.16"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet docSizes.js"
 
-let __script = { "name": "docSizes.js", "version": "0.1.15" };
+let __script = { "name": "docSizes.js", "version": "0.1.16" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
@@ -20,19 +20,6 @@ let options = {
    // "sampleSize": 1000 // parameter to $sample
 };
 
-/*
-   function fomatted(bytes) {
-      return Intl.NumberFormat('en', {
-         "minimumIntegerDigits": 1,
-         "minimumFractionDigits": 0,
-         "maximumFractionDigits": 2,
-         "style": "unit",
-         "unit": "byte", // https://tc39.es/proposal-unified-intl-numberformat/section6/locales-currencies-tz_proposed_out.html#sec-issanctionedsimpleunitidentifier
-         "unitDisplay": "narrow" // "short"
-      }).format(bytes);
-   }
-*/
-
 (({ dbName, collName, sampleSize = 1000 }) => {
    /*
     *  main
@@ -40,7 +27,7 @@ let options = {
 
    // connection preferences
    if (typeof readPref === 'undefined')
-      (readPref = (db.hello().secondary === false) ? 'primaryPreferred' : 'secondaryPreferred');
+      (readPref = (db.hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
    db.getMongo().setReadPref(readPref);
    try {
       if (db.getSiblingDB(dbName).getCollectionInfos({ "name": collName }, true)[0]?.name != collName)
@@ -49,46 +36,46 @@ let options = {
       console.log(`${dbName}.${collName} ${e}`);
    }
 
+   /*
+      function fomatted(bytes) {
+         return Intl.NumberFormat('en', {
+            "minimumIntegerDigits": 1,
+            "minimumFractionDigits": 0,
+            "maximumFractionDigits": 2,
+            "style": "unit",
+            "unit": "byte", // https://tc39.es/proposal-unified-intl-numberformat/section6/locales-currencies-tz_proposed_out.html#sec-issanctionedsimpleunitidentifier
+            "unitDisplay": "narrow" // "short"
+         }).format(bytes);
+      }
+   */
+
    // retrieve collection metadata
    let namespace = db.getSiblingDB(dbName).getCollection(collName);
-   let { 'size': dataSize,
+   let { 'count': documentCount,
+         'extras': {
+            compressor,
+            dataPageSize,
+            internalPageSize
+         },
+         'size': dataSize,
          'wiredTiger': {
-            creationString,
             'block-manager': {
-               'file size in bytes': storageSize,
-               'file bytes available for reuse': blocksFree
+               'file bytes available for reuse': blocksFree,
+               'file size in bytes': storageSize
             },
             'uri': dhandle
-         },
-         'count': documentCount,
-         compressor = (creationString.match(/block_compressor=(?<compressor>\w+)/).groups?.compressor),
-         internalPageSize = (creationString.match(/internal_page_max=(?<internal_page_max>\d+)/).groups?.internal_page_max * 1024),
-         dataPageSize = (creationString.match(/leaf_page_max=(?<leaf_page_max>\d+)/).groups?.leaf_page_max * 1024)
-      } = namespace.stats();
-   // let { 'size': dataSize,
-   //       'wiredTiger': {
-   //          'block-manager': {
-   //             'file size in bytes': storageSize,
-   //             'file bytes available for reuse': blocksFree
-   //          },
-   //          'uri': dhandle,
-   //       },
-   //       'count': documentCount,
-   //       compressor,
-   //       'internal_page_max': internalPageSize,
-   //       'leaf_page_max': dataPageSize
-   //    } = {
-   //       ...namespace.stats(),
-   //       get compressor() {
-   //          return this['wiredTiger']['creationString'].match(/block_compressor=(?<compressor>\w+)/).groups?.compressor
-   //       },
-   //       get internal_page_max() {
-   //          return this['wiredTiger']['creationString'].match(/internal_page_max=(?<internal_page_max>\d+)/).groups?.internal_page_max * 1024
-   //       },
-   //       get leaf_page_max() {
-   //          return this['wiredTiger']['creationString'].match(/leaf_page_max=(?<leaf_page_max>\d+)/).groups?.leaf_page_max * 1024
-   //       }
-   //    };
+         }
+      } = new Proxy(
+         namespace.stats(),
+         { get(target, name) {
+            if (name == 'extras') {
+               let regexFilter = /block_compressor=(?<compressor>\w+).+internal_page_max=(?<internalPageSize>\d+).+leaf_page_max=(?<dataPageSize>\d+)/;
+               let { compressor, dataPageSize, internalPageSize } = target['wiredTiger']['creationString'].match(regexFilter).groups;
+               return { "compressor": compressor, "dataPageSize": dataPageSize * 1024, "internalPageSize": internalPageSize * 1024 };
+            }
+            return target[name];
+         } }
+      );
    let aggOptions = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
@@ -97,7 +84,7 @@ let options = {
       },
       { 'system': { hostname } } = db.hostInfo(),
       { 'parsed': { 'storage': { dbPath } } } = db.serverCmdLineOpts(),
-      metadataSize = 4096, // outside of WT stats (4k-64MB)
+      metadataSize = internalPageSize, // outside of WT stats (4k-64MB)
       ratio = +(dataSize / (storageSize - blocksFree - metadataSize)).toFixed(2);
 
    // Distribution buckets
@@ -169,7 +156,7 @@ let options = {
             "compressionRatio": ratio,
             "documentCount": documentCount,
             "consumed32kPages": Math.ceil((storageSize - blocksFree - metadataSize) / dataPageSize),
-            "avgDocsPer32kPage": +(documentCount / ((storageSize - blocksFree - metadataSize) / dataPageSize)).toFixed(0)
+            "avgDocsPer32kPage": +(documentCount / ((storageSize - blocksFree - metadataSize) / dataPageSize))|0
       } } }
    ];
 
