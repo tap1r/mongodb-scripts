@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.3.1"
+ *  Version: "0.3.2"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.3.1"
+      "version": "0.3.2"
 })
 
 /*
@@ -142,11 +142,9 @@ class AutoFactor {
       }
       // return this.format
    }
-
    // format(number) {
    //    return (number / this.metric.factor).toFixed(this.metric.precision) + this.metric.unit;
    // }
-
    get metrics() {
       // array indexed by scale
       return [
@@ -184,7 +182,6 @@ class MetaStats {
       this.compressor = compressor;
       this.overhead = 4096 / 1024 / 1024; // 4KB in MB
    }
-
    init() {  // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
       this.instance = hello().me;
       this.hostname = db.hostInfo().system.hostname;
@@ -192,11 +189,9 @@ class MetaStats {
       this.dbPath = (db.serverStatus().process === 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : null;
       this.shards = (db.serverStatus().process === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
    }
-
    get compression() {
       return this.dataSize / (this.storageSize - this.blocksFree - this.overhead)
    }
-
    get totalSize() {
       return this.storageSize + this.indexSize + this.overhead
    }
@@ -242,6 +237,13 @@ function isReplSet() {
     *  Determine if current host is a replSet member
     */
    return typeof hello().hosts !== 'undefined'
+}
+
+function isSharded() {
+   /*
+    *  Determine if current host is a replSet member
+    */
+   return typeof db.serverStatus().process !== 'mongos'
 }
 
 function getAllNonSystemNamespaces() {
