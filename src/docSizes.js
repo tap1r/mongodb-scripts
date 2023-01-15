@@ -1,13 +1,13 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.16"
+ *  Version: "0.1.17"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet docSizes.js"
 
-let __script = { "name": "docSizes.js", "version": "0.1.16" };
+let __script = { "name": "docSizes.js", "version": "0.1.17" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
@@ -83,7 +83,7 @@ let options = {
          "comment": `Performing document distribution analysis with ${__script.name} v${__script.version}`
       },
       { 'system': { hostname } } = db.hostInfo(),
-      { 'parsed': { 'storage': { dbPath } } } = db.serverCmdLineOpts(),
+      dbPath = db.serverCmdLineOpts().parsed?.storage?.dbPath,
       metadataSize = internalPageSize, // outside of WT stats (4k-64MB)
       ratio = +(dataSize / (storageSize - blocksFree - metadataSize)).toFixed(2);
 
