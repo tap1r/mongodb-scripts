@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.15"
+ *  Version: "0.4.16"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.4.15" };
+   let __script = { "name": "fuzzer.js", "version": "0.4.16" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -547,10 +547,10 @@
    function buildIndexes() {
       if (indexPrefs.build) {
          if (indexes.length > 0) {
-            console.log(`\nBuilding index${((indexes.length == 1) ? '' : 'es')} with collation locale "${collation.locale}" with commit quorum "${((isReplSet() && fCV(4.4)) ? indexPrefs.commitQuorum : 'disabled')}":`);
+            console.log(`\nBuilding index${((indexes.length == 1) ? '' : 'es')} with collation locale "${collation.locale}" with commit quorum "${((fCV(4.4)) ? indexPrefs.commitQuorum : 'disabled')}":`);
             indexes.forEach(index => console.log(`\tkey: ${JSON.stringify(index)}`));
             let indexing = () => {
-               let options = (isReplSet() && fCV(4.4))
+               let options = (fCV(4.4))
                            ? [indexes, indexOptions, indexPrefs.commitQuorum]
                            : [indexes, indexOptions];
 
@@ -574,10 +574,10 @@
             console.log('No regular index builds specified.')
 
          if (specialIndexes.length > 0) {
-            console.log(`\nBuilding exceptional index${((specialIndexes.length == 1) ? '' : 'es')} (no collation support) with commit quorum "${((isReplSet() && fCV(4.4)) ? indexPrefs.commitQuorum : 'disabled')}":`);
+            console.log(`\nBuilding exceptional index${((specialIndexes.length == 1) ? '' : 'es')} (no collation support) with commit quorum "${((fCV(4.4)) ? indexPrefs.commitQuorum : 'disabled')}":`);
             specialIndexes.forEach(index => console.log(`\tkey: ${JSON.stringify(index)}`));
             let sIndexing = () => {
-               let sOptions = (isReplSet() && fCV(4.4))
+               let sOptions = (fCV(4.4))
                             ? [specialIndexes, specialIndexOptions, indexPrefs.commitQuorum]
                             : [specialIndexes, specialIndexOptions];
 
