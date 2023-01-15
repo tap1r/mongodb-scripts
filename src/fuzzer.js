@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.14"
+ *  Version: "0.4.15"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.4.14" };
+   let __script = { "name": "fuzzer.js", "version": "0.4.15" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -56,6 +56,8 @@
          // maxVariable: <string>,
          // backwards: <boolean>
       },
+      // sharded = false,
+      // shardKey = { "string": "hashed" },
       writeConcern = (isReplSet())
                    ? {
                         "w": "majority",
@@ -254,7 +256,7 @@
          "schema": "A",
          "comment": "General purpose schema shape",
          "language": idioma,
-         "string": $genRandomString($getRandomIntInclusive(6, 24)),
+         "string": $genRandomString($getRandomIntInclusive(6, 24)),  // hashed shard key
          "quote": {
             "language": idiomas[
                $getRandomRatioInt([80, 0, 0, 5, 0, 3, 2])
@@ -324,6 +326,7 @@
          "schema": "B",
          "comment": "Time series schema example",
          "language": idioma,
+         "string": $genRandomString($getRandomIntInclusive(6, 24)),  // hashed shard key
          "timeField": date,
          "metaField": [
             'Series 1',
@@ -343,6 +346,7 @@
          "schema": "C",
          "comment": "GeoJSON schema examples",
          "language": idioma,
+         "string": $genRandomString($getRandomIntInclusive(6, 24)),  // hashed shard key
          "temperature": [
             +$genNormal(15, 10).toFixed(1),
             ['K', '°F', '°C'][$getRandomIntInclusive(0, 2)]
