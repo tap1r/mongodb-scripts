@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.3.2"
+ *  Version: "0.3.3"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.3.2"
+      "version": "0.3.3"
 })
 
 /*
@@ -138,7 +138,7 @@ class AutoFactor {
          this.metric = this.metrics[this.scale];
          this.format = (input / this.metric.factor).toFixed(this.metric.precision) + this.metric.unit;
       } else {
-         throw new Error(`Invalid scale factor parameter: ${input}`)
+         throw new Error(`Invalid scale factor parameter: ${input}`);
       }
       // return this.format
    }
@@ -157,7 +157,7 @@ class AutoFactor {
          { "name":   "exabytes", "unit": "EB", "symbol": "E", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 },
          { "name": "zettabytes", "unit": "ZB", "symbol": "Z", "factor": Math.pow(1024, 7), "precision": 2, "pctPoint": 1 },
          { "name": "yottabytes", "unit": "YB", "symbol": "Y", "factor": Math.pow(1024, 8), "precision": 2, "pctPoint": 1 }
-      ]
+      ];
    }
 }
 
@@ -236,14 +236,14 @@ function isReplSet() {
    /*
     *  Determine if current host is a replSet member
     */
-   return typeof hello().hosts !== 'undefined'
+   return typeof hello().hosts !== 'undefined';
 }
 
 function isSharded() {
    /*
-    *  Determine if current host is a replSet member
+    *  Determine if current host is a mongos
     */
-   return typeof db.serverStatus().process !== 'mongos'
+   return typeof db.serverStatus().process !== 'mongos';
 }
 
 function getAllNonSystemNamespaces() {
@@ -279,21 +279,21 @@ function getAllNonSystemCollections() {
    /*
     *  getAllNonSystemCollections
     */
-   return null
+   return null;
 }
 
 function getAllNonSystemViews() {
    /*
     *  getAllNonSystemViews()
     */
-   return null
+   return null;
 }
 
 function getAllSystemNamespaces() {
    /*
     *  getAllSystemNamespaces
     */
-   return null
+   return null;
 }
 
 /*
@@ -320,7 +320,7 @@ function fCV(ver) { // update for shared tier compatability
                "getParameter": 1,
                "featureCompatibilityVersion": 1
              }).featureCompatibilityVersion.version
-           : serverVer(ver)
+           : serverVer(ver);
    }
    return (typeof ver !== 'undefined' && ver <= featureVer()) ? true
         : (typeof ver !== 'undefined' && ver > featureVer()) ? false
@@ -346,7 +346,7 @@ function slaveOk(readPref = 'primaryPreferred') {
         ? db.getMongo().setReadPref(readPref)
          // else if (shellVer() >= 4.4)
         : (typeof rs.secondaryOk === 'function') ? rs.secondaryOk()
-        : rs.slaveOk()
+        : rs.slaveOk();
 }
 
 function isMaster() {
@@ -355,7 +355,7 @@ function isMaster() {
     */
    return (typeof db.prototype.hello === 'undefined')
         ? db.isMaster()
-        : db.hello()
+        : db.hello();
 }
 
 function hello() {
@@ -364,7 +364,7 @@ function hello() {
     */
    return (typeof db.prototype.hello !== 'function')
         ? db.isMaster()
-        : db.hello()
+        : db.hello();
 }
 
 function isAtlasPlatform(type) {
@@ -375,28 +375,28 @@ function isAtlasPlatform(type) {
         : (type === 'serverless' && db.hello().msg === 'isdbgrid' && db.adminCommand({ "atlasVersion": 1 }).ok === 1) ? true
         : (db.hello().msg !== 'isdbgrid' && db.adminCommand({ "atlasVersion": 1 }).ok === 1) ? 'sharedTier||dedicatedReplicaSet'
         : (db.hello().msg === 'isdbgrid' && typeof db.serverStatus().atlasVersion === 'undefined') ? 'dedicatedShardedCluster'
-        : false
+        : false;
 }
 
 if (typeof db.prototype.isMaster === 'undefined') {
    /*
     *  Backward compatibility with db.isMaster()
     */
-   db.isMaster = () => this.hello()
+   db.isMaster = () => this.hello();
 }
 
 if (typeof db.prototype.hello === 'undefined') {
    /*
     *  Forward compatibility with db.hello()
     */
-   db.hello = () => this.isMaster()
+   db.hello = () => this.isMaster();
 }
 
 if (typeof bsonsize === 'undefined') {
    /*
     *  Forward compatibility with bsonsize()
     */
-   bsonsize = arg => Object.prototype.bsonsize(arg)
+   bsonsize = arg => Object.prototype.bsonsize(arg);
 }
 
 if (typeof process !== 'undefined') {
@@ -408,14 +408,14 @@ if (typeof process !== 'undefined') {
       /*
        *  Backward compatibility with UUID().base64()
        */
-      UUID.prototype.base64 = () => this.toString('base64')
+      UUID.prototype.base64 = () => this.toString('base64');
    }
 
    if (typeof hex_md5 === 'undefined') {
       /*
        *  Backward compatibility with hex_md5()
        */
-      hex_md5 = arg => crypto.createHash('md5').update(arg).digest('hex')
+      hex_md5 = arg => crypto.createHash('md5').update(arg).digest('hex');
    }
 }
 
@@ -429,14 +429,18 @@ function $NumberLong(arg) {
    /*
     *  NumberLong() wrapper
     */
-   return (typeof process !== 'undefined') ? Long.fromNumber(arg) : NumberLong(arg)
+   return (typeof process !== 'undefined')
+        ? Long.fromNumber(arg)
+        : NumberLong(arg);
 }
 
 function $NumberDecimal(arg) {
    /*
     *  NumberDecimal() wrapper
     */
-   return (typeof process !== 'undefined') ? Decimal128.fromString(arg.toString()) : NumberDecimal(arg)
+   return (typeof process !== 'undefined')
+        ? Decimal128.fromString(arg.toString())
+        : NumberDecimal(arg);
 }
 
 function $getRandomRegex() {
@@ -458,14 +462,14 @@ function $getRandomNumber(min = 0, max = 1) {
    /*
     *  generate random number
     */
-   return $rand() * (max - min) + min
+   return $rand() * (max - min) + min;
 }
 
 function $getRandomExp(exponent = 0) {
    /*
     *  generate random exponential number
     */
-   return Math.ceil($getRandomNumber(0, 9) * Math.pow(10, exponent))
+   return Math.ceil($getRandomNumber(0, 9) * Math.pow(10, exponent));
 }
 
 function $getRandomInt(min = 0, max = 1) {
@@ -495,7 +499,7 @@ function $getRandomRatioInt(ratios = [1]) {
    let weightedIndex = [];
    ratios.forEach((ratio, idx) => {
       for (let i = 0; i < ratio; ++i) {
-         weightedIndex.push(idx)
+         weightedIndex.push(idx);
       }
    });
 
@@ -508,7 +512,7 @@ function $genRandomHex(len = 1) {
     */
    let res = '';
    for (let i = 0; i < len; ++i) {
-      res += ($rand() * 16|0).toString(16)
+      res += ($rand() * 16|0).toString(16);
    }
 
    return res;
@@ -521,7 +525,7 @@ function $genRandomString(len = 1) {
    let res = '';
    let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
    for (let i = 0; i < len; ++i) {
-      res += chars.charAt($rand() * chars.length|0)
+      res += chars.charAt($rand() * chars.length|0);
    }
 
    return res;
@@ -544,7 +548,7 @@ function $genRandomAlpha(len = 1) {
    let res = '';
    let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
    for (let i = 0; i < len; ++i) {
-      res += chars.charAt($getRandomInt(0, chars.length))
+      res += chars.charAt($getRandomInt(0, chars.length));
    }
 
    return res;
@@ -574,7 +578,7 @@ function $genArrayElements(len) {
     */
    let array = [];
    for (let i = 0; i < len; ++i) {
-      array.push($genRandomString($getRandomIntInclusive(6, 24)))
+      array.push($genRandomString($getRandomIntInclusive(6, 24)));
    }
 
    return array;
@@ -586,7 +590,7 @@ function $genArrayStrings(len) {
     */
    let array = [];
    for (let i = 0; i < len; ++i) {
-      array.push($genRandomString($getRandomIntInclusive(6, 24)))
+      array.push($genRandomString($getRandomIntInclusive(6, 24)));
    }
 
    return array;
@@ -598,7 +602,7 @@ function $genArrayInts(len) {
     */
    let array = [];
    for (let i = 0; i < len; ++i) {
-      array.push($getRandomIntInclusive(1, 1000))
+      array.push($getRandomIntInclusive(1, 1000));
    }
 
    return array;
@@ -639,56 +643,56 @@ function $genExponential(lambda = 1) {
    /*
     *  exponential distribution function
     */
-   return -Math.log(1.0 - $rand()) / lambda
+   return -Math.log(1.0 - $rand()) / lambda;
 }
 
 function $ftoc(fahrenheit) {
    /*
     *  convert Fahrenheit to Celsius temparature unit
     */
-   return (fahrenheit - 32) / 1.8
+   return (fahrenheit - 32) / 1.8;
 }
 
 function $ctof(celsius) {
    /*
     *  convert Celsius to Fahrenheit temparature unit
     */
-   return celsius * 1.8 + 32
+   return celsius * 1.8 + 32;
 }
 
 function $ctok(celsius) {
    /*
     *  convert Celsius to Kelvin temparature unit
     */
-   return celsius + K
+   return celsius + K;
 }
 
 function $ktoc(kelvin) {
    /*
     *  convert Kelvin to Celsius temparature unit
     */
-   return kelvin - K
+   return kelvin - K;
 }
 
 function $ftok(fahrenheit) {
    /*
     *  convert Fahrenheit to Kelvin temparature unit
     */
-   return ((fahrenheit - 32) / 1.8) + K
+   return ((fahrenheit - 32) / 1.8) + K;
 }
 
 function $ktof(kelvin) {
    /*
     *  convert Kelvin to Fahrenheit temparature unit
     */
-   return (kelvin - K) * 1.8 + 32
+   return (kelvin - K) * 1.8 + 32;
 }
 
 function $bool(chance = 0.5) {
    /*
     *  return true/false
     */
-   return $rand() < chance
+   return $rand() < chance;
 }
 
 function $benford() {
