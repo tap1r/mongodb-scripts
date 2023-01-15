@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.16"
+ *  Version: "0.4.17"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.4.16" };
+   let __script = { "name": "fuzzer.js", "version": "0.4.17" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -42,7 +42,7 @@
    let dbName = 'database',           // database name
       collName = 'collection',        // collection name
       totalDocs = $getRandomExp(3.5), // number of documents to generate per namespace
-      dropPref = false,               // drop collection prior to generating data
+      dropNamespace = false,          // drop collection prior to generating data
       compressor = 'best',            // ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
       // compressionOptions = -1,     // [-1|0|1|2|3|4|5|6|7|8|9] compression level
       idioma = 'en',                  // ['en'|'es'|'de'|'fr'|'zh']
@@ -56,17 +56,17 @@
          // maxVariable: <string>,
          // backwards: <boolean>
       },
-      // sharded = false,
-      // shardKey = { "string": "hashed" },
-      writeConcern = (isReplSet())
-                   ? {
-                        "w": "majority",
-                        // "j": true
-                     }
-                   : {
-                        "w": 1,
-                        // "j": true
-                     },
+      sharding = {  /* sharding feature TBA */
+         "sharded": true,
+         "key": { "string": "hashed" },
+         "numInitialChunksPerShard": 2, // = n * numInitialChunks * noShards
+         "collation": collation,
+         // "reShard": true
+      },
+      writeConcern = {
+         "w": (isReplSet() || isSharded()) ? "majority" : 1,
+         // "j": true
+      },
       indexPrefs = {  /* build index preferences */
          "build": true,              // [true|false]
          "order": "post",            // ["pre"|"post"] collection population
@@ -182,7 +182,7 @@
       }
 
       // (re)create the namespace
-      dropNS(dropPref, dbName, collName, compressor, collation, tsOptions);
+      dropNS(dropNamespace, dbName, collName, compressor, collation, tsOptions);
 
       // set collection/index build order, generate and bulk write the documents, create indexes
       console.log(`\nIndex build order preference "${indexPrefs.order}"`);
@@ -261,7 +261,14 @@
             "language": idiomas[
                $getRandomRatioInt([80, 0, 0, 5, 0, 3, 2])
             ],
-            "txt": $genRandomString($getRandomIntInclusive(6, 24))
+            "txt": (() => {
+               let lines = $getRandomIntInclusive(2, 512);
+               let string = '';
+               for (let line = 0; line < lines; ++line) {
+                  string += `${$genRandomString($getRandomIntInclusive(8, 24)) + $genRandomSymbol()}`;
+               }
+               return string;
+            })()
          },
          "object": {
             "oid": oid,
@@ -469,7 +476,7 @@
       return fuzzer.schemas[$getRandomRatioInt(fuzzer.ratios)];
    }
 
-   function dropNS(dropPref = false, dbName = false, collName = false,
+   function dropNS(dropNamespace = false, dbName = false, collName = false,
                    compressor = 'best', collation = { "locale": "simple" },
                    tsOptions) {
       /*
@@ -497,19 +504,19 @@
          default:
             compressor = 'snappy';
       }
-      if (dropPref && !!dbName && !!collName) {
-         console.log(`\nDropping namespace "${dbName}.${collName}"\n`);
+      if (dropNamespace && !!dbName && !!collName) {
+         console.log(`\nDropping namespace "${namespace}"\n`);
          namespace.drop();
          createNS(dbName, collName, msg, compressor,
                   expireAfterSeconds, collation, tsOptions
          );
-      } else if (!dropPref && !namespace.exists()) {
-         console.log(`\nNominated namespace "${dbName}.${collName}" does not exist\n`);
+      } else if (!dropNamespace && !namespace.exists()) {
+         console.log(`\nNominated namespace "${namespace}" does not exist\n`);
          createNS(dbName, collName, msg, compressor,
                   expireAfterSeconds, collation, tsOptions
          );
       } else
-      console.log(`\nPreserving existing namespace "${dbName}.${collName}"`)
+         console.log(`\nPreserving existing namespace "${namespace}"`)
 
       return;
    }
@@ -523,7 +530,7 @@
             "metaField": "data", "granularity": "hours"
          }
       ) {
-      console.log(`Creating namespace "${dbName}.${collName}"\n\twith block compression:\t"${compressor}" ${msg}\n\tand collation locale:\t"${collation.locale}"`);
+      console.log(`Creating namespace "${namespace}"\n\twith block compression:\t"${compressor}" ${msg}\n\tand collation locale:\t"${collation.locale}"`);
       let options = {
          "storageEngine": {
             "wiredTiger": {
@@ -547,10 +554,10 @@
    function buildIndexes() {
       if (indexPrefs.build) {
          if (indexes.length > 0) {
-            console.log(`\nBuilding index${((indexes.length == 1) ? '' : 'es')} with collation locale "${collation.locale}" with commit quorum "${((fCV(4.4)) ? indexPrefs.commitQuorum : 'disabled')}":`);
+            console.log(`\nBuilding index${((indexes.length == 1) ? '' : 'es')} with collation locale "${collation.locale}" with commit quorum "${fCV(4.4) ? indexPrefs.commitQuorum : 'disabled'}":`);
             indexes.forEach(index => console.log(`\tkey: ${JSON.stringify(index)}`));
             let indexing = () => {
-               let options = (fCV(4.4))
+               let options = fCV(4.4)
                            ? [indexes, indexOptions, indexPrefs.commitQuorum]
                            : [indexes, indexOptions];
 
@@ -574,10 +581,10 @@
             console.log('No regular index builds specified.')
 
          if (specialIndexes.length > 0) {
-            console.log(`\nBuilding exceptional index${((specialIndexes.length == 1) ? '' : 'es')} (no collation support) with commit quorum "${((fCV(4.4)) ? indexPrefs.commitQuorum : 'disabled')}":`);
+            console.log(`\nBuilding exceptional index${(specialIndexes.length == 1) ? '' : 'es'} (no collation support) with commit quorum "${fCV(4.4) ? indexPrefs.commitQuorum : 'disabled'}":`);
             specialIndexes.forEach(index => console.log(`\tkey: ${JSON.stringify(index)}`));
             let sIndexing = () => {
-               let sOptions = (fCV(4.4))
+               let sOptions = fCV(4.4)
                             ? [specialIndexes, specialIndexOptions, indexPrefs.commitQuorum]
                             : [specialIndexes, specialIndexOptions];
 
@@ -607,7 +614,7 @@
    }
 
    function genBulk(batchSize) {
-      console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} document${((totalDocs == 1) ? '' : 's')} in ${totalBatches} batch${((totalBatches == 1) ? '' : 'es')}:`);
+      console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} document${(totalDocs == 1) ? '' : 's'} in ${totalBatches} batch${(totalBatches == 1) ? '' : 'es'}:`);
       for (let i = 0; i < totalBatches; ++i) {
          if (i == totalBatches - 1 && residual > 0) batchSize = residual;
          let bulk = namespace.initializeUnorderedBulkOp();
@@ -616,7 +623,7 @@
          try {
             let result = bulk.execute(writeConcern);
             let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
-            console.log(`\t[Batch ${1 + i}/${totalBatches}] bulk inserted ${bInserted} document${((bInserted == 1) ? '' : 's')}`);
+            console.log(`\t[Batch ${1 + i}/${totalBatches}] bulk inserted ${bInserted} document${(bInserted == 1) ? '' : 's'}`);
          } catch(e) {
             console.log(`Generation failed with: ${e}`);
          }
