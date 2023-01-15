@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.3.3"
+ *  Version: "0.3.4"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.3.3"
+      "version": "0.3.4"
 })
 
 /*
@@ -243,7 +243,7 @@ function isSharded() {
    /*
     *  Determine if current host is a mongos
     */
-   return typeof db.serverStatus().process !== 'mongos';
+   return db.serverStatus().process == 'mongos';
 }
 
 function getAllNonSystemNamespaces() {
@@ -310,11 +310,11 @@ function serverVer(ver) {
         : svrVer();
 }
 
-function fCV(ver) { // update for shared tier compatability
+function fCV(ver) { // update for shared tier compatibility
    /*
     *  Evaluate feature compatibility version
     */
-   let featureVer = () => {
+   let featureVer = (ver) => {
       return (db.serverStatus().process === 'mongod')
            ? +db.adminCommand({
                "getParameter": 1,
