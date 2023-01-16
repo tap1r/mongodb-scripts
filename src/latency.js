@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.2.1"
+ *  Version: "0.2.2"
  *  Description: driver and network latency telemetry PoC
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@ console.clear();
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.2.1" };
+   let __script = { "name": "latency.js", "version": "0.2.2" };
    console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
    let { slowms } = db.getSiblingDB('admin').getProfilingStatus(),
@@ -44,13 +44,13 @@ console.clear();
       report, tableWidth, padding, longestValue,
       columnWidth = 24, spacing = 2;
 
-   t0 = process.hrtime();
    try {
+      t0 = process.hrtime();
       result = db.getSiblingDB('admin').aggregate(pipeline, options).toArray()[0];
+      t1 = process.hrtime(t0);
    } catch(error) {
       throw error;
    }
-   t1 = process.hrtime(t0);
 
    // let { t, 'attr': { 'durationMillis': durationMillis } // t is experimental
    let { 'attr': { 'durationMillis': durationMillis }
@@ -102,7 +102,6 @@ console.clear();
    ${'='.repeat(tableWidth)}
    `;
    console.log(report);
-
-})()
+})();
 
 // EOF
