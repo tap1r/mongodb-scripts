@@ -1,13 +1,13 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.17"
+ *  Version: "0.1.18"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet docSizes.js"
 
-let __script = { "name": "docSizes.js", "version": "0.1.17" };
+let __script = { "name": "docSizes.js", "version": "0.1.18" };
 console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
@@ -83,7 +83,7 @@ let options = {
          "comment": `Performing document distribution analysis with ${__script.name} v${__script.version}`
       },
       { 'system': { hostname } } = db.hostInfo(),
-      dbPath = db.serverCmdLineOpts().parsed?.storage?.dbPath,
+      dbPath = db.serverCmdLineOpts().parsed?.storage?.dbPath ?? 'sharded',
       metadataSize = internalPageSize, // outside of WT stats (4k-64MB)
       ratio = +(dataSize / (storageSize - blocksFree - metadataSize)).toFixed(2);
 
@@ -95,7 +95,7 @@ let options = {
       );
    };
    let { maxBsonObjectSize } = db.hello();
-   // byte offset to reach bucket inclusive boundary
+   // byte offset to reach the bucket's inclusive boundary
    let buckets = range(1, maxBsonObjectSize + 1, internalPageSize),
       pages = range(1, maxBsonObjectSize + 1, dataPageSize);
 
@@ -144,7 +144,7 @@ let options = {
          "CollectionTotals": {
             "hostname": hostname,
             "dbPath": dbPath,
-            "URI": dhandle,
+            "URI": (db.serverStatus().process == 'mongos') ? 'sharded' : dhandle,
             "namespace": `${dbName}.${collName}`,
             "dataSize": dataSize,
             "storageSize": storageSize,
