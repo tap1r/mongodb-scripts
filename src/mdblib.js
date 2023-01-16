@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.3.4"
+ *  Version: "0.3.5"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,18 +8,13 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.3.4"
+      "version": "0.3.5"
 })
 
 /*
  *  Global defaults
  */
 
-// if (typeof bsonMax === 'undefined') (
-//    bsonMax = (typeof hello().maxBsonObjectSize === 'undefined')
-//            ? 16 * Math.pow(1024, 2)
-//            : hello().maxBsonObjectSize
-// );
 if (typeof bsonMax === 'undefined') (bsonMax = (hello()) ? hello().maxBsonObjectSize : 16 * Math.pow(1024, 2));
 if (typeof maxWriteBatchSize === 'undefined') (
    maxWriteBatchSize = (typeof hello().maxWriteBatchSize === 'undefined')
@@ -98,8 +93,8 @@ if (typeof console === 'undefined') {
    /*
     *  legacy mongo detected
     */
-   (console = {}),
-   console.log = string => print(string)
+   (console = {});
+   console.log = string => print(string);
 }
 
 /*
@@ -190,10 +185,10 @@ class MetaStats {
       this.shards = (db.serverStatus().process === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
    }
    get compression() {
-      return this.dataSize / (this.storageSize - this.blocksFree - this.overhead)
+      return this.dataSize / (this.storageSize - this.blocksFree - this.overhead);
    }
    get totalSize() {
-      return this.storageSize + this.indexSize + this.overhead
+      return this.storageSize + this.indexSize + this.overhead;
    }
 }
 
@@ -206,11 +201,11 @@ function $rand() {
        *  mongosh/nodejs detected
        */
       return crypto.webcrypto.getRandomValues(new Uint32Array(1))[0] / (Math.pow(2, 32) - 1);
+      // return Math.random();
    } else {
       // default RNG
       return Math.random();
    }
-
    // return _rand(); // the shell's prng
    // return Math.abs(_srand()) / (Math.pow(2, 63) - 1); // SecureRandom() method
    // return Math.random(); // node's prng
@@ -701,8 +696,8 @@ function $benford() {
     */
    array => [1, 2, 3, 4, 5, 6, 7, 8, 9].map(
       val => [val, array.reduce(
-         (sum, item) => sum + (item [0] === val), 0
-      ) / array.length, Math.log10(1 + 1 / val)
+         (sum, item) => sum + (item [0] == val), 0
+      ) / array.length, Math.log10(1 + (1 / val))
    ]);
 
    return array;
