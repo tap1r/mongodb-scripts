@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.17"
+ *  Version: "0.4.18"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.4.17" };
+   let __script = { "name": "fuzzer.js", "version": "0.4.18" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -113,7 +113,7 @@
          // { "multiPolygon": "2dsphere" },
          // { "geoCollection": "2dsphere" },
          fCV(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
-      ];
+      ],
       indexOptions = {    /* createIndexes options */
          // "background": fCV(4.0) ? true : false,
          // "background": true,
@@ -123,11 +123,11 @@
          // "expireAfterSeconds": expireAfterSeconds,
          // "hidden": hidden,
          "collation": collation
-      };
+      },
       specialIndexes = [  /* index types unsupported by collations */
          { "location.coordinates": "2d" },
          { "quote.txt": "text" }
-      ];
+      ],
       specialIndexOptions = { /* exceptional index options */
          // "background": fCV(4.0) ? true : false,
          // "background": true,
@@ -158,24 +158,23 @@
        *  main
        */
       db.getMongo().setReadPref('primary');
-      console.log(`\nSynthesising ${totalDocs} document${((totalDocs == 1) ? '' : 's')}`);
+      console.log(`\nSynthesising ${totalDocs} document${(totalDocs == 1) ? '' : 's'}`);
 
       // sampling synthetic documents and estimating batch size
       for (let i = 0; i < sampleSize; ++i)
-         docSize += bsonsize(genDocument())
+         docSize += bsonsize(genDocument());
 
       let avgSize = (docSize / sampleSize)|0;
       if (avgSize > bsonMax * 0.95)
-         console.log(`\nWarning: The average document size of ${avgSize} bytes approaches or exceeeds the BSON max size of ${bsonMax} bytes`)
-
-      console.log(`\nSampling ${sampleSize} document${((sampleSize == 1) ? '' : 's')} each with BSON size averaging ${avgSize} byte${((avgSize == 1) ? '' : 's')}`);
+         console.log(`\nWarning: The average document size of ${avgSize} bytes approaches or exceeeds the BSON max size of ${bsonMax} bytes`);
+      console.log(`\nSampling ${sampleSize} document${(sampleSize == 1) ? '' : 's'} each with BSON size averaging ${avgSize} byte${(avgSize == 1) ? '' : 's'}`);
       let batchSize = (() => {
          let sampledSize = (bsonMax * 0.95 / avgSize)|0;
          return (maxWriteBatchSize < sampledSize) ? maxWriteBatchSize : sampledSize;
-      })()
-      console.log(`Estimated optimal capacity of ${batchSize} document${((batchSize == 1) ? '' : 's')} per batch`);
+      })();
+      console.log(`Estimated optimal capacity of ${batchSize} document${(batchSize == 1) ? '' : 's'} per batch`);
       if (totalDocs < batchSize)
-         batchSize = totalDocs
+         batchSize = totalDocs;
       else {
          totalBatches += (totalDocs / batchSize)|0;
          residual = (totalDocs % batchSize)|0;
@@ -223,11 +222,11 @@
             // secondsOffset = +($getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
             // break;
          case 'pareto': // not implemented yet
-            // $genRandomInclusivePareto(min, alpha = 1.161) {
+            // $genRandomInclusivePareto(min, alpha = 1.161) {}
             // secondsOffset = +($genRandomInclusivePareto(fuzzer.offset + fuzzer.range) * 86400)|0;
             // break;
          case 'exponential': // not implemented yet
-            // $getRandomExp()
+            // $getRandomExp();
             // secondsOffset = +($getRandomExp(fuzzer.offset, fuzzer.offset + fuzzer.range, 128) * 86400)|0;
             // break;
          default:
@@ -544,9 +543,8 @@
          options.expireAfterSeconds = expireAfterSeconds;
          console.log(`\tand time series options: ${JSON.stringify(options, null, '\t')}`);
       }
-
-      try { db.getSiblingDB(dbName).createCollection(collName, options) }
-      catch(e) { console.log(`\nNamespace creation failed: ${e}`) }
+      try { db.getSiblingDB(dbName).createCollection(collName, options); }
+      catch(e) { console.log(`\nNamespace creation failed: ${e}`); }
 
       return;
    }
@@ -554,7 +552,7 @@
    function buildIndexes() {
       if (indexPrefs.build) {
          if (indexes.length > 0) {
-            console.log(`\nBuilding index${((indexes.length == 1) ? '' : 'es')} with collation locale "${collation.locale}" with commit quorum "${fCV(4.4) ? indexPrefs.commitQuorum : 'disabled'}":`);
+            console.log(`\nBuilding index${(indexes.length == 1) ? '' : 'es'} with collation locale "${collation.locale}" with commit quorum "${fCV(4.4) ? indexPrefs.commitQuorum : 'disabled'}":`);
             indexes.forEach(index => console.log(`\tkey: ${JSON.stringify(index)}`));
             let indexing = () => {
                let options = fCV(4.4)
@@ -566,20 +564,19 @@
             let idxResult = indexing();
             let idxMsg = () => {
                if (typeof idxResult.errmsg !== 'undefined')
-                  return `Indexing operation failed: ${idxResult.errmsg}`
+                  return `Indexing operation failed: ${idxResult.errmsg}`;
                else if (typeof idxResult.note !== 'undefined') 
-                  return `Indexing completed with note: ${idxResult.note} with ${idxResult.numIndexesAfter - idxResult.numIndexesBefore} index changes.`
+                  return `Indexing completed with note: ${idxResult.note} with ${idxResult.numIndexesAfter - idxResult.numIndexesBefore} index changes.`;
                else if (typeof idxResult.ok !== 'undefined')
-                  return 'Indexing completed!'
+                  return 'Indexing completed!';
                else if (typeof idxResult.msg !== 'undefined')
-                  return `Indexing build failed with message: ${idxResult.msg}`
+                  return `Indexing build failed with message: ${idxResult.msg}`;
                else
-                  return `Indexing completed with results:\t${idxResult}`
+                  return `Indexing completed with results:\t${idxResult}`;
             }
             console.log(idxMsg());
          } else
-            console.log('No regular index builds specified.')
-
+            console.log('No regular index builds specified.');
          if (specialIndexes.length > 0) {
             console.log(`\nBuilding exceptional index${(specialIndexes.length == 1) ? '' : 'es'} (no collation support) with commit quorum "${fCV(4.4) ? indexPrefs.commitQuorum : 'disabled'}":`);
             specialIndexes.forEach(index => console.log(`\tkey: ${JSON.stringify(index)}`));
@@ -593,22 +590,21 @@
             let sIdxResult = sIndexing();
             let sidxMsg = () => {
                if (typeof sIdxResult.errmsg !== 'undefined')
-                  return `Special indexing operation failed: ${sIdxResult.errmsg}`
+                  return `Special indexing operation failed: ${sIdxResult.errmsg}`;
                else if (typeof sIdxResult.note !== 'undefined')
-                  return `Special indexing completed with note: ${sIdxResult.note} with ${sIdxResult.numIndexesAfter - sIdxResult.numIndexesBefore} index changes.`
+                  return `Special indexing completed with note: ${sIdxResult.note} with ${sIdxResult.numIndexesAfter - sIdxResult.numIndexesBefore} index changes.`;
                else if (typeof sIdxResult.ok !== 'undefined')
-                  return 'Special indexing completed!'
+                  return 'Special indexing completed!';
                else if (typeof sIdxResult.msg !== 'undefined')
-                  return `Special indexing build failed with message: ${sIdxResult.msg}`
+                  return `Special indexing build failed with message: ${sIdxResult.msg}`;
                else
-                  return `Special indexing completed with results:\t${sIdxResult}`
+                  return `Special indexing completed with results:\t${sIdxResult}`;
             }
             console.log(sidxMsg());
          } else
-            console.log('\nNo special index builds specified.')
-
+            console.log('\nNo special index builds specified.');
       } else
-         console.log('\nBuilding indexes: "false"')
+         console.log('\nBuilding indexes: "false"');
 
       return;
    }
@@ -635,7 +631,6 @@
    }
 
    main();
-
-})()
+})();
 
 // EOF
