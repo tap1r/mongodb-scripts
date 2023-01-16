@@ -1,13 +1,16 @@
 /*
  *  Name: "schema-sampler.js"
- *  Version: "0.2.5"
+ *  Version: "0.2.6"
  *  Description: generate schema with simulated mongosqld sampling commands
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "[mongo|mongosh] [connection options] --quiet schema-sampler.js > schema.json"
 
-// user preferences
+/*
+ *  User defined parameters
+ */
+
 let userOptions = {
    "sampleSize": 10, // defaults to 1 for performance reasons, increase for sparse data
    // "dbs": ['namespace'], // restrict list to known namespaces
@@ -18,7 +21,7 @@ let userOptions = {
    /*
     *
     */
-   let __script = { "name": "schema-sampler.js", "version": "0.2.5" };
+   let __script = { "name": "schema-sampler.js", "version": "0.2.6" };
    print(`\n---> Running script ${__script.name} v${__script.version}`);
    
    function main({ sampleSize = 1, dbs = [], readPreference = 'secondaryPreferred' }) {
@@ -103,7 +106,11 @@ let userOptions = {
        *  report
        */
 
-      return print(`\n${JSON.stringify(schema, null, '  ')}\n`);
+      if (typeof process !== 'undefined') {
+         return print(`\n${EJSON.stringify(schema, null, '  ')}\n`);
+      } else {
+         return print(`\n${JSON.stringify(schema, null, '  ')}\n`);
+      }
    }
 
    main(userOptions);
