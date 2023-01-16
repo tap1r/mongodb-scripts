@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.3.2"
+ *  Version: "0.3.3"
  *  Description: measure oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -20,7 +20,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.3.2" };
+   let __script = { "name": "oplogchurn.js", "version": "0.3.3" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -62,7 +62,7 @@
    if (typeof rowHeader === 'undefined') (rowHeader = 36);
 
    // connection preferences
-   if (typeof readPref === 'undefined') (readPref = (hello().secondary === false) ? 'primaryPreferred' : 'secondaryPreferred');
+   if (typeof readPref === 'undefined') (readPref = (hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
 
    function main() {
       /*
@@ -74,12 +74,12 @@
          t1 = (date.setHours(date.getHours() - intervalHrs) / 1000.0)|0, // start timestamp
          d1 = date.toISOString(), // start datetime
          $match = (typeof process !== 'undefined') // MONGOSH-930
-               ? { "$match": {
+                ? { "$match": {
                      "ts": {
                         "$gt": Timestamp({ "t": t1, "i": 0 }),
                         "$lte": Timestamp({ "t": t2, "i": 0 })
                   } } }
-               : { "$match": {
+                : { "$match": {
                      "ts": {
                         "$gt": Timestamp(t1, 0),
                         "$lte": Timestamp(t2, 0)
@@ -108,8 +108,7 @@
          } });
          ({ '_bsonDataSize': opSize, '_documentCount': docs } = oplog.aggregate(pipeline, options).toArray()[0]);
       } else {
-         print('\n');
-         print('Warning: Using the legacy client side calculation technique');
+         console.log('\nWarning: Using the legacy client side calculation technique');
          oplog.aggregate(pipeline, options).forEach(op => {
             opSize += bsonsize(op);
             ++docs;
@@ -123,8 +122,8 @@
          { 'wiredTiger': {
             creationString,
             'block-manager': {
+               'file bytes available for reuse': blocksFree,
                'file size in bytes': storageSize,
-               'file bytes available for reuse': blocksFree
             } },
             size,
             internalPageSize = (creationString.match(/internal_page_max=(\d+)/)[1] * 1024)
@@ -136,44 +135,26 @@
       let oplogChurn = intervalStorageSize / intervalHrs;
 
       // Print results
-      print('\n');
-      print('='.repeat(termWidth));
-      print('Hostname:'.padEnd(rowHeader), hostname.padStart(columnWidth));
-      // print('dbPath:\t', dbPath.padStart(columnWidth));
-      print('dbPath:\t', dbPath.padStart(termWidth - 'dbPath:\t'.length - 1));
-      print('-'.repeat(termWidth));
-      print('Start time:'.padEnd(rowHeader), d1.padStart(columnWidth));
-      print('End time:'.padEnd(rowHeader), d2.padStart(columnWidth));
-      print('Interval duration:'.padEnd(rowHeader),
-            (intervalHrs + ' hr' + ((intervalHrs === 1) ? '' : 's')).padStart(columnWidth)
-      );
-      print('Average oplog compression ratio:'.padEnd(rowHeader),
-            (ratio + ':1').padStart(columnWidth)
-      );
-      print('Interval document count:'.padEnd(rowHeader),
-            docs.toString().padStart(columnWidth)
-      );
-      print('Interval data size:'.padEnd(rowHeader),
-            (intervalDataSize.toFixed(2) + ' ' +
-            unit).padStart(columnWidth)
-      );
-      print('Estimated interval storage size:'.padEnd(rowHeader),
-            (intervalStorageSize.toFixed(2) + ' ' +
-            unit).padStart(columnWidth)
-      );
-      print('-'.repeat(termWidth));
-      print('Estimated current oplog data churn:'.padEnd(rowHeader),
-            (oplogChurn.toFixed(2) + ' ' + unit +
-            '/hr').padStart(columnWidth)
-      );
-      print('='.repeat(termWidth));
-      print('\n');
+      console.log(`\n${'='.repeat(termWidth)}`);
+      console.log(`${'Hostname:'.padEnd(rowHeader)} ${hostname.padStart(columnWidth)}`);
+      console.log(`dbPath:\t${dbPath.padStart(termWidth - 'dbPath:\t'.length)}`);
+      console.log(`${'-'.repeat(termWidth)}`);
+      console.log(`${'Start time:'.padEnd(rowHeader)} ${d1.padStart(columnWidth)}`);
+      console.log(`${'End time:'.padEnd(rowHeader)} ${d2.padStart(columnWidth)}`);
+      console.log(`${'Interval duration:'.padEnd(rowHeader)} ${`${intervalHrs} hr${(intervalHrs == 1) ? '' : 's'}`.padStart(columnWidth)}`);
+      console.log(`${'Average oplog compression ratio:'.padEnd(rowHeader)} ${`${ratio}:1`.padStart(columnWidth)}`);
+      console.log(`${'Interval document count:'.padEnd(rowHeader)} ${docs.toString().padStart(columnWidth)}`);
+      console.log(`${'Interval data size:'.padEnd(rowHeader)} ${`${intervalDataSize.toFixed(2)} ${unit}`.padStart(columnWidth)}`);
+      console.log(`${'Estimated interval storage size:'.padEnd(rowHeader)} ${`${intervalStorageSize.toFixed(2)} ${unit}`.padStart(columnWidth)}`);
+      console.log(`${'-'.repeat(termWidth)}`);
+      console.log(`${'Estimated current oplog data churn:'.padEnd(rowHeader)} ${`${oplogChurn.toFixed(2)} ${unit}/hr`.padStart(columnWidth)}`);
+      console.log(`${'='.repeat(termWidth)}\n`);
    }
 
    if (!isReplSet())
-      console.log(`\nHost is not a replica set member....exiting!\n\n`)
+      console.log(`\n\tHost is not a replica set member....exiting!\n\n`);
    else
-      main()
-})()
+      main();
+})();
 
 // EOF
