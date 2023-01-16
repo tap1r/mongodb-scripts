@@ -1,14 +1,11 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.18"
+ *  Version: "0.1.19"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet docSizes.js"
-
-let __script = { "name": "docSizes.js", "version": "0.1.18" };
-console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
 /*
  *  User defined parameters
@@ -24,7 +21,8 @@ let options = {
    /*
     *  main
     */
-
+   let __script = { "name": "docSizes.js", "version": "0.1.19" };
+   console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
    // connection preferences
    if (typeof readPref === 'undefined')
       (readPref = (db.hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
