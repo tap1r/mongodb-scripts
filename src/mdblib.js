@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.3.5"
+ *  Version: "0.3.6"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.3.5"
+      "version": "0.3.6"
 })
 
 /*
@@ -181,7 +181,7 @@ class MetaStats {
       this.instance = hello().me;
       this.hostname = db.hostInfo().system.hostname;
       this.proc = db.serverStatus().process;
-      this.dbPath = (db.serverStatus().process === 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : null;
+      this.dbPath = (db.serverStatus().process === 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : 'sharded';
       this.shards = (db.serverStatus().process === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
    }
    get compression() {
