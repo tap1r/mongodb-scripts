@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.18"
+ *  Version: "0.4.19"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.4.18" };
+   let __script = { "name": "fuzzer.js", "version": "0.4.19" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -113,8 +113,8 @@
          // { "multiPolygon": "2dsphere" },
          // { "geoCollection": "2dsphere" },
          fCV(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
-      ],
-      indexOptions = {    /* createIndexes options */
+      ];
+   let indexOptions = {    /* createIndexes options */
          // "background": fCV(4.0) ? true : false,
          // "background": true,
          // "unique": false,
@@ -170,7 +170,8 @@
       console.log(`\nSampling ${sampleSize} document${(sampleSize == 1) ? '' : 's'} each with BSON size averaging ${avgSize} byte${(avgSize == 1) ? '' : 's'}`);
       let batchSize = (() => {
          let sampledSize = (bsonMax * 0.95 / avgSize)|0;
-         return (maxWriteBatchSize < sampledSize) ? maxWriteBatchSize : sampledSize;
+         // return (maxWriteBatchSize < sampledSize) ? maxWriteBatchSize : sampledSize;
+         return (1000 < sampledSize) ? 1000 : sampledSize;
       })();
       console.log(`Estimated optimal capacity of ${batchSize} document${(batchSize == 1) ? '' : 's'} per batch`);
       if (totalDocs < batchSize)
@@ -504,18 +505,18 @@
             compressor = 'snappy';
       }
       if (dropNamespace && !!dbName && !!collName) {
-         console.log(`\nDropping namespace "${namespace}"\n`);
+         console.log(`\nDropping namespace "${dbName}.${collName}"\n`);
          namespace.drop();
          createNS(dbName, collName, msg, compressor,
                   expireAfterSeconds, collation, tsOptions
          );
       } else if (!dropNamespace && !namespace.exists()) {
-         console.log(`\nNominated namespace "${namespace}" does not exist\n`);
+         console.log(`\nNominated namespace "${dbName}.${collName}" does not exist\n`);
          createNS(dbName, collName, msg, compressor,
                   expireAfterSeconds, collation, tsOptions
          );
       } else
-         console.log(`\nPreserving existing namespace "${namespace}"`)
+         console.log(`\nPreserving existing namespace "${dbName}.${collName}"`)
 
       return;
    }
@@ -529,7 +530,7 @@
             "metaField": "data", "granularity": "hours"
          }
       ) {
-      console.log(`Creating namespace "${namespace}"\n\twith block compression:\t"${compressor}" ${msg}\n\tand collation locale:\t"${collation.locale}"`);
+      console.log(`Creating namespace "${dbName}.${collName}"\n\twith block compression:\t"${compressor}" ${msg}\n\tand collation locale:\t"${collation.locale}"`);
       let options = {
          "storageEngine": {
             "wiredTiger": {
