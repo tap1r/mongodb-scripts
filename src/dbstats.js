@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.3.4"
+ *  Version: "0.3.5"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.3.4" },
+   let __script = { "name": "dbstats.js", "version": "0.3.5" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -77,8 +77,14 @@
          database.init();
          printDbHeader(database.name);
          let collections = db.getSiblingDB(dbName).getCollectionInfos(
-            { "type": "collection", "name": /^((?!system\.(keys|preimages|indexBuilds)).)+$/ },
-            { "nameOnly": true }, true
+            {
+               // "type": "collection",
+               "type": /^(collection|timeseries)$/,
+               // "name": /^((?!system\.(keys|preimages|indexBuilds)).)+$/
+               "name": /^((?!system\.(keys|preimages|indexBuilds|views)).)+$/
+            },
+            { "nameOnly": true },
+            true
          );
          printCollHeader(collections.length);
          // collections.map(async collInfo => {
@@ -99,9 +105,6 @@
             database.blocksFree += collection.blocksFree;
             database.indexFree += collection.indexFree;
          });
-         // let timeSeries = db.getSiblingDB(dbName).getCollectionInfos({ "type": "timeseries" }, { "nameOnly": true }, true);
-         // printTimeSeriesHeader(timeSeries.length);
-         // timeSeries.map(timeSeriesInfo => printTimeSeries(timeSeriesInfo.name));
          let views = db.getSiblingDB(dbName).getCollectionInfos({ "type": "view" }, { "nameOnly": true }, true);
          printViewHeader(views.length);
          views.map(viewInfo => printView(viewInfo.name));
@@ -188,7 +191,7 @@
        */
       console.log(`${'-'.repeat(termWidth)}`);
       console.log(`${'Collections subtotal:'.padEnd(rowHeader)} ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${`${formatUnit(blocksFree).padStart(columnWidth)}${`${formatPct(blocksFree, storageSize)})`.padStart(8)}`.padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
-      console.log(`${'Indexes subtotal:'.padEnd(rowHeader)} ${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(indexSize).padStart(columnWidth)} ${(formatUnit(indexFree).padStart(columnWidth) + ('(' + formatPct(indexFree, indexSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
+      console.log(`${'Indexes subtotal:'.padEnd(rowHeader)} ${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(indexSize).padStart(columnWidth)} ${`${formatUnit(indexFree).padStart(columnWidth)}${`(${formatPct(indexFree, indexSize)})`.padStart(8)}`.padStart(columnWidth + 8)}`);
       console.log(`${'='.repeat(termWidth)}`);
    }
 
