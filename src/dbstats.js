@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.3.5"
+ *  Version: "0.3.6"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.3.5" },
+   let __script = { "name": "dbstats.js", "version": "0.3.6" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -78,9 +78,7 @@
          printDbHeader(database.name);
          let collections = db.getSiblingDB(dbName).getCollectionInfos(
             {
-               // "type": "collection",
                "type": /^(collection|timeseries)$/,
-               // "name": /^((?!system\.(keys|preimages|indexBuilds)).)+$/
                "name": /^((?!system\.(keys|preimages|indexBuilds|views)).)+$/
             },
             { "nameOnly": true },
@@ -215,6 +213,6 @@
    }
 
    await main();
-})()
+})();
 
 // EOF
