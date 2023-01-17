@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.3.3"
+ *  Version: "0.3.4"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.3.3" },
+   let __script = { "name": "dbstats.js", "version": "0.3.4" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -76,11 +76,14 @@
          let database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, '', dbStats.indexSize);
          database.init();
          printDbHeader(database.name);
-         let collections = db.getSiblingDB(dbName).getCollectionInfos({ "type": "collection" }, true);
+         let collections = db.getSiblingDB(dbName).getCollectionInfos(
+            { "type": "collection", "name": /^((?!system\.(keys|preimages|indexBuilds)).)+$/ },
+            { "nameOnly": true }, true
+         );
          printCollHeader(collections.length);
          // collections.map(async collInfo => {
          collections.map(collInfo => {
-            let collStats = db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ "indexDetails": true });
+            let collStats = db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ "scale": 1, "indexDetails": true });
             let collection = new MetaStats(
                collInfo.name, collStats.size, collStats.wiredTiger['block-manager']['file size in bytes'],
                collStats.count, collStats.wiredTiger['block-manager']['file bytes available for reuse'],
@@ -96,7 +99,10 @@
             database.blocksFree += collection.blocksFree;
             database.indexFree += collection.indexFree;
          });
-         let views = db.getSiblingDB(dbName).getCollectionInfos({ "type": "view" }, true);
+         // let timeSeries = db.getSiblingDB(dbName).getCollectionInfos({ "type": "timeseries" }, { "nameOnly": true }, true);
+         // printTimeSeriesHeader(timeSeries.length);
+         // timeSeries.map(timeSeriesInfo => printTimeSeries(timeSeriesInfo.name));
+         let views = db.getSiblingDB(dbName).getCollectionInfos({ "type": "view" }, { "nameOnly": true }, true);
          printViewHeader(views.length);
          views.map(viewInfo => printView(viewInfo.name));
          printDb(database);
@@ -181,7 +187,7 @@
        *  Print DB level rollup stats
        */
       console.log(`${'-'.repeat(termWidth)}`);
-      console.log(`${'Collections subtotal:'.padEnd(rowHeader)} ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree).padStart(columnWidth) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
+      console.log(`${'Collections subtotal:'.padEnd(rowHeader)} ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${`${formatUnit(blocksFree).padStart(columnWidth)}${`${formatPct(blocksFree, storageSize)})`.padStart(8)}`.padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
       console.log(`${'Indexes subtotal:'.padEnd(rowHeader)} ${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(indexSize).padStart(columnWidth)} ${(formatUnit(indexFree).padStart(columnWidth) + ('(' + formatPct(indexFree, indexSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
       console.log(`${'='.repeat(termWidth)}`);
    }
@@ -200,7 +206,7 @@
       console.log(`${'All DBs:'.padEnd(rowHeader)} ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
       console.log(`${'All indexes:'.padEnd(rowHeader)} ${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(indexSize).padStart(columnWidth)} ${(formatUnit(indexFree) + ('(' + formatPct(indexFree, indexSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
       console.log(`${'='.repeat(termWidth)}`);
-      console.log(`Host: ${hostname}\tType: ${proc}\tdbPath:${dbPath}`);
+      console.log(`Host: ${hostname}\tType: ${proc}\tdbPath: ${dbPath}`);
       console.log(`${'='.repeat(termWidth)}`);
       console.log(`\n`);
    }
