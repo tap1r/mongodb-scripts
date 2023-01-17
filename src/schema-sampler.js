@@ -1,6 +1,6 @@
 /*
  *  Name: "schema-sampler.js"
- *  Version: "0.2.6"
+ *  Version: "0.2.7"
  *  Description: generate schema with simulated mongosqld sampling commands
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -21,7 +21,7 @@ let userOptions = {
    /*
     *
     */
-   let __script = { "name": "schema-sampler.js", "version": "0.2.6" };
+   let __script = { "name": "schema-sampler.js", "version": "0.2.7" };
    print(`\n---> Running script ${__script.name} v${__script.version}`);
    
    function main({ sampleSize = 1, dbs = [], readPreference = 'secondaryPreferred' }) {
@@ -40,7 +40,7 @@ let userOptions = {
       /*
        *  generate a synthetic schema with metadata
        */
-      let comment = 'Executed by ' + __script.name + ' v' + __script.version;
+      let comment = `Executed by ${__script.name} v${__script.version}`;
       let collectionPipeline = [{ "$sample": { "size": sampleSize } }];
       let viewPipeline = [{ "$sample": { "size": 1} }];
       let options = {
@@ -105,12 +105,9 @@ let userOptions = {
       /*
        *  report
        */
-
-      if (typeof process !== 'undefined') {
-         return print(`\n${EJSON.stringify(schema, null, '  ')}\n`);
-      } else {
-         return print(`\n${JSON.stringify(schema, null, '  ')}\n`);
-      }
+      return (typeof process !== 'undefined')
+           ? print(`\n${EJSON.stringify(schema, null, '  ')}\n`)
+           : print(`\n${JSON.stringify(schema, null, '  ')}\n`);
    }
 
    main(userOptions);
