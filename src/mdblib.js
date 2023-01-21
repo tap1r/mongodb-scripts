@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.3.6"
+ *  Version: "0.3.7"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.3.6"
+      "version": "0.3.7"
 })
 
 /*
@@ -247,21 +247,21 @@ function getAllNonSystemNamespaces() {
     */
    let listDbOpts = [{
       "listDatabases": 1,
-      "filter": { "name": /(?:^(?!admin$|config$|local$)).+/ },
+      "filter": { "name": /(?:^(?!(admin|config|local)$).+)/ },
       "nameOnly": true,
       "authorizedDatabases": true
    }];
    // db.runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true });
    let listColOpts = [{
-         "type": "collection",
-         "name": { "$regex": /(?!^(?:system\\.))/ }
+         "type": /^(?:collection|timeseries)$/,
+         "name": /(?:^(?!system\..+$).+)/
       },
       true,
       true
    ];
    let listViewOpts = [{
          "type": "view",
-         "name": { "$regex": /(?!^(?:system\\.))/ }
+         "name": /(?:^(?!system\..+$).+)/
       },
       true,
       true
