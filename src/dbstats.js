@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.3.6"
+ *  Version: "0.3.7"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.3.6" },
+   let __script = { "name": "dbstats.js", "version": "0.3.7" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -33,6 +33,7 @@
       load(__lib.path);
    }
    __comment += ` with ${__lib.name} v${__lib.version}`;
+   console.clear();
    console.log(__comment);
 
    /*
@@ -76,36 +77,35 @@
          let database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, '', dbStats.indexSize);
          database.init();
          printDbHeader(database.name);
-         let collections = db.getSiblingDB(dbName).getCollectionInfos(
-            {
+         let collections = db.getSiblingDB(dbName).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
                "name": /^((?!system\.(keys|preimages|indexBuilds|views)).)+$/
             },
-            { "nameOnly": true },
+            true,
             true
          );
          printCollHeader(collections.length);
          // collections.map(async collInfo => {
-         collections.map(collInfo => {
-            let collStats = db.getSiblingDB(dbName).getCollection(collInfo.name).stats({ "scale": 1, "indexDetails": true });
+         collections.map(({ 'name': collName }) => {
+            let collStats = db.getSiblingDB(dbName).getCollection(collName).stats({ "scale": 1, "indexDetails": true });
             let collection = new MetaStats(
-               collInfo.name, collStats.size, collStats.wiredTiger['block-manager']['file size in bytes'],
+               collName, collStats.size, collStats.wiredTiger['block-manager']['file size in bytes'],
                collStats.count, collStats.wiredTiger['block-manager']['file bytes available for reuse'],
                // collStats.wiredTiger.creationString.match(/block_compressor=(?<compressor>\w+)/)?.groups?.compressor
                collStats.wiredTiger.creationString.match(/block_compressor=(\w+)/)[1]
             );
             collection.init();
             Object.keys(collStats.indexDetails).map(indexName => {
-               collection.indexSize += collStats.indexDetails[indexName]['block-manager']['file size in bytes'];
                collection.indexFree += collStats.indexDetails[indexName]['block-manager']['file bytes available for reuse'];
+               collection.indexSize += collStats.indexDetails[indexName]['block-manager']['file size in bytes'];
             });
             printCollection(collection);
             database.blocksFree += collection.blocksFree;
             database.indexFree += collection.indexFree;
          });
-         let views = db.getSiblingDB(dbName).getCollectionInfos({ "type": "view" }, { "nameOnly": true }, true);
+         let views = db.getSiblingDB(dbName).getCollectionInfos({ "type": "view" }, true, true);
          printViewHeader(views.length);
-         views.map(viewInfo => printView(viewInfo.name));
+         views.map(({ name }) => printView(name));
          printDb(database);
          dbPath.dataSize += database.dataSize;
          dbPath.storageSize += database.storageSize;
@@ -143,15 +143,15 @@
       /*
        *  Print collection table header
        */
-      console.log(`${'-'.repeat(termWidth)}`);
-      console.log(`${('Collections:\t' + collTotal).padEnd(rowHeader)}`);
+      console.log('-'.repeat(termWidth));
+      console.log(`Collections:\t${collTotal}`.padEnd(rowHeader));
    }
 
    function printCollection({ name, dataSize, compression, compressor, storageSize, blocksFree, objects }) {
       /*
        *  Print collection level stats
        */
-      console.log(` ${'-'.repeat(termWidth -1)}`);
+      console.log(` ${'-'.repeat(termWidth - 1)}`);
       console.log(`${(' ' + name).padEnd(rowHeader)} ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(7)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
    }
 
@@ -159,16 +159,16 @@
       /*
        *  Print view table header
        */
-      console.log(`${'-'.repeat(termWidth)}`);
-      console.log(`${('Views:\t\t' + viewTotal).padEnd(rowHeader)}`);
+      console.log('-'.repeat(termWidth));
+      console.log(`Views:\t\t${viewTotal}`.padEnd(rowHeader));
    }
 
    function printView(viewName) {
       /*
        *  Print view name
        */
-      console.log(`${'-'.repeat(termWidth)}`);
-      console.log(`${(' ' + viewName).padEnd(rowHeader)}`);
+      console.log('-'.repeat(termWidth));
+      console.log(` ${viewName}`.padEnd(rowHeader));
    }
 
    function printDbHeader(dbName) {
@@ -176,8 +176,8 @@
        *  Print DB table header
        */
       console.log(`\n`);
-      console.log(`${'='.repeat(termWidth)}`);
-      console.log(`${('Database: ' + dbName).padEnd(rowHeader)} ${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}`);
+      console.log('='.repeat(termWidth));
+      console.log(`${`Database: ${dbName}`.padEnd(rowHeader)} ${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}`);
    }
 
    function printDb({
@@ -187,10 +187,10 @@
       /*
        *  Print DB level rollup stats
        */
-      console.log(`${'-'.repeat(termWidth)}`);
+      console.log('-'.repeat(termWidth));
       console.log(`${'Collections subtotal:'.padEnd(rowHeader)} ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${`${formatUnit(blocksFree).padStart(columnWidth)}${`${formatPct(blocksFree, storageSize)})`.padStart(8)}`.padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
       console.log(`${'Indexes subtotal:'.padEnd(rowHeader)} ${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(indexSize).padStart(columnWidth)} ${`${formatUnit(indexFree).padStart(columnWidth)}${`(${formatPct(indexFree, indexSize)})`.padStart(8)}`.padStart(columnWidth + 8)}`);
-      console.log(`${'='.repeat(termWidth)}`);
+      console.log('='.repeat(termWidth));
    }
 
    function printDbPath({
@@ -201,14 +201,14 @@
        *  Print total dbPath rollup stats
        */
       console.log(`\n`);
-      console.log(`${'='.repeat(termWidth)}`);
+      console.log('='.repeat(termWidth));
       console.log(`${'dbPath totals'.padEnd(rowHeader)} ${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}`);
-      console.log(`${'-'.repeat(termWidth)}`);
+      console.log('-'.repeat(termWidth));
       console.log(`${'All DBs:'.padEnd(rowHeader)} ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
       console.log(`${'All indexes:'.padEnd(rowHeader)} ${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(indexSize).padStart(columnWidth)} ${(formatUnit(indexFree) + ('(' + formatPct(indexFree, indexSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
-      console.log(`${'='.repeat(termWidth)}`);
+      console.log('='.repeat(termWidth));
       console.log(`Host: ${hostname}\tType: ${proc}\tdbPath: ${dbPath}`);
-      console.log(`${'='.repeat(termWidth)}`);
+      console.log('='.repeat(termWidth));
       console.log(`\n`);
    }
 
