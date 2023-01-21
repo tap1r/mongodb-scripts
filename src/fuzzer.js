@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.20"
+ *  Version: "0.4.21"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.4.20" };
+   let __script = { "name": "fuzzer.js", "version": "0.4.21" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -33,6 +33,7 @@
       load(__lib.path);
    }
    __comment += ` with ${__lib.name} v${__lib.version}`;
+   console.clear();
    console.log(__comment);
 
    /*
@@ -56,18 +57,11 @@
          // maxVariable: <string>,
          // backwards: <boolean>
       },
-      sharding = {  /* sharding feature TBA */
-         "sharded": true,
-         "key": { "string": "hashed" },
-         "numInitialChunksPerShard": 2, // = n * numInitialChunks * noShards
-         "collation": collation,
-         // "reShard": true
-      },
       writeConcern = {
          "w": (isReplSet() || isSharded()) ? "majority" : 1,
-         // "j": true
-      },
-      indexPrefs = {  /* build index preferences */
+         "j": false
+      };
+   let indexPrefs = {  /* build index preferences */
          "build": true,              // [true|false]
          "order": "post",            // ["pre"|"post"] collection population
          "commitQuorum": (writeConcern.w == 0) ? 1 : writeConcern.w
@@ -77,6 +71,11 @@
          "timeField": "timestamp",
          "metaField": "data",
          "granularity": "hours"
+      },
+      capped = false,
+      cappedOptions = {
+         "size": Math.pow(2, 27),
+         "max": Math.pow(2, 27) / Math.pow(2, 12)
       },
       expireAfterSeconds = 0,        // TTL and time series options
       fuzzer = {  /* preferences */
@@ -97,7 +96,14 @@
          "schemas": [],
          "ratios": [7, 2, 1]
       },
-      indexes = [ /* index definitions */
+      sharding = true,
+      shardedOptions = {  /* sharding feature TBA */
+         "key": { "string": "hashed" },
+         "numInitialChunksPerShard": 2, // = n * numInitialChunks * noShards
+         "collation": collation,
+         // "reShard": true
+      };
+   let indexes = [ /* index definitions */
          { "date": -1 },
          { "language": 1, "schema": 1 },
          { "random": 1 },
@@ -114,7 +120,7 @@
          // { "geoCollection": "2dsphere" },
          fCV(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
       ];
-   let indexOptions = {    /* createIndexes options */
+      indexOptions = {    /* createIndexes options */
          // "background": fCV(4.0) ? true : false,
          // "background": true,
          // "unique": false,
@@ -166,7 +172,7 @@
 
       let avgSize = (docSize / sampleSize)|0;
       if (avgSize > bsonMax * 0.95)
-         console.log(`\nWarning: The average document size of ${avgSize} bytes approaches or exceeeds the BSON max size of ${bsonMax} bytes`);
+         console.log(`\n[Warning] The average document size of ${avgSize} bytes approaches or exceeeds the BSON max size of ${bsonMax} bytes`);
       console.log(`\nSampling ${sampleSize} document${(sampleSize == 1) ? '' : 's'} each with BSON size averaging ${avgSize} byte${(avgSize == 1) ? '' : 's'}`);
       let batchSize = (() => {
          let sampledSize = (bsonMax * 0.95 / avgSize)|0;
@@ -182,7 +188,8 @@
       }
 
       // (re)create the namespace
-      dropNS(dropNamespace, dbName, collName, compressor, collation, tsOptions);
+      dropNS(dropNamespace, dbName, collName);
+      createNS(dbName, collName, compressor, expireAfterSeconds, collation, writeConcern, tsOptions);
 
       // set collection/index build order, generate and bulk write the documents, create indexes
       console.log(`\nIndex build order preference "${indexPrefs.order}"`);
@@ -476,76 +483,89 @@
       return fuzzer.schemas[$getRandomRatioInt(fuzzer.ratios)];
    }
 
-   function dropNS(dropNamespace = false, dbName = false, collName = false,
-                   compressor = 'best', collation = { "locale": "simple" },
-                   tsOptions) {
+   function dropNS(dropNamespace = false, dbName = false, collName = false) {
       /*
-       *  drop and recreate target namespace
+       *  drop target namespace
        */
-      let msg = '';
-      switch(compressor.toLowerCase()) {
-         case 'best':
-            compressor = fCV(4.2) ? 'zstd' : 'zlib';
-            break;
-         case 'none':
-            compressor = 'none';
-            break;
-         case 'zlib':
-            compressor = 'zlib';
-            break;
-         case 'zstd':
-            if (fCV(4.2))
-               compressor = 'zstd';
-            else {
-               compressor = 'zlib';
-               msg = '("zstd" requires mongod v4.2+)';
-            }
-            break;
-         default:
-            compressor = 'snappy';
-      }
       if (dropNamespace && !!dbName && !!collName) {
          console.log(`\nDropping namespace "${dbName}.${collName}"\n`);
-         namespace.drop();
-         createNS(dbName, collName, msg, compressor,
-                  expireAfterSeconds, collation, tsOptions
-         );
+         db.getSiblingDB(dbName).getCollection(collName).drop();
       } else if (!dropNamespace && !namespace.exists()) {
          console.log(`\nNominated namespace "${dbName}.${collName}" does not exist\n`);
-         createNS(dbName, collName, msg, compressor,
-                  expireAfterSeconds, collation, tsOptions
-         );
       } else
-         console.log(`\nPreserving existing namespace "${dbName}.${collName}"`)
+         console.log(`\nPreserving existing namespace "${dbName}.${collName}"`);
 
       return;
    }
 
    function createNS(
-         dbName = false, collName = false, msg = '',
+         dbName = false, collName = false,
          compressor = 'best', expireAfterSeconds = 0,
-         collation = { "locale": "simple" },
+         collation = { "locale": "simple" }, writeConcern,
          tsOptions = {
             "timeField": "timestamp",
             "metaField": "data", "granularity": "hours"
          }
       ) {
-      console.log(`Creating namespace "${dbName}.${collName}"\n\twith block compression:\t"${compressor}" ${msg}\n\tand collation locale:\t"${collation.locale}"`);
-      let options = {
-         "storageEngine": {
-            "wiredTiger": {
-               "configString": `block_compressor=${compressor}`
-         } },
-         "collation": collation,
-         "writeConcern": writeConcern
-      };
-      if (timeSeries && fCV(5.0) && !isAtlasPlatform('serverless')) {
-         options.timeSeries = tsOptions;
-         options.expireAfterSeconds = expireAfterSeconds;
-         console.log(`\tand time series options: ${JSON.stringify(options, null, '\t')}`);
+      let msg = '';
+      if (db.getSiblingDB(dbName).getCollection(collName).exists()) {
+         console.log(`\nNamespace "${dbName}.${collName}" exists`)
+      } else {
+         switch(compressor.toLowerCase()) {
+            case 'best':
+               compressor = fCV(4.2) ? 'zstd' : 'zlib';
+               break;
+            case 'none':
+               compressor = 'none';
+               break;
+            case 'zlib':
+               compressor = 'zlib';
+               break;
+            case 'zstd':
+               if (fCV(4.2))
+                  compressor = 'zstd';
+               else {
+                  compressor = 'zlib';
+                  msg = '("zstd" requires mongod v4.2+)';
+               }
+               break;
+            default:
+               compressor = 'snappy';
+         }
+         console.log(`Creating namespace "${dbName}.${collName}"\n\twith block compression:\t"${compressor}" ${msg}\n\tand collation locale:\t"${collation.locale}"`);
+         let options = {
+            "storageEngine": {
+               "wiredTiger": {
+                  "configString": `block_compressor=${compressor}`
+            } },
+            "collation": collation,
+            "writeConcern": writeConcern,
+            // "capped": capped,
+            // fCV(5.0) && "timeseries": {                  // Added in MongoDB 5.0
+            //    "timeField": <string>,        // required for time series collections
+            //    "metaField": <string>,
+            //    "granularity": <string>
+            // },
+            // "expireAfterSeconds": <number>,
+            // fCV(5.3) && "clusteredIndex": {},
+            // fCV(6.0) && "changeStreamPreAndPostImages": {},
+            // "size": <number>,
+            // "max": <number>,
+            // "validator": {},
+            // "validationLevel": <string>,
+            // "validationAction": <string>,
+            // "indexOptionDefaults": {},
+            // "viewOn": <string>,
+            // "pipeline": []
+         };
+         if (timeSeries && fCV(5.0) && !isAtlasPlatform('serverless')) {
+            options.timeSeries = tsOptions;
+            options.expireAfterSeconds = expireAfterSeconds;
+            console.log(`\tand time series options: ${JSON.stringify(options, null, '\t')}`);
+         }
+         try { db.getSiblingDB(dbName).createCollection(collName, options); }
+         catch(e) { console.log(`\nNamespace creation failed: ${e}`); }
       }
-      try { db.getSiblingDB(dbName).createCollection(collName, options); }
-      catch(e) { console.log(`\nNamespace creation failed: ${e}`); }
 
       return;
    }
@@ -616,7 +636,6 @@
          if (i == totalBatches - 1 && residual > 0) batchSize = residual;
          let bulk = namespace.initializeUnorderedBulkOp();
          for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument());
-
          try {
             let result = bulk.execute(writeConcern);
             let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
@@ -625,7 +644,6 @@
             console.log(`Generation failed with: ${e}`);
          }
       }
-
       console.log('Generation completed.');
 
       return;
