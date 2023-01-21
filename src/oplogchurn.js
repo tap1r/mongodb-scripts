@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.3.3"
+ *  Version: "0.3.4"
  *  Description: measure oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -20,7 +20,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.3.3" };
+   let __script = { "name": "oplogchurn.js", "version": "0.3.4" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -40,6 +40,7 @@
       load(__lib.path);
    }
    __comment += ` with ${__lib.name} v${__lib.version}`;
+   console.clear();
    console.log(__comment);
 
    /*
