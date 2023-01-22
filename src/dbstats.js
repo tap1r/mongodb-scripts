@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.3.7"
+ *  Version: "0.3.8"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.3.7" },
+   let __script = { "name": "dbstats.js", "version": "0.3.8" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -73,13 +73,14 @@
       dbPath.init();
       // db.getMongo().getDBNames().map(async dbName => {
       db.getMongo().getDBNames().map(dbName => {
-         let dbStats = db.getSiblingDB(dbName).stats();
+         let dbStats = db.getSiblingDB(dbName).stats({ "freeStorage": 1, "scale": 1 });
          let database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, '', dbStats.indexSize);
          database.init();
          printDbHeader(database.name);
          let collections = db.getSiblingDB(dbName).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
-               "name": /^((?!system\.(keys|preimages|indexBuilds|views)).)+$/
+               // "name": /^((?!system\.(keys|preimages|indexBuilds|views)).)+$/
+               "name": /(?:^(?!system\..+$).+)/
             },
             true,
             true
