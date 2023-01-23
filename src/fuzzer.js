@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.5.2"
+ *  Version: "0.5.3"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.5.2" };
+   let __script = { "name": "fuzzer.js", "version": "0.5.3" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -103,7 +103,7 @@
          "numInitialChunksPerShard": 4,
          // "collation": collation,    // inherit from collection options
          // "timeseries": tsOptions,   // not required after initial collection creation
-         // "reShard": true
+         "reShard": true
       };
    let indexes = [ /* index definitions */
          { "date": -1 },
@@ -210,6 +210,24 @@
             console.log(`Unsupported index build preference "${indexPrefs.order}": defaulting to "post"`);
             genBulk(batchSize);
             buildIndexes();
+      }
+
+      if (isSharded() && (shardedOptions.reShard == true)) {
+         console.log(`Resharding enabled...`);
+         try {
+            db.adminCommand({
+               "reshardCollection": `${dbName}.${collName}`,
+               "key": shardedOptions.key,
+               "unique": shardedOptions.unique,
+               "numInitialChunks": shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').count(),
+               "collation": collation,
+            });
+            // writeConcernMajorityJournalDefault must be true.
+            // Resharding a collection that has a uniqueness constraint is not supported.
+            // The new shard key cannot have a uniqueness constraint.
+            console.log(`Backgrounding resharding process.`);
+         }
+         catch(e) { console.log(`\nResharding namespace failed: ${e}`); }
       }
 
       return console.log('\n Fuzzing completed!\n');
@@ -512,14 +530,12 @@
             "unique": false,
             "numInitialChunksPerShard": 4,
             // "timeseries": {},
-            // "reshard": false
+            "reshard": false
          },
          msg = ''
       ) {
       if (db.getSiblingDB(dbName).getCollection(collName).exists()) {
          console.log(`\nNamespace "${dbName}.${collName}" exists`);
-         // Test for isSharded && reshard: true
-         // sh.reshardCollection(namespace, key, unique, options)
       } else {
          switch(compressor.toLowerCase()) {
             case 'best':
