@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.5.0"
+ *  Version: "0.5.1"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.5.0" };
+   let __script = { "name": "fuzzer.js", "version": "0.5.1" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -100,7 +100,7 @@
       shardedOptions = {  /* sharding feature TBA */
          "key": { "string": "hashed" },
          "unique": false,
-         "numInitialChunksPerShard": 2,
+         "numInitialChunksPerShard": 4,
          // "collation": collation,    // inherit from collection options
          // "timeseries": tsOptions,   // not required after initial collection creation
          // "reShard": true
@@ -510,7 +510,7 @@
          shardedOptions = {
             "key": {},
             "unique": false,
-            "numInitialChunksPerShard": 2,
+            "numInitialChunksPerShard": 4,
             // "timeseries": {},
             // "reshard": false
          },
@@ -580,13 +580,14 @@
          if (sharding && isSharded()) {
             console.log(`Sharding namespace with options: ${JSON.stringify(shardedOptions)}`);
             try {
+               let { shards } = db.adminCommand({ "listShards": 1 });
                fCV(6.0) || sh.enableSharding(dbName);
                sh.shardCollection(
                   `${dbName}.${collName}`,
                   shardedOptions.key,
                   shardedOptions.unique,
                   {  // numInitialChunks = numInitialChunksPerShard * #shard
-                     "numInitialChunks": shardedOptions.numInitialChunksPerShard,
+                     "numInitialChunks": shardedOptions.numInitialChunksPerShard * shards.length,
                      "collation": collation,
                      // "timeseries": {}
                   }
