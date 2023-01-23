@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.3.8"
+ *  Version: "0.3.9"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.3.8" },
+   let __script = { "name": "dbstats.js", "version": "0.3.9" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -74,12 +74,15 @@
       // db.getMongo().getDBNames().map(async dbName => {
       db.getMongo().getDBNames().map(dbName => {
          let dbStats = db.getSiblingDB(dbName).stats({ "freeStorage": 1, "scale": 1 });
+         if (typeof dbStats.raw !== 'undefined') {
+            dbStats.db = dbStats.raw[db.getSiblingDB('config').getCollection('shards').findOne().host].db;
+         }
          let database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, '', dbStats.indexSize);
          database.init();
          printDbHeader(database.name);
          let collections = db.getSiblingDB(dbName).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
-               // "name": /^((?!system\.(keys|preimages|indexBuilds|views)).)+$/
+               // "name": /^((?!system\.(keys|preimages|indexBuilds|views|js|profile|users|roles)).)+$/
                "name": /(?:^(?!system\..+$).+)/
             },
             true,
@@ -89,11 +92,12 @@
          // collections.map(async collInfo => {
          collections.map(({ 'name': collName }) => {
             let collStats = db.getSiblingDB(dbName).getCollection(collName).stats({ "scale": 1, "indexDetails": true });
+            let compressor = collStats.wiredTiger.creationString.match(/block_compressor=(\w+)/);
             let collection = new MetaStats(
                collName, collStats.size, collStats.wiredTiger['block-manager']['file size in bytes'],
                collStats.count, collStats.wiredTiger['block-manager']['file bytes available for reuse'],
                // collStats.wiredTiger.creationString.match(/block_compressor=(?<compressor>\w+)/)?.groups?.compressor
-               collStats.wiredTiger.creationString.match(/block_compressor=(\w+)/)[1]
+               (compressor != null) ? compressor[1] : 'none'
             );
             collection.init();
             Object.keys(collStats.indexDetails).map(indexName => {
@@ -148,7 +152,7 @@
       console.log(`Collections:\t${collTotal}`.padEnd(rowHeader));
    }
 
-   function printCollection({ name, dataSize, compression, compressor, storageSize, blocksFree, objects }) {
+   function printCollection({ name, dataSize, compression, compressor = 'none', storageSize, blocksFree, objects }) {
       /*
        *  Print collection level stats
        */
