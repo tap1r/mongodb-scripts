@@ -1,19 +1,19 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.4.21"
+ *  Version: "0.5.0"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "[mongo|mongosh] [connection options] --quiet fuzzer.js"
 
-(() => {
+(async() => {
    /*
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.4.21" };
+   let __script = { "name": "fuzzer.js", "version": "0.5.0" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -95,12 +95,14 @@
          },
          "schemas": [],
          "ratios": [7, 2, 1]
-      },
-      sharding = true,
+      };
+   let sharding = true,
       shardedOptions = {  /* sharding feature TBA */
          "key": { "string": "hashed" },
-         "numInitialChunksPerShard": 2, // = n * numInitialChunks * noShards
-         "collation": collation,
+         "unique": false,
+         "numInitialChunksPerShard": 2,
+         // "collation": collation,    // inherit from collection options
+         // "timeseries": tsOptions,   // not required after initial collection creation
          // "reShard": true
       };
    let indexes = [ /* index definitions */
@@ -189,7 +191,7 @@
 
       // (re)create the namespace
       dropNS(dropNamespace, dbName, collName);
-      createNS(dbName, collName, compressor, expireAfterSeconds, collation, writeConcern, tsOptions);
+      createNS(dbName, collName, compressor, expireAfterSeconds, collation, writeConcern, tsOptions, sharding, shardedOptions);
 
       // set collection/index build order, generate and bulk write the documents, create indexes
       console.log(`\nIndex build order preference "${indexPrefs.order}"`);
@@ -209,9 +211,8 @@
             genBulk(batchSize);
             buildIndexes();
       }
-      console.log('\n Fuzzing completed!\n');
 
-      return;
+      return console.log('\n Fuzzing completed!\n');
    }
 
    function genDocument() {
@@ -247,10 +248,9 @@
             oid = new ObjectId();
             break;
          default: // the 'ts' option
-            oid = new ObjectId(
+            oid = new ObjectId(  // employ native mongosh method
                Math.floor(timestamp + secondsOffset).toString(16) +
                $genRandomHex(16)
-               // employ native mongosh method
             );
       }
       let date = new Date(now + (secondsOffset * 1000));
@@ -483,19 +483,19 @@
       return fuzzer.schemas[$getRandomRatioInt(fuzzer.ratios)];
    }
 
-   function dropNS(dropNamespace = false, dbName = false, collName = false) {
+   function dropNS(dropNamespace = false, dbName = false, collName = false, msg = '') {
       /*
        *  drop target namespace
        */
       if (dropNamespace && !!dbName && !!collName) {
-         console.log(`\nDropping namespace "${dbName}.${collName}"\n`);
+         msg = `\nDropping namespace "${dbName}.${collName}"\n`;
          db.getSiblingDB(dbName).getCollection(collName).drop();
       } else if (!dropNamespace && !namespace.exists()) {
-         console.log(`\nNominated namespace "${dbName}.${collName}" does not exist\n`);
+         msg = `\nNominated namespace "${dbName}.${collName}" does not exist\n`;
       } else
-         console.log(`\nPreserving existing namespace "${dbName}.${collName}"`);
+         msg = `\nPreserving existing namespace "${dbName}.${collName}"`;
 
-      return;
+      return console.log(msg);
    }
 
    function createNS(
@@ -505,11 +505,21 @@
          tsOptions = {
             "timeField": "timestamp",
             "metaField": "data", "granularity": "hours"
-         }
+         },
+         sharding = false,
+         shardedOptions = {
+            "key": {},
+            "unique": false,
+            "numInitialChunksPerShard": 2,
+            // "timeseries": {},
+            // "reshard": false
+         },
+         msg = ''
       ) {
-      let msg = '';
       if (db.getSiblingDB(dbName).getCollection(collName).exists()) {
-         console.log(`\nNamespace "${dbName}.${collName}" exists`)
+         console.log(`\nNamespace "${dbName}.${collName}" exists`);
+         // Test for isSharded && reshard: true
+         // sh.reshardCollection(namespace, key, unique, options)
       } else {
          switch(compressor.toLowerCase()) {
             case 'best':
@@ -526,7 +536,7 @@
                   compressor = 'zstd';
                else {
                   compressor = 'zlib';
-                  msg = '("zstd" requires mongod v4.2+)';
+                  msg = '("zstd" requires mongod fCV 4.2)';
                }
                break;
             default:
@@ -563,8 +573,30 @@
             options.expireAfterSeconds = expireAfterSeconds;
             console.log(`\tand time series options: ${JSON.stringify(options, null, '\t')}`);
          }
+
          try { db.getSiblingDB(dbName).createCollection(collName, options); }
          catch(e) { console.log(`\nNamespace creation failed: ${e}`); }
+         
+         if (sharding && isSharded()) {
+            console.log(`Sharding namespace with options: ${JSON.stringify(shardedOptions)}`);
+            try {
+               fCV(6.0) || sh.enableSharding(dbName);
+               sh.shardCollection(
+                  `${dbName}.${collName}`,
+                  shardedOptions.key,
+                  shardedOptions.unique,
+                  {  // numInitialChunks = numInitialChunksPerShard * #shard
+                     "numInitialChunks": shardedOptions.numInitialChunksPerShard,
+                     "collation": collation,
+                     // "timeseries": {}
+                  }
+               );
+               sh.enableBalancing(`${dbName}.${collName}`);
+               // fCV(7.0) || sh.enableAutoSplit(`${dbName}.${collName}`);
+               sh.startBalancer();
+            }
+            catch(e) { console.log(`\nSharding namespace failed: ${e}`); }
+         }
       }
 
       return;
@@ -644,9 +676,8 @@
             console.log(`Generation failed with: ${e}`);
          }
       }
-      console.log('Generation completed.');
 
-      return;
+      return console.log('Generation completed.');
    }
 
    main();
