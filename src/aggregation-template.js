@@ -32,7 +32,7 @@
 
    db.getMongo().setReadPref(readPref);
    namespace.aggregate(pipeline, options).forEach(printjson);
-})()
+})();
 
 (() => {
    /*
@@ -65,7 +65,7 @@
 
    db.getMongo().setReadPref(readPref);
    namespace.explain(explainPlan).aggregate(pipeline, options);
-})()
+})();
 
 (() => {
    /*
@@ -89,7 +89,7 @@
 
    db.getMongo().setReadPref(readPref);
    namespace.aggregate(pipeline, options).forEach(printjson);
-})()
+})();
 
 (() => {
    /*
@@ -120,4 +120,4 @@
       ];
 
    db.getSiblingDB('admin').aggregate(pipeline, options).forEach(printjson);
-})()
+})();
