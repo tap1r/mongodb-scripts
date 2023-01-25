@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.5.4"
+ *  Version: "0.5.5"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.5.4" };
+   let __script = { "name": "fuzzer.js", "version": "0.5.5" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -84,23 +84,26 @@
          "offset": -300,             // date offset in days from now() (negative = past, positive = future)
          "interval": 7,              // date interval in days
          "distribution": "uniform",  // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
-         "polymorphic": { /* experimental */
-            "enabled": false,
+         // "polymorphic": { /* experimental */
+            // "enabled": false,
             // "varyTypes": false,     // fuzz types
             // "nests": 0,             // nested subdocs
             // "entropy": 100,         // 0 - 100%
             // "cardinality": 1,       // ratio:1
             // "sparsity": 0,          // 0 - 100%
             // "weighting": 50         // 0 - 100%
-         },
+         // },
          "schemas": [],
          "ratios": [7, 2, 1]
       };
    let sharding = true,
-      shardedOptions = {  /* sharding feature TBA */
-         "key": { "string": "hashed" },
+      shardedOptions = {
+         "key": {
+            "string": "hashed"
+            // "date": 1
+         },
          "unique": false,
-         "numInitialChunksPerShard": 4,
+         "numInitialChunksPerShard": 1,
          // "collation": collation,    // inherit from collection options
          // "timeseries": tsOptions,   // not required after initial collection creation
          "reShard": true
@@ -161,7 +164,7 @@
    fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
    sampleSize *= sampleSize;
 
-   function main() {
+   async function main() {
       /*
        *  main
        */
@@ -182,7 +185,7 @@
          return (1000 < sampledSize) ? 1000 : sampledSize;
       })();
       console.log(`Estimated optimal capacity of ${batchSize} document${(batchSize == 1) ? '' : 's'} per batch`);
-      if (totalDocs < batchSize)
+      if (totalDocs <= batchSize)
          batchSize = totalDocs;
       else {
          totalBatches += (totalDocs / batchSize)|0;
@@ -213,21 +216,93 @@
       }
 
       if (isSharded() && (shardedOptions.reShard == true)) {
-         console.log(`Resharding enabled...`);
-         try {
+         console.log(`Background resharding activated...`);
+         let resharding = new Promise((resolve, reject) => {
+            let msg = '';
+            let numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
             db.adminCommand({
                "reshardCollection": `${dbName}.${collName}`,
+               // The new shard key cannot have a uniqueness constraint.
                "key": shardedOptions.key,
+               // Resharding a collection that has a uniqueness constraint is not supported.
                "unique": shardedOptions.unique,
-               "numInitialChunks": shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').count(),
-               "collation": collation,
+               "numInitialChunks": numInitialChunks,
+               "collation": collation
+               // writeConcernMajorityJournalDefault must be true.
             });
-            // writeConcernMajorityJournalDefault must be true.
-            // Resharding a collection that has a uniqueness constraint is not supported.
-            // The new shard key cannot have a uniqueness constraint.
-            console.log(`Backgrounding resharding process.`);
+            resolve('\nResharding complete.\n');
+            reject(new Error(msg));
+         });
+         let rebalancingOps = () => {
+            return db.getSiblingDB('admin').aggregate([
+               { "$currentOp": {} },
+               { "$match": {
+                  "type": "op",
+                  "originatingCommand.reshardCollection": `${dbName}.${collName}`
+               } },
+               { "$sort": { "shard": 1 } },
+               { "$set": {
+                  "migration": {
+                     "$first": {
+                        "$regexFindAll": {
+                           "input": "$desc",
+                           "regex": /^(ReshardingDonorService|ReshardingRecipientService) ([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})$/
+               } } } } },
+               { "$set": {
+                  "migrationService": { "$first": "$migration.captures" },
+                  "migrationId": { "$last": "$migration.captures" }
+               } },
+               { "$group": {
+                  "_id": {
+                     "migrationId": "$migrationId",
+                     "namespace": "$ns"
+                  },
+                  "shards": {
+                     "$push": {
+                        "shard": "$shard",
+                        "migrationService": "$migrationService",
+                        "opStatus": "$opStatus",
+                        "recipientState": "$recipientState",
+                        "donorState": "$donorState",
+                        "approxDocumentsToCopy":{ "$ifNull": [{ "$toInt": "$approxDocumentsToCopy" }, "$$REMOVE"] },
+                        "documentsCopied": { "$ifNull": [{ "$toInt": "$documentsCopied" }, "$$REMOVE"] },
+                        "approxBytesToCopy": { "$ifNull": [{ "$toInt": "$approxBytesToCopy" }, "$$REMOVE"] },
+                        "bytesCopied": { "$ifNull": [{ "$toInt": "$bytesCopied" }, "$$REMOVE"] },
+                        "totalOperationTimeElapsedSecs": { "$toInt": "$totalOperationTimeElapsedSecs" },
+                        "remainingOperationTimeEstimatedSecs": { "$ifNull": [{ "$toInt": "$remainingOperationTimeEstimatedSecs" }, "$$REMOVE"] }
+               } } } },
+               { "$set": {
+                  "migrationId": "$_id.migrationId",
+                  "namespace": "$_id.namespace",
+               } },
+               { "$set": {
+                  "donors": {
+                     "$filter": {
+                        "input": "$shards",
+                        "as": "shard",
+                        "cond": { "$eq": ["$$shard.migrationService", "ReshardingDonorService"] }
+               } } } },
+               { "$set": {
+                  "recipients": {
+                     "$filter": {
+                        "input": "$shards",
+                        "as": "shard",
+                        "cond": { "$eq": ["$$shard.migrationService", "ReshardingRecipientService"] }
+               } } } },
+               { "$unset": ["_id", "shards"] }
+            ],
+            { "comment": "Monitoring resharding progress by fuzzer.js" }).toArray();
          }
-         catch(e) { console.log(`\nResharding namespace failed: ${e}`); }
+         do {
+            console.clear();
+            console.log(`\nMonitoring resharding operations:\n`);
+            console.log(printjson(...rebalancingOps()));
+            sleep(500);
+         } while (rebalancingOps().length > 0);
+         resharding.then(
+            result => console.log(result),
+            error => console.log(error)
+         );
       }
 
       return console.log('\n Fuzzing completed!\n');
@@ -528,7 +603,7 @@
          shardedOptions = {
             "key": {},
             "unique": false,
-            "numInitialChunksPerShard": 4,
+            "numInitialChunksPerShard": 1,
             // "timeseries": {},
             "reshard": false
          },
@@ -593,19 +668,18 @@
 
          try { db.getSiblingDB(dbName).createCollection(collName, options); }
          catch(e) { console.log(`\nNamespace creation failed: ${e}`); }
-         
+
          if (sharding && isSharded()) {
             console.log(`Sharding namespace with options: ${JSON.stringify(shardedOptions)}`);
+            let numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
             try {
-               // let { shards } = db.adminCommand({ "listShards": 1 });
                fCV(6.0) || sh.enableSharding(dbName);
                sh.shardCollection(
                   `${dbName}.${collName}`,
                   shardedOptions.key,
                   shardedOptions.unique,
-                  {  // numInitialChunks = numInitialChunksPerShard * #shard
-                     // "numInitialChunks": shardedOptions.numInitialChunksPerShard * shards.length,
-                     "numInitialChunks": shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').count(),
+                  {
+                     "numInitialChunks": numInitialChunks,
                      "collation": collation,
                      // "timeseries": {}
                   }
@@ -699,7 +773,7 @@
       return console.log('Generation completed.');
    }
 
-   main();
+   await main();
 })();
 
 // EOF
