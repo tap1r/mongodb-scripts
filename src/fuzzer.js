@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.5.8"
+ *  Version: "0.5.9"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.5.8" };
+   let __script = { "name": "fuzzer.js", "version": "0.5.9" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -393,9 +393,7 @@
          "dateString": date.toISOString(),
          "timestamp": ts,
          "null": null,
-         "int32": NumberInt(
-            $getRandomIntInclusive(int32MinVal, int32MaxVal)
-         ),
+         "int32": $getRandomIntInclusive(int32MinVal, int32MaxVal),
          "int64": $NumberLong(
             $getRandomIntInclusive(int64MinVal, int64MaxVal)
          ),
@@ -412,10 +410,10 @@
          "md5": MD5($genRandomHex(32)),
          "fle": BinData(6, UUID().base64()),
          /* "columnStore": fCV(5.2)
-                         ? BinData(7, NumberInt($getRandomIntInclusive(0, Math.pow(10, 4))),
+                         ? BinData(7, $getRandomIntInclusive(0, Math.pow(10, 4)),
                            {
                               "unit": +$getRandomNumber(0, Math.pow(10, 6)).toFixed(2),
-                              "qty": NumberInt($getRandomIntInclusive(0, Math.pow(10, 4))),
+                              "qty": $getRandomIntInclusive(0, Math.pow(10, 4)),
                               "price": [
                                  +$getRandomNumber(0, Math.pow(10, 4)).toFixed(2),
                                  $genRandomCurrency()
@@ -439,7 +437,7 @@
          ][$getRandomRatioInt([70, 20, 10])],
          "granularity": "hours",
          "unit": +$getRandomNumber(0, Math.pow(10, 6)).toFixed(2),
-         "qty": NumberInt($getRandomIntInclusive(0, Math.pow(10, 4))),
+         "qty": $getRandomIntInclusive(0, Math.pow(10, 4)),
          "price": [
             +$getRandomNumber(0, Math.pow(10, 4)).toFixed(2),
             $genRandomCurrency()
