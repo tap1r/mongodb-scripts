@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.5.9"
+ *  Version: "0.5.10"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.5.9" };
+   let __script = { "name": "fuzzer.js", "version": "0.5.10" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -402,7 +402,7 @@
             Math.pow(2, 12)
          ),
          "decimal128": $NumberDecimal(
-            $getRandomNumber(decimal128MinVal, decimal128MaxVal)
+            $getRandomNumber(dec128MinVal, dec128MaxVal)
          ),
          "regex": $getRandomRegex(),
          "bin": BinData(0, UUID().base64()),
