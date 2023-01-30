@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.5.6"
+ *  Version: "0.5.7"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.5.6" };
+   let __script = { "name": "fuzzer.js", "version": "0.5.7" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -394,23 +394,17 @@
          "timestamp": ts,
          "null": null,
          "int32": NumberInt(
-            $getRandomIntInclusive(
-               -Math.pow(2, 31),
-               Math.pow(2, 31) - 1)
+            $getRandomIntInclusive(int32MinVal, int32MaxVal)
          ),
          "int64": $NumberLong(
-            $getRandomIntInclusive(
-               -Math.pow(2, 63),
-               Math.pow(2, 63) - 1)
+            $getRandomIntInclusive(int64MinVal, int64MaxVal)
          ),
          "double": $getRandomNumber(
             -Math.pow(2, 12),
             Math.pow(2, 12)
          ),
          "decimal128": $NumberDecimal(
-            $getRandomNumber(
-               -10 * Math.pow(2, 110),
-               10 * Math.pow(2, 110) - 1)
+            $getRandomNumber(decimal128MinVal, decimal128MaxVal)
          ),
          "regex": $getRandomRegex(),
          "bin": BinData(0, UUID().base64()),
