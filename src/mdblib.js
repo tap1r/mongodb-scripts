@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.3.8"
+ *  Version: "0.3.9"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.3.8"
+      "version": "0.3.9"
 })
 
 /*
@@ -420,6 +420,12 @@ if (typeof process !== 'undefined') {
  */
 
 const K = 273.15;
+const int32MinVal = -Math.pow(2, 31);
+const int32MaxVal = Math.pow(2, 31) - 1;
+const int64MinVal = -Math.pow(2, 63);
+const int64MaxVal = Math.pow(2, 63) - 1;
+const decimal128MinVal = -10 * Math.pow(2, 110);
+const decimal128MaxVal = 10 * Math.pow(2, 110) - 1;
 
 function $NumberLong(arg) {
    /*
@@ -446,9 +452,12 @@ function $getRandomRegex() {
    let regexes = [
       /[a-z0-9]/,
       /[a-z]/,
+      /[A-Z]/,
       /[0-9]/,
+      /[A-Z0-9]/,
       /[a-zA-Z0-9]/,
-      /[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/
+      /[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/,
+      /[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}/
    ];
 
    return regexes[$getRandomInt(0, regexes.length)];
