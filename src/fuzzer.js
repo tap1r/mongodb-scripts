@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.5.7"
+ *  Version: "0.5.8"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.5.7" };
+   let __script = { "name": "fuzzer.js", "version": "0.5.8" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -72,7 +72,7 @@
          "metaField": "data",
          "granularity": "hours"
       },
-      capped = false,
+      capped = false,                // build capped collection type
       cappedOptions = {
          "size": Math.pow(2, 27),
          "max": Math.pow(2, 27) / Math.pow(2, 12)
@@ -194,7 +194,7 @@
 
       // (re)create the namespace
       dropNS(dropNamespace, dbName, collName);
-      createNS(dbName, collName, compressor, expireAfterSeconds, collation, writeConcern, tsOptions, sharding, shardedOptions);
+      createNS(dbName, collName, compressor, expireAfterSeconds, collation, writeConcern, tsOptions, sharding, shardedOptions, capped, cappedOptions);
 
       // set collection/index build order, generate and bulk write the documents, create indexes
       console.log(`\nIndex build order preference "${indexPrefs.order}"`);
@@ -594,7 +594,8 @@
          collation = { "locale": "simple" }, writeConcern,
          tsOptions = {
             "timeField": "timestamp",
-            "metaField": "data", "granularity": "hours"
+            "metaField": "data",
+            "granularity": "hours"
          },
          sharding = false,
          shardedOptions = {
@@ -604,6 +605,7 @@
             // "timeseries": {},
             "reshard": false
          },
+         capped = false, cappedOptions = {},
          msg = ''
       ) {
       if (db.getSiblingDB(dbName).getCollection(collName).exists()) {
@@ -631,7 +633,9 @@
                msg = `("${compressor}" not recognised)`;
                compressor = 'snappy';
          }
-         console.log(`Creating namespace "${dbName}.${collName}"\n\twith block compressor:\t"${compressor}" ${msg}\n\tand collation locale:\t"${collation.locale}"`);
+         console.log(`Creating namespace "${dbName}.${collName}"`);
+         console.log(`\twith block compressor:\t"${compressor}" ${msg}`);
+         console.log(`\twith collation locale:\t"${collation.locale}"`);
          let options = {
             "storageEngine": {
                "wiredTiger": {
@@ -639,17 +643,8 @@
             } },
             "collation": collation,
             "writeConcern": writeConcern,
-            // "capped": capped,
-            // fCV(5.0) && "timeseries": {                  // Added in MongoDB 5.0
-            //    "timeField": <string>,        // required for time series collections
-            //    "metaField": <string>,
-            //    "granularity": <string>
-            // },
-            // "expireAfterSeconds": <number>,
             // fCV(5.3) && "clusteredIndex": {},
             // fCV(6.0) && "changeStreamPreAndPostImages": {},
-            // "size": <number>,
-            // "max": <number>,
             // "validator": {},
             // "validationLevel": <string>,
             // "validationAction": <string>,
@@ -657,17 +652,24 @@
             // "viewOn": <string>,
             // "pipeline": []
          };
+         if (capped) {
+            options.capped = capped
+            options.size = cappedOptions.size;
+            options.max = cappedOptions.max;
+            console.log(`\twith capped options:\t"${JSON.stringify(cappedOptions)}"`);
+         }
          if (timeSeries && fCV(5.0) && !isAtlasPlatform('serverless')) {
             options.timeSeries = tsOptions;
+            console.log(`\twith time series options: ${JSON.stringify(tsOptions)}`);
             options.expireAfterSeconds = expireAfterSeconds;
-            console.log(`\tand time series options: ${JSON.stringify(options, null, '\t')}`);
+            console.log(`\twith TTL options:\t"${expireAfterSeconds}"`);
          }
 
          try { db.getSiblingDB(dbName).createCollection(collName, options); }
          catch(e) { console.log(`\nNamespace creation failed: ${e}`); }
 
          if (sharding && isSharded()) {
-            console.log(`Sharding namespace with options: ${JSON.stringify(shardedOptions)}`);
+            console.log(`\nSharding namespace with options: ${JSON.stringify(shardedOptions)}`);
             let numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
             try {
                fCV(6.0) || sh.enableSharding(dbName);
@@ -685,7 +687,7 @@
                // fCV(7.0) || sh.enableAutoSplit(`${dbName}.${collName}`);
                sh.startBalancer();
             }
-            catch(e) { console.log(`\nSharding namespace failed: ${e}`); }
+            catch(e) { console.log(`Sharding namespace failed: ${e}`); }
          }
       }
 
