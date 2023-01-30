@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.3.10"
+ *  Version: "0.3.11"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,8 +8,8 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.3.10"
-})
+      "version": "0.3.11"
+});
 
 /*
  *  Global defaults
@@ -182,8 +182,8 @@ class MetaStats {
       this.instance = hello().me;
       this.hostname = db.hostInfo().system.hostname;
       this.proc = db.serverStatus().process;
-      this.dbPath = (db.serverStatus().process === 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : 'sharded';
-      this.shards = (db.serverStatus().process === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
+      this.dbPath = (db.serverStatus().process == 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : 'sharded';
+      this.shards = (db.serverStatus().process == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
    }
    get compression() {
       return this.dataSize / (this.storageSize - this.blocksFree - this.overhead);
@@ -311,7 +311,7 @@ function fCV(ver) { // update for shared tier compatibility
     *  Evaluate feature compatibility version
     */
    let featureVer = (ver) => {
-      return (db.serverStatus().process === 'mongod')
+      return (db.serverStatus().process == 'mongod')
            ? +db.adminCommand({
                "getParameter": 1,
                "featureCompatibilityVersion": 1
@@ -399,7 +399,6 @@ if (typeof process !== 'undefined') {
    /*
     *  mongosh wrappers
     */
-
    if (typeof Object.getPrototypeOf(UUID()).base64 === 'undefined') {
       /*
        *  Backward compatibility with UUID().base64()
@@ -424,8 +423,8 @@ const int32MinVal = -Math.pow(2, 31);
 const int32MaxVal = Math.pow(2, 31) - 1;
 const int64MinVal = -Math.pow(2, 63);
 const int64MaxVal = Math.pow(2, 63) - 1;
-const decimal128MinVal = -10 * Math.pow(2, 110);
-const decimal128MaxVal = 10 * Math.pow(2, 110) - 1;
+const dec128MinVal = -10 * Math.pow(2, 110);
+const dec128MaxVal = 10 * Math.pow(2, 110) - 1;
 
 function $NumberLong(arg) {
    /*
