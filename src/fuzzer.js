@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.5.5"
+ *  Version: "0.5.6"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.5.5" };
+   let __script = { "name": "fuzzer.js", "version": "0.5.6" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -216,11 +216,9 @@
       }
 
       if (isSharded() && (shardedOptions.reShard == true)) {
-         console.log(`Background resharding activated...`);
-         let resharding = new Promise((resolve, reject) => {
-            let msg = '';
+         let resharding = async() => {
             let numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
-            db.adminCommand({
+            await db.adminCommand({
                "reshardCollection": `${dbName}.${collName}`,
                // The new shard key cannot have a uniqueness constraint.
                "key": shardedOptions.key,
@@ -230,9 +228,7 @@
                "collation": collation
                // writeConcernMajorityJournalDefault must be true.
             });
-            resolve('\nResharding complete.\n');
-            reject(new Error(msg));
-         });
+         };
          let rebalancingOps = () => {
             return db.getSiblingDB('admin').aggregate([
                { "$currentOp": {} },
@@ -261,7 +257,7 @@
                      "$push": {
                         "shard": "$shard",
                         "migrationService": "$migrationService",
-                        "opStatus": "$opStatus",
+                        // "opStatus": "$opStatus",
                         "recipientState": "$recipientState",
                         "donorState": "$donorState",
                         "approxDocumentsToCopy":{ "$ifNull": [{ "$toInt": "$approxDocumentsToCopy" }, "$$REMOVE"] },
@@ -293,16 +289,23 @@
             ],
             { "comment": "Monitoring resharding progress by fuzzer.js" }).toArray();
          }
-         do {
-            console.clear();
-            console.log(`\nMonitoring resharding operations:\n`);
-            console.log(printjson(...rebalancingOps()));
+         console.log('\nResharding activated...');
+         if (typeof process !== 'undefined') {
+            resharding();
             sleep(500);
-         } while (rebalancingOps().length > 0);
-         resharding.then(
-            result => console.log(result),
-            error => console.log(error)
-         );
+            res = rebalancingOps();
+            while (res.length > 0) {
+               console.clear();
+               console.log(`\nMonitoring resharding operations:\n`);
+               if (res.length > 0) printjson(...res);
+               sleep(500);
+               res = rebalancingOps();
+            }
+         } else {
+            console.log(`\nMonitoring resharding (async) operations are not supported in the legacy shell\n`);
+            resharding();
+         }
+         console.log(`\nResharding complete.`);
       }
 
       return console.log('\n Fuzzing completed!\n');
