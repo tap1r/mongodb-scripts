@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.3.9"
+ *  Version: "0.3.10"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.3.9"
+      "version": "0.3.10"
 })
 
 /*
@@ -201,7 +201,7 @@ function $rand() {
       /*
        *  mongosh/nodejs detected
        */
-      return crypto.webcrypto.getRandomValues(new Uint32Array(1))[0] / (Math.pow(2, 32) - 1);
+      return crypto.webcrypto.getRandomValues(new Uint32Array(1))[0] / int32MaxVal;
       // return Math.random();
    } else {
       // default RNG
@@ -494,7 +494,7 @@ function $getRandomIntInclusive(min = 0, max = 1) {
    min = Math.ceil(min);
    max = Math.floor(max);
 
-   return ($rand() * (max - min + 1) + min)|0;
+   return NumberInt(($rand() * (max - min + 1) + min)|0);
 }
 
 function $getRandomRatioInt(ratios = [1]) {
