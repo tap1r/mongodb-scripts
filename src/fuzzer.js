@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.5.10"
+ *  Version: "0.5.11"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.5.10" };
+   let __script = { "name": "fuzzer.js", "version": "0.5.11" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -79,7 +79,7 @@
       },
       expireAfterSeconds = 0,        // TTL and time series options
       fuzzer = {  /* preferences */
-         "_id": "ts",                // ["ts"|"oid"] - timeseries OID | client generated OID
+         "id": "ts",                 // ["ts"|"oid"] - timeseries OID | client generated OID
          "range": 365.2422,          // date range in days
          "offset": -300,             // date offset in days from now() (negative = past, positive = future)
          "interval": 7,              // date interval in days
@@ -156,7 +156,7 @@
     */
 
    let namespace = db.getSiblingDB(dbName).getCollection(collName),
-      sampleSize = 9, docSize = 0;
+      sampleSize = 8, docSize = 0;
       totalBatches = 1, residual = 0,
       now = new Date().getTime(),
       timestamp = (now/1000.0)|0;
@@ -173,7 +173,7 @@
 
       // sampling synthetic documents and estimating batch size
       for (let i = 0; i < sampleSize; ++i)
-         docSize += bsonsize(genDocument());
+         docSize += bsonsize(genDocument(fuzzer, timestamp));
 
       let avgSize = (docSize / sampleSize)|0;
       if (avgSize > bsonMax * 0.95)
@@ -215,6 +215,7 @@
             buildIndexes();
       }
 
+      // redistribute chunks if required
       if (isSharded() && (shardedOptions.reShard == true)) {
          let resharding = async() => {
             let numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
@@ -311,35 +312,38 @@
       return console.log('\n Fuzzing completed!\n');
    }
 
-   function genDocument() {
+   function genDocument({
+         id = 'ts', range = 365.2422, offset = -300, interval = 7,
+         distribution = 'uniform', schemas = [], ratios = [1] } = {},
+         timestamp) {
       /*
        *  generate pseudo-random key values
        */
       let secondsOffset;
-      switch (fuzzer.distribution.toLowerCase()) {
+      switch (distribution.toLowerCase()) {
          case 'uniform':
-            secondsOffset = +($getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
+            secondsOffset = +($getRandomNumber(offset, offset + range) * 86400)|0;
             break;
          case 'normal': // genNormal(mu, sigma)
-            secondsOffset = +($genNormal(fuzzer.offset + fuzzer.range/2, fuzzer.range/2) * 86400)|0;
+            secondsOffset = +($genNormal(offset + range/2, range/2) * 86400)|0;
             break;
          case 'bimodal': // not implemented yet
-            // secondsOffset = +($getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
+            // secondsOffset = +($getRandomNumber(offset, offset + range) * 86400)|0;
             // break;
          case 'pareto': // not implemented yet
             // $genRandomInclusivePareto(min, alpha = 1.161) {}
-            // secondsOffset = +($genRandomInclusivePareto(fuzzer.offset + fuzzer.range) * 86400)|0;
+            // secondsOffset = +($genRandomInclusivePareto(offset + range) * 86400)|0;
             // break;
          case 'exponential': // not implemented yet
             // $getRandomExp();
-            // secondsOffset = +($getRandomExp(fuzzer.offset, fuzzer.offset + fuzzer.range, 128) * 86400)|0;
+            // secondsOffset = +($getRandomExp(offset, offset + range, 128) * 86400)|0;
             // break;
          default:
-            console.log(`\nUnsupported distribution type: ${fuzzer.distribution}\nDefaulting to "uniform"`);
-            secondsOffset = +($getRandomNumber(fuzzer.offset, fuzzer.offset + fuzzer.range) * 86400)|0;
+            console.log(`\nUnsupported distribution type: ${distribution}\nDefaulting to "uniform"`);
+            secondsOffset = +($getRandomNumber(offset, offset + range) * 86400)|0;
       }
       let oid;
-      switch (fuzzer._id.toLowerCase()) {
+      switch (id.toLowerCase()) {
          case 'oid':
             oid = new ObjectId();
             break;
@@ -349,12 +353,12 @@
                $genRandomHex(16)
             );
       }
-      let date = new Date(now + (secondsOffset * 1000));
+      let date = new Date(now + secondsOffset * 1000);
       let ts = (typeof process !== 'undefined') // MONGOSH-930
              ? new Timestamp({ "t": timestamp + secondsOffset, "i": 0 })
              : new Timestamp(timestamp + secondsOffset, 0);
-      fuzzer.schemas = new Array();
-      fuzzer.schemas.push({
+      schemas = new Array();
+      schemas.push({
          "_id": oid,
          "schema": "A",
          "comment": "General purpose schema shape",
@@ -423,7 +427,7 @@
          "random": +$getRandomNumber(0, totalDocs).toFixed(4),
          "symbol": $genRandomSymbol()
       });
-      fuzzer.schemas.push({
+      schemas.push({
          "_id": oid,
          "schema": "B",
          "comment": "Time series schema example",
@@ -443,7 +447,7 @@
             $genRandomCurrency()
          ]
       });
-      fuzzer.schemas.push({
+      schemas.push({
          "_id": oid,
          "schema": "C",
          "comment": "GeoJSON schema examples",
@@ -568,7 +572,7 @@
          }
       });
 
-      return fuzzer.schemas[$getRandomRatioInt(fuzzer.ratios)];
+      return schemas[$getRandomRatioInt(ratios)];
    }
 
    function dropNS(dropNamespace = false, dbName = false, collName = false, msg = '') {
@@ -757,7 +761,7 @@
       for (let i = 0; i < totalBatches; ++i) {
          if (i == totalBatches - 1 && residual > 0) batchSize = residual;
          let bulk = namespace.initializeUnorderedBulkOp();
-         for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument());
+         for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument(fuzzer, timestamp));
          try {
             let result = bulk.execute(writeConcern);
             let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
