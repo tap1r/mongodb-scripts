@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.3.11"
+ *  Version: "0.3.12"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.3.11"
+      "version": "0.3.12"
 });
 
 /*
@@ -201,7 +201,7 @@ function $rand() {
       /*
        *  mongosh/nodejs detected
        */
-      return crypto.webcrypto.getRandomValues(new Uint32Array(1))[0] / int32MaxVal;
+      return crypto.webcrypto.getRandomValues(new Uint32Array(1))[0] / Uint32MaxVal;
       // return Math.random();
    } else {
       // default RNG
@@ -421,6 +421,7 @@ if (typeof process !== 'undefined') {
 const K = 273.15;
 const int32MinVal = -Math.pow(2, 31);
 const int32MaxVal = Math.pow(2, 31) - 1;
+const Uint32MaxVal = Math.pow(2, 32) - 1;
 const int64MinVal = -Math.pow(2, 63);
 const int64MaxVal = Math.pow(2, 63) - 1;
 const dec128MinVal = -10 * Math.pow(2, 110);
