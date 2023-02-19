@@ -121,3 +121,34 @@
 
    db.getSiblingDB('admin').aggregate(pipeline, options).forEach(printjson);
 })();
+
+(() => {
+   /*
+    *    Aggregation template with $documents pipeline
+    */
+   let dbName = 'database';
+   let namespace = db.getSiblingDB(dbName);
+   let options = {
+         // "allowDiskUse": true,
+         "cursor": { "batchSize": 0 },
+         // "maxTimeMS": 0,
+         // "bypassDocumentValidation": false,
+         "readConcern": { "level": "local" },
+         // "collation": { "locale": "simple" },
+         // "hint": { "_id": 1 },
+         "comment": "My aggregation query",
+         // "let": { } // Added in MongoDB v5.0
+      },
+      pipeline = [
+         { "$documents": [
+            { "document": 1 },
+            { "document": 2 },
+            { "document": 3 }
+         ] },
+         {
+            // aggregation stage operators
+         }
+      ];
+
+   namespace.aggregate(pipeline, options).forEach(printjson);
+})();
