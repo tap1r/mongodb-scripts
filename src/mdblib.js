@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.3.13"
+ *  Version: "0.3.14"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.3.13"
+      "version": "0.3.14"
 });
 
 /*
@@ -694,7 +694,7 @@ function $genRandCardNumber(type = 'rnd', card = '') {
       { "type": "mastercard", "iin": [$range(51, 55, 1), $range(2221, 2720, 1)].flat(), "digits": 16, "weight": 25 },
       { "type": "visa", "iin": [4], "digits": 16, "weight": 50 }
    ];
-   let countryCode = $getRandomCountry()['numeric code'];
+   let countryCode = $getRandCountry()['numeric code'];
 
    if (type == 'rnd') {
       type = ['amex', 'discover', 'mastercard', 'visa'][
@@ -702,17 +702,7 @@ function $genRandCardNumber(type = 'rnd', card = '') {
       ];
    }
    card = cards.find(card => card.type == type);
-   // console.log(card);
    // Card format = BIN prefix (IIN + country code padded to 8) + PAN (pad to card length -1) + luhn check digit
-
-   // return $genLuhnNumber(
-   //    $getRandomInt(
-   //       // +(card['iin'][$getRandomIntInclusive(0, (card['iin'].length - 1))]).toString().padEnd(card['digits'] - 1, '0'),
-   //       +(card['iin'][$getRandomIntInclusive(0, (card['iin'].length - 1))]).toString().padEnd(card['digits'] - 1, '0'),
-   //       // +(card['iin'][$getRandomIntInclusive(0, (card['iin'].length - 1))] + 1).toString().padEnd(card['digits'] - 1, '0')
-   //       +(card['iin'][$getRandomIntInclusive(0, (card['iin'].length - 1))] + 1).toString().padEnd(card['digits'] - 1, '0')
-   //    ).toString()
-   // );
 
    let iin = ((card['iin'][$getRandomIntInclusive(0, (card['iin'].length - 1))]).toString() + countryCode.replace(/^0+/, '') + $getRandomInt(0, Math.pow(10, 6))).toString().padEnd(8, '0').substring(0, 8);
    let pan = ($getRandomInt(0, Math.pow(10, 7))).toString().padStart(7, '0').substring(0, 7);
@@ -729,7 +719,7 @@ function $range(start, stop, step) {
    );
 };
 
-function $getRandomCountry() {
+function $getRandCountry() {
    /*
     *  return country code
     */
