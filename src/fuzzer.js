@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.5.11"
+ *  Version: "0.5.12"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.5.11" };
+   let __script = { "name": "fuzzer.js", "version": "0.5.12" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -368,14 +368,14 @@
             "language": idiomas[
                $getRandomRatioInt([80, 0, 0, 5, 0, 3, 2])
             ],
-            "txt": (() => {
-               let lines = $getRandomIntInclusive(2, 512);
-               let string = '';
-               for (let line = 0; line < lines; ++line) {
-                  string += `${$genRandomString($getRandomIntInclusive(8, 24)) + $genRandomSymbol()}`;
-               }
-               return string;
-            })()
+            // "txt": (() => {
+            //    let lines = $getRandomIntInclusive(2, 512);
+            //    let string = '';
+            //    for (let line = 0; line < lines; ++line) {
+            //       string += `${$genRandomString($getRandomIntInclusive(8, 24)) + $genRandomSymbol()}`;
+            //    }
+            //    return string;
+            // })()
          },
          "object": {
             "oid": oid,
@@ -397,13 +397,14 @@
          "dateString": date.toISOString(),
          "timestamp": ts,
          "null": null,
-         "int32": $getRandomIntInclusive(int32MinVal, int32MaxVal),
+         "int32": $NumberInt(
+            $getRandomIntInclusive(int32MinVal, int32MaxVal)
+         ),
          "int64": $NumberLong(
             $getRandomIntInclusive(int64MinVal, int64MaxVal)
          ),
          "double": $getRandomNumber(
-            -Math.pow(2, 12),
-            Math.pow(2, 12)
+            -Math.pow(2, 12), Math.pow(2, 12)
          ),
          "decimal128": $NumberDecimal(
             $getRandomNumber(dec128MinVal, dec128MaxVal)
@@ -425,7 +426,8 @@
                            })
                          : 'requires v5.2+', */
          "random": +$getRandomNumber(0, totalDocs).toFixed(4),
-         "symbol": $genRandomSymbol()
+         "symbol": $genRandomSymbol(),
+         "credit card": $genRandCardNumber()
       });
       schemas.push({
          "_id": oid,
@@ -463,6 +465,7 @@
             'Inactive',
             null
          ][$getRandomRatioInt([80, 20, 1])],
+         "locality": $getRandCountry()['alpha-3 code'],
          "location": {   // GeoJSON Point
             "type": "Point",
             "coordinates": [
