@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.3.15"
+ *  Version: "0.3.16"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.3.15"
+      "version": "0.3.16"
 });
 
 /*
@@ -130,7 +130,7 @@ class AutoFactor {
     */
    constructor(input = Math.pow(1024, 2)) {
       if (typeof input === 'number' && input >= 0) {
-         this.scale = (Math.log2(input) / 10)|0;
+         this.scale = $floor(Math.log2(input) / 10);
          this.metric = this.metrics[this.scale];
          this.format = (input / this.metric.factor).toFixed(this.metric.precision) + this.metric.unit;
       } else {
@@ -226,6 +226,14 @@ function $rand() {
       };
       return db.getSiblingDB('admin').getCollection('any').aggregate(pipeline, options).toArray()[0].random;
    */
+}
+
+function $floor(num) {
+   /*
+    *  Choose your preferred floor operator
+    */
+   
+   return Math.floor(num);
 }
 
 function isReplSet() {
@@ -517,7 +525,7 @@ function $getRandomRatioInt(ratios = [1]) {
       }
    });
 
-   return weightedIndex[$rand() * weightedIndex.length|0];
+   return weightedIndex[$floor($rand() * weightedIndex.length)];
 }
 
 function $genRandomHex(len = 1) {
@@ -526,7 +534,7 @@ function $genRandomHex(len = 1) {
     */
    let res = '';
    for (let i = 0; i < len; ++i) {
-      res += ($rand() * 16|0).toString(16);
+      res += ($floor($rand() * 16)).toString(16);
    }
 
    return res;
@@ -539,7 +547,7 @@ function $genRandomString(len = 1) {
    let res = '';
    let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
    for (let i = 0; i < len; ++i) {
-      res += chars.charAt($rand() * chars.length|0);
+      res += chars.charAt($floor($rand() * chars.length));
    }
 
    return res;
@@ -574,7 +582,7 @@ function $genRandomSymbol() {
     */
    let symbol = '!#%&\'()+,-;=@[]^_`{}~¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ';
 
-   return symbol.charAt($rand() * symbol.length|0);
+   return symbol.charAt($floor($rand() * symbol.length));
 }
 
 function $genRandomCurrency() {
@@ -692,6 +700,23 @@ function $genLuhnNumber(input) {
    return input + checkDigit;
 }
 
+function $genIin({ iin }) {
+   /*
+    *  basic fake IIN generator
+    */
+
+   let countryCode = $getRandCountry()['numeric code'];
+   return ((iin[$getRandomIntInclusive(0, (iin.length - 1))]).toString() + countryCode.replace(/^0+/, '') + $getRandomInt(0, Math.pow(10, 6))).toString().padEnd(8, '0').substring(0, 8);
+}
+
+function $genPan() {
+   /*
+    *  basic fake PAN generator
+    */
+
+   return ($getRandomInt(0, Math.pow(10, 7))).toString().padStart(7, '0').substring(0, 7);
+}
+
 function $genRandCardNumber(type = 'rnd', card = '') {
    /*
     *  basic fake card generator
@@ -703,7 +728,6 @@ function $genRandCardNumber(type = 'rnd', card = '') {
       { "type": "mastercard", "iin": [...$range(51, 55, 1), ...$range(2221, 2720, 1)], "digits": 16, "weight": 25 },
       { "type": "visa", "iin": [4], "digits": 16, "weight": 50 }
    ];
-   let countryCode = $getRandCountry()['numeric code'];
 
    if (type == 'rnd') {
       type = ['amex', 'discover', 'mastercard', 'visa'][
@@ -713,8 +737,8 @@ function $genRandCardNumber(type = 'rnd', card = '') {
    card = cards.find(card => card.type == type);
    // Card format = BIN prefix (IIN + country code padded to 8) + PAN (pad to card length -1) + luhn check digit
 
-   let iin = ((card['iin'][$getRandomIntInclusive(0, (card['iin'].length - 1))]).toString() + countryCode.replace(/^0+/, '') + $getRandomInt(0, Math.pow(10, 6))).toString().padEnd(8, '0').substring(0, 8);
-   let pan = ($getRandomInt(0, Math.pow(10, 7))).toString().padStart(7, '0').substring(0, 7);
+   let iin = $genIin(card);
+   let pan = $genPan();
    return $genLuhnNumber(iin + pan);
 }
 
