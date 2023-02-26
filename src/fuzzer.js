@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.0" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.1" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
