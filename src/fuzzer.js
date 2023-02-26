@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.0"
+ *  Version: "0.6.1"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -159,7 +159,7 @@
       sampleSize = 8, docSize = 0;
       totalBatches = 1, residual = 0,
       now = new Date().getTime(),
-      timestamp = (now/1000.0)|0;
+      timestamp = $floor(now/1000.0);
 
    fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
    sampleSize *= sampleSize;
@@ -175,12 +175,12 @@
       for (let i = 0; i < sampleSize; ++i)
          docSize += bsonsize(genDocument(fuzzer, timestamp));
 
-      let avgSize = (docSize / sampleSize)|0;
+      let avgSize = $floor(docSize / sampleSize);
       if (avgSize > bsonMax * 0.95)
          console.log(`\n[Warning] The average document size of ${avgSize} bytes approaches or exceeeds the BSON max size of ${bsonMax} bytes`);
       console.log(`\nSampling ${sampleSize} document${(sampleSize == 1) ? '' : 's'} each with BSON size averaging ${avgSize} byte${(avgSize == 1) ? '' : 's'}`);
       let batchSize = (() => {
-         let sampledSize = (bsonMax * 0.95 / avgSize)|0;
+         let sampledSize = $floor(bsonMax * 0.95 / avgSize);
          // return (maxWriteBatchSize < sampledSize) ? maxWriteBatchSize : sampledSize;
          return (1000 < sampledSize) ? 1000 : sampledSize;
       })();
@@ -188,8 +188,8 @@
       if (totalDocs <= batchSize)
          batchSize = totalDocs;
       else {
-         totalBatches += (totalDocs / batchSize)|0;
-         residual = (totalDocs % batchSize)|0;
+         totalBatches += $floor(totalDocs / batchSize);
+         residual = $floor(totalDocs % batchSize);
       }
 
       // (re)create the namespace
@@ -322,25 +322,25 @@
       let secondsOffset;
       switch (distribution.toLowerCase()) {
          case 'uniform':
-            secondsOffset = +($getRandNum(offset, offset + range) * 86400)|0;
+            secondsOffset = +$floor($getRandNum(offset, offset + range) * 86400);
             break;
          case 'normal': // genNormal(mu, sigma)
-            secondsOffset = +($genNormal(offset + range/2, range/2) * 86400)|0;
+            secondsOffset = +$floor($genNormal(offset + range/2, range/2) * 86400);
             break;
          case 'bimodal': // not implemented yet
-            // secondsOffset = +($getRandNum(offset, offset + range) * 86400)|0;
+            // secondsOffset = +$floor($getRandNum(offset, offset + range) * 86400);
             // break;
          case 'pareto': // not implemented yet
             // $genRandIncPareto(min, alpha = 1.161) {}
-            // secondsOffset = +($genRandIncPareto(offset + range) * 86400)|0;
+            // secondsOffset = +$floor($genRandIncPareto(offset + range) * 86400);
             // break;
          case 'exponential': // not implemented yet
             // $getRandExp();
-            // secondsOffset = +($getRandExp(offset, offset + range, 128) * 86400)|0;
+            // secondsOffset = +$floor($getRandExp(offset, offset + range, 128) * 86400);
             // break;
          default:
             console.log(`\nUnsupported distribution type: ${distribution}\nDefaulting to "uniform"`);
-            secondsOffset = +($getRandNum(offset, offset + range) * 86400)|0;
+            secondsOffset = +$floor($getRandNum(offset, offset + range) * 86400);
       }
       let oid;
       switch (id.toLowerCase()) {
