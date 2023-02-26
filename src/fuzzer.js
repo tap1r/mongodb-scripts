@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.5.12"
+ *  Version: "0.6.0"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.5.12" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.0" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -42,7 +42,7 @@
 
    let dbName = 'database',           // database name
       collName = 'collection',        // collection name
-      totalDocs = $getRandomExp(3.5), // number of documents to generate per namespace
+      totalDocs = $getRandExp(3.5), // number of documents to generate per namespace
       dropNamespace = false,          // drop collection prior to generating data
       compressor = 'best',            // ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
       // compressionOptions = -1,     // [-1|0|1|2|3|4|5|6|7|8|9] compression level
@@ -322,25 +322,25 @@
       let secondsOffset;
       switch (distribution.toLowerCase()) {
          case 'uniform':
-            secondsOffset = +($getRandomNumber(offset, offset + range) * 86400)|0;
+            secondsOffset = +($getRandNum(offset, offset + range) * 86400)|0;
             break;
          case 'normal': // genNormal(mu, sigma)
             secondsOffset = +($genNormal(offset + range/2, range/2) * 86400)|0;
             break;
          case 'bimodal': // not implemented yet
-            // secondsOffset = +($getRandomNumber(offset, offset + range) * 86400)|0;
+            // secondsOffset = +($getRandNum(offset, offset + range) * 86400)|0;
             // break;
          case 'pareto': // not implemented yet
-            // $genRandomInclusivePareto(min, alpha = 1.161) {}
-            // secondsOffset = +($genRandomInclusivePareto(offset + range) * 86400)|0;
+            // $genRandIncPareto(min, alpha = 1.161) {}
+            // secondsOffset = +($genRandIncPareto(offset + range) * 86400)|0;
             // break;
          case 'exponential': // not implemented yet
-            // $getRandomExp();
-            // secondsOffset = +($getRandomExp(offset, offset + range, 128) * 86400)|0;
+            // $getRandExp();
+            // secondsOffset = +($getRandExp(offset, offset + range, 128) * 86400)|0;
             // break;
          default:
             console.log(`\nUnsupported distribution type: ${distribution}\nDefaulting to "uniform"`);
-            secondsOffset = +($getRandomNumber(offset, offset + range) * 86400)|0;
+            secondsOffset = +($getRandNum(offset, offset + range) * 86400)|0;
       }
       let oid;
       switch (id.toLowerCase()) {
@@ -350,7 +350,7 @@
          default: // the 'ts' option
             oid = new ObjectId(  // employ native mongosh method
                Math.floor(timestamp + secondsOffset).toString(16) +
-               $genRandomHex(16)
+               $genRandHex(16)
             );
       }
       let date = new Date(now + secondsOffset * 1000);
@@ -363,32 +363,32 @@
          "schema": "A",
          "comment": "General purpose schema shape",
          "language": idioma,
-         "string": $genRandomString($getRandomIntInclusive(6, 24)),  // hashed shard key
+         "string": $genRandStr($getRandIntInc(6, 24)),  // hashed shard key
          "quote": {
             "language": idiomas[
-               $getRandomRatioInt([80, 0, 0, 5, 0, 3, 2])
+               $getRandRatioInt([80, 0, 0, 5, 0, 3, 2])
             ],
             // "txt": (() => {
-            //    let lines = $getRandomIntInclusive(2, 512);
+            //    let lines = $getRandIntInc(2, 512);
             //    let string = '';
             //    for (let line = 0; line < lines; ++line) {
-            //       string += `${$genRandomString($getRandomIntInclusive(8, 24)) + $genRandomSymbol()}`;
+            //       string += `${$genRandStr($getRandIntInc(8, 24)) + $genRandSymbol()}`;
             //    }
             //    return string;
             // })()
          },
          "object": {
             "oid": oid,
-            "str": $genRandomAlpha($getRandomIntInclusive(8, 16)),
-            "num": +$getRandomNumber(
+            "str": $genRandAlpha($getRandIntInc(8, 16)),
+            "num": +$getRandNum(
                -Math.pow(2, 12),
                Math.pow(2, 12)
             ).toFixed(4),
-            "nestedArray": [$genArrayElements($getRandomIntInclusive(0, 10))]
+            "nestedArray": [$genArrayElements($getRandIntInc(0, 10))]
          },
-         "array": $genArrayElements($getRandomIntInclusive(0, 10)),
+         "array": $genArrayElements($getRandIntInc(0, 10)),
          "objectArray": [
-            { "nestedArray": $genArrayElements($getRandomIntInclusive(0, 10)) }
+            { "nestedArray": $genArrayElements($getRandIntInc(0, 10)) }
          ],
          "boolean": $bool(),
          // "code": Code('() => {}'),
@@ -398,35 +398,35 @@
          "timestamp": ts,
          "null": null,
          "int32": $NumberInt(
-            $getRandomIntInclusive(int32MinVal, int32MaxVal)
+            $getRandIntInc(int32MinVal, int32MaxVal)
          ),
          "int64": $NumberLong(
-            $getRandomIntInclusive(int64MinVal, int64MaxVal)
+            $getRandIntInc(int64MinVal, int64MaxVal)
          ),
-         "double": $getRandomNumber(
+         "double": $getRandNum(
             -Math.pow(2, 12), Math.pow(2, 12)
          ),
          "decimal128": $NumberDecimal(
-            $getRandomNumber(dec128MinVal, dec128MaxVal)
+            $getRandNum(dec128MinVal, dec128MaxVal)
          ),
-         "regex": $getRandomRegex(),
+         "regex": $getRandRegex(),
          "bin": BinData(0, UUID().base64()),
          "uuid": UUID(),
-         "md5": MD5($genRandomHex(32)),
+         "md5": MD5($genRandHex(32)),
          "fle": BinData(6, UUID().base64()),
          /* "columnStore": fCV(5.2)
-                         ? BinData(7, $getRandomIntInclusive(0, Math.pow(10, 4)),
+                         ? BinData(7, $getRandIntInc(0, Math.pow(10, 4)),
                            {
-                              "unit": +$getRandomNumber(0, Math.pow(10, 6)).toFixed(2),
-                              "qty": $getRandomIntInclusive(0, Math.pow(10, 4)),
+                              "unit": +$getRandNum(0, Math.pow(10, 6)).toFixed(2),
+                              "qty": $getRandIntInc(0, Math.pow(10, 4)),
                               "price": [
-                                 +$getRandomNumber(0, Math.pow(10, 4)).toFixed(2),
-                                 $genRandomCurrency()
+                                 +$getRandNum(0, Math.pow(10, 4)).toFixed(2),
+                                 $genRandCurrency()
                               ]
                            })
                          : 'requires v5.2+', */
-         "random": +$getRandomNumber(0, totalDocs).toFixed(4),
-         "symbol": $genRandomSymbol(),
+         "random": +$getRandNum(0, totalDocs).toFixed(4),
+         "symbol": $genRandSymbol(),
          "credit card": $genRandCardNumber()
       });
       schemas.push({
@@ -434,19 +434,19 @@
          "schema": "B",
          "comment": "Time series schema example",
          "language": idioma,
-         "string": $genRandomString($getRandomIntInclusive(6, 24)),  // hashed shard key
+         "string": $genRandStr($getRandIntInc(6, 24)),  // hashed shard key
          "timeField": date,
          "metaField": [
             'Series 1',
             'Series 2',
             'Series 3'
-         ][$getRandomRatioInt([70, 20, 10])],
+         ][$getRandRatioInt([70, 20, 10])],
          "granularity": "hours",
-         "unit": +$getRandomNumber(0, Math.pow(10, 6)).toFixed(2),
-         "qty": $getRandomIntInclusive(0, Math.pow(10, 4)),
+         "unit": +$getRandNum(0, Math.pow(10, 6)).toFixed(2),
+         "qty": $getRandIntInc(0, Math.pow(10, 4)),
          "price": [
-            +$getRandomNumber(0, Math.pow(10, 4)).toFixed(2),
-            $genRandomCurrency()
+            +$getRandNum(0, Math.pow(10, 4)).toFixed(2),
+            $genRandCurrency()
          ]
       });
       schemas.push({
@@ -454,32 +454,32 @@
          "schema": "C",
          "comment": "GeoJSON schema examples",
          "language": idioma,
-         "string": $genRandomString($getRandomIntInclusive(6, 24)),  // hashed shard key
+         "string": $genRandStr($getRandIntInc(6, 24)),  // hashed shard key
          "temperature": [
             +$genNormal(15, 10).toFixed(1),
-            ['K', '°F', '°C'][$getRandomIntInclusive(0, 2)]
+            ['K', '°F', '°C'][$getRandIntInc(0, 2)]
          ],
          "dB": +$genNormal(20, 10).toFixed(3),
          "status": [
             'Active',
             'Inactive',
             null
-         ][$getRandomRatioInt([80, 20, 1])],
+         ][$getRandRatioInt([80, 20, 1])],
          "locality": $getRandCountry()['alpha-3 code'],
          "location": {   // GeoJSON Point
             "type": "Point",
             "coordinates": [
-               +$getRandomNumber(-180, 180).toFixed(4),
-               +$getRandomNumber(-90, 90).toFixed(4)
+               +$getRandNum(-180, 180).toFixed(4),
+               +$getRandNum(-90, 90).toFixed(4)
          ] },
          "lineString": { // GeoJSON LineString
             "type": "LineString",
             "coordinates": [[
-                  +$getRandomNumber(-180, 180).toFixed(4),
-                  +$getRandomNumber(-90, 90).toFixed(4)
+                  +$getRandNum(-180, 180).toFixed(4),
+                  +$getRandNum(-90, 90).toFixed(4)
                ],[
-                  +$getRandomNumber(-180, 180).toFixed(4),
-                  +$getRandomNumber(-90, 90).toFixed(4)
+                  +$getRandNum(-180, 180).toFixed(4),
+                  +$getRandNum(-90, 90).toFixed(4)
             ]]
          },
          "polygon": {    // polygon with a single ring
@@ -575,7 +575,7 @@
          }
       });
 
-      return schemas[$getRandomRatioInt(ratios)];
+      return schemas[$getRandRatioInt(ratios)];
    }
 
    function dropNS(dropNamespace = false, dbName = false, collName = false, msg = '') {
