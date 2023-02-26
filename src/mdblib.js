@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.3.16"
+ *  Version: "0.4.0"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.3.16"
+      "version": "0.4.0"
 });
 
 /*
@@ -462,7 +462,7 @@ function $NumberInt(arg) {
         : NumberInt(arg);
 }
 
-function $getRandomRegex() {
+function $getRandRegex() {
    /*
     *  generate random regex
     */
@@ -477,24 +477,24 @@ function $getRandomRegex() {
       /[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}/
    ];
 
-   return regexes[$getRandomInt(0, regexes.length)];
+   return regexes[$getRandInt(0, regexes.length)];
 }
 
-function $getRandomNumber(min = 0, max = 1) {
+function $getRandNum(min = 0, max = 1) {
    /*
     *  generate random number
     */
    return $rand() * (max - min) + min;
 }
 
-function $getRandomExp(exponent = 0) {
+function $getRandExp(exponent = 0) {
    /*
     *  generate random exponential number
     */
-   return Math.ceil($getRandomNumber(0, 9) * Math.pow(10, exponent));
+   return Math.ceil($getRandNum(0, 9) * Math.pow(10, exponent));
 }
 
-function $getRandomInt(min = 0, max = 1) {
+function $getRandInt(min = 0, max = 1) {
    /*
     *  generate random integer
     */
@@ -504,7 +504,7 @@ function $getRandomInt(min = 0, max = 1) {
    return Math.floor(($rand() * (max - min) + min));
 }
 
-function $getRandomIntInclusive(min = 0, max = 1) {
+function $getRandIntInc(min = 0, max = 1) {
    /*
     *  generate random integer inclusive of the maximum
     */
@@ -514,7 +514,7 @@ function $getRandomIntInclusive(min = 0, max = 1) {
    return Math.floor($rand() * (max - min + 1) + min);
 }
 
-function $getRandomRatioInt(ratios = [1]) {
+function $getRandRatioInt(ratios = [1]) {
    /*
     *  generate ratioed random integer
     */
@@ -528,7 +528,7 @@ function $getRandomRatioInt(ratios = [1]) {
    return weightedIndex[$floor($rand() * weightedIndex.length)];
 }
 
-function $genRandomHex(len = 1) {
+function $genRandHex(len = 1) {
    /*
     *  generate random hexadecimal string
     */
@@ -540,7 +540,7 @@ function $genRandomHex(len = 1) {
    return res;
 }
 
-function $genRandomString(len = 1) {
+function $genRandStr(len = 1) {
    /*
     *  generate random alpha-numeric string
     */
@@ -553,7 +553,7 @@ function $genRandomString(len = 1) {
    return res;
 }
 
-function $genRandomWord() {
+function $genRandWord() {
    /*
     *  generate random word from a dictionary
     */
@@ -563,20 +563,20 @@ function $genRandomWord() {
    return word;
 }
 
-function $genRandomAlpha(len = 1) {
+function $genRandAlpha(len = 1) {
    /*
     *  generate random alpha-character string
     */
    let res = '';
    let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
    for (let i = 0; i < len; ++i) {
-      res += chars.charAt($getRandomInt(0, chars.length));
+      res += chars.charAt($getRandInt(0, chars.length));
    }
 
    return res;
 }
 
-function $genRandomSymbol() {
+function $genRandSymbol() {
    /*
     *  generate random symbol
     */
@@ -585,13 +585,13 @@ function $genRandomSymbol() {
    return symbol.charAt($floor($rand() * symbol.length));
 }
 
-function $genRandomCurrency() {
+function $genRandCurrency() {
    /*
     *  generate random curreny symbol
     */
    let currencies = ['$', '€', '₡', '£', '₪', '₹', '¥', '₩', '₦', '₱zł', '₲', '฿', '₴', '₫'];
 
-   return currencies[$getRandomInt(0, currencies.length)];
+   return currencies[$getRandInt(0, currencies.length)];
 }
 
 function $genArrayElements(len) {
@@ -600,7 +600,7 @@ function $genArrayElements(len) {
     */
    let array = [];
    for (let i = 0; i < len; ++i) {
-      array.push($genRandomString($getRandomIntInclusive(6, 24)));
+      array.push($genRandStr($getRandIntInc(6, 24)));
    }
 
    return array;
@@ -612,7 +612,7 @@ function $genArrayStrings(len) {
     */
    let array = [];
    for (let i = 0; i < len; ++i) {
-      array.push($genRandomString($getRandomIntInclusive(6, 24)));
+      array.push($genRandStr($getRandIntInc(6, 24)));
    }
 
    return array;
@@ -624,13 +624,13 @@ function $genArrayInts(len) {
     */
    let array = [];
    for (let i = 0; i < len; ++i) {
-      array.push($getRandomIntInclusive(1, 1000));
+      array.push($getRandIntInc(1, 1000));
    }
 
    return array;
 }
 
-function $genRandomInclusivePareto(min, alpha = 1.161) {
+function $genRandIncPareto(min, alpha = 1.161) {
    /*
     *  min is the lowest possible value that can be returned
     *  alpha controls the "shape" of the distribution
@@ -640,7 +640,7 @@ function $genRandomInclusivePareto(min, alpha = 1.161) {
    return min / Math.pow(u, (1.0 / alpha));
 }
 
-function $genRandomIntInclusivePareto(min, max, alpha = 1.161) {
+function $genRandIntIncPareto(min, max, alpha = 1.161) {
    /*
     *  min is the lowest possible value that can be returned
     *  alpha controls the "shape" of the distribution
@@ -706,7 +706,7 @@ function $genIin({ iin }) {
     */
 
    let countryCode = $getRandCountry()['numeric code'];
-   return ((iin[$getRandomIntInclusive(0, (iin.length - 1))]).toString() + countryCode.replace(/^0+/, '') + $getRandomInt(0, Math.pow(10, 6))).toString().padEnd(8, '0').substring(0, 8);
+   return ((iin[$getRandIntInc(0, (iin.length - 1))]).toString() + countryCode.replace(/^0+/, '') + $getRandInt(0, Math.pow(10, 6))).toString().padEnd(8, '0').substring(0, 8);
 }
 
 function $genPan() {
@@ -714,7 +714,7 @@ function $genPan() {
     *  basic fake PAN generator
     */
 
-   return ($getRandomInt(0, Math.pow(10, 7))).toString().padStart(7, '0').substring(0, 7);
+   return ($getRandInt(0, Math.pow(10, 7))).toString().padStart(7, '0').substring(0, 7);
 }
 
 function $genRandCardNumber(type = 'rnd', card = '') {
@@ -731,7 +731,7 @@ function $genRandCardNumber(type = 'rnd', card = '') {
 
    if (type == 'rnd') {
       type = ['amex', 'discover', 'mastercard', 'visa'][
-         $getRandomRatioInt([10, 5, 25, 50])
+         $getRandRatioInt([10, 5, 25, 50])
       ];
    }
    card = cards.find(card => card.type == type);
@@ -1009,7 +1009,7 @@ function $getRandCountry() {
       { "name": "Zambia", "alpha-2 code": "ZM", "alpha-3 code": "ZMB", "numeric code": "894" }
    ];
 
-   return codes[$getRandomIntInclusive(0, codes.length - 1)];
+   return codes[$getRandIntInc(0, codes.length - 1)];
 }
 
 function $ftoc(fahrenheit) {
