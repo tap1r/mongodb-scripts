@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.4.0"
+ *  Version: "0.4.1"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.4.0"
+      "version": "0.4.1"
 });
 
 /*
@@ -420,6 +420,13 @@ if (typeof process !== 'undefined') {
        */
       hex_md5 = arg => crypto.createHash('md5').update(arg).digest('hex');
    }
+}
+
+if (typeof tojson === 'undefined') {
+   /*
+    *  Compatibility with tojson()
+    */
+   tojson = arg => util.inspect(arg, { "depth": null, "colors": true });
 }
 
 /*
