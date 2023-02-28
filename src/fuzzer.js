@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.1"
+ *  Version: "0.6.2"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.1" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.2" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -42,7 +42,7 @@
 
    let dbName = 'database',           // database name
       collName = 'collection',        // collection name
-      totalDocs = $getRandExp(3.5), // number of documents to generate per namespace
+      totalDocs = $getRandExp(3.5),   // number of documents to generate per namespace
       dropNamespace = false,          // drop collection prior to generating data
       compressor = 'best',            // ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
       // compressionOptions = -1,     // [-1|0|1|2|3|4|5|6|7|8|9] compression level
@@ -661,11 +661,11 @@
             options.capped = capped
             options.size = cappedOptions.size;
             options.max = cappedOptions.max;
-            console.log(`\twith capped options:\t"${JSON.stringify(cappedOptions)}"`);
+            console.log(`\twith capped options:\t"${tojson(cappedOptions)}"`);
          }
          if (timeSeries && fCV(5.0) && !isAtlasPlatform('serverless')) {
             options.timeSeries = tsOptions;
-            console.log(`\twith time series options: ${JSON.stringify(tsOptions)}`);
+            console.log(`\twith time series options: ${tojson(tsOptions)}`);
             options.expireAfterSeconds = expireAfterSeconds;
             console.log(`\twith TTL options:\t"${expireAfterSeconds}"`);
          }
@@ -674,7 +674,7 @@
          catch(e) { console.log(`\nNamespace creation failed: ${e}`); }
 
          if (sharding && isSharded()) {
-            console.log(`\nSharding namespace with options: ${JSON.stringify(shardedOptions)}`);
+            console.log(`\nSharding namespace with options: ${tojson(shardedOptions)}`);
             let numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
             try {
                fCV(6.0) || sh.enableSharding(dbName);
@@ -703,7 +703,7 @@
       if (indexPrefs.build) {
          if (indexes.length > 0) {
             console.log(`\nBuilding index${(indexes.length == 1) ? '' : 'es'} with collation locale "${collation.locale}" with commit quorum "${(fCV(4.4) && (isReplSet() || isSharded())) ? indexPrefs.commitQuorum : 'disabled'}":`);
-            indexes.forEach(index => console.log(`\tkey: ${JSON.stringify(index)}`));
+            indexes.forEach(index => console.log(`\tkey: ${tojson(index)}`));
             let indexing = () => {
                let options = (fCV(4.4) && (isReplSet() || isSharded()))
                            ? [indexes, indexOptions, indexPrefs.commitQuorum]
@@ -729,7 +729,7 @@
             console.log('No regular index builds specified.');
          if (specialIndexes.length > 0) {
             console.log(`\nBuilding exceptional index${(specialIndexes.length == 1) ? '' : 'es'} (no collation support) with commit quorum "${(fCV(4.4) && (isReplSet() || isSharded())) ? indexPrefs.commitQuorum : 'disabled'}":`);
-            specialIndexes.forEach(index => console.log(`\tkey: ${JSON.stringify(index)}`));
+            specialIndexes.forEach(index => console.log(`\tkey: ${tojson(index)}`));
             let sIndexing = () => {
                let sOptions = (fCV(4.4) && (isReplSet() || isSharded()))
                             ? [specialIndexes, specialIndexOptions, indexPrefs.commitQuorum]
