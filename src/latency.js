@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.2.2"
+ *  Version: "0.2.3"
  *  Description: driver and network latency telemetry PoC
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@ console.clear();
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.2.2" };
+   let __script = { "name": "latency.js", "version": "0.2.3" };
    console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
    let { slowms } = db.getSiblingDB('admin').getProfilingStatus(),
@@ -52,15 +52,14 @@ console.clear();
       throw error;
    }
 
-   // let { t, 'attr': { 'durationMillis': durationMillis } // t is experimental
    let { 'attr': { 'durationMillis': durationMillis }
       } = db.adminCommand(
          { "getLog": "global" }
-      ).log.map(logString => {
-         return EJSON.parse(logString)
-      }).filter(log => {
-         return log?.attr?.command?.comment == filter
-      })[0];
+      ).log.map(
+         EJSON.parse
+      ).filter(
+         log => log?.attr?.command?.comment == filter
+      )[0];
 
    try {
       t2 = process.hrtime();
