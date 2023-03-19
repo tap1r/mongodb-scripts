@@ -1,6 +1,6 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.19"
+ *  Version: "0.1.20"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -21,7 +21,7 @@ let options = {
    /*
     *  main
     */
-   let __script = { "name": "docSizes.js", "version": "0.1.19" };
+   let __script = { "name": "docSizes.js", "version": "0.1.20" };
    console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
    // connection preferences
    if (typeof readPref === 'undefined')
@@ -83,7 +83,7 @@ let options = {
       { 'system': { hostname } } = db.hostInfo(),
       dbPath = db.serverCmdLineOpts().parsed?.storage?.dbPath ?? 'sharded',
       metadataSize = internalPageSize, // outside of WT stats (4k-64MB)
-      ratio = +(dataSize / (storageSize - blocksFree - metadataSize)).toFixed(2);
+      ratio = +((dataSize / (storageSize - blocksFree - metadataSize)).toFixed(2));
 
    // Distribution buckets
    let range = (start, stop, step) => {
@@ -149,12 +149,12 @@ let options = {
             "metadataSize": metadataSize,
             "freeBlocks": blocksFree,
             "utilisedBytes": storageSize - blocksFree - metadataSize,
-            "utilisedPercentage": +(100 * (storageSize - blocksFree - metadataSize) / (storageSize - metadataSize)).toFixed(2), // + '%',
+            "utilisedPercentage": +((100 * (storageSize - blocksFree - metadataSize) / (storageSize - metadataSize)).toFixed(2)), // + '%',
             "compressor": compressor,
             "compressionRatio": ratio,
             "documentCount": documentCount,
             "consumed32kPages": Math.ceil((storageSize - blocksFree - metadataSize) / dataPageSize),
-            "avgDocsPer32kPage": +(documentCount / ((storageSize - blocksFree - metadataSize) / dataPageSize))|0
+            "avgDocsPer32kPage": Math.floor(documentCount / ((storageSize - blocksFree - metadataSize) / dataPageSize))
       } } }
    ];
 
