@@ -1,6 +1,6 @@
 /*
  *  Name: "schema-sampler.js"
- *  Version: "0.2.8"
+ *  Version: "0.2.9"
  *  Description: generate schema with simulated mongosqld sampling commands
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -21,7 +21,7 @@ let userOptions = {
    /*
     *
     */
-   let __script = { "name": "schema-sampler.js", "version": "0.2.8" };
+   let __script = { "name": "schema-sampler.js", "version": "0.2.9" };
    print(`\n---> Running script ${__script.name} v${__script.version}\n`);
    
    function main({ sampleSize = 1, dbs = [], readPreference = 'secondaryPreferred' }) {
@@ -47,25 +47,25 @@ let userOptions = {
          "allowDiskUse": true,
          "cursor": { "batchSize": sampleSize },
          "readConcern": { "level": "local" },
-         "comment": comment,
+         "comment": comment
       };
       let listDbOpts = [{
          "listDatabases": 1,
-         "filter": { "name": /(?:^(?!admin$|config$|local$)).+/ },
+         "filter": { "name": /(?:^(?!(admin|config|local)$).+)/ },
          "nameOnly": true,
          "authorizedDatabases": true
       }];
       // db.runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true });
       let listColOpts = [{
             "type": "collection",
-            "name": { "$regex": /(?!^(?:system\\.))/ }
+            "name": /(?:^(?!system\..+$).+)/
          },
          true,
          true
       ];
       let listViewOpts = [{
             "type": "view",
-            "name": { "$regex": /(?!^(?:system\\.))/ }
+            "name": /(?:^(?!system\..+$).+)/
          },
          true,
          true
@@ -106,8 +106,8 @@ let userOptions = {
        *  report
        */
       return (typeof process !== 'undefined')
-           ? console.log(`\n${EJSON.stringify(schema, null, '  ')}\n`)
-           : print(`\n${JSON.stringify(schema, null, '  ')}\n`);
+           ? console.log(util.inspect(schema, { "depth": null, "colors": true }))
+           : print(tojson(schema))
    }
 
    main(userOptions);
