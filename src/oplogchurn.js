@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.3.4"
+ *  Version: "0.3.5"
  *  Description: measure oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -20,7 +20,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.3.4" };
+   let __script = { "name": "oplogchurn.js", "version": "0.3.5" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -100,7 +100,7 @@
       let oplog = db.getSiblingDB('local').getCollection('oplog.rs');
 
       if (serverVer(4.4)) {
-         // Using the v4.4 $bsonSize aggregation operator
+         // Using the v4.4+ $bsonSize aggregation operator
          pipeline.push({
             "$group": {
                "_id": null,
@@ -130,7 +130,7 @@
             internalPageSize = (creationString.match(/internal_page_max=(\d+)/)[1] * 1024)
          } = oplog.stats();
       let overhead = internalPageSize;
-      let ratio = +(size / (storageSize - blocksFree - overhead)).toFixed(2),
+      let ratio = +((size / (storageSize - blocksFree - overhead)).toFixed(2)),
          intervalDataSize = opSize / factor;
       let intervalStorageSize = intervalDataSize / ratio;
       let oplogChurn = intervalStorageSize / intervalHrs;
