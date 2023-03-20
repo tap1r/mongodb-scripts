@@ -1,6 +1,6 @@
 /*
  *  Name: "oplog-workload.js"
- *  Version: "0.1.4"
+ *  Version: "0.1.5"
  *  Description: oplog "workload" analysis script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   let __script = { "name": "oplog-workload.js", "version": "0.1.4" };
+   let __script = { "name": "oplog-workload.js", "version": "0.1.5" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -104,10 +104,7 @@
             }
          });
          console.log(pipeline);
-         oplog.aggregate(pipeline, options).forEach(({ __bsonDataSize, __documentCount }) => {
-            size += __bsonDataSize;
-            docs += __documentCount;
-         });
+         ({ '__bsonDataSize': size, '__documentCount': docs } = oplog.aggregate(pipeline, options).toArray()[0]);
       } else {
          console.log('\n');
          console.log('Warning: Using the legacy client side calculation technique');
