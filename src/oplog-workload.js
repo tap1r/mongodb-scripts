@@ -1,6 +1,6 @@
 /*
  *  Name: "oplog-workload.js"
- *  Version: "0.1.3"
+ *  Version: "0.1.4"
  *  Description: oplog "workload" analysis script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   let __script = { "name": "oplog-workload.js", "version": "0.1.3" };
+   let __script = { "name": "oplog-workload.js", "version": "0.1.4" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -41,7 +41,7 @@
 
    if (typeof hrs === 'undefined') {
       // set interval in hours
-      (intervalHrs = 1);
+      (hrs = 1);
    }
 
    if (typeof scale === 'undefined') {
@@ -54,8 +54,8 @@
     */
 
    // formatting preferences
-   if (typeof termWidth === 'undefined') (termWidth = 60);
-   if (typeof columnWidth === 'undefined') (columnWidth = 25);
+   if (typeof termWidth === 'undefined') (termWidth = 80);
+   if (typeof columnWidth === 'undefined') (columnWidth = 45);
    if (typeof rowHeader === 'undefined') (rowHeader = 34);
 
    if (typeof readPref === 'undefined') (readPref = (hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
@@ -87,10 +87,7 @@
          options = {
             "allowDiskUse": true,
             "cursor": { "batchSize": 0 },
-            "comment": "Performing oplog analysis with "
-               + this.__script.name
-               + " v"
-               + this.__script.version
+            "comment": `Performing oplog analysis with ${__comment}`
          };
 
       // Measure interval statistics
@@ -106,14 +103,14 @@
                "__documentCount": { "$sum": 1 }
             }
          });
-         print(pipeline);
-         oplog.aggregate(pipeline, options).forEach(churnInfo => {
-            size = churnInfo.__bsonDataSize;
-            docs = churnInfo.__documentCount;
+         console.log(pipeline);
+         oplog.aggregate(pipeline, options).forEach(({ __bsonDataSize, __documentCount }) => {
+            size += __bsonDataSize;
+            docs += __documentCount;
          });
       } else {
-         print('\n');
-         print('Warning: Using the legacy client side calculation technique');
+         console.log('\n');
+         console.log('Warning: Using the legacy client side calculation technique');
          oplog.aggregate(pipeline, options).forEach(op => {
             size += bsonsize(op);
             ++docs;
@@ -126,47 +123,47 @@
          // Get oplog stats
          stats = oplog.stats(),
          blocksFree = stats.wiredTiger['block-manager']['file bytes available for reuse'],
-         ratio = (stats.size / (stats.storageSize - blocksFree)).toFixed(2),
-         intervalDataSize = size / scale.factor,
-         intervalStorageSize = size / (scale.factor * ratio),
-         oplogChurn = size / (scale.factor * ratio * hrs);
+         ratio = +((stats.size / (stats.storageSize - blocksFree)).toFixed(2)),
+         intervalDataSize = size / factor,
+         intervalStorageSize = size / (factor * ratio),
+         oplogChurn = size / (factor * ratio * hrs);
 
       // Print results
-      print('\n');
-      print('='.repeat(termWidth));
-      print('Host:'.padEnd(rowHeader), host.padStart(columnWidth));
-      print('DbPath:\t', dbPath.padStart(columnWidth));
-      print('-'.repeat(termWidth));
-      print('Start time:'.padEnd(rowHeader), d1.padStart(columnWidth));
-      print('End time:'.padEnd(rowHeader), d2.padStart(columnWidth));
-      print('Interval duration:'.padEnd(rowHeader),
-            (hrs + ' hr' + ((hrs === 1) ? '' : 's')).padStart(columnWidth)
+      console.log('\n');
+      console.log('='.repeat(termWidth));
+      console.log('Host:'.padEnd(rowHeader), host.padStart(columnWidth));
+      console.log(`dbPath:\t ${dbPath.padStart(columnWidth)}`);
+      console.log('-'.repeat(termWidth));
+      console.log('Start time:'.padEnd(rowHeader), d1.padStart(columnWidth));
+      console.log('End time:'.padEnd(rowHeader), d2.padStart(columnWidth));
+      console.log('Interval duration:'.padEnd(rowHeader),
+         (hrs + ' hr' + ((hrs === 1) ? '' : 's')).padStart(columnWidth)
       );
-      print('Average oplog compression ratio:'.padEnd(rowHeader),
-            (ratio + ':1').padStart(columnWidth)
+      console.log('Average oplog compression ratio:'.padEnd(rowHeader),
+         (ratio + ':1').padStart(columnWidth)
       );
-      print('Interval document count:'.padEnd(rowHeader),
-            docs.toString().padStart(columnWidth)
+      console.log('Interval document count:'.padEnd(rowHeader),
+         docs.toString().padStart(columnWidth)
       );
-      print('Interval data size:'.padEnd(rowHeader),
-            (intervalDataSize.toFixed(2) + ' ' +
-            scale.unit).padStart(columnWidth)
+      console.log('Interval data size:'.padEnd(rowHeader),
+         (intervalDataSize.toFixed(2) + ' ' +
+         unit).padStart(columnWidth)
       );
-      print('Estimated interval storage size:'.padEnd(rowHeader),
-            (intervalStorageSize.toFixed(2) + ' ' +
-            scale.unit).padStart(columnWidth)
+      console.log('Estimated interval storage size:'.padEnd(rowHeader),
+         (intervalStorageSize.toFixed(2) + ' ' +
+         unit).padStart(columnWidth)
       );
-      print('-'.repeat(termWidth));
-      print('Estimated current oplog churn:'.padEnd(rowHeader),
-            (oplogChurn.toFixed(2) + ' ' + scale.unit +
-            '/hr').padStart(columnWidth)
+      console.log('-'.repeat(termWidth));
+      console.log('Estimated current oplog churn:'.padEnd(rowHeader),
+         (oplogChurn.toFixed(2) + ' ' + unit +
+         '/hr').padStart(columnWidth)
       );
-      print('='.repeat(termWidth));
-      print('\n');
+      console.log('='.repeat(termWidth));
+      console.log('\n');
    }
 
    if (!isReplSet())
-      print('\n', 'Host is not a replica set member....exiting!', '\n')
+      console.log('\n', 'Host is not a replica set member....exiting!', '\n')
    else
       main()
 
