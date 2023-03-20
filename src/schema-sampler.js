@@ -1,6 +1,6 @@
 /*
  *  Name: "schema-sampler.js"
- *  Version: "0.2.7"
+ *  Version: "0.2.8"
  *  Description: generate schema with simulated mongosqld sampling commands
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -21,8 +21,8 @@ let userOptions = {
    /*
     *
     */
-   let __script = { "name": "schema-sampler.js", "version": "0.2.7" };
-   print(`\n---> Running script ${__script.name} v${__script.version}`);
+   let __script = { "name": "schema-sampler.js", "version": "0.2.8" };
+   print(`\n---> Running script ${__script.name} v${__script.version}\n`);
    
    function main({ sampleSize = 1, dbs = [], readPreference = 'secondaryPreferred' }) {
       /*
@@ -42,7 +42,7 @@ let userOptions = {
        */
       let comment = `Executed by ${__script.name} v${__script.version}`;
       let collectionPipeline = [{ "$sample": { "size": sampleSize } }];
-      let viewPipeline = [{ "$sample": { "size": 1} }];
+      let viewPipeline = [{ "$sample": { "size": 1 } }];
       let options = {
          "allowDiskUse": true,
          "cursor": { "batchSize": sampleSize },
@@ -75,26 +75,26 @@ let userOptions = {
             "db": dbName,
             "collections": db.getSiblingDB(dbName)
                              .getCollectionInfos(...listColOpts)
-                             .map(collection => ({
-                                 "name":         collection.name,
-                                 "documents":    db.getSiblingDB(dbName)
-                                                   .getCollection(collection.name)
-                                                   .stats().count,
-                                 "indexes":      db.getSiblingDB(dbName)
-                                                   .getCollection(collection.name)
-                                                   .getIndexes(),
-                                 "$sample":      db.getSiblingDB(dbName)
-                                                   .getCollection(collection.name)
-                                                   .aggregate(collectionPipeline, options)
-                                                   .toArray()
+                             .map(({ 'name': collName }) => ({
+                                 "name":        collName,
+                                 "documents":   db.getSiblingDB(dbName)
+                                                  .getCollection(collName)
+                                                  .stats().count,
+                                 "indexes":     db.getSiblingDB(dbName)
+                                                  .getCollection(collName)
+                                                  .getIndexes(),
+                                 "$sample":     db.getSiblingDB(dbName)
+                                                  .getCollection(collName)
+                                                  .aggregate(collectionPipeline, options)
+                                                  .toArray()
             })),
             "views": db.getSiblingDB(dbName)
                        .getCollectionInfos(...listViewOpts)
-                       .map(view => ({
-                           "name":     view.name,
-                           "options":  view.options,
+                       .map(({ 'name': viewName, 'options': viewOptions }) => ({
+                           "name":     viewName,
+                           "options":  viewOptions,
                            "$sample":  db.getSiblingDB(dbName)
-                                         .getCollection(view.name)
+                                         .getCollection(viewName)
                                          .aggregate(viewPipeline, options)
                                          .toArray()
             }))
@@ -106,7 +106,7 @@ let userOptions = {
        *  report
        */
       return (typeof process !== 'undefined')
-           ? print(`\n${EJSON.stringify(schema, null, '  ')}\n`)
+           ? console.log(`\n${EJSON.stringify(schema, null, '  ')}\n`)
            : print(`\n${JSON.stringify(schema, null, '  ')}\n`);
    }
 
