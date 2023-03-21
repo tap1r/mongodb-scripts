@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.4.2"
+ *  Version: "0.4.3"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.4.2"
+      "version": "0.4.3"
 });
 
 /*
@@ -24,9 +24,15 @@ if (typeof maxWriteBatchSize === 'undefined') (
 if (typeof idiomas === 'undefined') (
    idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', 'pt', 'ro', 'ru', 'es', 'sv', 'tr']
 );
-if (typeof nonce === 'undefined') (
-   nonce = (+((db.adminCommand({ "features": 1 }).oidMachine).toString() + (db.serverStatus().pid).toString())).toString(16).substring(0, 10)
-);
+if (typeof pid === 'undefined') {
+   if (db.serverStatus().ok)
+      (pid = Number(db.serverStatus().pid))
+   else
+   (pid = $getRandInt(0, 99999));
+};
+if (typeof nonce === 'undefined') {
+   (nonce = (+((db.adminCommand({ "features": 1 }).oidMachine).toString() + pid.toString())).toString(16).substring(0, 10));
+};
 
 /*
  *  Helper functions, derived from:
@@ -182,7 +188,14 @@ class MetaStats {
    }
    init() {  // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
       this.instance = hello().me;
-      this.hostname = db.hostInfo().system.hostname;
+      // this.hostname = db.hostInfo().system.hostname;
+      this.hostname = 'unknown';
+      try {
+         this.hostname = db.hostInfo().system.hostname;
+      } catch (error) {
+         console.error(`WARN: insufficient rights to execute db.hostInfo()\n${error}`);
+         this.hostname = db.hello().me.match(/(.*):/)[1];
+      }
       this.proc = db.serverStatus().process;
       this.dbPath = (db.serverStatus().process == 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : 'sharded';
       this.shards = (db.serverStatus().process == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
