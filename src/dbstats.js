@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.3.10"
+ *  Version: "0.3.11"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.3.10" },
+   let __script = { "name": "dbstats.js", "version": "0.3.11" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -82,7 +82,7 @@
          printDbHeader(database.name);
          let collections = db.getSiblingDB(dbName).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
-               "name": /(?:^(?!system\..+$).+)/
+               "name": /(?:^(?!(system\..+|replset\..+)$).+)/
             },
             true,
             true
@@ -107,7 +107,13 @@
             database.blocksFree += collection.blocksFree;
             database.indexFree += collection.indexFree;
          });
-         let views = db.getSiblingDB(dbName).getCollectionInfos({ "type": "view" }, true, true);
+         let views = db.getSiblingDB(dbName).getCollectionInfos({
+            "type": "view",
+            // "name": /(?:^(?!(system\..+|replset\..+)$).+)/
+         },
+         true,
+         true
+      );
          printViewHeader(views.length);
          views.map(({ name }) => printView(name));
          printDb(database);
@@ -185,8 +191,7 @@
    }
 
    function printDb({
-         dataSize, compression, storageSize, blocksFree,
-         objects, indexSize, indexFree
+         dataSize, compression, storageSize, blocksFree, objects, indexSize, indexFree
       }) {
       /*
        *  Print DB level rollup stats
@@ -198,8 +203,7 @@
    }
 
    function printDbPath({
-         dbPath, proc, hostname, dataSize, storageSize,
-         blocksFree, compression, objects, indexSize, indexFree
+         dbPath, proc, hostname, dataSize, storageSize, blocksFree, compression, objects, indexSize, indexFree
       }) {
       /*
        *  Print total dbPath rollup stats
