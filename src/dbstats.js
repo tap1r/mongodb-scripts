@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.3.9"
+ *  Version: "0.3.10"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.3.9" },
+   let __script = { "name": "dbstats.js", "version": "0.3.10" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -73,7 +73,7 @@
       dbPath.init();
       // db.getMongo().getDBNames().map(async dbName => {
       db.getMongo().getDBNames().map(dbName => {
-         let dbStats = db.getSiblingDB(dbName).stats({ "freeStorage": 1, "scale": 1 });
+         let dbStats = db.getSiblingDB(dbName).stats({ "freeStorage": 1, "scale": 1 });  // max precision due to SERVER-69036
          if (typeof dbStats.raw !== 'undefined') {
             dbStats.db = dbStats.raw[db.getSiblingDB('config').getCollection('shards').findOne().host].db;
          }
@@ -82,7 +82,6 @@
          printDbHeader(database.name);
          let collections = db.getSiblingDB(dbName).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
-               // "name": /^((?!system\.(keys|preimages|indexBuilds|views|js|profile|users|roles)).)+$/
                "name": /(?:^(?!system\..+$).+)/
             },
             true,
@@ -193,7 +192,7 @@
        *  Print DB level rollup stats
        */
       console.log('-'.repeat(termWidth));
-      console.log(`${'Collections subtotal:'.padEnd(rowHeader)} ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${`${formatUnit(blocksFree).padStart(columnWidth)}${`${formatPct(blocksFree, storageSize)})`.padStart(8)}`.padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
+      console.log(`${'Collections subtotal:'.padEnd(rowHeader)} ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree).padStart(columnWidth) + `(${formatPct(blocksFree, storageSize)})`.padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
       console.log(`${'Indexes subtotal:'.padEnd(rowHeader)} ${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(indexSize).padStart(columnWidth)} ${`${formatUnit(indexFree).padStart(columnWidth)}${`(${formatPct(indexFree, indexSize)})`.padStart(8)}`.padStart(columnWidth + 8)}`);
       console.log('='.repeat(termWidth));
    }
