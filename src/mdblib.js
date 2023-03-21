@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.4.4"
+ *  Version: "0.4.5"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.4.4"
+      "version": "0.4.5"
 });
 
 /*
@@ -26,9 +26,9 @@ if (typeof idiomas === 'undefined') (
 );
 if (typeof pid === 'undefined') {
    if (db.serverStatus().ok)
-      (pid = Number(db.serverStatus().pid))
+      (pid = +db.serverStatus().pid);
    else
-   (pid = $getRandInt(0, 99999));
+      (pid = $getRandInt(0, 99999));
 };
 if (typeof nonce === 'undefined') {
    (nonce = (+((db.adminCommand({ "features": 1 }).oidMachine).toString() + pid.toString())).toString(16).substring(0, 10));
@@ -194,11 +194,16 @@ class MetaStats {
          this.hostname = db.hostInfo().system.hostname;
       } catch (error) {
          console.error(`WARN: insufficient rights to execute db.hostInfo()\n${error}`);
-         this.hostname = db.hello().me.match(/(.*):/)[1];
+         this.hostname = hello().me.match(/(.*):/)[1];
       }
-      this.proc = db.serverStatus().process;
-      this.dbPath = (db.serverStatus().process == 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : 'sharded';
-      this.shards = (db.serverStatus().process == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
+      // this.proc = (db.serverStatus().ok) ? db.serverStatus().process : 'unknown';
+      // this.dbPath = (db.serverStatus().process == 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : 'sharded';
+      // this.shards = (db.serverStatus().process == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
+      this.proc = (db.serverStatus().ok) ? db.serverStatus().process : 'unknown'; //  db.adminCommand({ "listShards": 1 })
+      this.dbPath = (this.proc == 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath
+                  : (this.proc == 'mongos') ? 'sharded'
+                  : 'unknown';
+      this.shards = (this.proc == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
    }
    get compression() {
       return this.dataSize / (this.storageSize - this.blocksFree - this.overhead);
@@ -262,7 +267,10 @@ function isSharded() {
    /*
     *  Determine if current host is a mongos
     */
-   return db.serverStatus().process == 'mongos';
+   let proc = (db.serverStatus().ok) ? db.serverStatus().process
+            : (db.adminCommand({ "listShards": 1 }).shards) ? 'mongos'
+            : 'unknown';
+   return proc == 'mongos';
 }
 
 function getAllNonSystemNamespaces() {
