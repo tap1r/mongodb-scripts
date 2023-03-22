@@ -1,6 +1,6 @@
 /*
  *  Name: "oplog-workload.js"
- *  Version: "0.1.5"
+ *  Version: "0.1.6"
  *  Description: oplog "workload" analysis script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   let __script = { "name": "oplog-workload.js", "version": "0.1.5" };
+   let __script = { "name": "oplog-workload.js", "version": "0.1.6" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -33,7 +33,7 @@
    }
    __comment += ` with ${__lib.name} v${__lib.version}`;
    console.clear();
-   console.log(__comment);
+   console.log(`\u001b[32m${__comment}\u001b[0m`);
 
    /*
     *  User defined parameters
