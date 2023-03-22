@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.2"
+ *  Version: "0.6.3"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.2" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.3" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -34,7 +34,7 @@
    }
    __comment += ` with ${__lib.name} v${__lib.version}`;
    console.clear();
-   console.log(__comment);
+   console.log(`\u001b[32m${__comment}\u001b[0m`);
 
    /*
     *  User defined parameters
