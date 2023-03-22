@@ -23,9 +23,17 @@ Sample syntax to run against either of the _mongo_ or _mongosh_ shells:
 ### Prerequisites
 
 1. Add [mdblib.js](src/mdblib.js) dependency to the `cwd` or `$MDBLIB` path
-2. Ensure _authorized_ users have the following minimum required roles:
-  * `readAnyDatabase@admin`
-  * `clusterMonitor@admin`
+2. Ensure _authorized_ users have the following minimum required roles `readAnyDatabase@admin` and `clusterMonitor@admin`
+
+   In the Atlas UI this translates as
+   * Built-in Role: Only read any database
+   * Specific Privileges: clusterMonitor
+   \-or-
+   * Custom role:
+     * Global Actions and Roles 
+       - Built-In Roles
+         - clusterMonitor
+         - readAnyDatabase
 
 ### Sample output
 
