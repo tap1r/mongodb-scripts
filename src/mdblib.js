@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.4.5"
+ *  Version: "0.4.6"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.4.5"
+      "version": "0.4.6"
 });
 
 /*
@@ -286,7 +286,7 @@ function getAllNonSystemNamespaces() {
    // db.runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true });
    let listColOpts = [{
          "type": /^(?:collection|timeseries)$/,
-         "name": /(?:^(?!system\..+$).+)/
+         "name": /(?:^(?!(system\..+|replset\..+)$).+)/
       },
       true,
       true
