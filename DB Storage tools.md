@@ -28,7 +28,7 @@ Sample syntax to run against either of the _mongo_ or _mongosh_ shells:
    In the Atlas UI this translates as
    * Built-in Role: Only read any database
    * Specific Privileges: clusterMonitor
-   \-or-
+   -or-
    * Custom role:
      * Global Actions and Roles 
        - Built-In Roles
