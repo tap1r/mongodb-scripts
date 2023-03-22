@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.3.12"
+ *  Version: "0.3.13"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.3.12" },
+   let __script = { "name": "dbstats.js", "version": "0.3.13" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -155,7 +155,6 @@
        */
       // console.log('-'.repeat(termWidth));
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      console.log('\u001b[35m\u001b[0m');
       // console.log(`Collections:\t${collTotal}`.padEnd(rowHeader));
       console.log(`\u001b[35mCollections\u001b[0m:\t${collTotal}`.padEnd(rowHeader));
    }
