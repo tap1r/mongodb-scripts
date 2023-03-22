@@ -26,15 +26,15 @@ Sample syntax to run against either of the _mongo_ or _mongosh_ shells:
 2. Ensure _authorized_ users have the following minimum required roles `readAnyDatabase@admin` and `clusterMonitor@admin`
 
    In the Atlas UI this translates as:
-   * Built-in Role: Only read any database
-   * Specific Privileges: clusterMonitor
+   * Built-in Role: _Only read any database_
+   * Specific Privileges: _clusterMonitor_
  
    Or:
    * Custom role:
      * Global Actions and Roles 
        - Built-In Roles
-         - clusterMonitor
-         - readAnyDatabase
+         - _clusterMonitor_
+         - _readAnyDatabase_
 
 ### Sample output
 
