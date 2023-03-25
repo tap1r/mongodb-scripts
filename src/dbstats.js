@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.3.14"
+ *  Version: "0.3.15"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -18,8 +18,8 @@
       monitorRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => authDb == 'admin' && role == 'clusterMonitor'),
       dbRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => authDb == 'admin' && authzRoles.includes(role));
    if (!(!(!!authenticatedUsers.length) || !!adminRoles.length || !!monitorRoles.length && !!dbRoles.length))
-      console.log('\u001b[31mWARN: authz privileges may be inadequate\u001b[0m');
-      console.log('\u001b[31mWARN: consider using \u001b[33mclusterMonitor@admin\u001b[31m and \u001b[33mreadAnyDatabase@admin\u001b[31m roles at a minimum\u001b[0m');
+      print('\u001b[31mWARN: authz privileges may be inadequate and results may vary\u001b[0m');
+      print('\u001b[31mWARN: consider using \u001b[33mclusterMonitor@admin\u001b[31m and \u001b[33mreadAnyDatabase@admin\u001b[31m roles at a minimum\u001b[0m');
 })();
 
 /*
@@ -28,7 +28,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.3.14" },
+   let __script = { "name": "dbstats.js", "version": "0.3.15" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
