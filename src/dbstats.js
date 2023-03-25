@@ -1,11 +1,26 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.3.13"
+ *  Version: "0.3.14"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "[mongo|mongosh] [connection options] --quiet dbstats.js"
+
+(() => {
+   /*
+    *  Ensure authorized users have the following minimum required roles
+    *  clusterMonitor@admin and readAnyDatabase@admin
+    */
+   let { 'authInfo': { authenticatedUsers, authenticatedUserRoles } } = db.adminCommand({ "connectionStatus": 1 }),
+      authzRoles = ['readAnyDatabase', 'readWriteAnyDatabase', 'dbAdminAnyDatabase'],
+      adminRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => authDb == 'admin' && role == 'atlasAdmin'),
+      monitorRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => authDb == 'admin' && role == 'clusterMonitor'),
+      dbRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => authDb == 'admin' && authzRoles.includes(role));
+   if (!(!(!!authenticatedUsers.length) || !!adminRoles.length || !!monitorRoles.length && !!dbRoles.length))
+      console.log('\u001b[31mWARN: authz privileges may be inadequate\u001b[0m');
+      console.log('\u001b[31mWARN: consider using \u001b[33mclusterMonitor@admin\u001b[31m and \u001b[33mreadAnyDatabase@admin\u001b[31m roles at a minimum\u001b[0m');
+})();
 
 /*
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
@@ -13,7 +28,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.3.13" },
+   let __script = { "name": "dbstats.js", "version": "0.3.14" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -164,7 +179,7 @@
        *  Print collection level stats
        */
       // console.log(` ${'-'.repeat(termWidth - 1)}`);
-      console.log(`\u001b[33m ${'-'.repeat(termWidth - 1)}\u001b[0m`);
+      console.log(` \u001b[33m${'-'.repeat(termWidth - 1)}\u001b[0m`);
       console.log(`\u001b[34m${(' ' + name).padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(7)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
    }
 
