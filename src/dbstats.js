@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.3.16"
+ *  Version: "0.3.17"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -28,7 +28,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.3.16" },
+   let __script = { "name": "dbstats.js", "version": "0.3.17" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -63,12 +63,12 @@
     */
 
    // formatting preferences
-   typeof termWidth === 'undefined' && !!(termWidth = 124);
-   typeof columnWidth === 'undefined' && !!(columnWidth = 14);
-   typeof rowHeader === 'undefined' && !!(rowHeader = 40);
+   typeof termWidth === 'undefined' && (termWidth = 124);
+   typeof columnWidth === 'undefined' && (columnWidth = 14);
+   typeof rowHeader === 'undefined' && (rowHeader = 40);
 
    // connection preferences
-   if (typeof readPref === 'undefined') (readPref = (hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
+   typeof readPref === 'undefined' && (readPref = (hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
 
    async function main() {
       /*
@@ -148,7 +148,7 @@
       /*
        *  Pretty format percentage
        */
-      return `${(numerator / denominator * 100).toFixed(scale.pctPoint)}%`;
+      return `${(100 * numerator / denominator).toFixed(scale.pctPoint)}%`;
    }
 
    function formatRatio(metric) {
@@ -192,7 +192,7 @@
        */
       // console.log('-'.repeat(termWidth));
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      console.log(` ${viewName}`.padEnd(rowHeader));
+      console.log(` \u001b[34m${viewName.padEnd(rowHeader)}\u001b[0m`);
    }
 
    function printDbHeader(dbName) {
