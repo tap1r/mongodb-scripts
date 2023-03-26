@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.3.6"
+ *  Version: "0.3.7"
  *  Description: measure oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -11,8 +11,8 @@
  *  User defined parameters
  */
 
-// let intervalHrs = 1); // set interval in hours   
-// let scale = new ScaleFactor('MB'); // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
+// let intervalHrs = 1; // set interval in hours
+// let scale = new ScaleFactor('MB'); // B, KB, MB, GB, TB, PB, EB, ZB, YB
 
 (() => {
    /*
@@ -20,7 +20,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.3.6" };
+   let __script = { "name": "oplogchurn.js", "version": "0.3.7" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -47,32 +47,30 @@
     *  Global defaults
     */
 
-   if (typeof intervalHrs === 'undefined') {
-      // set interval in hours
-      (intervalHrs = 1);
-   }
+   // set interval in hours
+   typeof intervalHrs === 'undefined' && !!(intervalHrs = 1);
 
    if (typeof scale === 'undefined') {
-      // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
+      // B, KB, MB, GB, TB, PB, EB, ZB, YB
       ({ unit, factor } = new ScaleFactor('MB'));
    }
 
    // formatting preferences
-   if (typeof termWidth === 'undefined') (termWidth = 62);
-   if (typeof columnWidth === 'undefined') (columnWidth = 25);
-   if (typeof rowHeader === 'undefined') (rowHeader = 36);
+   typeof termWidth === 'undefined' && !!(termWidth = 62);
+   typeof columnWidth === 'undefined' && !!(columnWidth = 25);
+   typeof rowHeader === 'undefined' && !!(rowHeader = 36);
 
    // connection preferences
-   if (typeof readPref === 'undefined') (readPref = (hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
+   (typeof readPref === 'undefined') && !!(readPref = (hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
 
    function main() {
       /*
        *  main
        */
       let opSize = 0, docs = 0, date = new Date();
-      let t2 = (date.getTime() / 1000.0)|0, // end timestamp
+      let t2 = Math.floor(date.getTime() / 1000.0), // end timestamp
          d2 = date.toISOString(), // end datetime
-         t1 = (date.setHours(date.getHours() - intervalHrs) / 1000.0)|0, // start timestamp
+         t1 = Math.floor(date.setHours(date.getHours() - intervalHrs) / 1000.0), // start timestamp
          d1 = date.toISOString(), // start datetime
          $match = (typeof process !== 'undefined') // MONGOSH-930
                 ? { "$match": {
@@ -136,10 +134,10 @@
       let oplogChurn = intervalStorageSize / intervalHrs;
 
       // Print results
-      console.log(`\n${'='.repeat(termWidth)}`);
-      console.log(`${'Hostname:'.padEnd(rowHeader)} ${hostname.padStart(columnWidth)}`);
-      console.log(`dbPath:\t${dbPath.padStart(termWidth - 'dbPath:\t'.length)}`);
-      console.log(`${'-'.repeat(termWidth)}`);
+      console.log(`\n\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
+      console.log(`Hostname: ${hostname.padStart(termWidth - 'Hostname: '.length)}`);
+      console.log(`dbPath: ${dbPath.padStart(termWidth - 'dbPath: '.length)}`);
+      console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
       console.log(`${'Start time:'.padEnd(rowHeader)} ${d1.padStart(columnWidth)}`);
       console.log(`${'End time:'.padEnd(rowHeader)} ${d2.padStart(columnWidth)}`);
       console.log(`${'Interval duration:'.padEnd(rowHeader)} ${`${intervalHrs} hr${(intervalHrs == 1) ? '' : 's'}`.padStart(columnWidth)}`);
@@ -147,15 +145,16 @@
       console.log(`${'Interval document count:'.padEnd(rowHeader)} ${docs.toString().padStart(columnWidth)}`);
       console.log(`${'Interval data size:'.padEnd(rowHeader)} ${`${intervalDataSize.toFixed(2)} ${unit}`.padStart(columnWidth)}`);
       console.log(`${'Estimated interval storage size:'.padEnd(rowHeader)} ${`${intervalStorageSize.toFixed(2)} ${unit}`.padStart(columnWidth)}`);
-      console.log(`${'-'.repeat(termWidth)}`);
+      console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
       console.log(`${'Estimated current oplog data churn:'.padEnd(rowHeader)} ${`${oplogChurn.toFixed(2)} ${unit}/hr`.padStart(columnWidth)}`);
-      console.log(`${'='.repeat(termWidth)}\n`);
+      console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
+      console.log('\n');
    }
 
-   if (!isReplSet())
-      console.log(`\n\tHost is not a replica set member....exiting!\n\n`);
-   else
-      main();
+   if (!isReplSet()) {
+      console.log(`\n\t\u001b[31mHost is not a replica set member....exiting!\u001b[0m`);
+      console.log('\n');
+   } else main();
 })();
 
 // EOF
