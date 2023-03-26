@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.3.15"
+ *  Version: "0.3.16"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -28,7 +28,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.3.15" },
+   let __script = { "name": "dbstats.js", "version": "0.3.16" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -55,19 +55,17 @@
     *  User defined parameters
     */
 
-   if (typeof scale === 'undefined') {
-      // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
-      (scale = new ScaleFactor('MB'));
-   }
+   // Set scaler unit B, KB, MB, GB, TB, PB, EB, ZB, YB
+   typeof scale === 'undefined' && (scale = new ScaleFactor('MB'));
 
    /*
     *  Global defaults
     */
 
    // formatting preferences
-   if (typeof termWidth === 'undefined') (termWidth = 124);
-   if (typeof columnWidth === 'undefined') (columnWidth = 14);
-   if (typeof rowHeader === 'undefined') (rowHeader = 40);
+   typeof termWidth === 'undefined' && !!(termWidth = 124);
+   typeof columnWidth === 'undefined' && !!(columnWidth = 14);
+   typeof rowHeader === 'undefined' && !!(rowHeader = 40);
 
    // connection preferences
    if (typeof readPref === 'undefined') (readPref = (hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
@@ -88,7 +86,7 @@
       dbPath.init();
       // db.getMongo().getDBNames().map(async dbName => {
       db.getMongo().getDBNames().map(dbName => {
-         let dbStats = db.getSiblingDB(dbName).stats({ "freeStorage": 1, "scale": 1 });  // max precision due to SERVER-69036
+         let dbStats = db.getSiblingDB(dbName).stats({ "freeStorage": 1, "scale": 1 }); // max precision due to SERVER-69036
          if (typeof dbStats.raw !== 'undefined') {
             dbStats.db = dbStats.raw[db.getSiblingDB('config').getCollection('shards').findOne().host].db;
          }
@@ -98,9 +96,7 @@
          let collections = db.getSiblingDB(dbName).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
                "name": /(?:^(?!(system\..+|replset\..+)$).+)/
-            },
-            true,
-            true
+            }, true, true
          );
          printCollHeader(collections.length);
          // collections.map(async collInfo => {
@@ -125,9 +121,7 @@
          let views = db.getSiblingDB(dbName).getCollectionInfos({
             "type": "view",
             // "name": /(?:^(?!(system\..+|replset\..+)$).+)/
-         },
-         true,
-         true
+         }, true, true
       );
          printViewHeader(views.length);
          views.map(({ name }) => printView(name));
