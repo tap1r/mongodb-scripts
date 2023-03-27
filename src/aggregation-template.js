@@ -1,10 +1,10 @@
 /*
- *    Aggregation templates
+ *  Aggregation templates
  */
 
 (() => {
    /*
-    *    Aggregation template with extended options
+    *  Aggregation template with extended options
     */
    let dbName = 'database', collName = 'collection', readPref = 'primary';
    let namespace = db.getSiblingDB(dbName).getCollection(collName);
@@ -36,8 +36,8 @@
 
 (() => {
    /*
-    *    Aggregation template with explain options
-    */   
+    *  Aggregation template with explain options
+    */
    let dbName = 'database', collName = 'collection', readPref = 'primary';
    let namespace = db.getSiblingDB(dbName).getCollection(collName);
    let explainPlan = 'executionStats', // ['queryPlanner'|'executionStats'|'allPlansExecution']
@@ -69,7 +69,7 @@
 
 (() => {
    /*
-    *    Aggregation template for $sql queries
+    *  Aggregation template for $sql queries
     */
    let dbName = 'database', collName = 'collection';
    let namespace = db.getSiblingDB(dbName).getCollection(collName);
@@ -93,7 +93,7 @@
 
 (() => {
    /*
-    *    Aggregation template for $currentOp
+    *  Aggregation template for $currentOp
     */
    let options = {
          "cursor": { "batchSize": 0 },
@@ -124,7 +124,7 @@
 
 (() => {
    /*
-    *    Aggregation template with $documents pipeline
+    *  Aggregation template with $documents pipeline (req v5.1)
     */
    let dbName = 'database';
    let namespace = db.getSiblingDB(dbName);
