@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.4.7"
+ *  Version: "0.5.0"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.4.7"
+      "version": "0.5.0"
 });
 
 /*
@@ -1109,6 +1109,108 @@ function $benford() {
    ]);
 
    return array;
+}
+
+function $collStats(dbName = '', collName = '') {
+   /*
+    *  $collStats wrapper
+    */
+   let namespace = db.getSiblingDB(dbName).getCollection(collName);
+   let options = {
+         "allowDiskUse": true,
+         "cursor": { "batchSize": 0 },
+         "readConcern": { "level": "local" },
+         "comment": "sharding compatible $collStats"
+      },
+      pipeline = [
+         { "$collStats": { "storageStats": { "scale": 1 } } },
+         { "$set": {
+            "storageStats.wiredTiger.creationStrings": {
+               "$first": {
+                  "$regexFindAll": {
+                     "input": "$storageStats.wiredTiger.creationString",
+                     "regex": /block_compressor=(\w+).+internal_page_max=(\d+).+leaf_page_max=(\d+)/
+         } } } } },
+         { "$set": {
+            "storageStats.wiredTiger.compressor": {
+               "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 0]
+            },
+            "storageStats.wiredTiger.internalPageSize": {
+               "$multiply": [
+                  { "$toInt": {
+                     "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 1]
+                  } }, 1024
+            ] },
+            "storageStats.wiredTiger.dataPageSize": {
+               "$multiply": [
+                  { "$toInt": {
+                     "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 2]
+                  } }, 1024
+            ] }
+         } },
+         { "$set": {
+            "storageStats.indexDetails": { "$objectToArray": "$storageStats.indexDetails" }
+         } },
+         { "$set": {
+            "storageStats.indexStats.file size in bytes": {
+               "$reduce": {
+                  "input": "$storageStats.indexDetails",
+                  "initialValue": 0,
+                  "in": { "$sum": ["$$value", "$$this.v.block-manager.file size in bytes"] }
+               }
+            }
+         } },
+         { "$set": {
+            "storageStats.indexStats.file bytes available for reuse": {
+               "$reduce": {
+                  "input": "$storageStats.indexDetails",
+                  "initialValue": 0,
+                  "in": { "$sum": ["$$value", "$$this.v.block-manager.file bytes available for reuse"] }
+         } } } },
+         { "$group": {
+            "_id": null,
+            "nodes": { "$sum": 1 },
+            "shards": { "$push": "$shard" },
+            "size": { "$sum": "$storageStats.size" },
+            "count": { "$sum": "$storageStats.count" },
+            "avgObjSize": { "$avg": "$storageStats.avgObjSize" },
+            "numOrphanDocs": { "$sum": "$storageStats.numOrphanDocs" },
+            "storageSize": { "$sum": "$storageStats.storageSize" },
+            "freeStorageSize": { "$sum": "$storageStats.freeStorageSize" },
+            "compressor": { "$push": "$storageStats.wiredTiger.compressor" },
+            "internalPageSize": { "$push": "$storageStats.wiredTiger.internalPageSize" },
+            "dataPageSize": { "$push": "$storageStats.wiredTiger.dataPageSize" },
+            "uri": { "$push": "$storageStats.wiredTiger.uri" },
+            "file allocation unit size": { "$push": "$storageStats.wiredTiger.block-manager.file allocation unit size" },
+            "file size in bytes": { "$sum": "$storageStats.wiredTiger.block-manager.file size in bytes" },
+            "file bytes available for reuse": { "$sum": "$storageStats.wiredTiger.block-manager.file bytes available for reuse" },
+            "nindexes": { "$sum": "$storageStats.nindexes" },
+            "indexes size in bytes": { "$sum": "$storageStats.indexStats.file size in bytes" },
+            "indexes bytes available for reuse": { "$sum": "$storageStats.indexStats.file bytes available for reuse" }
+         } },
+         { "$set": {
+            "wiredTiger": {
+               "block-manager": {
+                  "file size in bytes": "$file size in bytes",
+                  "file bytes available for reuse": "$file bytes available for reuse",
+                  "file allocation unit size": "$file allocation unit size"
+               },
+               "compressor": { "$first": "$compressor" },
+               "dataPageSize": { "$first": "$dataPageSize" },
+               "internalPageSize": { "$first": "$internalPageSize" },
+               "uri": "$uri"
+            },
+            "indexes": {
+               "totalIndexSize": "$indexes size in bytes",
+               "totalIndexBytesReusable": "$indexes bytes available for reuse"
+            }
+         } },
+         { "$project": {
+            "_id": 0
+         } }
+      ];
+
+   return namespace.aggregate(pipeline, options).toArray()[0];
 }
 
 // EOF
