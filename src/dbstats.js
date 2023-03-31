@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.3.19"
+ *  Version: "0.4.0"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -29,7 +29,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.3.19" },
+   let __script = { "name": "dbstats.js", "version": "0.4.0" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -102,8 +102,10 @@
          printCollHeader(collections.length);
          // collections.map(async collInfo => {
          collections.map(({ 'name': collName }) => {
-            let collStats = db.getSiblingDB(dbName).getCollection(collName).stats({ "scale": 1, "indexDetails": true });
-            let compressor = collStats.wiredTiger.creationString.match(/block_compressor=(\w+)/);
+            // let collStats = db.getSiblingDB(dbName).getCollection(collName).stats({ "scale": 1, "indexDetails": true });
+            let collStats = $collStats(dbName, collName);
+            // let compressor = collStats.wiredTiger.creationString.match(/block_compressor=(\w+)/);
+            let compressor = collStats.compressor;
             let collection = new MetaStats(
                collName, collStats.size, collStats.wiredTiger['block-manager']['file size in bytes'],
                collStats.count, collStats.wiredTiger['block-manager']['file bytes available for reuse'],
@@ -111,10 +113,12 @@
                (compressor != null) ? compressor[1] : 'none'
             );
             collection.init();
-            Object.keys(collStats.indexDetails).map(indexName => {
-               collection.indexFree += collStats.indexDetails[indexName]['block-manager']['file bytes available for reuse'];
-               collection.indexSize += collStats.indexDetails[indexName]['block-manager']['file size in bytes'];
-            });
+            // Object.keys(collStats.indexDetails).map(indexName => {
+            //    collection.indexFree += collStats.indexDetails[indexName]['block-manager']['file bytes available for reuse'];
+            //    collection.indexSize += collStats.indexDetails[indexName]['block-manager']['file size in bytes'];
+            // });
+            collection.indexFree = collStats.indexes.totalIndexBytesReusable;
+            collection.indexSize = collStats.indexes.totalIndexSize;
             printCollection(collection);
             database.blocksFree += collection.blocksFree;
             database.indexFree += collection.indexFree;
