@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.4.0"
+ *  Version: "0.4.1"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -29,7 +29,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.4.0" },
+   let __script = { "name": "dbstats.js", "version": "0.4.1" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -105,12 +105,13 @@
             // let collStats = db.getSiblingDB(dbName).getCollection(collName).stats({ "scale": 1, "indexDetails": true });
             let collStats = $collStats(dbName, collName);
             // let compressor = collStats.wiredTiger.creationString.match(/block_compressor=(\w+)/);
-            let compressor = collStats.compressor;
+            let compressor = collStats.wiredTiger.compressor;
             let collection = new MetaStats(
                collName, collStats.size, collStats.wiredTiger['block-manager']['file size in bytes'],
                collStats.count, collStats.wiredTiger['block-manager']['file bytes available for reuse'],
                // collStats.wiredTiger.creationString.match(/block_compressor=(?<compressor>\w+)/)?.groups?.compressor
-               (compressor != null) ? compressor[1] : 'none'
+               // (compressor != null) ? compressor[1] : 'none'
+               (compressor != null) ? compressor : 'none'
             );
             collection.init();
             // Object.keys(collStats.indexDetails).map(indexName => {
