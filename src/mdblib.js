@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.4.6"
+ *  Version: "0.4.7"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.4.6"
+      "version": "0.4.7"
 });
 
 /*
@@ -172,7 +172,7 @@ class MetaStats {
    constructor(name = '', dataSize = 0, storageSize = 0, objects = 0, blocksFree = 0, compressor = '', indexSize = 0, indexFree = 0) {
       // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
       // this.instance = (async() => { return await hello().me })();
-      // this.hostname = (async() => { return db.hostInfo().system.hostname })();
+      // this.hostname = (async() => { return hostInfo().system.hostname })();
       // this.proc = (async() => { return db.serverStatus().process })();
       // this.dbPath = (async() => { return (db.serverStatus().process === 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : null })();
       // this.shards = (async() => { return (db.serverStatus().process === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null })();
@@ -188,14 +188,8 @@ class MetaStats {
    }
    init() {  // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
       this.instance = hello().me;
-      // this.hostname = db.hostInfo().system.hostname;
-      this.hostname = 'unknown';
-      try {
-         this.hostname = db.hostInfo().system.hostname;
-      } catch (error) {
-         console.error(`WARN: insufficient rights to execute db.hostInfo()\n${error}`);
-         this.hostname = hello().me.match(/(.*):/)[1];
-      }
+      this.hostname = hostInfo().system.hostname;
+      // this.hostname = 'unknown';
       // this.proc = (db.serverStatus().ok) ? db.serverStatus().process : 'unknown';
       // this.dbPath = (db.serverStatus().process == 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : 'sharded';
       // this.shards = (db.serverStatus().process == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
@@ -391,6 +385,20 @@ function hello() {
    return (typeof db.prototype.hello !== 'function')
         ? db.isMaster()
         : db.hello();
+}
+
+function hostInfo() {
+   /*
+    *  Forward compatibility with db.hostInfo()
+    */
+   let hostInfo = {};
+   try {
+      hostInfo = db.hostInfo();
+   } catch (error) {
+      console.error(`WARN: insufficient rights to execute db.hostInfo()\n${error}`);
+      hostInfo.system.hostname = hello().me.match(/(.*):/)[1];
+   }
+   return hostInfo;
 }
 
 function isAtlasPlatform(type) {
