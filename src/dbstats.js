@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.4.1"
+ *  Version: "0.4.2"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -29,7 +29,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.4.1" },
+   let __script = { "name": "dbstats.js", "version": "0.4.2" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -171,7 +171,7 @@
       // console.log('-'.repeat(termWidth));
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
       // console.log(`Collections:\t${collTotal}`.padEnd(rowHeader));
-      console.log(`\u001b[35mCollections:\u001b[0m${collTotal.toString().padStart(2)}`);
+      console.log(`\u001b[1m\u001b[32mCollections:\u001b[0m${collTotal.toString().padStart(2)}`);
    }
 
    function printCollection({ name, dataSize, compression, compressor = 'none', storageSize, blocksFree, objects }) {
@@ -180,8 +180,8 @@
        */
       // console.log(` ${'-'.repeat(termWidth - 1)}`);
       console.log(` \u001b[33m${'-'.repeat(termWidth - 1)}\u001b[0m`);
-      // console.log(`\u001b[34m${(' ' + name).padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(7)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
-      console.log(`\u001b[34m${(' ' + name).padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
+      // console.log(`\u001b[36m${(' ' + name).padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(7)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
+      console.log(`\u001b[36m${(' ' + name).padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
    }
 
    function printViewHeader(viewTotal = 0) {
@@ -190,7 +190,7 @@
        */
       // console.log('-'.repeat(termWidth));
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[35mViews:\u001b[0m${viewTotal.toString().padStart(8)}`);
+      console.log(`\u001b[1m\u001b[32mViews:\u001b[0m${viewTotal.toString().padStart(8)}`);
    }
 
    function printView(viewName) {
@@ -199,7 +199,7 @@
        */
       // console.log('-'.repeat(termWidth));
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      console.log(` \u001b[34m${viewName.padEnd(rowHeader)}\u001b[0m`);
+      console.log(` \u001b[36m${viewName.padEnd(rowHeader)}\u001b[0m`);
    }
 
    function printDbHeader(dbName) {
@@ -209,7 +209,7 @@
       console.log(`\n`);
       // console.log('='.repeat(termWidth));
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[35m${`Database:\u001b[0m \u001b[34m${dbName}`.padEnd(rowHeader + 9)}\u001b[0m \u001b[35m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}\u001b[0m`);
+      console.log(`\u001b[1m\u001b[32m${`Database:\u001b[0m \u001b[36m${dbName}`.padEnd(rowHeader + 9)}\u001b[0m \u001b[32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}\u001b[0m`);
    }
 
    function printDb({
@@ -220,8 +220,8 @@
        */
       // console.log('-'.repeat(termWidth));
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[35m${'Collections subtotal:'.padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree).padStart(columnWidth) + `(${formatPct(blocksFree, storageSize)})`.padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
-      console.log(`\u001b[35m${'Indexes subtotal:'.padEnd(rowHeader)}\u001b[0m ${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(indexSize).padStart(columnWidth)} ${`${formatUnit(indexFree).padStart(columnWidth)}${`(${formatPct(indexFree, indexSize)})`.padStart(8)}`.padStart(columnWidth + 8)}`);
+      console.log(`\u001b[1m\u001b[32m${'Collections subtotal:'.padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree).padStart(columnWidth) + `(${formatPct(blocksFree, storageSize)})`.padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
+      console.log(`\u001b[1m\u001b[32m${'Indexes subtotal:'.padEnd(rowHeader)}\u001b[0m ${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(indexSize).padStart(columnWidth)} ${`${formatUnit(indexFree).padStart(columnWidth)}${`(${formatPct(indexFree, indexSize)})`.padStart(8)}`.padStart(columnWidth + 8)}`);
       // console.log('='.repeat(termWidth));
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
    }
@@ -235,14 +235,14 @@
       console.log(`\n`);
       // console.log('='.repeat(termWidth));
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[35m${'dbPath totals'.padEnd(rowHeader)} ${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}\u001b[0m`);
+      console.log(`\u001b[1m\u001b[32m${'dbPath totals'.padEnd(rowHeader)} ${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}\u001b[0m`);
       // console.log('-'.repeat(termWidth));
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[35m${'All DBs:'.padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
-      console.log(`\u001b[35m${'All indexes:'.padEnd(rowHeader)}\u001b[0m ${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(indexSize).padStart(columnWidth)} ${(formatUnit(indexFree) + ('(' + formatPct(indexFree, indexSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
+      console.log(`\u001b[1m\u001b[32m${'All DBs:'.padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
+      console.log(`\u001b[1m\u001b[32m${'All indexes:'.padEnd(rowHeader)}\u001b[0m ${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(indexSize).padStart(columnWidth)} ${(formatUnit(indexFree) + ('(' + formatPct(indexFree, indexSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
       // console.log('='.repeat(termWidth));
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[35mHost:\u001b[0m ${hostname}\t\u001b[35mType:\u001b[0m ${proc}\t\u001b[35mdbPath:\u001b[0m ${dbPath}`);
+      console.log(`\u001b[1m\u001b[32mHost:\u001b[0m ${hostname}\t\u001b[1m\u001b[32mType:\u001b[0m ${proc}\t\u001b[1m\u001b[32mdbPath:\u001b[0m ${dbPath}`);
       // console.log('='.repeat(termWidth));
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
       console.log(`\n`);
