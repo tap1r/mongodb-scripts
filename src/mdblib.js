@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.5.1"
+ *  Version: "0.5.2"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.5.1"
+      "version": "0.5.2"
 });
 
 /*
@@ -169,7 +169,7 @@ class MetaStats {
    /*
     *  Storage statistics metadata class
     */
-   constructor(name = '', dataSize = 0, storageSize = 0, blocksFree = 0, objects = 0, orphans = 0, compressor = '', indexSize = 0, indexFree = 0) {
+   constructor({ name = '', dataSize = 0, storageSize = 0, freeStorageSize = 0, objects = 0, orphans = 0, compressor = '', indexSize = 0, totalIndexSize = 0, totalIndexBytesReusable = 0 } = {}) {
       // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
       // this.instance = (async() => { return await hello().me })();
       // this.hostname = (async() => { return hostInfo().system.hostname })();
@@ -179,12 +179,12 @@ class MetaStats {
       this.name = name;
       this.dataSize = dataSize;
       this.storageSize = storageSize;
-      this.blocksFree = blocksFree;
+      this.freeStorageSize = freeStorageSize;
       this.objects = +objects;
       this.orphans = +orphans;
       this.compressor = compressor;
-      this.indexSize = indexSize;
-      this.indexFree = indexFree;
+      this.totalIndexSize = (indexSize === 0) ? totalIndexSize : indexSize;
+      this.totalIndexBytesReusable = totalIndexBytesReusable;
       this.overhead = 4096 / 1024 / 1024; // 4KB in MB
    }
    init() {  // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
@@ -201,10 +201,10 @@ class MetaStats {
       this.shards = (this.proc == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
    }
    get compression() {
-      return this.dataSize / (this.storageSize - this.blocksFree - this.overhead);
+      return this.dataSize / (this.storageSize - this.freeStorageSize - this.overhead);
    }
    get totalSize() {
-      return this.storageSize + this.indexSize + this.overhead;
+      return this.storageSize + this.totalIndexSize + this.overhead;
    }
 }
 
@@ -1170,12 +1170,13 @@ function $collStats(dbName = '', collName = '') {
          } } } },
          { "$group": {
             "_id": null,
+            "name": { "$push": "$ns" },
             "nodes": { "$sum": 1 },
             "shards": { "$push": "$shard" },
-            "size": { "$sum": "$storageStats.size" },
-            "count": { "$sum": "$storageStats.count" },
+            "dataSize": { "$sum": "$storageStats.size" },
+            "objects": { "$sum": "$storageStats.count" },
             "avgObjSize": { "$avg": "$storageStats.avgObjSize" },
-            "numOrphanDocs": { "$sum": "$storageStats.numOrphanDocs" },
+            "orphans": { "$sum": "$storageStats.numOrphanDocs" },
             "storageSize": { "$sum": "$storageStats.storageSize" },
             "freeStorageSize": { "$sum": "$storageStats.freeStorageSize" },
             "compressor": { "$push": "$storageStats.wiredTiger.compressor" },
@@ -1183,17 +1184,22 @@ function $collStats(dbName = '', collName = '') {
             "dataPageSize": { "$push": "$storageStats.wiredTiger.dataPageSize" },
             "uri": { "$push": "$storageStats.wiredTiger.uri" },
             "file allocation unit size": { "$push": "$storageStats.wiredTiger.block-manager.file allocation unit size" },
-            "file size in bytes": { "$sum": "$storageStats.wiredTiger.block-manager.file size in bytes" },
-            "file bytes available for reuse": { "$sum": "$storageStats.wiredTiger.block-manager.file bytes available for reuse" },
+            // "file size in bytes": { "$sum": "$storageStats.wiredTiger.block-manager.file size in bytes" },
+            // "file bytes available for reuse": { "$sum": "$storageStats.wiredTiger.block-manager.file bytes available for reuse" },
             "nindexes": { "$sum": "$storageStats.nindexes" },
             "indexes size in bytes": { "$sum": "$storageStats.indexStats.file size in bytes" },
             "indexes bytes available for reuse": { "$sum": "$storageStats.indexStats.file bytes available for reuse" }
          } },
          { "$set": {
+            "name": { 
+               "$regexFind": {
+                  "input": { "$first": "$name" },
+                  "regex": /^.+\.(.+)$/
+            } },
             "wiredTiger": {
                "block-manager": {
-                  "file size in bytes": "$file size in bytes",
-                  "file bytes available for reuse": "$file bytes available for reuse",
+                  // "file size in bytes": "$file size in bytes",
+                  // "file bytes available for reuse": "$file bytes available for reuse",
                   "file allocation unit size": "$file allocation unit size"
                },
                "compressor": { "$first": "$compressor" },
@@ -1201,13 +1207,18 @@ function $collStats(dbName = '', collName = '') {
                "internalPageSize": { "$first": "$internalPageSize" },
                "uri": "$uri"
             },
-            "indexes": {
-               "totalIndexSize": "$indexes size in bytes",
-               "totalIndexBytesReusable": "$indexes bytes available for reuse"
-            }
+            "totalIndexSize": "$indexes size in bytes",
+            "totalIndexBytesReusable": "$indexes bytes available for reuse"
+         } },
+         { "$set": {
+            "name": { "$arrayElemAt": ["$name.captures", 0] }
          } },
          { "$project": {
-            "_id": 0
+            "_id": 0,
+            "uri": 0,
+            "indexes size in bytes": 0,
+            "indexes bytes available for reuse": 0,
+            "file allocation unit size": 0
          } }
       ];
 
