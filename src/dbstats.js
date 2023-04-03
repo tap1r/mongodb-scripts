@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.4.3"
+ *  Version: "0.4.4"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -29,7 +29,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.4.3" },
+   let __script = { "name": "dbstats.js", "version": "0.4.4" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -64,7 +64,7 @@
     */
 
    // formatting preferences
-   typeof termWidth === 'undefined' && (termWidth = 124);
+   typeof termWidth === 'undefined' && (termWidth = 134);
    typeof columnWidth === 'undefined' && (columnWidth = 14);
    typeof rowHeader === 'undefined' && (rowHeader = 40);
 
@@ -89,9 +89,63 @@
       db.getMongo().getDBNames().map(dbName => {
          let dbStats = db.getSiblingDB(dbName).stats({ "freeStorage": 1, "scale": 1 }); // max precision due to SERVER-69036
          if (typeof dbStats.raw !== 'undefined') {
-            dbStats.db = dbStats.raw[db.getSiblingDB('config').getCollection('shards').findOne().host].db;
+            dbStats.db = dbStats.raw[db.getSiblingDB('config').getCollection('shards').findOne().host].db; // replace with reducer
+            // {
+            //    raw: {
+            //      'shard01/localhost:27018,localhost:27019,localhost:27020': {
+            //        db: 'database',
+            //        collections: 1,
+            //        views: 0,
+            //        objects: 3622,
+            //        avgObjSize: 984.1220320265047,
+            //        dataSize: 3564490,
+            //        storageSize: 1409024,
+            //        indexes: 11,
+            //        indexSize: 1974272,
+            //        totalSize: 3383296,
+            //        scaleFactor: 1,
+            //        fsUsedSize: 421465636864,
+            //        fsTotalSize: 499963174912,
+            //        ok: 1
+            //      },
+            //      'shard02/localhost:27021,localhost:27022,localhost:27023': {
+            //        db: 'database',
+            //        collections: 1,
+            //        views: 0,
+            //        objects: 3600,
+            //        avgObjSize: 956.62,
+            //        dataSize: 3443832,
+            //        storageSize: 1400832,
+            //        indexes: 11,
+            //        indexSize: 1986560,
+            //        totalSize: 3387392,
+            //        scaleFactor: 1,
+            //        fsUsedSize: 421465636864,
+            //        fsTotalSize: 499963174912,
+            //        ok: 1
+            //      }
+            //    },
+            //    objects: 7222,
+            //    avgObjSize: 970.0426474660759,
+            //    dataSize: 7008322,
+            //    storageSize: 2809856,
+            //    totalSize: 6770688,
+            //    indexes: 22,
+            //    indexSize: 3960832,
+            //    scaleFactor: 1,
+            //    fileSize: 0,
+            //    ok: 1,
+            //    operationTime: Timestamp({ t: 1680489585, i: 1 }),
+            //    '$clusterTime': {
+            //      clusterTime: Timestamp({ t: 1680489588, i: 1 }),
+            //      signature: {
+            //        hash: Binary(Buffer.from("0000000000000000000000000000000000000000", "hex"), 0),
+            //        keyId: Long("0")
+            //      }
+            //    }
+            //  }
          }
-         let database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, dbStats.objects, 0, '', dbStats.indexSize);
+         let database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, 0, dbStats.objects, 0, '', dbStats.indexSize, 0);
          database.init();
          printDbHeader(database.name);
          let collections = db.getSiblingDB(dbName).getCollectionInfos({
@@ -102,16 +156,16 @@
          printCollHeader(collections.length);
          // collections.map(async collInfo => {
          collections.map(({ 'name': collName }) => {
-            // let collStats = db.getSiblingDB(dbName).getCollection(collName).stats({ "scale": 1, "indexDetails": true });
             let collStats = $collStats(dbName, collName);
-            // let compressor = collStats.wiredTiger.creationString.match(/block_compressor=(\w+)/);
             let compressor = collStats.wiredTiger.compressor;
             let collection = new MetaStats(
                collName, collStats.size, collStats.wiredTiger['block-manager']['file size in bytes'],
-               collStats.count, collStats.wiredTiger['block-manager']['file bytes available for reuse'],
-               // collStats.wiredTiger.creationString.match(/block_compressor=(?<compressor>\w+)/)?.groups?.compressor
+               collStats.wiredTiger['block-manager']['file bytes available for reuse'],
+               collStats.count,
+               collStats.numOrphanDocs,
                // (compressor != null) ? compressor[1] : 'none'
-               (compressor != null) ? compressor : 'none'
+               (compressor != null) ? compressor : 'none',
+               0, 0
             );
             collection.init();
             // Object.keys(collStats.indexDetails).map(indexName => {
@@ -135,6 +189,7 @@
          dbPath.dataSize += database.dataSize;
          dbPath.storageSize += database.storageSize;
          dbPath.objects += database.objects;
+         dbPath.orphans += database.orphans;
          dbPath.indexSize += database.indexSize;
          dbPath.indexFree += database.indexFree;
          dbPath.blocksFree += database.blocksFree;
@@ -168,30 +223,23 @@
       /*
        *  Print collection table header
        */
-      // console.log('-'.repeat(termWidth));
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      // console.log(`Collections:\t${collTotal}`.padEnd(rowHeader));
-      // console.log(`\u001b[1m\u001b[32mCollections:\u001b[0m${collTotal.toString().padStart(2)}`);
       console.log(`\u001b[1m\u001b[32mCollections:\u001b[0m ${collTotal.toString()}`);
    }
 
-   function printCollection({ name, dataSize, compression, compressor = 'none', storageSize, blocksFree, objects }) {
+   function printCollection({ name, dataSize, compression, compressor = 'none', storageSize, blocksFree, objects, orphans }) {
       /*
        *  Print collection level stats
        */
-      // console.log(` ${'-'.repeat(termWidth - 1)}`);
       console.log(` \u001b[33m${'-'.repeat(termWidth - 1)}\u001b[0m`);
-      // console.log(`\u001b[36m${(' ' + name).padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(7)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
-      console.log(`\u001b[36m${(' ' + name).padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
+      console.log(`\u001b[36m${(' ' + name).padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${orphans.toString().padStart(columnWidth - 5)}`);
    }
 
    function printViewHeader(viewTotal = 0) {
       /*
        *  Print view table header
        */
-      // console.log('-'.repeat(termWidth));
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      // console.log(`\u001b[1m\u001b[32mViews:\u001b[0m${viewTotal.toString().padStart(8)}`);
       console.log(`\u001b[1m\u001b[32mViews:\u001b[0m${' '.repeat(7)}${viewTotal.toString()}`);
    }
 
@@ -199,7 +247,6 @@
       /*
        *  Print view name
        */
-      // console.log('-'.repeat(termWidth));
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
       console.log(` \u001b[36m${viewName.padEnd(rowHeader)}\u001b[0m`);
    }
@@ -209,43 +256,36 @@
        *  Print DB table header
        */
       console.log(`\n`);
-      // console.log('='.repeat(termWidth));
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32m${`Database:\u001b[0m \u001b[36m${dbName}`.padEnd(rowHeader + 9)}\u001b[0m \u001b[32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}\u001b[0m`);
+      console.log(`\u001b[1m\u001b[32m${`Database:\u001b[0m \u001b[36m${dbName}`.padEnd(rowHeader + 9)}\u001b[0m \u001b[1m\u001b[32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Orphans'.padStart(columnWidth - 4)}\u001b[0m`);
    }
 
    function printDb({
-         dataSize, compression, storageSize, blocksFree, objects, indexSize, indexFree
+         dataSize, compression, storageSize, blocksFree, objects, orphans, indexSize, indexFree
       }) {
       /*
        *  Print DB level rollup stats
        */
-      // console.log('-'.repeat(termWidth));
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32m${'Collections subtotal:'.padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree).padStart(columnWidth) + `(${formatPct(blocksFree, storageSize)})`.padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
+      console.log(`\u001b[1m\u001b[32m${'Collections subtotal:'.padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree).padStart(columnWidth) + `(${formatPct(blocksFree, storageSize)})`.padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${orphans.toString().padStart(columnWidth - 5)}`);
       console.log(`\u001b[1m\u001b[32m${'Indexes subtotal:'.padEnd(rowHeader)}\u001b[0m ${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(indexSize).padStart(columnWidth)} ${`${formatUnit(indexFree).padStart(columnWidth)}${`(${formatPct(indexFree, indexSize)})`.padStart(8)}`.padStart(columnWidth + 8)}`);
-      // console.log('='.repeat(termWidth));
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
    }
 
    function printDbPath({
-         dbPath, proc, hostname, dataSize, storageSize, blocksFree, compression, objects, indexSize, indexFree
+         dbPath, proc, hostname, dataSize, storageSize, blocksFree, objects, orphans, compression, indexSize, indexFree
       }) {
       /*
        *  Print total dbPath rollup stats
        */
       console.log(`\n`);
-      // console.log('='.repeat(termWidth));
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32m${'dbPath totals'.padEnd(rowHeader)} ${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}\u001b[0m`);
-      // console.log('-'.repeat(termWidth));
+      console.log(`\u001b[1m\u001b[32m${'dbPath totals'.padEnd(rowHeader)} \u001b[32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Orphans'.padStart(columnWidth - 4)}\u001b[0m`);
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32m${'All DBs:'.padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)}`);
+      console.log(`\u001b[1m\u001b[32m${'All DBs:'.padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(blocksFree) + ('(' + formatPct(blocksFree, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${orphans.toString().padStart(columnWidth - 5)}`);
       console.log(`\u001b[1m\u001b[32m${'All indexes:'.padEnd(rowHeader)}\u001b[0m ${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(indexSize).padStart(columnWidth)} ${(formatUnit(indexFree) + ('(' + formatPct(indexFree, indexSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
-      // console.log('='.repeat(termWidth));
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
       console.log(`\u001b[1m\u001b[32mHost:\u001b[0m ${hostname}\t\u001b[1m\u001b[32mType:\u001b[0m ${proc}\t\u001b[1m\u001b[32mdbPath:\u001b[0m ${dbPath}`);
-      // console.log('='.repeat(termWidth));
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
       console.log(`\n`);
    }
