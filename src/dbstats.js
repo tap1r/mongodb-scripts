@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.4.2"
+ *  Version: "0.4.3"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -19,8 +19,8 @@
       monitorRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => authDb == role == 'clusterMonitor' && authDb == 'admin'),
       dbRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => authzRoles.includes(role) && authDb == 'admin');
    if (!(!(!!authenticatedUsers.length) || !!adminRoles.length || !!monitorRoles.length && !!dbRoles.length))
-      print('\u001b[31mWARN: authz privileges may be inadequate and results may vary\u001b[0m');
-      print('\u001b[31mWARN: consider inheriting built-in roles \u001b[33mclusterMonitor@admin\u001b[31m and \u001b[33mreadAnyDatabase@admin\u001b[0m');
+      print('\u001b[31m[WARN] authz privileges may be inadequate and results may vary\u001b[0m');
+      print('\u001b[31m[WARN] consider inheriting built-in roles \u001b[33mclusterMonitor@admin\u001b[31m and \u001b[33mreadAnyDatabase@admin\u001b[0m');
 })();
 
 /*
@@ -29,7 +29,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.4.2" },
+   let __script = { "name": "dbstats.js", "version": "0.4.3" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -171,7 +171,8 @@
       // console.log('-'.repeat(termWidth));
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
       // console.log(`Collections:\t${collTotal}`.padEnd(rowHeader));
-      console.log(`\u001b[1m\u001b[32mCollections:\u001b[0m${collTotal.toString().padStart(2)}`);
+      // console.log(`\u001b[1m\u001b[32mCollections:\u001b[0m${collTotal.toString().padStart(2)}`);
+      console.log(`\u001b[1m\u001b[32mCollections:\u001b[0m ${collTotal.toString()}`);
    }
 
    function printCollection({ name, dataSize, compression, compressor = 'none', storageSize, blocksFree, objects }) {
@@ -190,7 +191,8 @@
        */
       // console.log('-'.repeat(termWidth));
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32mViews:\u001b[0m${viewTotal.toString().padStart(8)}`);
+      // console.log(`\u001b[1m\u001b[32mViews:\u001b[0m${viewTotal.toString().padStart(8)}`);
+      console.log(`\u001b[1m\u001b[32mViews:\u001b[0m${' '.repeat(7)}${viewTotal.toString()}`);
    }
 
    function printView(viewName) {
