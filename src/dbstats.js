@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.4.4"
+ *  Version: "0.4.5"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -29,7 +29,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.4.4" },
+   let __script = { "name": "dbstats.js", "version": "0.4.5" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -88,63 +88,7 @@
       // db.getMongo().getDBNames().map(async dbName => {
       db.getMongo().getDBNames().map(dbName => {
          let dbStats = db.getSiblingDB(dbName).stats({ "freeStorage": 1, "scale": 1 }); // max precision due to SERVER-69036
-         if (typeof dbStats.raw !== 'undefined') {
-            dbStats.db = dbStats.raw[db.getSiblingDB('config').getCollection('shards').findOne().host].db; // replace with reducer
-            // {
-            //    raw: {
-            //      'shard01/localhost:27018,localhost:27019,localhost:27020': {
-            //        db: 'database',
-            //        collections: 1,
-            //        views: 0,
-            //        objects: 3622,
-            //        avgObjSize: 984.1220320265047,
-            //        dataSize: 3564490,
-            //        storageSize: 1409024,
-            //        indexes: 11,
-            //        indexSize: 1974272,
-            //        totalSize: 3383296,
-            //        scaleFactor: 1,
-            //        fsUsedSize: 421465636864,
-            //        fsTotalSize: 499963174912,
-            //        ok: 1
-            //      },
-            //      'shard02/localhost:27021,localhost:27022,localhost:27023': {
-            //        db: 'database',
-            //        collections: 1,
-            //        views: 0,
-            //        objects: 3600,
-            //        avgObjSize: 956.62,
-            //        dataSize: 3443832,
-            //        storageSize: 1400832,
-            //        indexes: 11,
-            //        indexSize: 1986560,
-            //        totalSize: 3387392,
-            //        scaleFactor: 1,
-            //        fsUsedSize: 421465636864,
-            //        fsTotalSize: 499963174912,
-            //        ok: 1
-            //      }
-            //    },
-            //    objects: 7222,
-            //    avgObjSize: 970.0426474660759,
-            //    dataSize: 7008322,
-            //    storageSize: 2809856,
-            //    totalSize: 6770688,
-            //    indexes: 22,
-            //    indexSize: 3960832,
-            //    scaleFactor: 1,
-            //    fileSize: 0,
-            //    ok: 1,
-            //    operationTime: Timestamp({ t: 1680489585, i: 1 }),
-            //    '$clusterTime': {
-            //      clusterTime: Timestamp({ t: 1680489588, i: 1 }),
-            //      signature: {
-            //        hash: Binary(Buffer.from("0000000000000000000000000000000000000000", "hex"), 0),
-            //        keyId: Long("0")
-            //      }
-            //    }
-            //  }
-         }
+         dbStats.db = dbName;
          let database = new MetaStats(dbStats.db, dbStats.dataSize, dbStats.storageSize, 0, dbStats.objects, 0, '', dbStats.indexSize, 0);
          database.init();
          printDbHeader(database.name);
@@ -165,15 +109,10 @@
                collStats.numOrphanDocs,
                // (compressor != null) ? compressor[1] : 'none'
                (compressor != null) ? compressor : 'none',
-               0, 0
+               collStats.indexes.totalIndexSize,
+               collStats.indexes.totalIndexBytesReusable
             );
             collection.init();
-            // Object.keys(collStats.indexDetails).map(indexName => {
-            //    collection.indexFree += collStats.indexDetails[indexName]['block-manager']['file bytes available for reuse'];
-            //    collection.indexSize += collStats.indexDetails[indexName]['block-manager']['file size in bytes'];
-            // });
-            collection.indexFree = collStats.indexes.totalIndexBytesReusable;
-            collection.indexSize = collStats.indexes.totalIndexSize;
             printCollection(collection);
             database.blocksFree += collection.blocksFree;
             database.indexFree += collection.indexFree;
@@ -188,11 +127,11 @@
          printDb(database);
          dbPath.dataSize += database.dataSize;
          dbPath.storageSize += database.storageSize;
+         dbPath.blocksFree += database.blocksFree;
          dbPath.objects += database.objects;
          dbPath.orphans += database.orphans;
          dbPath.indexSize += database.indexSize;
          dbPath.indexFree += database.indexFree;
-         dbPath.blocksFree += database.blocksFree;
       });
 
       return dbPath;
