@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.5.0"
+ *  Version: "0.5.1"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.5.0"
+      "version": "0.5.1"
 });
 
 /*
@@ -169,7 +169,7 @@ class MetaStats {
    /*
     *  Storage statistics metadata class
     */
-   constructor(name = '', dataSize = 0, storageSize = 0, objects = 0, blocksFree = 0, compressor = '', indexSize = 0, indexFree = 0) {
+   constructor(name = '', dataSize = 0, storageSize = 0, blocksFree = 0, objects = 0, orphans = 0, compressor = '', indexSize = 0, indexFree = 0) {
       // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
       // this.instance = (async() => { return await hello().me })();
       // this.hostname = (async() => { return hostInfo().system.hostname })();
@@ -179,11 +179,12 @@ class MetaStats {
       this.name = name;
       this.dataSize = dataSize;
       this.storageSize = storageSize;
-      this.objects = +objects;
       this.blocksFree = blocksFree;
+      this.objects = +objects;
+      this.orphans = +orphans;
+      this.compressor = compressor;
       this.indexSize = indexSize;
       this.indexFree = indexFree;
-      this.compressor = compressor;
       this.overhead = 4096 / 1024 / 1024; // 4KB in MB
    }
    init() {  // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
