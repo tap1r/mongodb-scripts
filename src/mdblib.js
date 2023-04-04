@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.5.4"
+ *  Version: "0.5.5"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.5.4"
+      "version": "0.5.5"
 });
 
 /*
@@ -118,7 +118,7 @@ class ScaleFactor {
       // default to MB
       switch (unit.toUpperCase()) {
          case 'B':
-            this.factor = { "name": "bytes", "unit": "B", "symbol": "", "factor": Math.pow(1024, 0), "precision": 0, "pctPoint": 2 };
+            this.factor = { "name": "bytes", "unit": "B", "symbol": "", "factor": Math.pow(1024, 0), "precision": 0, "pctPoint": 1 };
             break;
          case 'KB':
             this.factor = { "name": "kilobytes", "unit": "KB", "symbol": "k", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 };
