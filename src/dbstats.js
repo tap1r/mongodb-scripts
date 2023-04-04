@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.4.6"
+ *  Version: "0.4.7"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -29,7 +29,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.4.6" },
+   let __script = { "name": "dbstats.js", "version": "0.4.7" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -56,12 +56,15 @@
     *  User defined parameters
     */
 
-   // Set scaler unit B, KB, MB, GB, TB, PB, EB, ZB, YB
-   typeof scale === 'undefined' && (scale = new ScaleFactor('MB'));
+   // scaler unit B, KB, MB, GB, TB, PB, EB, ZB, YB
+   let scale = new ScaleFactor('MB');
 
    /*
     *  Global defaults
     */
+
+   // scaler unit B, KB, MB, GB, TB, PB, EB, ZB, YB
+   typeof scale === 'undefined' && (scale = new ScaleFactor('MB'));
 
    // formatting preferences
    typeof termWidth === 'undefined' && (termWidth = 134);
@@ -87,7 +90,7 @@
       dbPath.init();
       // db.getMongo().getDBNames().map(async dbName => {
       db.getMongo().getDBNames().map(dbName => {
-         let dbStats = db.getSiblingDB(dbName).stats({ "freeStorage": 1, "scale": 1 }); // max precision due to SERVER-69036
+         let dbStats = db.getSiblingDB(dbName).stats((fCV(5.0)) ? { "freeStorage": 1, "scale": 1 } : 1); // max precision due to SERVER-69036
          dbStats.name = dbName;
          let database = new MetaStats(dbStats);
          database.init();
@@ -101,8 +104,6 @@
          // collections.map(async collInfo => {
          collections.map(({ 'name': collName }) => {
             let collStats = $collStats(dbName, collName);
-            collStats.compressor = collStats.wiredTiger.compressor;
-            // (collStats.compressor != null) ? compressor : 'none',
             let collection = new MetaStats(collStats);
             collection.init();
             printCollection(collection);
@@ -140,14 +141,14 @@
       /*
        *  Pretty format percentage
        */
-      return `${(100 * numerator / denominator).toFixed(scale.pctPoint)}%`;
+      return `${Math.round((numerator / denominator) * 1000)/10}%`;
    }
 
    function formatRatio(metric) {
       /*
        *  Pretty format ratio
        */
-      return `${metric.toFixed(scale.precision)}:1`;
+      return `${Math.round(metric * 100)/100}:1`;
    }
 
    function printCollHeader(collTotal = 0) {
@@ -158,7 +159,7 @@
       console.log(`\u001b[1m\u001b[32mCollections:\u001b[0m ${collTotal.toString()}`);
    }
 
-   function printCollection({ name, dataSize, compression, compressor = 'none', storageSize, freeStorageSize, objects, orphans }) {
+   function printCollection({ name, dataSize, compression, compressor, storageSize, freeStorageSize, objects, orphans }) {
       /*
        *  Print collection level stats
        */
