@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.5.3"
+ *  Version: "0.5.4"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.5.3"
+      "version": "0.5.4"
 });
 
 /*
@@ -187,12 +187,19 @@ class MetaStats {
    /*
     *  Storage statistics metadata class
     */
-   constructor({ name = '', dataSize = 0, storageSize = 0, freeStorageSize = 0, objects = 0, orphans = 0, compressor = '', indexSize = 0, totalIndexSize = 0, totalIndexBytesReusable = 0 } = {}) {
-      // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
+   constructor({
+         name = '', dataSize = 0, storageSize = 4096, freeStorageSize = 0,
+         objects = 0, orphans = 0, compressor = 'none', indexes = 0, nindexes = 1,
+         indexSize = 4096, totalIndexSize = 4096, totalIndexBytesReusable = 0,
+         internalPageSize = 4096
+      } = {}) {
+      /*
+       *  https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
+       */
       // this.instance = (async() => { return await hello().me })();
       // this.hostname = (async() => { return hostInfo().system.hostname })();
       // this.proc = (async() => { return db.serverStatus().process })();
-      // this.dbPath = (async() => { return (db.serverStatus().process === 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : null })();
+      // this.dbPath = (async() => { return (db.serverStatus().process === 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath : null })();
       // this.shards = (async() => { return (db.serverStatus().process === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null })();
       this.name = name;
       this.dataSize = dataSize;
@@ -201,9 +208,13 @@ class MetaStats {
       this.objects = objects;
       this.orphans = orphans;
       this.compressor = compressor;
+      this.indexes = indexes;  // dbStats indexes
+      this.nindexes = nindexes;  // collStats indexes
+      this.totalIndexBytesReusable = totalIndexBytesReusable;
       this.totalIndexSize = (indexSize === 0) ? totalIndexSize : indexSize;
       this.totalIndexBytesReusable = totalIndexBytesReusable;
-      this.overhead = 4096 / 1024 / 1024; // 4KB in MB
+      // this.overhead = (typeof internalPageSize === 'number') ? internalPageSize : 4096; // 4KB min allocation block size
+      this.overhead = 1024;
    }
    init() {  // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
       this.instance = hello().me;
@@ -213,7 +224,7 @@ class MetaStats {
       // this.dbPath = (db.serverStatus().process == 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : 'sharded';
       // this.shards = (db.serverStatus().process == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
       this.proc = (db.serverStatus().ok) ? db.serverStatus().process : 'unknown'; //  db.adminCommand({ "listShards": 1 })
-      this.dbPath = (this.proc == 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath
+      this.dbPath = (this.proc == 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
                   : (this.proc == 'mongos') ? 'sharded'
                   : 'unknown';
       this.shards = (this.proc == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
@@ -221,8 +232,8 @@ class MetaStats {
    get compression() {
       return this.dataSize / (this.storageSize - this.freeStorageSize - this.overhead);
    }
-   get totalSize() {
-      return this.storageSize + this.totalIndexSize + this.overhead;
+   get totalSize() { // unused
+      return this.storageSize + (this.totalIndexSize + this.overhead) * this.nindexes;
    }
 }
 
@@ -261,11 +272,17 @@ function $rand() {
    */
 }
 
+function $ceil(num) {
+   /*
+    *  Choose your preferred ceiling operator
+    */
+   return Math.ceil(num);
+}
+
 function $floor(num) {
    /*
     *  Choose your preferred floor operator
     */
-   
    return Math.floor(num);
 }
 
@@ -420,6 +437,20 @@ function hostInfo() {
    return hostInfo;
 }
 
+function serverCmdLineOpts() {
+   /*
+    *  Forward compatibility with db.serverCmdLineOpts()
+    */
+   let serverCmdLineOpts = {};
+   try {
+      serverCmdLineOpts = db.serverCmdLineOpts();
+   } catch (error) {
+      console.error(`WARN: insufficient rights to execute db.serverCmdLineOpts()\n${error}`);
+      serverCmdLineOpts.parsed.storage.dbPath = 'undefined';
+   }
+   return serverCmdLineOpts;
+}
+
 function isAtlasPlatform(type) {
    /*
     *  Evaluate Atlas deployment platform type
@@ -547,27 +578,27 @@ function $getRandExp(exponent = 0) {
    /*
     *  generate random exponential number
     */
-   return Math.ceil($getRandNum(0, 9) * Math.pow(10, exponent));
+   return $ceil($getRandNum(0, 9) * Math.pow(10, exponent));
 }
 
 function $getRandInt(min = 0, max = 1) {
    /*
     *  generate random integer
     */
-   min = Math.ceil(min);
-   max = Math.floor(max);
+   min = $ceil(min);
+   max = $floor(max);
 
-   return Math.floor(($rand() * (max - min) + min));
+   return $floor(($rand() * (max - min) + min));
 }
 
 function $getRandIntInc(min = 0, max = 1) {
    /*
     *  generate random integer inclusive of the maximum
     */
-   min = Math.ceil(min);
-   max = Math.floor(max);
+   min = $ceil(min);
+   max = $floor(max);
 
-   return Math.floor($rand() * (max - min + 1) + min);
+   return $floor($rand() * (max - min + 1) + min);
 }
 
 function $getRandRatioInt(ratios = [1]) {
@@ -1216,20 +1247,38 @@ function $collStats(dbName = '', collName = '') {
             } },
             "wiredTiger": {
                "block-manager": {
-                  // "file size in bytes": "$file size in bytes",
-                  // "file bytes available for reuse": "$file bytes available for reuse",
+                  "file size in bytes": "$file size in bytes",
+                  "file bytes available for reuse": "$file bytes available for reuse",
                   "file allocation unit size": "$file allocation unit size"
                },
-               "compressor": { "$first": "$compressor" },
-               "dataPageSize": { "$first": "$dataPageSize" },
-               "internalPageSize": { "$first": "$internalPageSize" },
+               "compressor": "$compressor",
+               "dataPageSize": "$dataPageSize",
+               "internalPageSize": "$internalPageSize",
                "uri": "$uri"
             },
             "totalIndexSize": "$indexes size in bytes",
             "totalIndexBytesReusable": "$indexes bytes available for reuse"
          } },
          { "$set": {
-            "name": { "$arrayElemAt": ["$name.captures", 0] }
+            "name": { "$arrayElemAt": ["$name.captures", 0] },
+            "dataPageSize": {
+               "$reduce": {
+                  "input": "$wiredTiger.dataPageSize",
+                  "initialValue": { "$arrayElemAt": ["$wiredTiger.dataPageSize", 0] },
+                  "in": { "$cond": [{ "$eq": ["$$value", "$$this"] }, "$$value", "mixed"] }
+            } },
+            "compressor": {
+               "$reduce": {
+                  "input": "$wiredTiger.compressor",
+                  "initialValue": { "$arrayElemAt": ["$wiredTiger.compressor", 0] },
+                  "in": { "$cond": [{ "$eq": ["$$value", "$$this"] }, "$$value", "mixed"] }
+            } },
+            "internalPageSize": {
+               "$reduce": {
+                  "input": "$wiredTiger.internalPageSize",
+                  "initialValue": { "$arrayElemAt": ["$wiredTiger.internalPageSize", 0] },
+                  "in": { "$cond": [{ "$eq": ["$$value", "$$this"] }, "$$value", "mixed"] }
+            } }
          } },
          { "$project": {
             "_id": 0,
