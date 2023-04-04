@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.5.2"
+ *  Version: "0.5.3"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.5.2"
+      "version": "0.5.3"
 });
 
 /*
@@ -117,16 +117,34 @@ class ScaleFactor {
    constructor(unit = 'MB') {
       // default to MB
       switch (unit.toUpperCase()) {
-         case  'B': this.factor = { "name":      "bytes", "unit":  "B", "symbol":  "", "factor": Math.pow(1024, 0), "precision": 0, "pctPoint": 2 };
-         case 'KB': this.factor = { "name":  "kilobytes", "unit": "KB", "symbol": "k", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 };
-         case 'MB': this.factor = { "name":  "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
-         case 'GB': this.factor = { "name":  "gigabytes", "unit": "GB", "symbol": "G", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 };
-         case 'TB': this.factor = { "name":  "terabytes", "unit": "TB", "symbol": "T", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 };
-         case 'PB': this.factor = { "name":  "petabytes", "unit": "PB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 };
-         case 'EB': this.factor = { "name":   "exabytes", "unit": "EB", "symbol": "E", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 };
-         case 'ZB': this.factor = { "name": "zettabytes", "unit": "ZB", "symbol": "Z", "factor": Math.pow(1024, 7), "precision": 2, "pctPoint": 1 };
-         case 'YB': this.factor = { "name": "yottabytes", "unit": "YB", "symbol": "Y", "factor": Math.pow(1024, 8), "precision": 2, "pctPoint": 1 };
-         default:   this.factor = { "name":  "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
+         case 'B':
+            this.factor = { "name": "bytes", "unit": "B", "symbol": "", "factor": Math.pow(1024, 0), "precision": 0, "pctPoint": 2 };
+            break;
+         case 'KB':
+            this.factor = { "name": "kilobytes", "unit": "KB", "symbol": "k", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 };
+            break;
+         case 'MB':
+            this.factor = { "name": "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
+            break;
+         case 'GB':
+            this.factor = { "name": "gigabytes", "unit": "GB", "symbol": "G", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 };
+            break;
+         case 'TB':
+            this.factor = { "name": "terabytes", "unit": "TB", "symbol": "T", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 };
+            break;
+         case 'PB':
+            this.factor = { "name": "petabytes", "unit": "PB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 };
+            break;
+         case 'EB':
+            this.factor = { "name": "exabytes", "unit": "EB", "symbol": "E", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 };
+            break;
+         case 'ZB':
+            this.factor = { "name": "zettabytes", "unit": "ZB", "symbol": "Z", "factor": Math.pow(1024, 7), "precision": 2, "pctPoint": 1 };
+            break;
+         case 'YB':
+            this.factor = { "name": "yottabytes", "unit": "YB", "symbol": "Y", "factor": Math.pow(1024, 8), "precision": 2, "pctPoint": 1 };
+            break;
+         default: this.factor = { "name": "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
       }
       return this.factor;
    }
@@ -180,8 +198,8 @@ class MetaStats {
       this.dataSize = dataSize;
       this.storageSize = storageSize;
       this.freeStorageSize = freeStorageSize;
-      this.objects = +objects;
-      this.orphans = +orphans;
+      this.objects = objects;
+      this.orphans = orphans;
       this.compressor = compressor;
       this.totalIndexSize = (indexSize === 0) ? totalIndexSize : indexSize;
       this.totalIndexBytesReusable = totalIndexBytesReusable;
