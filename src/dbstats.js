@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.4.7"
+ *  Version: "0.4.8"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -29,7 +29,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.4.7" },
+   let __script = { "name": "dbstats.js", "version": "0.4.8" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -94,7 +94,7 @@
          dbStats.name = dbName;
          let database = new MetaStats(dbStats);
          database.init();
-         printDbHeader(database.name);
+         printDbHeader(database);
          let collections = db.getSiblingDB(dbName).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
                "name": /(?:^(?!(system\..+|replset\..+)$).+)/
@@ -134,21 +134,21 @@
       /*
        *  Pretty format unit
        */
-      return `${(metric / scale.factor).toFixed(scale.precision)} ${scale.unit}`;
+      return `${Math.round((metric / scale.factor) * 100) / 100} ${scale.unit}`;
    }
 
-   function formatPct(numerator, denominator) {
+   function formatPct(numerator = 0, denominator = 1) {
       /*
        *  Pretty format percentage
        */
-      return `${Math.round((numerator / denominator) * 1000)/10}%`;
+      return `${Math.round((numerator / denominator) * 1000) / 10}%`;
    }
 
    function formatRatio(metric) {
       /*
        *  Pretty format ratio
        */
-      return `${Math.round(metric * 100)/100}:1`;
+      return `${Math.round(metric * 100) / 100}:1`;
    }
 
    function printCollHeader(collTotal = 0) {
@@ -156,7 +156,7 @@
        *  Print collection table header
        */
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32mCollections:\u001b[0m ${collTotal.toString()}`);
+      console.log(`\u001b[1m\u001b[32mCollections:\u001b[0m ${collTotal}`);
    }
 
    function printCollection({ name, dataSize, compression, compressor, storageSize, freeStorageSize, objects, orphans }) {
@@ -172,10 +172,10 @@
        *  Print view table header
        */
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32mViews:\u001b[0m${' '.repeat(7)}${viewTotal.toString()}`);
+      console.log(`\u001b[1m\u001b[32mViews:\u001b[0m${' '.repeat(7)}${viewTotal}`);
    }
 
-   function printView(viewName) {
+   function printView(viewName = 'unknown') {
       /*
        *  Print view name
        */
@@ -183,13 +183,13 @@
       console.log(` \u001b[36m${viewName.padEnd(rowHeader)}\u001b[0m`);
    }
 
-   function printDbHeader(dbName) {
+   function printDbHeader({ name }) {
       /*
        *  Print DB table header
        */
       console.log(`\n`);
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32m${`Database:\u001b[0m \u001b[36m${dbName}`.padEnd(rowHeader + 9)}\u001b[0m \u001b[1m\u001b[32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Orphans'.padStart(columnWidth - 4)}\u001b[0m`);
+      console.log(`\u001b[1m\u001b[32m${`Database:\u001b[0m \u001b[36m${name}`.padEnd(rowHeader + 9)}\u001b[0m \u001b[1m\u001b[32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Orphans'.padStart(columnWidth - 4)}\u001b[0m`);
    }
 
    function printDb({
