@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.2.3"
+ *  Version: "0.2.4"
  *  Description: driver and network latency telemetry PoC
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,23 +13,27 @@ console.clear();
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.2.3" };
+   let __script = { "name": "latency.js", "version": "0.2.4" };
    console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
 
-   let { slowms } = db.getSiblingDB('admin').getProfilingStatus(),
+   let slowms = 100,
       filter = `Synthetic slow operation at ${performance.now()}`;
+   try {
+      slowms = db.getSiblingDB('admin').getProfilingStatus().slowms;
+   } catch(error) {
+      console.log('[WARN] failed to aquire the slowms threshold:', error);
+      console.log('[WARN] defaulting slowms to 200ms');
+      slowms = 200;
+   }
+   // let { slowms = 100 } = db.getSiblingDB('admin').getProfilingStatus();
    let pipeline = [
-         { "$currentOp": {} },
+         { "$currentOp": { } },
          { "$limit": 1 },
          { "$project": {
             "_id": 0,
             "slowms": {
                "$function": {
-                  "body": `function(ms) {
-                     sleep(ms);
-                     return ms;
-                  }`,
-                  // "args": ["$$delayms"],
+                  "body": `function(ms) { sleep(ms) }`,
                   "args": [slowms],
                   "lang": "js"
          } } } }
@@ -37,18 +41,18 @@ console.clear();
       options = {
          "comment": filter,
          "cursor": { "batchSize": 1 },
-         "readConcern": { "level": "local" },
-         // "let": { "delayms": slowms }
+         "readConcern": { "level": "local" }
       },
-      result, rtt, t0, t1, t2, t3, totalTime,
+      rtt, t0, t1, t2, t3, totalTime,
       report, tableWidth, padding, longestValue,
       columnWidth = 24, spacing = 2;
 
    try {
       t0 = process.hrtime();
-      result = db.getSiblingDB('admin').aggregate(pipeline, options).toArray()[0];
+      db.getSiblingDB('admin').aggregate(pipeline, options).toArray();
       t1 = process.hrtime(t0);
    } catch(error) {
+      console.log('Synthetic slow query failed');
       throw error;
    }
 
@@ -65,7 +69,9 @@ console.clear();
       t2 = process.hrtime();
       let { ok } = db.adminCommand({ "ping": 1 });
       t3 = process.hrtime(t2);
+      if (!ok) throw new Error();
    } catch(error) {
+      console.log('SDAM ping failed');
       throw error;
    }
 
@@ -78,8 +84,8 @@ console.clear();
          "minimumFractionDigits": 2,
          "maximumFractionDigits": 2,
          "style": "unit",
-         "unit": "millisecond", // https://tc39.es/proposal-unified-intl-numberformat/section6/locales-currencies-tz_proposed_out.html#sec-issanctionedsimpleunitidentifier
-         "unitDisplay": "short" // "narrow"
+         "unit": "millisecond",
+         "unitDisplay": "short"
       }).format(duration);
    }
 
