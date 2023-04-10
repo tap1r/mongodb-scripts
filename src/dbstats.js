@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.4.8"
+ *  Version: "0.4.9"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,6 +12,11 @@
     *  Ensure authorized users have the following minimum required roles
     *  clusterMonitor@admin and readAnyDatabase@admin
     */
+   try {
+      db.adminCommand({ "features": 1 });
+   } catch(error) {
+      // MongoServerError: command features requires authentication
+   }
    let { 'authInfo': { authenticatedUsers, authenticatedUserRoles } } = db.adminCommand({ "connectionStatus": 1 }),
       adminRoles = ['clusterAdmin', 'atlasAdmin', 'backup', 'root', '__system'];
       authzRoles = ['readAnyDatabase', 'readWriteAnyDatabase', 'dbAdminAnyDatabase'],
@@ -29,7 +34,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.4.8" },
+   let __script = { "name": "dbstats.js", "version": "0.4.9" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -88,11 +93,11 @@
        */
       let dbPath = new MetaStats();
       dbPath.init();
-      // db.getMongo().getDBNames().map(async dbName => {
       db.getMongo().getDBNames().map(dbName => {
-         let dbStats = db.getSiblingDB(dbName).stats((fCV(5.0)) ? { "freeStorage": 1, "scale": 1 } : 1); // max precision due to SERVER-69036
-         dbStats.name = dbName;
-         let database = new MetaStats(dbStats);
+         let database = new MetaStats({
+            name: dbName,
+            ...db.getSiblingDB(dbName).stats((fCV(5.0)) ? { "freeStorage": 1, "scale": 1 } : 1) // max precision due to SERVER-69036
+         });
          database.init();
          printDbHeader(database);
          let collections = db.getSiblingDB(dbName).getCollectionInfos({
@@ -100,23 +105,33 @@
                "name": /(?:^(?!(system\..+|replset\..+)$).+)/
             }, true, true
          );
+         //
          printCollHeader(collections.length);
-         // collections.map(async collInfo => {
          collections.map(({ 'name': collName }) => {
-            let collStats = $collStats(dbName, collName);
-            let collection = new MetaStats(collStats);
+            let collection = new MetaStats($collStats(dbName, collName));
             collection.init();
             printCollection(collection);
             database.freeStorageSize += collection.freeStorageSize;
             database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
          });
+         //
          let views = db.getSiblingDB(dbName).getCollectionInfos({
-            "type": "view",
-            // "name": /(?:^(?!(system\..+|replset\..+)$).+)/
-         }, true, true
-      );
+               "type": "view",
+               // "name": /(?:^(?!(system\..+|replset\..+)$).+)/
+            }, true, true
+         );
          printViewHeader(views.length);
          views.map(({ name }) => printView(name));
+         //
+         // printIndexHeader(indexes.length);
+         // indexes.map(({ 'name': index }) => {
+         //    let index = new MetaStats($collStats(dbName, collName));
+         //    index.init();
+         //    printIndex(index);
+         //    // database.freeStorageSize += collection.freeStorageSize;
+         //    database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
+         // });
+         //
          printDb(database);
          dbPath.dataSize += database.dataSize;
          dbPath.storageSize += database.storageSize;
@@ -181,6 +196,22 @@
        */
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
       console.log(` \u001b[36m${viewName.padEnd(rowHeader)}\u001b[0m`);
+   }
+
+   function printIndexHeader(indexTotal = 0) {
+      /*
+       *  Print index table header
+       */
+      console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
+      console.log(`\u001b[1m\u001b[32mIndexes:\u001b[0m${' '.repeat(7)}${indexTotal}`);
+   }
+
+   function printIndex({ namespace, name, storageSize, freeStorageSize }) {
+      /*
+       *  Print index level stats
+       */
+      console.log(` \u001b[33m${'-'.repeat(termWidth - 1)}\u001b[0m`);
+      console.log(`\u001b[36m${(' ' + namespace + '.' + name).padEnd(rowHeader)}\u001b[0m ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ('(' + formatPct(freeStorageSize, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
    }
 
    function printDbHeader({ name }) {
