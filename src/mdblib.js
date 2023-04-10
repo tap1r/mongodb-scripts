@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.5.6"
+ *  Version: "0.5.7"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.5.6"
+      "version": "0.5.7"
 });
 
 /*
@@ -1243,7 +1243,7 @@ function $collStats(dbName = '', collName = '') {
             "name": { 
                "$regexFind": {
                   "input": { "$first": "$name" },
-                  "regex": /^.+\.(.+)$/
+                  "regex": /^\w+\.(.+)$/
             } },
             "wiredTiger": {
                "block-manager": {
