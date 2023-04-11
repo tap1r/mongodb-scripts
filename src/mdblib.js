@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.5.8"
+ *  Version: "0.5.9"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.5.8"
+      "version": "0.5.9"
 });
 
 /*
@@ -1201,21 +1201,32 @@ function $collStats(dbName = '', collName = '') {
             ] }
          } },
          { "$set": {
-            "storageStats.indexDetails": { "$objectToArray": "$storageStats.indexDetails" }
+            "storageStats.indexStats": { "$objectToArray": "$storageStats.indexDetails" }
          } },
          { "$set": {
-            "storageStats.indexStats.file size in bytes": {
+            "storageStats.indexes": {
+               "$map": {
+                  "input": "$storageStats.indexStats",
+                  "as": "indexes",
+                  "in": {
+                     "$arrayToObject": [[
+                        { "k": "name", "v": "$$indexes.k" },
+                        { "k": "uri", "v": "$$indexes.v.uri" },
+                        { "k": "file size in bytes", "v": "$$indexes.v.block-manager.file size in bytes" },
+                        { "k": "file bytes available for reuse", "v": "$$indexes.v.block-manager.file bytes available for reuse" },
+                        { "k": "file allocation unit size", "v": "$$indexes.v.block-manager.file allocation unit size" }
+         ]] } } } } },
+         { "$set": {
+            "storageStats.indexDetails.file size in bytes": {
                "$reduce": {
-                  "input": "$storageStats.indexDetails",
+                  "input": "$storageStats.indexStats",
                   "initialValue": 0,
                   "in": { "$sum": ["$$value", "$$this.v.block-manager.file size in bytes"] }
-               }
-            }
-         } },
+         } } } },
          { "$set": {
-            "storageStats.indexStats.file bytes available for reuse": {
+            "storageStats.indexDetails.file bytes available for reuse": {
                "$reduce": {
-                  "input": "$storageStats.indexDetails",
+                  "input": "$storageStats.indexStats",
                   "initialValue": 0,
                   "in": { "$sum": ["$$value", "$$this.v.block-manager.file bytes available for reuse"] }
          } } } },
@@ -1235,11 +1246,10 @@ function $collStats(dbName = '', collName = '') {
             "dataPageSize": { "$push": "$storageStats.wiredTiger.dataPageSize" },
             "uri": { "$push": "$storageStats.wiredTiger.uri" },
             "file allocation unit size": { "$push": "$storageStats.wiredTiger.block-manager.file allocation unit size" },
-            // "file size in bytes": { "$sum": "$storageStats.wiredTiger.block-manager.file size in bytes" },
-            // "file bytes available for reuse": { "$sum": "$storageStats.wiredTiger.block-manager.file bytes available for reuse" },
             "nindexes": { "$sum": "$storageStats.nindexes" },
-            "indexes size in bytes": { "$sum": "$storageStats.indexStats.file size in bytes" },
-            "indexes bytes available for reuse": { "$sum": "$storageStats.indexStats.file bytes available for reuse" }
+            "indexes": { "$push": "$storageStats.indexes" },
+            "indexes size in bytes": { "$sum": "$storageStats.indexDetails.file size in bytes" },
+            "indexes bytes available for reuse": { "$sum": "$storageStats.indexDetails.file bytes available for reuse" }
          } },
          { "$set": {
             "name": { 
