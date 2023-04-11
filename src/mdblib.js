@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.5.7"
+ *  Version: "0.5.8"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.5.7"
+      "version": "0.5.8"
 });
 
 /*
@@ -189,9 +189,9 @@ class MetaStats {
     */
    constructor({
          name = '', dataSize = 0, storageSize = 4096, freeStorageSize = 0,
-         objects = 0, orphans = 0, compressor = 'none', indexes = 0, nindexes = 1,
+         objects = 0, orphans = 0, compressor = 'none', indexes = 0, nindexes = 0,
          indexSize = 4096, totalIndexSize = 4096, totalIndexBytesReusable = 0,
-         internalPageSize = 4096
+         collections = 0, ncollections = 0, internalPageSize = 4096
       } = {}) {
       /*
        *  https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
@@ -208,13 +208,15 @@ class MetaStats {
       this.objects = +objects;
       this.orphans = +orphans;
       this.compressor = compressor;
-      this.indexes = indexes;  // dbStats indexes
-      this.nindexes = nindexes;  // collStats indexes
+      this.collections = []; // usurp dbStats counter for collections list
+      this.ncollections = (collections === 0) ? ncollections : +collections // merge collStats and dbStats n/collections counters
+      this.indexes = []; // usurp dbStats counter for indexes list
+      this.nindexes = (indexes === 0) ? nindexes : +indexes // merge collStats and dbStats n/indexes counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
-      this.totalIndexSize = (indexSize === 0) ? totalIndexSize : indexSize;
+      this.totalIndexSize = (indexSize === 0) ? totalIndexSize : indexSize; // merge collStats and dbStats index size counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
       // this.overhead = (typeof internalPageSize === 'number') ? internalPageSize : 4096; // 4KB min allocation block size
-      this.overhead = 1024;
+      this.overhead = 1024; // unused
    }
    init() {  // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
       this.instance = hello().me;
@@ -1170,7 +1172,7 @@ function $collStats(dbName = '', collName = '') {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
-         "comment": "sharding compatible $collStats"
+         "comment": `run by ${__lib.name} sharding compatible $collStats wrapper`
       },
       pipeline = [
          { "$collStats": { "storageStats": { "scale": 1 } } },
