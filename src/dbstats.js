@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.4.10"
+ *  Version: "0.4.11"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -34,7 +34,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.4.10" },
+   let __script = { "name": "dbstats.js", "version": "0.4.11" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -194,7 +194,7 @@
        *  Print view name
        */
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      console.log(` \u001b[36m${viewName.padEnd(rowHeader)}\u001b[0m`);
+      console.log(` \u001b[36m${viewName}\u001b[0m`);
    }
 
    function printIndexHeader(indexTotal = 0) {
@@ -235,7 +235,7 @@
    }
 
    function printDbPath({
-         dbPath, proc, hostname, dataSize, storageSize, freeStorageSize, objects, orphans, compression, totalIndexSize, totalIndexBytesReusable
+         dbPath, proc, hostname, compression, dataSize, storageSize, freeStorageSize, objects, orphans, ncollections, nindexes, totalIndexSize, totalIndexBytesReusable
       }) {
       /*
        *  Print total dbPath rollup stats
@@ -244,8 +244,8 @@
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
       console.log(`\u001b[1m\u001b[32m${'dbPath totals'.padEnd(rowHeader)} \u001b[32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Orphans'.padStart(columnWidth - 4)}\u001b[0m`);
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32m${'All DBs:'.padEnd(rowHeader)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ('(' + formatPct(freeStorageSize, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${orphans.toString().padStart(columnWidth - 5)}`);
-      console.log(`\u001b[1m\u001b[32m${'All indexes:'.padEnd(rowHeader)}\u001b[0m ${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ('(' + formatPct(totalIndexBytesReusable, totalIndexSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
+      console.log(`\u001b[1m\u001b[32m${`All namespaces:\u001b[0m      ${ncollections}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ('(' + formatPct(freeStorageSize, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${orphans.toString().padStart(columnWidth - 5)}`);
+      console.log(`\u001b[1m\u001b[32m${`All indexes:\u001b[0m         ${nindexes}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ('(' + formatPct(totalIndexBytesReusable, totalIndexSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
       console.log(`\u001b[1m\u001b[32mHost:\u001b[0m ${hostname}\t\u001b[1m\u001b[32mType:\u001b[0m ${proc}\t\u001b[1m\u001b[32mdbPath:\u001b[0m ${dbPath}`);
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
