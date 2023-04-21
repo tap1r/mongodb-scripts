@@ -97,7 +97,7 @@
     */
    let options = {
          "cursor": { "batchSize": 0 },
-         "comment": "$currentOp command template",
+         "comment": "$currentOp template",
          // "let": { } // v5.0+ only
       },
       pipeline = [
