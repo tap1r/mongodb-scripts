@@ -13,6 +13,14 @@ The [dbstats.js](src/dbstats.js) script (and [mdblib.js](src/mdblib.js) dependen
 * Free blocks (reclaimable/reusable space)
 * Compression statistics
 
+### Installing _dbstats.js_
+
+Retrieve fresh versions of both the _dbstats.js_ and _mdblib.js_ scripts:
+
+```bash
+curl --remote-name-all -fsSL https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/src/{dbstats.js,mdblib.js}
+```
+
 ### Using _dbstats.js_
 
 Sample syntax to run against either of the _mongo_ or _mongosh_ shells:
