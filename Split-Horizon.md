@@ -74,16 +74,16 @@ Add the split-horizon topology definitions
 
 ```javascript
 let horizons = [
-    { "external": "external:37017" },
-    { "external": "external:37018" },
-    { "external": "external:37019" }
+   { "external": "external:37017" },
+   { "external": "external:37018" },
+   { "external": "external:37019" }
 ];
 rs.reconfig({
-	...rs.conf(),
-	"members": rs.conf().members.map((member) => ({
-		...member,
-		"horizons": horizons[member._id]
-	}))
+   ...rs.conf(),
+   "members": rs.conf().members.map(member => ({
+      ...member,
+      "horizons": horizons[member._id]
+   }))
 });
 ```
 
