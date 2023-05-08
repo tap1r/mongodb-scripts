@@ -64,7 +64,7 @@
       ];
 
    db.getMongo().setReadPref(readPref);
-   namespace.explain(explainPlan).aggregate(pipeline, options);
+   printjson(namespace.explain(explainPlan).aggregate(pipeline, options));
 })();
 
 (() => {
