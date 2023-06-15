@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.3"
+ *  Version: "0.6.4"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.3" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.4" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -159,7 +159,7 @@
       sampleSize = 8, docSize = 0;
       totalBatches = 1, residual = 0,
       now = new Date().getTime(),
-      timestamp = $floor(now/1000.0);
+      timestamp = $floor(now / 1000.0);
 
    fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
    sampleSize *= sampleSize;
@@ -270,7 +270,7 @@
                } } } },
                { "$set": {
                   "migrationId": "$_id.migrationId",
-                  "namespace": "$_id.namespace",
+                  "namespace": "$_id.namespace"
                } },
                { "$set": {
                   "donors": {
@@ -360,8 +360,11 @@
       schemas = new Array();
       schemas.push({
          "_id": oid,
-         "schema": "A",
-         "comment": "General purpose schema shape",
+         "schema": {
+            "type": "A",
+            "version": 1.0,
+            "comment": "General purpose schema"
+         },
          "language": idioma,
          "string": $genRandStr($getRandIntInc(6, 24)),  // hashed shard key
          "quote": {
@@ -431,8 +434,11 @@
       });
       schemas.push({
          "_id": oid,
-         "schema": "B",
-         "comment": "Time series schema example",
+         "schema": {
+            "type": "B",
+            "version": 1.0,
+            "comment": "Time series schema"
+         },
          "language": idioma,
          "string": $genRandStr($getRandIntInc(6, 24)),  // hashed shard key
          "timeField": date,
@@ -451,8 +457,11 @@
       });
       schemas.push({
          "_id": oid,
-         "schema": "C",
-         "comment": "GeoJSON schema examples",
+         "schema": {
+            "type": "C",
+            "version": 1.0,
+            "comment": "GeoJSON schema"
+         },
          "language": idioma,
          "string": $genRandStr($getRandIntInc(6, 24)),  // hashed shard key
          "temperature": [
@@ -658,7 +667,7 @@
             // "pipeline": []
          };
          if (capped) {
-            options.capped = capped
+            options.capped = capped;
             options.size = cappedOptions.size;
             options.max = cappedOptions.max;
             console.log(`\twith capped options:\t"${tojson(cappedOptions)}"`);
@@ -670,7 +679,7 @@
             console.log(`\twith TTL options:\t"${expireAfterSeconds}"`);
          }
 
-         try { db.getSiblingDB(dbName).createCollection(collName, options); }
+         try { db.getSiblingDB(dbName).createCollection(collName, options) }
          catch(e) { console.log(`\nNamespace creation failed: ${e}`); }
 
          if (sharding && isSharded()) {
@@ -692,7 +701,7 @@
                // fCV(7.0) || sh.enableAutoSplit(`${dbName}.${collName}`);
                sh.startBalancer();
             }
-            catch(e) { console.log(`Sharding namespace failed: ${e}`); }
+            catch(e) { console.log(`Sharding namespace failed: ${e}`) }
          }
       }
 
@@ -770,7 +779,7 @@
             let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
             console.log(`\t[Batch ${1 + i}/${totalBatches}] bulk inserted ${bInserted} document${(bInserted == 1) ? '' : 's'}`);
          } catch(e) {
-            console.log(`Generation failed with: ${e}`);
+            console.log(`Generation failed with: ${e}`)
          }
       }
 
