@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.5.9"
+ *  Version: "0.5.10"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.5.9"
+      "version": "0.5.10"
 });
 
 /*
@@ -209,16 +209,16 @@ class MetaStats {
       this.orphans = +orphans;
       this.compressor = compressor;
       this.collections = []; // usurp dbStats counter for collections list
-      this.ncollections = (collections === 0) ? ncollections : +collections // merge collStats and dbStats n/collections counters
+      this.ncollections = (collections === 0) ? ncollections : +collections; // merge collStats and dbStats n/collections counters
       this.indexes = []; // usurp dbStats counter for indexes list
-      this.nindexes = (indexes === 0) ? nindexes : +indexes // merge collStats and dbStats n/indexes counters
+      this.nindexes = (indexes === 0) ? nindexes : +indexes; // merge collStats and dbStats n/indexes counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
       this.totalIndexSize = (indexSize === 0) ? totalIndexSize : indexSize; // merge collStats and dbStats index size counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
       // this.overhead = (typeof internalPageSize === 'number') ? internalPageSize : 4096; // 4KB min allocation block size
       this.overhead = 1024; // unused
    }
-   init() {  // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
+   init() { // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
       this.instance = hello().me;
       this.hostname = hostInfo().system.hostname;
       // this.hostname = 'unknown';
@@ -305,7 +305,7 @@ function isSharded() {
    return proc == 'mongos';
 }
 
-function getAllNonSystemNamespaces() {
+function getAllNonSystemNamespaces() { // TBA
    /*
     *  getAllNonSystemNamespaces
     */
@@ -334,21 +334,21 @@ function getAllNonSystemNamespaces() {
    return null;
 }
 
-function getAllNonSystemCollections() {
+function getAllNonSystemCollections() { // TBA
    /*
     *  getAllNonSystemCollections
     */
    return null;
 }
 
-function getAllNonSystemViews() {
+function getAllNonSystemViews() { // TBA
    /*
     *  getAllNonSystemViews()
     */
    return null;
 }
 
-function getAllSystemNamespaces() {
+function getAllSystemNamespaces() { // TBA
    /*
     *  getAllSystemNamespaces
     */
@@ -642,7 +642,7 @@ function $genRandStr(len = 1) {
    return res;
 }
 
-function $genRandWord() {
+function $genRandWord() { // TBA
    /*
     *  generate random word from a dictionary
     */
@@ -1163,6 +1163,24 @@ function $benford() {
    return array;
 }
 
+function $stats(dbName = '') {
+   /*
+    *  stats() wrapper
+    */
+   let stats = db.getSiblingDB(dbName).stats((fCV(5.0)) ? { "freeStorage": 1, "scale": 1 } : 1); // max precision due to SERVER-69036
+   if (stats.hasOwnProperty('raw')) {
+      stats.collections = 0;
+      for (let key in stats.raw) {
+         if (stats.raw.hasOwnProperty(key)) {
+            stats.collections += stats.raw[key].collections;
+            stats.collections += stats.raw[key].views;
+         }
+      }
+   }
+
+   return stats;
+}
+
 function $collStats(dbName = '', collName = '') {
    /*
     *  $collStats wrapper
@@ -1178,11 +1196,15 @@ function $collStats(dbName = '', collName = '') {
          { "$collStats": { "storageStats": { "scale": 1 } } },
          { "$set": {
             "storageStats.wiredTiger.creationStrings": {
-               "$first": {
+               "$arrayElemAt": [{
                   "$regexFindAll": {
                      "input": "$storageStats.wiredTiger.creationString",
                      "regex": /block_compressor=(\w+).+internal_page_max=(\d+).+leaf_page_max=(\d+)/
-         } } } } },
+                  } },
+                  0
+            ] },
+            "storageStats.indexStats": { "$objectToArray": "$storageStats.indexDetails" }
+         } },
          { "$set": {
             "storageStats.wiredTiger.compressor": {
                "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 0]
@@ -1198,12 +1220,7 @@ function $collStats(dbName = '', collName = '') {
                   { "$toInt": {
                      "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 2]
                   } }, 1024
-            ] }
-         } },
-         { "$set": {
-            "storageStats.indexStats": { "$objectToArray": "$storageStats.indexDetails" }
-         } },
-         { "$set": {
+            ] },
             "storageStats.indexes": {
                "$map": {
                   "input": "$storageStats.indexStats",
@@ -1215,21 +1232,20 @@ function $collStats(dbName = '', collName = '') {
                         { "k": "file size in bytes", "v": "$$indexes.v.block-manager.file size in bytes" },
                         { "k": "file bytes available for reuse", "v": "$$indexes.v.block-manager.file bytes available for reuse" },
                         { "k": "file allocation unit size", "v": "$$indexes.v.block-manager.file allocation unit size" }
-         ]] } } } } },
-         { "$set": {
+            ]] } } },
             "storageStats.indexDetails.file size in bytes": {
                "$reduce": {
                   "input": "$storageStats.indexStats",
                   "initialValue": 0,
                   "in": { "$sum": ["$$value", "$$this.v.block-manager.file size in bytes"] }
-         } } } },
-         { "$set": {
+            } },
             "storageStats.indexDetails.file bytes available for reuse": {
                "$reduce": {
                   "input": "$storageStats.indexStats",
                   "initialValue": 0,
                   "in": { "$sum": ["$$value", "$$this.v.block-manager.file bytes available for reuse"] }
-         } } } },
+            } }
+         } },
          { "$group": {
             "_id": null,
             "name": { "$push": "$ns" },
@@ -1246,6 +1262,8 @@ function $collStats(dbName = '', collName = '') {
             "dataPageSize": { "$push": "$storageStats.wiredTiger.dataPageSize" },
             "uri": { "$push": "$storageStats.wiredTiger.uri" },
             "file allocation unit size": { "$push": "$storageStats.wiredTiger.block-manager.file allocation unit size" },
+            "file bytes available for reuse": { "$push": "$storageStats.wiredTiger.block-manager.file bytes available for reuse" },
+            "file size in bytes": { "$push": "$storageStats.wiredTiger.block-manager.file size in bytes" },
             "nindexes": { "$sum": "$storageStats.nindexes" },
             "indexes": { "$push": "$storageStats.indexes" },
             "indexes size in bytes": { "$sum": "$storageStats.indexDetails.file size in bytes" },
@@ -1254,7 +1272,7 @@ function $collStats(dbName = '', collName = '') {
          { "$set": {
             "name": { 
                "$regexFind": {
-                  "input": { "$first": "$name" },
+                  "input": { "$arrayElemAt": ["$name", 0] },
                   "regex": /^\w+\.(.+)$/
             } },
             "wiredTiger": {
@@ -1266,7 +1284,8 @@ function $collStats(dbName = '', collName = '') {
                "compressor": "$compressor",
                "dataPageSize": "$dataPageSize",
                "internalPageSize": "$internalPageSize",
-               "uri": "$uri"
+               "uri": "$uri",
+               "indexes": "$indexes"
             },
             "totalIndexSize": "$indexes size in bytes",
             "totalIndexBytesReusable": "$indexes bytes available for reuse"
@@ -1290,14 +1309,55 @@ function $collStats(dbName = '', collName = '') {
                   "input": "$wiredTiger.internalPageSize",
                   "initialValue": { "$arrayElemAt": ["$wiredTiger.internalPageSize", 0] },
                   "in": { "$cond": [{ "$eq": ["$$value", "$$this"] }, "$$value", "mixed"] }
-            } }
+            } },
+            "indexes": {
+               "$reduce": {
+                  "input": {
+                     "$sortArray": {
+                        "input": {
+                           "$reduce": {
+                              "input": "$indexes",
+                              "initialValue": [],
+                              "in": { "$concatArrays": ["$$value", "$$this"] }
+                        } },
+                        "sortBy": { "name": 1 }
+                  } },
+                  "initialValue": [],
+                  "in": {
+                     "$cond": {
+                        "if": {
+                           "$eq": [
+                              { "$arrayElemAt": ["$$value.name", -1] },
+                              "$$this.name"
+                        ] },
+                        "then": {
+                           "$concatArrays": [
+                              { "$slice": [
+                                 "$$value",
+                                 { "$subtract": [{ "$size": "$$value" }, 1] }
+                              ] },
+                              [{
+                                 "name": "$$this.name",
+                                 "file size in bytes": { "$sum": [{ "$arrayElemAt": ["$$value.file size in bytes", -1] }, "$$this.file size in bytes"] },
+                                 "file bytes available for reuse": { "$sum": [{ "$arrayElemAt": ["$$value.file bytes available for reuse", -1] }, "$$this.file bytes available for reuse"] }
+                        }]] },
+                        "else": {
+                           "$concatArrays": [
+                              "$$value",
+                              ["$$this"]
+            ] } } } } }
          } },
+         { "$unset": [
+            "indexes.uri", "indexes.file allocation unit size"
+         ] },
          { "$project": {
             "_id": 0,
             "uri": 0,
             "indexes size in bytes": 0,
             "indexes bytes available for reuse": 0,
-            "file allocation unit size": 0
+            "file allocation unit size": 0,
+            "file size in bytes": 0,
+            "file bytes available for reuse": 0
          } }
       ];
 
