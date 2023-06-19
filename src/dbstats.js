@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.4.13"
+ *  Version: "0.4.14"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -34,7 +34,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.4.13" },
+   let __script = { "name": "dbstats.js", "version": "0.4.14" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -94,7 +94,7 @@
       let dbPath = new MetaStats();
       dbPath.init();
       db.getMongo().getDBNames().map(dbName => {
-         let database = new MetaStats({ 'name': dbName, ...$stats(dbName) });
+         let database = new MetaStats($stats(dbName));
          database.init();
          printDbHeader(database);
          let collections = db.getSiblingDB(dbName).getCollectionInfos({
@@ -202,7 +202,7 @@
       console.log(`\u001b[1m\u001b[32mIndexes:\u001b[0m${' '.repeat(13)}${nindexes}`);
    }
 
-   function printIndex({ namespace, name, storageSize, freeStorageSize }) {
+   function printIndex({ namespace, name, storageSize, freeStorageSize } = {}) {
       /*
        *  Print index level stats
        */
@@ -210,7 +210,7 @@
       console.log(`\u001b[36m${(' ' + namespace + '.' + name).padEnd(rowHeader)}\u001b[0m ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ('(' + formatPct(freeStorageSize, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
    }
 
-   function printDbHeader({ name }) {
+   function printDbHeader({ name } = {}) {
       /*
        *  Print DB table header
        */
