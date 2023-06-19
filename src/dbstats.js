@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.4.12"
+ *  Version: "0.4.13"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -34,7 +34,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.4.12" },
+   let __script = { "name": "dbstats.js", "version": "0.4.13" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -94,11 +94,7 @@
       let dbPath = new MetaStats();
       dbPath.init();
       db.getMongo().getDBNames().map(dbName => {
-         let database = new MetaStats({
-            name: dbName,
-            // ...db.getSiblingDB(dbName).stats((fCV(5.0)) ? { "freeStorage": 1, "scale": 1 } : 1) // max precision due to SERVER-69036
-            ...$stats(dbName)
-         });
+         let database = new MetaStats({ 'name': dbName, ...$stats(dbName) });
          database.init();
          printDbHeader(database);
          let collections = db.getSiblingDB(dbName).getCollectionInfos({
