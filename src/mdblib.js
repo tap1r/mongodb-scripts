@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.5.13"
+ *  Version: "0.5.14"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.5.13"
+      "version": "0.5.14"
 });
 
 /*
@@ -1350,12 +1350,11 @@ function $collStats(dbName = db.getName(), collName = '') {
                               ["$$this"]
             ] } } } } }
          } },
-         { "$unset": [
-            "indexes.uri", "indexes.file allocation unit size"
-         ] },
          { "$project": {
             "_id": 0,
             "uri": 0,
+            "indexes.uri": 0,
+            "indexes.file allocation unit size": 0,
             "indexes size in bytes": 0,
             "indexes bytes available for reuse": 0,
             "file allocation unit size": 0,
