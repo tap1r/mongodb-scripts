@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.4.15"
+ *  Version: "0.4.16"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -35,7 +35,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.4.15" },
+   let __script = { "name": "dbstats.js", "version": "0.4.16" },
       __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -49,7 +49,7 @@
          __lib.paths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
          __lib.path = __lib.paths.find(path => fs.existsSync(path + '/' + __lib.name)) + '/' + __lib.name;
       } else {
-         print(`[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory`);
+         print(`\u001b[31m[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory\u001b[0m`);
          __lib.path = __lib.name;
       }
       load(__lib.path);
