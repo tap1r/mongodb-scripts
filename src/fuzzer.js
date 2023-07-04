@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.4"
+ *  Version: "0.6.5"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.4" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.5" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -216,7 +216,7 @@
       }
 
       // redistribute chunks if required
-      if (isSharded() && (shardedOptions.reShard == true)) {
+      if (isSharded() && (shardedOptions.reShard == true) && fCV(5.0)) {
          let resharding = async() => {
             let numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
             await db.adminCommand({
@@ -240,14 +240,16 @@
                { "$sort": { "shard": 1 } },
                { "$set": {
                   "migration": {
-                     "$first": {
-                        "$regexFindAll": {
+                     "$arrayElemAt": [
+                        { "$regexFindAll": {
                            "input": "$desc",
                            "regex": /^(ReshardingDonorService|ReshardingRecipientService) ([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})$/
-               } } } } },
+                        } },
+                        0]
+               } } } ,
                { "$set": {
-                  "migrationService": { "$first": "$migration.captures" },
-                  "migrationId": { "$last": "$migration.captures" }
+                  "migrationService": { "$arrayElemAt": ["$migration.captures", 0] },
+                  "migrationId": { "$arrayElemAt": ["$migration.captures", -1] }
                } },
                { "$group": {
                   "_id": {
@@ -307,6 +309,9 @@
             resharding();
          }
          console.log(`\nResharding complete.`);
+      }
+      else if (isSharded() && (shardedOptions.reShard == true) && !fCV(5.0)) {
+         console.log('WARN: reshardCollection() requires v5.0+');
       }
 
       return console.log('\n Fuzzing completed!\n');
