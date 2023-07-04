@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.5.14"
+ *  Version: "0.5.15"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.5.14"
+      "version": "0.5.15"
 });
 
 /*
@@ -1316,15 +1316,30 @@ function $collStats(dbName = db.getName(), collName = '') {
             "indexes": {
                "$reduce": {
                   "input": {
-                     "$sortArray": {
-                        "input": {
-                           "$reduce": {
-                              "input": "$indexes",
-                              "initialValue": [],
-                              "in": { "$concatArrays": ["$$value", "$$this"] }
-                        } },
-                        "sortBy": { "name": 1 }
-                  } },
+                     "$reverseArray": {
+                        "$reduce": {
+                           "input": {
+                              "$reduce": {
+                                 "input": "$indexes",
+                                 "initialValue": [],
+                                 "in": { "$concatArrays": ["$$value", "$$this"] }
+                           } },
+                           "initialValue": [],
+                           "in": {
+                              "$let": {
+                                 "vars": {
+                                    "sorted": {
+                                       "$filter": {
+                                          "input": "$$value",
+                                          "as": "idx",
+                                          "cond": { "$lt": ["$$this", "$$idx"] }
+                                 } } },
+                                 "in": {
+                                    "$concatArrays": [
+                                       "$$sorted",
+                                       ["$$this"],
+                                       { "$setDifference": ["$$value", "$$sorted"] }
+                  ] } } } } } },
                   "initialValue": [],
                   "in": {
                      "$cond": {
@@ -1345,22 +1360,19 @@ function $collStats(dbName = db.getName(), collName = '') {
                                  "file bytes available for reuse": { "$sum": [{ "$arrayElemAt": ["$$value.file bytes available for reuse", -1] }, "$$this.file bytes available for reuse"] }
                         }]] },
                         "else": {
-                           "$concatArrays": [
-                              "$$value",
-                              ["$$this"]
-            ] } } } } }
-         } },
-         { "$project": {
-            "_id": 0,
-            "uri": 0,
-            "indexes.uri": 0,
-            "indexes.file allocation unit size": 0,
-            "indexes size in bytes": 0,
-            "indexes bytes available for reuse": 0,
-            "file allocation unit size": 0,
-            "file size in bytes": 0,
-            "file bytes available for reuse": 0
-         } }
+                           "$concatArrays": ["$$value", ["$$this"]]
+         } } } } } } },
+         { "$unset": [
+            "_id",
+            "file allocation unit size",
+            "file size in bytes",
+            "file bytes available for reuse",
+            "indexes.file allocation unit size",
+            "indexes.uri",
+            "indexes bytes available for reuse",
+            "indexes size in bytes",
+            "uri"
+         ] }
       ];
 
    return namespace.aggregate(pipeline, options).toArray()[0];
