@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.5"
+ *  Version: "0.6.6"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.5" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.6" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -311,10 +311,10 @@
          console.log(`\nResharding complete.`);
       }
       else if (isSharded() && (shardedOptions.reShard == true) && !fCV(5.0)) {
-         console.log('WARN: reshardCollection() requires v5.0+');
+         console.log('\u001b[31m[WARN] reshardCollection() requires v5.0+\u001b[0m');
       }
 
-      return console.log('\n Fuzzing completed!\n');
+      return console.log('\n \u001b[32mFuzzing completed!\u001b[0m\n');
    }
 
    function genDocument({
