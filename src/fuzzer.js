@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.6"
+ *  Version: "0.6.7"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.6" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.7" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -685,13 +685,14 @@
          }
 
          try { db.getSiblingDB(dbName).createCollection(collName, options) }
-         catch(e) { console.log(`\nNamespace creation failed: ${e}`); }
+         catch(e) { console.log(`\nNamespace creation failed: ${e}`) }
 
-         if (sharding && isSharded()) {
+         if (sharding && isSharded() && db.getSiblingDB(dbName).getCollection(collName).exists()) {
             console.log(`\nSharding namespace with options: ${tojson(shardedOptions)}`);
-            let numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
+            let numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments({});
+            console.log(`with initial chunks: ${numInitialChunks}`);
             try {
-               fCV(6.0) || sh.enableSharding(dbName);
+               // fCV(6.0) || (sh.enableSharding(dbName).ok);
                sh.shardCollection(
                   `${dbName}.${collName}`,
                   shardedOptions.key,
@@ -702,9 +703,12 @@
                      // "timeseries": {}
                   }
                );
+               // console.log(`Sharded namespace`);
                sh.enableBalancing(`${dbName}.${collName}`);
+               // console.log(`enable balancing`);
                // fCV(7.0) || sh.enableAutoSplit(`${dbName}.${collName}`);
                sh.startBalancer();
+               // console.log(`started balancer`);
             }
             catch(e) { console.log(`Sharding namespace failed: ${e}`) }
          }
@@ -778,14 +782,10 @@
       for (let i = 0; i < totalBatches; ++i) {
          if (i == totalBatches - 1 && residual > 0) batchSize = residual;
          let bulk = namespace.initializeUnorderedBulkOp();
-         for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument(fuzzer, timestamp));
-         try {
-            let result = bulk.execute(writeConcern);
-            let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
-            console.log(`\t[Batch ${1 + i}/${totalBatches}] bulk inserted ${bInserted} document${(bInserted == 1) ? '' : 's'}`);
-         } catch(e) {
-            console.log(`Generation failed with: ${e}`)
-         }
+         for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument(fuzzer, timestamp))
+         let result = bulk.execute(writeConcern);
+         let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
+         console.log(`\t[Batch ${1 + i}/${totalBatches}] bulk inserted ${bInserted} document${(bInserted == 1) ? '' : 's'}`);
       }
 
       return console.log('Generation completed.');
