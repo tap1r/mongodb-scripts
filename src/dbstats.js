@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.5.1"
+ *  Version: "0.5.2"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -35,7 +35,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.5.1" };
+   let __script = { "name": "dbstats.js", "version": "0.5.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -236,7 +236,7 @@
       console.log(`\u001b[1m\u001b[32m${`All namespaces:\u001b[0m        ${ncollections}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ('(' + formatPct(freeStorageSize, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${orphans.toString().padStart(columnWidth - 5)}`);
       console.log(`\u001b[1m\u001b[32m${`All indexes:\u001b[0m           ${nindexes}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ('(' + formatPct(totalIndexBytesReusable, totalIndexSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32mHost:\u001b[0m \u001b[36m${hostname}\u001b[0m\t\u001b[1m\u001b[32mType:\u001b[0m \u001b[36m${proc}\u001b[0m\t\u001b[1m\u001b[32mdbPath:\u001b[0m \u001b[36m${dbPath}\u001b[0m`);
+      console.log(`\u001b[1m\u001b[32mHost:\u001b[0m \u001b[36m${hostname}\u001b[0m\t\u001b[1m\u001b[32mType:\u001b[0m \u001b[36m${proc}\u001b[0m\t\u001b[1m\u001b[32mVersion:\u001b[0m \u001b[36m${db.version()}\u001b[0m\t\u001b[1m\u001b[32mdbPath:\u001b[0m \u001b[36m${dbPath}\u001b[0m`);
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
       console.log(`\n`);
    }
