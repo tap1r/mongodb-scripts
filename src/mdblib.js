@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.6.0"
+ *  Version: "0.6.1"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.6.0"
+      "version": "0.6.1"
 });
 
 /*
@@ -1259,7 +1259,7 @@ function $collStats(dbName = db.getName(), collName = '') {
             "avgObjSize": { "$avg": "$storageStats.avgObjSize" },
             "orphans": { "$sum": "$storageStats.numOrphanDocs" },
             "storageSize": { "$sum": "$storageStats.storageSize" },
-            "freeStorageSize": { "$sum": "$storageStats.freeStorageSize" },
+            "freeStorageSize": { "$sum": "$storageStats.wiredTiger.block-manager.file bytes available for reuse" },
             "compressor": { "$push": "$storageStats.wiredTiger.compressor" },
             "internalPageSize": { "$push": "$storageStats.wiredTiger.internalPageSize" },
             "dataPageSize": { "$push": "$storageStats.wiredTiger.dataPageSize" },
