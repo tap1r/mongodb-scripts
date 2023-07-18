@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.4.16"
+ *  Version: "0.5.0"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -35,8 +35,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.4.16" },
-      __comment = `\n Running script ${__script.name} v${__script.version}`;
+   let __script = { "name": "dbstats.js", "version": "0.5.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -54,7 +53,9 @@
       }
       load(__lib.path);
    }
+   let __comment = `\n Running script ${__script.name} v${__script.version}`;
    __comment += ` with ${__lib.name} v${__lib.version}`;
+   __comment += ` on shell v${version()}`;
    console.clear();
    console.log(`\u001b[32m${__comment}\u001b[0m`);
 
@@ -109,12 +110,7 @@
             let collection = new MetaStats($collStats(dbName, collName));
             collection.init();
             printCollection(collection);
-            // printIndexHeader(collection);
-            // collection.indexes.map(({ 'name': index }) => {
-            //    // let index = new MetaStats($collStats(dbName, collName));
-            //    // index.init();
-            //    printIndex(index);
-            // });
+            collection.indexes.forEach(printIndex);
             database.freeStorageSize += collection.freeStorageSize;
             database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
          });
@@ -195,20 +191,12 @@
       console.log(` \u001b[36m${viewName}\u001b[0m`);
    }
 
-   function printIndexHeader({ nindexes = 0 } = {}) {
-      /*
-       *  Print index table header
-       */
-      console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32mIndexes:\u001b[0m${' '.repeat(13)}${nindexes}`);
-   }
-
-   function printIndex({ namespace, name, storageSize, freeStorageSize } = {}) {
+   function printIndex({ name, 'file size in bytes': storageSize, 'file bytes available for reuse': freeStorageSize } = {}) {
       /*
        *  Print index level stats
        */
-      console.log(` \u001b[33m${'-'.repeat(termWidth - 1)}\u001b[0m`);
-      console.log(`\u001b[36m${(' ' + namespace + '.' + name).padEnd(rowHeader)}\u001b[0m ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ('(' + formatPct(freeStorageSize, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
+      console.log(`  \u001b[33m${'-'.repeat(termWidth - 2)}\u001b[0m`);
+      console.log(`  \u001b[31m${name.padEnd(rowHeader + 1 + columnWidth * 2)}\u001b[0m ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ('(' + formatPct(freeStorageSize, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
    }
 
    function printDbHeader({ name } = {}) {
@@ -246,7 +234,7 @@
       console.log(`\u001b[1m\u001b[32m${`All namespaces:\u001b[0m        ${ncollections}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ('(' + formatPct(freeStorageSize, storageSize) + ')').padStart(8)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${orphans.toString().padStart(columnWidth - 5)}`);
       console.log(`\u001b[1m\u001b[32m${`All indexes:\u001b[0m           ${nindexes}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ('(' + formatPct(totalIndexBytesReusable, totalIndexSize) + ')').padStart(8)).padStart(columnWidth + 8)}`);
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32mHost:\u001b[0m ${hostname}\t\u001b[1m\u001b[32mType:\u001b[0m ${proc}\t\u001b[1m\u001b[32mdbPath:\u001b[0m ${dbPath}`);
+      console.log(`\u001b[1m\u001b[32mHost:\u001b[0m \u001b[36m${hostname}\u001b[0m\t\u001b[1m\u001b[32mType:\u001b[0m \u001b[36m${proc}\u001b[0m\t\u001b[1m\u001b[32mdbPath:\u001b[0m \u001b[36m${dbPath}\u001b[0m`);
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
       console.log(`\n`);
    }
