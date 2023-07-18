@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.5.16"
+ *  Version: "0.6.0"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.5.16"
+      "version": "0.6.0"
 });
 
 /*
@@ -100,7 +100,7 @@ if (typeof console === 'undefined') {
     *  legacy mongo detected
     */
    (console = {});
-   console.log = string => print(string);
+   console.log = print;
    console.clear = () => _runMongoProgram('clear');
    console.error = tojson;
    console.dir = tojson;
@@ -189,7 +189,7 @@ class MetaStats {
     */
    constructor({
          name = '', dataSize = 0, storageSize = 4096, freeStorageSize = 0,
-         objects = 0, orphans = 0, compressor = 'none', indexes = 0, nindexes = 0,
+         objects = 0, orphans = 0, compressor = 'none', indexes = [], nindexes = -1,
          indexSize = 4096, totalIndexSize = 4096, totalIndexBytesReusable = 0,
          collections = 0, ncollections = 0, internalPageSize = 4096
       } = {}) {
@@ -210,8 +210,8 @@ class MetaStats {
       this.compressor = compressor;
       this.collections = []; // usurp dbStats counter for collections list
       this.ncollections = (collections === 0) ? ncollections : +collections; // merge collStats and dbStats n/collections counters
-      this.indexes = []; // usurp dbStats counter for indexes list
-      this.nindexes = (indexes === 0) ? nindexes : +indexes; // merge collStats and dbStats n/indexes counters
+      this.indexes = indexes; // usurp dbStats counter for indexes list
+      this.nindexes = (nindexes === -1) ? +indexes: nindexes; // merge collStats and dbStats n/indexes counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
       this.totalIndexSize = (indexSize === 0) ? totalIndexSize : indexSize; // merge collStats and dbStats index size counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
