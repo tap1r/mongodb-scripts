@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.6.1"
+ *  Version: "0.6.2"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.6.1"
+      "version": "0.6.2"
 });
 
 /*
@@ -150,38 +150,38 @@ class ScaleFactor {
    }
 }
 
-class AutoFactor {
-   /*
-    *  Determine scale factor automatically
-    */
-   constructor(input = Math.pow(1024, 2)) {
-      if (typeof input === 'number' && input >= 0) {
-         this.scale = $floor(Math.log2(input) / 10);
-         this.metric = this.metrics[this.scale];
-         this.format = (input / this.metric.factor).toFixed(this.metric.precision) + this.metric.unit;
-      } else {
-         throw new Error(`Invalid scale factor parameter: ${input}`);
-      }
-      // return this.format
-   }
-   // format(number) {
-   //    return (number / this.metric.factor).toFixed(this.metric.precision) + this.metric.unit;
-   // }
-   get metrics() {
-      // array indexed by scale
-      return [
-         { "name":      "bytes", "unit":  "B", "symbol":  "", "factor": Math.pow(1024, 0), "precision": 0, "pctPoint": 2 },
-         { "name":  "kilobytes", "unit": "KB", "symbol": "k", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 },
-         { "name":  "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 },
-         { "name":  "gigabytes", "unit": "GB", "symbol": "G", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 },
-         { "name":  "terabytes", "unit": "TB", "symbol": "T", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 },
-         { "name":  "petabytes", "unit": "PB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 },
-         { "name":   "exabytes", "unit": "EB", "symbol": "E", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 },
-         { "name": "zettabytes", "unit": "ZB", "symbol": "Z", "factor": Math.pow(1024, 7), "precision": 2, "pctPoint": 1 },
-         { "name": "yottabytes", "unit": "YB", "symbol": "Y", "factor": Math.pow(1024, 8), "precision": 2, "pctPoint": 1 }
-      ];
-   }
-}
+// class AutoFactor { // unused
+//    /*
+//     *  Determine scale factor automatically
+//     */
+//    constructor(input = Math.pow(1024, 2)) {
+//       if (typeof input === 'number' && input >= 0) {
+//          this.scale = $floor(Math.log2(input) / 10);
+//          this.metric = this.metrics[this.scale];
+//          this.format = (input / this.metric.factor).toFixed(this.metric.precision) + this.metric.unit;
+//       } else {
+//          throw new Error(`Invalid scale factor parameter: ${input}`);
+//       }
+//       // return this.format
+//    }
+//    // format(number) {
+//    //    return (number / this.metric.factor).toFixed(this.metric.precision) + this.metric.unit;
+//    // }
+//    get metrics() {
+//       // array indexed by scale
+//       return [
+//          { "name":      "bytes", "unit":  "B", "symbol":  "", "factor": Math.pow(1024, 0), "precision": 0, "pctPoint": 2 },
+//          { "name":  "kilobytes", "unit": "KB", "symbol": "k", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 },
+//          { "name":  "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 },
+//          { "name":  "gigabytes", "unit": "GB", "symbol": "G", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 },
+//          { "name":  "terabytes", "unit": "TB", "symbol": "T", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 },
+//          { "name":  "petabytes", "unit": "PB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 },
+//          { "name":   "exabytes", "unit": "EB", "symbol": "E", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 },
+//          { "name": "zettabytes", "unit": "ZB", "symbol": "Z", "factor": Math.pow(1024, 7), "precision": 2, "pctPoint": 1 },
+//          { "name": "yottabytes", "unit": "YB", "symbol": "Y", "factor": Math.pow(1024, 8), "precision": 2, "pctPoint": 1 }
+//       ];
+//    }
+// }
 
 class MetaStats {
    /*
@@ -1167,7 +1167,9 @@ function $stats(dbName = db.getName()) {
    /*
     *  stats() wrapper
     */
-   let stats = db.getSiblingDB(dbName).stats((fCV(5.0)) ? { "freeStorage": 1, "scale": 1 } : 1); // max precision due to SERVER-69036
+   let stats = db.getSiblingDB(dbName).stats( // max precision due to SERVER-69036
+      (fCV(5.0) && (shellVer() >= 5.0 || typeof process !== 'undefined')) ? { "freeStorage": 1, "scale": 1 } : 1
+   );
    stats.name = dbName;
    if (stats.hasOwnProperty('raw')) {
       stats.collections = 0;
@@ -1257,7 +1259,7 @@ function $collStats(dbName = db.getName(), collName = '') {
             "dataSize": { "$sum": "$storageStats.size" },
             "objects": { "$sum": "$storageStats.count" },
             "avgObjSize": { "$avg": "$storageStats.avgObjSize" },
-            "orphans": { "$sum": "$storageStats.numOrphanDocs" },
+            "orphans": { "$sum": "$storageStats.numOrphanDocs" }, // Available starting in MongoDB 6.0
             "storageSize": { "$sum": "$storageStats.storageSize" },
             "freeStorageSize": { "$sum": "$storageStats.wiredTiger.block-manager.file bytes available for reuse" },
             "compressor": { "$push": "$storageStats.wiredTiger.compressor" },
