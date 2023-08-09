@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.6.2"
+ *  Version: "0.6.3"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.6.2"
+      "version": "0.6.3"
 });
 
 /*
@@ -590,7 +590,7 @@ function $getRandInt(min = 0, max = 1) {
    min = $ceil(min);
    max = $floor(max);
 
-   return $floor(($rand() * (max - min) + min));
+   return $floor($rand() * (max - min) + min);
 }
 
 function $getRandIntInc(min = 0, max = 1) {
