@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.5.3"
+ *  Version: "0.5.4"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -35,7 +35,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.5.3" };
+   let __script = { "name": "dbstats.js", "version": "0.5.4" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -144,21 +144,24 @@
       /*
        *  Pretty format unit
        */
-      return `${Math.round((metric / scale.factor) * 100) / 100} ${scale.unit}`;
+      // return `${Math.round((metric / scale.factor) * 100) / 100} ${scale.unit}`;
+      return `${(metric / scale.factor).toFixed(2)} ${scale.unit}`;
    }
 
    function formatPct(numerator = 0, denominator = 1) {
       /*
        *  Pretty format percentage
        */
-      return `${Math.round((numerator / denominator) * 1000) / 10}%`;
+      // return `${Math.round((numerator / denominator) * 1000) / 10}%`;
+      return `${((numerator / denominator) * 100).toFixed(1)}%`;
    }
 
    function formatRatio(metric) {
       /*
        *  Pretty format ratio
        */
-      return `${Math.round(metric * 100) / 100}:1`;
+      // return `${Math.round(metric * 100) / 100}:1`;
+      return `${metric.toFixed(2)}:1`;
    }
 
    function printCollHeader(collTotal = 0) {
@@ -205,7 +208,7 @@
       /*
        *  Print DB table header
        */
-      console.log(`\n`);
+      console.log('\n');
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
       console.log(`\u001b[1m\u001b[32m${`Database:\u001b[0m \u001b[36m${name}`.padEnd(rowHeader + 9)}\u001b[0m \u001b[1m\u001b[32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Orphans'.padStart(columnWidth - 4)}\u001b[0m`);
    }
@@ -229,7 +232,7 @@
       /*
        *  Print total dbPath rollup stats
        */
-      console.log(`\n`);
+      console.log('\n');
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
       console.log(`\u001b[1m\u001b[32m${'dbPath totals'.padEnd(rowHeader)} \u001b[32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks (reuse)'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Orphans'.padStart(columnWidth - 4)}\u001b[0m`);
       console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
@@ -238,7 +241,7 @@
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
       console.log(`\u001b[1m\u001b[32mHost:\u001b[0m \u001b[36m${hostname}\u001b[0m\t\u001b[1m\u001b[32mType:\u001b[0m \u001b[36m${proc}\u001b[0m\t\u001b[1m\u001b[32mVersion:\u001b[0m \u001b[36m${db.version()}\u001b[0m\t\u001b[1m\u001b[32mdbPath:\u001b[0m \u001b[36m${dbPath}\u001b[0m`);
       console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
-      console.log(`\n`);
+      console.log('\n');
    }
 
    await main();
