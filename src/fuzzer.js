@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.7"
+ *  Version: "0.6.8"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.7" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.8" };
    let __comment = `\n Running script ${__script.name} v${__script.version}`;
    if (typeof __lib === 'undefined') {
       /*
@@ -395,9 +395,12 @@
             "nestedArray": [$genArrayElements($getRandIntInc(0, 10))]
          },
          "array": $genArrayElements($getRandIntInc(0, 10)),
-         "objectArray": [
-            { "nestedArray": $genArrayElements($getRandIntInc(0, 10)) }
-         ],
+         // "objectArray": [
+         //    { "nestedArray": $genArrayElements($getRandIntInc(0, 10)) }
+         // ],
+         // "1dArray": [
+         //    { "2dArray": $genArrayElements($getRandIntInc(1, 10)) }
+         // ],
          "boolean": $bool(),
          // "code": Code('() => {}'),
          // "codeScoped": Code('() => {}', {}),
@@ -433,6 +436,16 @@
                               ]
                            })
                          : 'requires v5.2+', */
+      /* "sensitive": fCV(7.0)
+                         ? BinData(8, await window.crypto.subtle.generateKey(
+                           {
+                              "name": "HMAC",
+                              "hash": { "name": "SHA-512" },
+                           },
+                           true,
+                           ["sign", "verify"],
+                           ))
+                         : 'requires v7.0+', */
          "random": +$getRandNum(0, totalDocs).toFixed(4),
          "symbol": $genRandSymbol(),
          "credit card": $genRandCardNumber()
@@ -480,13 +493,13 @@
             null
          ][$getRandRatioInt([80, 20, 1])],
          "locality": $getRandCountry()['alpha-3 code'],
-         "location": {   // GeoJSON Point
+         "location": {  // GeoJSON Point
             "type": "Point",
             "coordinates": [
                +$getRandNum(-180, 180).toFixed(4),
                +$getRandNum(-90, 90).toFixed(4)
          ] },
-         "lineString": { // GeoJSON LineString
+         "lineString": {  // GeoJSON LineString
             "type": "LineString",
             "coordinates": [[
                   +$getRandNum(-180, 180).toFixed(4),
@@ -496,7 +509,7 @@
                   +$getRandNum(-90, 90).toFixed(4)
             ]]
          },
-         "polygon": {    // polygon with a single ring
+         "polygon": {  // polygon with a single ring
             "type": "Polygon",
             "coordinates": [[
                [0, 0],
@@ -505,7 +518,7 @@
                [0, 0]
             ]]
          },
-         "polygonMulti": {   // polygons with multiple rings
+         "polygonMulti": {  // polygons with multiple rings
             "type": "Polygon",
             "coordinates": [[
                   [0, 0],
@@ -519,7 +532,7 @@
                   [2, 2]
             ]]
          },
-         "multiPoint": { // GeoJSON MultiPoint
+         "multiPoint": {  // GeoJSON MultiPoint
             "type": "MultiPoint",
             "coordinates": [
                [-73.9580, 40.8003],
@@ -528,7 +541,7 @@
                [-73.9814, 40.7681]
             ]
          },
-         "multiLineString": {    // GeoJSON MultiLineString
+         "multiLineString": {  // GeoJSON MultiLineString
             "type": "MultiLineString",
             "coordinates": [[
                   [-73.96943, 40.78519],
@@ -544,7 +557,7 @@
                   [-73.97036, 40.76811]
             ]]
          },
-         "multiPolygon": {   // GeoJSON MultiPolygon
+         "multiPolygon": {  // GeoJSON MultiPolygon
             "type": "MultiPolygon",
             "coordinates": [[[
                   [-73.958, 40.8003],
