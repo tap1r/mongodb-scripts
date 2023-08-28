@@ -108,7 +108,7 @@
          //    }, true, true
          // );
          let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/;
-         let collFilter = new RegExp(collFilter);
+         collFilter = new RegExp(collFilter);
          let collections = db.getSiblingDB(dbName).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
                "name": systemFilter
