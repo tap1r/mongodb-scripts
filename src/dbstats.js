@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.5.4"
+ *  Version: "0.5.5"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -34,8 +34,8 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-(async() => {
-   let __script = { "name": "dbstats.js", "version": "0.5.4" };
+(async(dbFilter) => {
+   let __script = { "name": "dbstats.js", "version": "0.5.5" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -97,7 +97,7 @@
        */
       let dbPath = new MetaStats();
       dbPath.init();
-      db.getMongo().getDBNames().map(dbName => {
+      getDBNames(dbFilter).map(dbName => {
          let database = new MetaStats($stats(dbName));
          database.init();
          printDbHeader(database);
@@ -106,7 +106,6 @@
                "name": /(?:^(?!(system\..+|replset\..+)$).+)/
             }, true, true
          );
-         //
          printCollHeader(collections.length);
          collections.map(({ 'name': collName }) => {
             let collection = new MetaStats($collStats(dbName, collName));
@@ -116,7 +115,6 @@
             database.freeStorageSize += collection.freeStorageSize;
             database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
          });
-         //
          let views = db.getSiblingDB(dbName).getCollectionInfos({
                "type": "view",
                // "name": /(?:^(?!(system\..+|replset\..+)$).+)/
@@ -124,7 +122,6 @@
          );
          printViewHeader(views.length);
          views.map(({ name }) => printView(name));
-         //
          printDb(database);
          dbPath.ncollections += database.ncollections;
          dbPath.nindexes += database.nindexes;
@@ -245,6 +242,6 @@
    }
 
    await main();
-})();
+})(dbFilter);
 
 // EOF
