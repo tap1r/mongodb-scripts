@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.5.5"
+ *  Version: "0.5.6"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -16,6 +16,7 @@
       db.adminCommand({ "features": 1 });
    } catch(error) {
       // MongoServerError: command features requires authentication
+      print('\u001b[31m[ERR] MongoServerError: command features requires authentication\u001b[0m');
    }
    let { 'authInfo': { authenticatedUsers, authenticatedUserRoles } } = db.adminCommand({ "connectionStatus": 1 }),
       adminRoles = ['clusterAdmin', 'atlasAdmin', 'backup', 'root', '__system'];
@@ -34,8 +35,8 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-(async(dbFilter) => {
-   let __script = { "name": "dbstats.js", "version": "0.5.5" };
+(async(dbFilter, collFilter) => {
+   let __script = { "name": "dbstats.js", "version": "0.5.6" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -101,9 +102,16 @@
          let database = new MetaStats($stats(dbName));
          database.init();
          printDbHeader(database);
+         // let collections = db.getSiblingDB(dbName).getCollectionInfos({
+         //       "type": /^(collection|timeseries)$/,
+         //       "name": /(?:^(?!(system\..+|replset\..+)$).+)/
+         //    }, true, true
+         // );
+         let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/;
+         collFilter = systemFilter;
          let collections = db.getSiblingDB(dbName).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
-               "name": /(?:^(?!(system\..+|replset\..+)$).+)/
+               "name": collFilter
             }, true, true
          );
          printCollHeader(collections.length);
@@ -118,6 +126,7 @@
          let views = db.getSiblingDB(dbName).getCollectionInfos({
                "type": "view",
                // "name": /(?:^(?!(system\..+|replset\..+)$).+)/
+               "name": collFilter
             }, true, true
          );
          printViewHeader(views.length);
@@ -242,6 +251,9 @@
    }
 
    await main();
-})(dbFilter);
+})(
+   typeof dbFilter === 'undefined' && (dbFilter = /^.+/) || dbFilter,
+   typeof collFilter === 'undefined' && (collFilter = /^.+/) || collFilter
+);
 
 // EOF
