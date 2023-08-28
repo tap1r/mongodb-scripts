@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.6.3"
+ *  Version: "0.6.4"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.6.3"
+      "version": "0.6.4"
 });
 
 /*
@@ -305,6 +305,21 @@ function isSharded() {
    return proc == 'mongos';
 }
 
+function getDBNames(dbFilter = /^.+/) {
+   /*
+    *  getDBNames substitues for db.getDBNames()
+    */
+   let filterOptions = 'i';
+   let filterRegex = new RegExp(dbFilter, filterOptions);
+   return db.adminCommand({
+      "listDatabases": 1,
+      "filter": { "name": filterRegex },
+      "nameOnly": true,
+      "authorizedDatabases": true,
+      // "comment": "list databases"
+   }).databases.map(({ name }) => name);
+};
+
 function getAllNonSystemNamespaces() { // TBA
    /*
     *  getAllNonSystemNamespaces
@@ -433,7 +448,7 @@ function hostInfo() {
    try {
       hostInfo = db.hostInfo();
    } catch (error) {
-      console.error(`WARN: insufficient rights to execute db.hostInfo()\n${error}`);
+      console.error(`[WARN] insufficient rights to execute db.hostInfo()\n${error}`);
       hostInfo.system.hostname = hello().me.match(/(.*):/)[1];
    }
    return hostInfo;
@@ -447,7 +462,7 @@ function serverCmdLineOpts() {
    try {
       serverCmdLineOpts = db.serverCmdLineOpts();
    } catch (error) {
-      console.error(`WARN: insufficient rights to execute db.serverCmdLineOpts()\n${error}`);
+      console.error(`[WARN] insufficient rights to execute db.serverCmdLineOpts()\n${error}`);
       serverCmdLineOpts.parsed.storage.dbPath = 'undefined';
    }
    return serverCmdLineOpts;
