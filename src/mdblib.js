@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.6.4"
+ *  Version: "0.6.5"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.6.4"
+      "version": "0.6.5"
 });
 
 /*
@@ -316,7 +316,7 @@ function getDBNames(dbFilter = /^.+/) {
       "filter": { "name": filterRegex },
       "nameOnly": true,
       "authorizedDatabases": true,
-      // "comment": "list databases"
+      // "comment": "list databases" // fCV(4.4)
    }).databases.map(({ name }) => name);
 };
 
@@ -406,7 +406,7 @@ function shellVer(ver) {
     *  Evaluate shell version
     */
    let shell = () => +version().match(/^\d+\.\d+/);
-   return (typeof process !== 'undefined') ? true
+   return (typeof ver !== 'undefined' && typeof process !== 'undefined') ? true
         : (typeof ver !== 'undefined' && ver <= shell()) ? true
         : (typeof ver !== 'undefined' && ver > shell()) ? false
         : shell();
