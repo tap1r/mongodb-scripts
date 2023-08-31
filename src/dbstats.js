@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.5.7"
+ *  Version: "0.5.8"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -36,7 +36,7 @@
  */
 
 (async(dbFilter, collFilter) => {
-   let __script = { "name": "dbstats.js", "version": "0.5.7" };
+   let __script = { "name": "dbstats.js", "version": "0.5.8" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -58,8 +58,9 @@
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    console.clear();
-   console.log(`\u001b[32m${__comment}\u001b[0m`);
+   console.log(`\u001b[33m${__comment}\u001b[0m`);
    if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n\u001b[31m[WARN] Possible incompatible shell version detected: ${shellVer()}\u001b[0m`);
+   if (shellVer() < 1.0 && typeof process === 'object') console.log(`\n\u001b[31m[WARN] Possible incompatible non-GA shell version detected: ${shellVer()}\u001b[0m`);
    if (serverVer() < 4.2) console.log(`\n\u001b[31m[ERROR] Unsupported mongod/s version detected: ${serverVer()}\u001b[0m`);
 
    /*
