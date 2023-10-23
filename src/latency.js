@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.2.5"
+ *  Version: "0.2.6"
  *  Description: driver and network latency telemetry PoC
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,8 +13,8 @@ console.clear();
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.2.5" };
-   console.log(`\n\u001b[33m---> Running script ${__script.name} v${__script.version} on shell v${version()}\u001b[0m\n`);
+   let __script = { "name": "latency.js", "version": "0.2.6" };
+   console.log(`\n\u001b[33m---> Running script ${__script.name} v${__script.version} on shell v${version()}\u001b[0m`);
 
    let slowms = 100,
       filter = `Synthetic slow operation at ${performance.now()}`;
