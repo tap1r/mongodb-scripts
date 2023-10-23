@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.6.7"
+ *  Version: "0.6.8"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.6.7"
+      "version": "0.6.8"
 });
 
 /*
@@ -241,16 +241,15 @@ class MetaStats {
 
 function $rand() {
    /*
-    *  Choose your preferred RNG
+    *  Choose your preferred PRNG
     */
    if (typeof process !== 'undefined') {
       /*
        *  mongosh/nodejs detected
        */
       return crypto.webcrypto.getRandomValues(new Uint32Array(1))[0] / Uint32MaxVal;
-      // return Math.random();
    } else {
-      // default RNG
+      // default PRNG
       return Math.random();
    }
    // return _rand(); // the shell's prng
@@ -388,7 +387,7 @@ function fCV(ver) { // update for shared tier compatibility
    /*
     *  Evaluate feature compatibility version
     */
-   let featureVer = (ver) => {
+   let featureVer = ver => {
       return (db.serverStatus().process == 'mongod')
            ? +db.adminCommand({
                "getParameter": 1,
@@ -446,8 +445,8 @@ function hostInfo() {
    let hostInfo = {};
    try {
       hostInfo = db.hostInfo();
-   } catch (error) {
-      console.error(`[WARN] insufficient rights to execute db.hostInfo()\n${error}`);
+   } catch(error) {
+      console.error(`\u001b[31m[WARN] insufficient rights to execute db.hostInfo()\n${error}\u001b[0m`);
       hostInfo.system.hostname = hello().me.match(/(.*):/)[1];
    }
    return hostInfo;
@@ -460,8 +459,8 @@ function serverCmdLineOpts() {
    let serverCmdLineOpts = {};
    try {
       serverCmdLineOpts = db.serverCmdLineOpts();
-   } catch (error) {
-      console.error(`[WARN] insufficient rights to execute db.serverCmdLineOpts()\n${error}`);
+   } catch(error) {
+      console.error(`\u001b[31m[WARN] insufficient rights to execute db.serverCmdLineOpts()\n${error}\u001b[0m`);
       serverCmdLineOpts.parsed.storage.dbPath = 'undefined';
    }
    return serverCmdLineOpts;
