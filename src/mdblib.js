@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.6.6"
+ *  Version: "0.6.7"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.6.6"
+      "version": "0.6.7"
 });
 
 /*
@@ -406,8 +406,7 @@ function shellVer(ver) {
     *  Evaluate shell version
     */
    let shell = () => +version().match(/^\d+\.\d+/);
-   return (typeof ver !== 'undefined' && typeof process !== 'undefined') ? true
-        : (typeof ver !== 'undefined' && ver <= shell()) ? true
+   return (typeof ver !== 'undefined' && ver <= shell()) ? true
         : (typeof ver !== 'undefined' && ver > shell()) ? false
         : shell();
 }
