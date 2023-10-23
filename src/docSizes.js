@@ -1,6 +1,6 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.20"
+ *  Version: "0.1.21"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -21,8 +21,8 @@ let options = {
    /*
     *  main
     */
-   let __script = { "name": "docSizes.js", "version": "0.1.20" };
-   console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
+   let __script = { "name": "docSizes.js", "version": "0.1.21" };
+   console.log(`\n\u001b[33m---> Running script ${__script.name} v${__script.version} on shell v${version()}\u001b[0m`);
    // connection preferences
    if (typeof readPref === 'undefined')
       (readPref = (db.hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
@@ -31,7 +31,7 @@ let options = {
       if (db.getSiblingDB(dbName).getCollectionInfos({ "name": collName }, true)[0]?.name != collName)
          throw 'namespace does not exist';
    } catch(e) {
-      console.log(`${dbName}.${collName} ${e}`);
+      console.error(`${dbName}.${collName} ${e}`);
    }
 
    /*
@@ -88,7 +88,7 @@ let options = {
    // Distribution buckets
    let range = (start, stop, step) => {
       return Array.from(
-         { "length": (stop - start) / step + 1 },
+         { "length": (stop - start) / (step + 1) },
          (_, idx) => start + idx * step
       );
    };
