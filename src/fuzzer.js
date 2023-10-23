@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.10"
+ *  Version: "0.6.11"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.10" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.11" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -48,7 +48,7 @@
       compressor = 'best',            // ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
       // compressionOptions = -1,     // [-1|0|1|2|3|4|5|6|7|8|9] compression level
       idioma = 'en',                  // ['en'|'es'|'de'|'fr'|'zh']
-      collation = {   /* collation options */
+      collation = { /* collation options */
          "locale": "simple",          // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
          // caseLevel: <boolean>,
          // caseFirst: <string>,
@@ -62,7 +62,7 @@
          "w": (isReplSet() || isSharded()) ? "majority" : 1,
          "j": false
       };
-   let indexPrefs = {  /* build index preferences */
+   let indexPrefs = { /* build index preferences */
          "build": true,              // [true|false]
          "order": "post",            // ["pre"|"post"] collection population
          "commitQuorum": (writeConcern.w == 0) ? 1 : writeConcern.w
@@ -79,7 +79,7 @@
          "max": Math.pow(2, 27) / Math.pow(2, 12)
       },
       expireAfterSeconds = 0,        // TTL and time series options
-      fuzzer = {  /* preferences */
+      fuzzer = { /* preferences */
          "id": "ts",                 // ["ts"|"oid"] - timeseries OID | client generated OID
          "range": 365.2422,          // date range in days
          "offset": -300,             // date offset in days from now() (negative = past, positive = future)
@@ -87,12 +87,12 @@
          "distribution": "uniform",  // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
          // "polymorphic": { /* experimental */
             // "enabled": false,
-            // "varyTypes": false,     // fuzz types
+            // "varyTypes": false,     // fuzz BSON types
             // "nests": 0,             // nested subdocs
-            // "entropy": 100,         // 0 - 100%
+            // "entropy": 100,         // 0-100%
             // "cardinality": 1,       // ratio:1
-            // "sparsity": 0,          // 0 - 100%
-            // "weighting": 50         // 0 - 100%
+            // "sparsity": 0,          // 0-100%
+            // "weighting": 50         // 0-100%
          // },
          "schemas": [],
          "ratios": [7, 2, 1]
@@ -115,7 +115,7 @@
          { "random": 1 },
          { "string": "hashed" },
          { "array": 1 },
-         { "timestamp": 1 },
+         { "timestamp": -1 },
          { "location": "2dsphere" },
          // { "lineString": "2dsphere" },
          // { "polygon": "2dsphere" },
@@ -222,13 +222,13 @@
             let numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
             await db.adminCommand({
                "reshardCollection": `${dbName}.${collName}`,
-               // The new shard key cannot have a uniqueness constraint.
+               // The new shard key cannot have a uniqueness constraint
                "key": shardedOptions.key,
-               // Resharding a collection that has a uniqueness constraint is not supported.
+               // Resharding a collection that has a uniqueness constraint is not supported
                "unique": shardedOptions.unique,
                "numInitialChunks": numInitialChunks,
                "collation": collation
-               // writeConcernMajorityJournalDefault must be true.
+               // writeConcernMajorityJournalDefault must be true
             });
          };
          let rebalancingOps = () => {
@@ -328,21 +328,21 @@
       let secondsOffset;
       switch (distribution.toLowerCase()) {
          case 'uniform':
-            secondsOffset = +$floor($getRandNum(offset, offset + range) * 86400);
+            secondsOffset = $floor($getRandNum(offset, offset + range) * 86400);
             break;
          case 'normal': // genNormal(mu, sigma)
-            secondsOffset = +$floor($genNormal(offset + range/2, range/2) * 86400);
+            secondsOffset = $floor($genNormal(offset + (range / 2), range / 2) * 86400);
             break;
          case 'bimodal': // not implemented yet
-            // secondsOffset = +$floor($getRandNum(offset, offset + range) * 86400);
+            // secondsOffset = $floor($getRandNum(offset, offset + range) * 86400);
             // break;
          case 'pareto': // not implemented yet
             // $genRandIncPareto(min, alpha = 1.161) {}
-            // secondsOffset = +$floor($genRandIncPareto(offset + range) * 86400);
+            // secondsOffset = $floor($genRandIncPareto(offset + range) * 86400);
             // break;
          case 'exponential': // not implemented yet
             // $getRandExp();
-            // secondsOffset = +$floor($getRandExp(offset, offset + range, 128) * 86400);
+            // secondsOffset = $floor($getRandExp(offset, offset + range, 128) * 86400);
             // break;
          default:
             console.log(`\nUnsupported distribution type: ${distribution}\nDefaulting to "uniform"`);
@@ -514,8 +514,8 @@
             "type": "Polygon",
             "coordinates": [[
                [0, 0],
-               [3, 6],
-               [6, 1],
+               [$getRandIntInc(0, 10), $getRandIntInc(0, 10)],
+               [$getRandIntInc(0, 10), $getRandIntInc(0, 10)],
                [0, 0]
             ]]
          },
@@ -523,14 +523,14 @@
             "type": "Polygon",
             "coordinates": [[
                   [0, 0],
-                  [3, 6],
-                  [6, 1],
+                  [$getRandIntInc(0, 10), $getRandIntInc(0, 10)],
+                  [$getRandIntInc(0, 10), $getRandIntInc(0, 10)],
                   [0, 0]
                ],[
-                  [2, 2],
-                  [3, 3],
-                  [4, 2],
-                  [2, 2]
+                  [4, 4],
+                  [$getRandIntInc(0, 10), $getRandIntInc(0, 10)],
+                  [$getRandIntInc(0, 10), $getRandIntInc(0, 10)],
+                  [4, 4]
             ]]
          },
          "multiPoint": {  // GeoJSON MultiPoint
