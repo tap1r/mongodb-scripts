@@ -1,6 +1,6 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.21"
+ *  Version: "0.1.22"
  *  Description: sample document size distribution
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -21,8 +21,8 @@ let options = {
    /*
     *  main
     */
-   let __script = { "name": "docSizes.js", "version": "0.1.21" };
-   console.log(`\n\u001b[33m---> Running script ${__script.name} v${__script.version} on shell v${version()}\u001b[0m`);
+   let __script = { "name": "docSizes.js", "version": "0.1.22" };
+   console.log(`\n\u001b[33m# Running script ${__script.name} v${__script.version} on shell v${version()}\u001b[0m`);
    // connection preferences
    if (typeof readPref === 'undefined')
       (readPref = (db.hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
