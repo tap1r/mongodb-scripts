@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.13"
+ *  Version: "0.6.14"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,18 +13,18 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.13" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.14" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
        */
       let __lib = { "name": "mdblib.js", "paths": null, "path": null };
       if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
-         __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
-         __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
+         __lib.paths = [_getEnv('MDBLIB'), `${_getEnv('HOME')}/.mongodb`, '.'];
+         __lib.path = `${__lib.paths.find(path => fileExists(`${path}/${__lib.name}`))}/${__lib.name}`;
       } else if (typeof process !== 'undefined') { // mongosh process.env[] method
-         __lib.paths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
-         __lib.path = __lib.paths.find(path => fs.existsSync(path + '/' + __lib.name)) + '/' + __lib.name;
+         __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
+         __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
       } else {
          print(`\u001b[31m[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory\u001b[0m`);
          __lib.path = __lib.name;
@@ -35,7 +35,7 @@
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    console.clear();
-   console.log(`\n\u001b[32m${__comment}\u001b[0m`);
+   console.log(`\n\u001b[33m${__comment}\u001b[0m`);
 
    /*
     *  User defined parameters
