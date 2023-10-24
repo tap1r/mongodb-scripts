@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.3.9"
+ *  Version: "0.3.10"
  *  Description: measure oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -20,18 +20,18 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.3.9" };
+   let __script = { "name": "oplogchurn.js", "version": "0.3.10" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
        */
       let __lib = { "name": "mdblib.js", "paths": null, "path": null };
       if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
-         __lib.paths = [_getEnv('MDBLIB'), _getEnv('HOME') + '/.mongodb', '.'];
-         __lib.path = __lib.paths.find(path => fileExists(path + '/' + __lib.name)) + '/' + __lib.name;
+         __lib.paths = [_getEnv('MDBLIB'), `${_getEnv('HOME')}/.mongodb`, '.'];
+         __lib.path = `${__lib.paths.find(path => fileExists(`${path}/${__lib.name}`))}/${__lib.name}`;
       } else if (typeof process !== 'undefined') { // mongosh process.env[] method
-         __lib.paths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
-         __lib.path = __lib.paths.find(path => fs.existsSync(path + '/' + __lib.name)) + '/' + __lib.name;
+         __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
+         __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
       } else {
          print(`\u001b[31m[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory\u001b[0m`);
          __lib.path = __lib.name;
@@ -91,7 +91,7 @@
          options = {
             "allowDiskUse": true,
             "cursor": { "batchSize": 0 },
-            "comment": `Performing oplog churn analysis with ${__script.name} v${__script.version}`
+            "comment": __comment
          };
 
       // Measure interval statistics
