@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.3.8"
+ *  Version: "0.3.9"
  *  Description: measure oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -20,7 +20,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.3.8" };
+   let __script = { "name": "oplogchurn.js", "version": "0.3.9" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -33,16 +33,16 @@
          __lib.paths = [process.env.MDBLIB, process.env.HOME + '/.mongodb', '.'];
          __lib.path = __lib.paths.find(path => fs.existsSync(path + '/' + __lib.name)) + '/' + __lib.name;
       } else {
-         print(`[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory`);
+         print(`\u001b[31m[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory\u001b[0m`);
          __lib.path = __lib.name;
       }
       load(__lib.path);
    }
-   let __comment = `\n# Running script ${__script.name} v${__script.version}`;
+   let __comment = `# Running script ${__script.name} v${__script.version}`;
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    console.clear();
-   console.log(`\u001b[32m${__comment}\u001b[0m`);
+   console.log(`\n\u001b[32m${__comment}\u001b[0m`);
 
    /*
     *  Global defaults
