@@ -1,17 +1,21 @@
 /*
  *  Name: "compact.js"
- *  Version: "0.2.2"
+ *  Version: "0.2.3"
  *  Description: schrödinger's page reproduction
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "[mongo|mongosh] [connection options] --quiet compact.js"
+// Usage: "mongosh [connection options] --quiet compact.js"
+
+/*
+ *  User defined parameters
+ */
 
 let options = {
    "dbName": "database",
    "collName": "collection",
    // "n": 25, // = % chance of being matched
-   // "rounds": 5, // iterations of entropy
+   "rounds": 1, // iterations of entropy
    // "compactions": 1
 };
 
@@ -20,15 +24,14 @@ let options = {
    /*
     *  ...
     */
-   let __script = { "name": "compact.js", "version": "0.2.2" };
-   console.log(`\n---> Running script ${__script.name} v${__script.version}\n`);
-   try {
-      if (db.getSiblingDB(dbName).getCollectionInfos({ "name": collName }, true)[0]?.name != collName)
-         throw 'namespace does not exist';
-   } catch(e) {
-      console.log(`${dbName}.${collName} ${e}`);
-   }
+   let __script = { "name": "compact.js", "version": "0.2.3" };
+   console.log(`\n\u001b[33m# Running script ${__script.name} v${__script.version} on shell v${version()}\u001b[0m`);
    let namespace = db.getSiblingDB(dbName).getCollection(collName);
+   if (!namespace.exists()) {
+      throw `\u001b[31mnamespace "${dbName}.${collName}" does not exist\u001b[0m`;
+   }
+   let dbFilter = "database", collFilter = "collection";
+
    let randFilter = { "$expr": { "$gt": [n / 100, { "$rand": {} }] } };
    // let update = { "$set": { "x": Math.random() } };
 
