@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.6.8"
+ *  Version: "0.7.0"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.6.8"
+      "version": "0.7.0"
 });
 
 /*
@@ -1226,18 +1226,18 @@ function $collStats(dbName = db.getName(), collName = '') {
          } },
          { "$set": {
             "storageStats.wiredTiger.compressor": {
-               "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 0]
+               "$ifNull": [{ "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 0] }, "undef"]
             },
             "storageStats.wiredTiger.internalPageSize": {
                "$multiply": [
                   { "$toInt": {
-                     "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 1]
+                     "$ifNull": [{ "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 1] }, 4]
                   } }, 1024
             ] },
             "storageStats.wiredTiger.dataPageSize": {
                "$multiply": [
                   { "$toInt": {
-                     "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 2]
+                     "$ifNull": [{ "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 2] }, 32]
                   } }, 1024
             ] },
             "storageStats.indexes": {
@@ -1247,10 +1247,10 @@ function $collStats(dbName = db.getName(), collName = '') {
                   "in": {
                      "$arrayToObject": [[
                         { "k": "name", "v": "$$indexes.k" },
-                        { "k": "uri", "v": "$$indexes.v.uri" },
-                        { "k": "file size in bytes", "v": "$$indexes.v.block-manager.file size in bytes" },
-                        { "k": "file bytes available for reuse", "v": "$$indexes.v.block-manager.file bytes available for reuse" },
-                        { "k": "file allocation unit size", "v": "$$indexes.v.block-manager.file allocation unit size" }
+                        { "k": "uri", "v": { "$ifNull": ["$$indexes.v.uri", "statistics:table:index-0-0000000000000000000"] } },
+                        { "k": "file size in bytes", "v": { "$ifNull": ["$$indexes.v.block-manager.file size in bytes", 4096] } },
+                        { "k": "file bytes available for reuse", "v": { "$ifNull": ["$$indexes.v.block-manager.file bytes available for reuse", 0] } },
+                        { "k": "file allocation unit size", "v": { "$ifNull": ["$$indexes.v.block-manager.file allocation unit size", 4096] } }
             ]] } } },
             "storageStats.indexDetails.file size in bytes": {
                "$reduce": {
@@ -1280,9 +1280,9 @@ function $collStats(dbName = db.getName(), collName = '') {
             "internalPageSize": { "$push": "$storageStats.wiredTiger.internalPageSize" },
             "dataPageSize": { "$push": "$storageStats.wiredTiger.dataPageSize" },
             "uri": { "$push": "$storageStats.wiredTiger.uri" },
-            "file allocation unit size": { "$push": "$storageStats.wiredTiger.block-manager.file allocation unit size" },
-            "file bytes available for reuse": { "$push": "$storageStats.wiredTiger.block-manager.file bytes available for reuse" },
-            "file size in bytes": { "$push": "$storageStats.wiredTiger.block-manager.file size in bytes" },
+            "file allocation unit size": { "$push": { "$ifNull": ["$storageStats.wiredTiger.block-manager.file allocation unit size", "$storageStats.wiredTiger.internalPageSize"] } },
+            "file bytes available for reuse": { "$push": { "$ifNull": ["$storageStats.wiredTiger.block-manager.file bytes available for reuse", "$storageStats.freeStorageSize"] } },
+            "file size in bytes": { "$push": { "$ifNull": ["$storageStats.wiredTiger.block-manager.file size in bytes", { "$sum": "$storageStats.storageSize" }] } },
             "nindexes": { "$sum": "$storageStats.nindexes" },
             "indexes": { "$push": "$storageStats.indexes" },
             "indexes size in bytes": { "$sum": "$storageStats.indexDetails.file size in bytes" },
