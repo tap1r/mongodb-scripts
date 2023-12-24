@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.5.15"
+ *  Version: "0.6.0"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -16,7 +16,7 @@
       db.adminCommand({ "features": 1 });
    } catch(error) {
       // MongoServerError: command features requires authentication
-      print('\u001b[31m[ERR] MongoServerError: command features requires authentication\u001b[0m');
+      print('\x1b[31m[ERR] MongoServerError: features command requires authentication\x1b[0m');
    }
    let { 'authInfo': { authenticatedUsers, authenticatedUserRoles } } = db.adminCommand({ "connectionStatus": 1 }),
       adminRoles = ['clusterAdmin', 'atlasAdmin', 'backup', 'root', '__system'];
@@ -25,8 +25,8 @@
       monitorRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => authDb == role == 'clusterMonitor' && authDb == 'admin'),
       dbRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => authzRoles.includes(role) && authDb == 'admin');
    if (!(!(!!authenticatedUsers.length) || !!adminRoles.length || !!monitorRoles.length && !!dbRoles.length)) {
-      print('\u001b[31m[WARN] authz privileges may be inadequate and results may vary\u001b[0m');
-      print('\u001b[31m[WARN] consider inheriting built-in roles \u001b[33mclusterMonitor@admin\u001b[31m and \u001b[33mreadAnyDatabase@admin\u001b[0m');
+      print('\x1b[31m[WARN] authz privileges may be inadequate and results may vary\x1b[0m');
+      print('\x1b[31m[WARN] consider inheriting built-in roles \x1b[33mclusterMonitor@admin\x1b[31m and \x1b[33mreadAnyDatabase@admin\x1b[0m');
    }
 })();
 
@@ -36,7 +36,7 @@
  */
 
 (async(dbFilter, collFilter) => {
-   let __script = { "name": "dbstats.js", "version": "0.5.15" };
+   let __script = { "name": "dbstats.js", "version": "0.6.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -49,7 +49,7 @@
          __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
          __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
       } else {
-         print(`\u001b[31m[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory\u001b[0m`);
+         print(`\x1b[31m[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory\x1b[0m`);
          __lib.path = __lib.name;
       }
       load(__lib.path);
@@ -58,10 +58,10 @@
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    console.clear();
-   console.log(`\n\u001b[33m${__comment}\u001b[0m`);
-   if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n\u001b[31m[WARN] Possible incompatible shell version detected: ${shellVer()}\u001b[0m`);
-   if (shellVer() < 1.0 && typeof process !== 'undefined') console.log(`\n\u001b[31m[WARN] Possible incompatible non-GA shell version detected: ${shellVer()}\u001b[0m`);
-   if (serverVer() < 4.2) console.log(`\n\u001b[31m[ERROR] Unsupported mongod/s version detected: ${serverVer()}\u001b[0m`);
+   console.log(`\n\x1b[33m${__comment}\x1b[0m`);
+   if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n\x1b[31m[WARN] Possible incompatible shell version detected: ${shellVer()}\x1b[0m`);
+   if (shellVer() < 1.0 && typeof process !== 'undefined') console.log(`\n\x1b[31m[WARN] Possible incompatible non-GA shell version detected: ${shellVer()}\x1b[0m`);
+   if (serverVer() < 4.2) console.log(`\n\x1b[31m[ERROR] Unsupported mongod/s version detected: ${serverVer()}\x1b[0m`);
 
    /*
     *  User defined parameters
@@ -175,40 +175,40 @@
       /*
        *  Print collection table header
        */
-      console.log(`\u001b[33m${'━'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32mCollections (visible):\u001b[0m${' '.repeat(1)}${collTotal}`);
+      console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
+      console.log(`\x1b[1m\x1b[32mCollections (visible):\x1b[0m${' '.repeat(1)}${collTotal}`);
    }
 
    function printCollection({ name, dataSize, compression, compressor, storageSize, freeStorageSize, objects, orphans }) {
       /*
        *  Print collection level stats
        */
-      console.log(`\u001b[33m${'━'.repeat(termWidth)}\u001b[0m`);
-      console.log(`└\u001b[36m${(' ' + name).padEnd(rowHeader - 1)}\u001b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${orphans.toString().padStart(columnWidth - 5)}`);
+      console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
+      console.log(`└\x1b[36m${(' ' + name).padEnd(rowHeader - 1)}\x1b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${orphans.toString().padStart(columnWidth - 5)}`);
    }
 
    function printViewHeader(viewTotal = 0) {
       /*
        *  Print view table header
        */
-      console.log(`\u001b[33m${'━'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32mViews (visible):\u001b[0m${' '.repeat(7)}${viewTotal}`);
+      console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
+      console.log(`\x1b[1m\x1b[32mViews (visible):\x1b[0m${' '.repeat(7)}${viewTotal}`);
    }
 
    function printView(viewName = 'unknown') {
       /*
        *  Print view name
        */
-      console.log(`\u001b[33m${'━'.repeat(termWidth)}\u001b[0m`);
-      console.log(` \u001b[36m${viewName}\u001b[0m`);
+      console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
+      console.log(` \x1b[36m${viewName}\x1b[0m`);
    }
 
    function printIndex({ name, 'file size in bytes': storageSize, 'file bytes available for reuse': freeStorageSize } = {}) {
       /*
        *  Print index level stats
        */
-      console.log(`  \u001b[33m${'━'.repeat(termWidth - 2)}\u001b[0m`);
-      console.log(`   \u001b[31m${name.padEnd(rowHeader + columnWidth * 2)}\u001b[0m ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)}`);
+      console.log(`  \x1b[33m${'━'.repeat(termWidth - 2)}\x1b[0m`);
+      console.log(`   \x1b[31m${name.padEnd(rowHeader + columnWidth * 2)}\x1b[0m ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)}`);
    }
 
    function printDbHeader({ name } = {}) {
@@ -216,8 +216,8 @@
        *  Print DB table header
        */
       console.log('\n');
-      console.log(`\u001b[33m${'═'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32m${`Database:\u001b[0m \u001b[36m${name}`.padEnd(rowHeader + 9)}\u001b[0m \u001b[1m\u001b[32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks | reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Orphans'.padStart(columnWidth - 4)}\u001b[0m`);
+      console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
+      console.log(`\x1b[1m\x1b[32m${`Database:\x1b[0m \x1b[36m${name}`.padEnd(rowHeader + 9)}\x1b[0m \x1b[1m\x1b[32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks | reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Orphans'.padStart(columnWidth - 4)}\x1b[0m`);
    }
 
    function printDb({
@@ -226,11 +226,11 @@
       /*
        *  Print DB level rollup stats
        */
-      console.log(`\u001b[33m${'━'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32m${`Namespaces subtotal:\u001b[0m   ${ncollections}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize).padStart(columnWidth) + ' |' + `${formatPct(freeStorageSize, storageSize)}`.padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${orphans.toString().padStart(columnWidth - 5)}`);
-      console.log(`\u001b[1m\u001b[32m${`Indexes subtotal:\u001b[0m      ${nindexes}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${`${formatUnit(totalIndexBytesReusable).padStart(columnWidth)} |${`${formatPct(totalIndexBytesReusable, totalIndexSize)}`.padStart(6)}`.padStart(columnWidth + 8)}`);
-      // console.log(`\u001b[1m\u001b[32mShards:\u001b[0m ${shards}`);
-      console.log(`\u001b[33m${'═'.repeat(termWidth)}\u001b[0m`);
+      console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
+      console.log(`\x1b[1m\x1b[32m${`Namespaces subtotal:\x1b[0m   ${ncollections}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize).padStart(columnWidth) + ' |' + `${formatPct(freeStorageSize, storageSize)}`.padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${orphans.toString().padStart(columnWidth - 5)}`);
+      console.log(`\x1b[1m\x1b[32m${`Indexes subtotal:\x1b[0m      ${nindexes}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${`${formatUnit(totalIndexBytesReusable).padStart(columnWidth)} |${`${formatPct(totalIndexBytesReusable, totalIndexSize)}`.padStart(6)}`.padStart(columnWidth + 8)}`);
+      // console.log(`\x1b[1m\x1b[32mShards:\x1b[0m ${shards}`);
+      console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
    }
 
    function printDbPath({
@@ -240,14 +240,14 @@
        *  Print total dbPath rollup stats
        */
       console.log('\n');
-      console.log(`\u001b[33m${'═'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32m${'dbPath totals'.padEnd(rowHeader)} \u001b[32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks | reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Orphans'.padStart(columnWidth - 4)}\u001b[0m`);
-      console.log(`\u001b[33m${'━'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32m${`All namespaces:\u001b[0m        ${ncollections}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${orphans.toString().padStart(columnWidth - 5)}`);
-      console.log(`\u001b[1m\u001b[32m${`All indexes:\u001b[0m           ${nindexes}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ' |' + (formatPct(totalIndexBytesReusable, totalIndexSize)).padStart(6)).padStart(columnWidth + 8)}`);
-      console.log(`\u001b[33m${'═'.repeat(termWidth)}\u001b[0m`);
-      console.log(`\u001b[1m\u001b[32mHost:\u001b[0m \u001b[36m${hostname}\u001b[0m   \u001b[1m\u001b[32mType:\u001b[0m \u001b[36m${proc}\u001b[0m   \u001b[1m\u001b[32mVersion:\u001b[0m \u001b[36m${db.version()}\u001b[0m   \u001b[1m\u001b[32mdbPath:\u001b[0m \u001b[36m${dbPath}\u001b[0m`);
-      console.log(`\u001b[33m${'═'.repeat(termWidth)}\u001b[0m`);
+      console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
+      console.log(`\x1b[1m\x1b[32m${'dbPath totals'.padEnd(rowHeader)} \x1b[32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks | reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Orphans'.padStart(columnWidth - 4)}\x1b[0m`);
+      console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
+      console.log(`\x1b[1m\x1b[32m${`All namespaces:\x1b[0m        ${ncollections}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${orphans.toString().padStart(columnWidth - 5)}`);
+      console.log(`\x1b[1m\x1b[32m${`All indexes:\x1b[0m           ${nindexes}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ' |' + (formatPct(totalIndexBytesReusable, totalIndexSize)).padStart(6)).padStart(columnWidth + 8)}`);
+      console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
+      console.log(`\x1b[1m\x1b[32mHost:\x1b[0m \x1b[36m${hostname}\x1b[0m   \x1b[1m\x1b[32mType:\x1b[0m \x1b[36m${proc}\x1b[0m   \x1b[1m\x1b[32mVersion:\x1b[0m \x1b[36m${db.version()}\x1b[0m   \x1b[1m\x1b[32mdbPath:\x1b[0m \x1b[36m${dbPath}\x1b[0m`);
+      console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log('\n');
    }
 
