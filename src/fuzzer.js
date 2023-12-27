@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.15"
+ *  Version: "0.6.16"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.15" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.16" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -126,7 +126,7 @@
          // { "geoCollection": "2dsphere" },
          fCV(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
       ];
-      indexOptions = {    /* createIndexes options */
+      indexOptions = { /* createIndexes options */
          // "background": fCV(4.0) ? true : false,
          // "background": true,
          // "unique": false,
@@ -136,7 +136,7 @@
          // "hidden": hidden,
          "collation": collation
       },
-      specialIndexes = [  /* index types unsupported by collations */
+      specialIndexes = [ /* index types unsupported by collations */
          { "location.coordinates": "2d" },
          { "quote.txt": "text" }
       ],
@@ -170,7 +170,7 @@
        *  main
        */
       db.getMongo().setReadPref('primary');
-      console.log(`\nSynthesising ${totalDocs} document${(totalDocs == 1) ? '' : 's'}`);
+      console.log(`\nSynthesising ${totalDocs} document${(totalDocs === 1) ? '' : 's'}`);
 
       // sampling synthetic documents and estimating batch size
       for (let i = 0; i < sampleSize; ++i)
@@ -179,13 +179,13 @@
       let avgSize = $floor(docSize / sampleSize);
       if (avgSize > bsonMax * 0.95)
          console.log(`\n[Warning] The average document size of ${avgSize} bytes approaches or exceeeds the BSON max size of ${bsonMax} bytes`);
-      console.log(`\nSampling ${sampleSize} document${(sampleSize == 1) ? '' : 's'} each with BSON size averaging ${avgSize} byte${(avgSize == 1) ? '' : 's'}`);
+      console.log(`\nSampling ${sampleSize} document${(sampleSize === 1) ? '' : 's'} each with BSON size averaging ${avgSize} byte${(avgSize === 1) ? '' : 's'}`);
       let batchSize = (() => {
          let sampledSize = $floor(bsonMax * 0.95 / avgSize);
          // return (maxWriteBatchSize < sampledSize) ? maxWriteBatchSize : sampledSize;
          return (1000 < sampledSize) ? 1000 : sampledSize;
       })();
-      console.log(`Estimated optimal capacity of ${batchSize} document${(batchSize == 1) ? '' : 's'} per batch`);
+      console.log(`Estimated optimal capacity of ${batchSize} document${(batchSize === 1) ? '' : 's'} per batch`);
       if (totalDocs <= batchSize)
          batchSize = totalDocs;
       else {
@@ -261,7 +261,6 @@
                      "$push": {
                         "shard": "$shard",
                         "migrationService": "$migrationService",
-                        // "opStatus": "$opStatus",
                         "recipientState": "$recipientState",
                         "donorState": "$donorState",
                         "approxDocumentsToCopy":{ "$ifNull": [{ "$toInt": "$approxDocumentsToCopy" }, "$$REMOVE"] },
@@ -354,7 +353,7 @@
             oid = new ObjectId();
             break;
          default: // the 'ts' option
-            oid = new ObjectId(  // employ native mongosh method
+            oid = new ObjectId( // employ native mongosh method
                Math.floor(timestamp + secondsOffset).toString(16) +
                $genRandHex(16)
             );
@@ -372,7 +371,7 @@
             "comment": "General purpose schema"
          },
          "language": idioma,
-         "string": $genRandStr($getRandIntInc(6, 24)),  // hashed shard key
+         "string": $genRandStr($getRandIntInc(6, 24)), // hashed shard key
          "quote": {
             "language": idiomas[
                $getRandRatioInt([80, 0, 0, 5, 0, 3, 2])
@@ -459,7 +458,7 @@
             "comment": "Time series schema"
          },
          "language": idioma,
-         "string": $genRandStr($getRandIntInc(6, 24)),  // hashed shard key
+         "string": $genRandStr($getRandIntInc(6, 24)), // hashed shard key
          "timeField": date,
          "metaField": [
             'Series 1',
@@ -482,7 +481,7 @@
             "comment": "GeoJSON schema"
          },
          "language": idioma,
-         "string": $genRandStr($getRandIntInc(6, 24)),  // hashed shard key
+         "string": $genRandStr($getRandIntInc(6, 24)), // hashed shard key
          "temperature": [
             +$genNormal(15, 10).toFixed(1),
             ['K', '°F', '°C'][$getRandIntInc(0, 2)]
@@ -494,13 +493,13 @@
             null
          ][$getRandRatioInt([80, 20, 1])],
          "locality": $getRandCountry()['alpha-3 code'],
-         "location": {  // GeoJSON Point
+         "location": { // GeoJSON Point
             "type": "Point",
             "coordinates": [
                +$getRandNum(-180, 180).toFixed(4),
                +$getRandNum(-90, 90).toFixed(4)
          ] },
-         "lineString": {  // GeoJSON LineString
+         "lineString": { // GeoJSON LineString
             "type": "LineString",
             "coordinates": [[
                   +$getRandNum(-180, 180).toFixed(4),
@@ -510,7 +509,7 @@
                   +$getRandNum(-90, 90).toFixed(4)
             ]]
          },
-         "polygon": {  // polygon with a single ring
+         "polygon": { // polygon with a single ring
             "type": "Polygon",
             "coordinates": [[
                [0, 0],
@@ -519,7 +518,7 @@
                [0, 0]
             ]]
          },
-         "polygonMulti": {  // polygons with multiple rings
+         "polygonMulti": { // polygons with multiple rings
             "type": "Polygon",
             "coordinates": [[
                   [0, 0],
@@ -533,7 +532,7 @@
                   [4, 4]
             ]]
          },
-         "multiPoint": {  // GeoJSON MultiPoint
+         "multiPoint": { // GeoJSON MultiPoint
             "type": "MultiPoint",
             "coordinates": [
                [-73.9580, 40.8003],
@@ -542,7 +541,7 @@
                [-73.9814, 40.7681]
             ]
          },
-         "multiLineString": {  // GeoJSON MultiLineString
+         "multiLineString": { // GeoJSON MultiLineString
             "type": "MultiLineString",
             "coordinates": [[
                   [-73.96943, 40.78519],
@@ -558,7 +557,7 @@
                   [-73.97036, 40.76811]
             ]]
          },
-         "multiPolygon": {  // GeoJSON MultiPolygon
+         "multiPolygon": { // GeoJSON MultiPolygon
             "type": "MultiPolygon",
             "coordinates": [[[
                   [-73.958, 40.8003],
@@ -574,7 +573,7 @@
                   [-73.958, 40.8003]
             ]]]
          },
-         "geoCollection": {  // GeoJSON GeometryCollection
+         "geoCollection": { // GeoJSON GeometryCollection
             "type": "GeometryCollection",
             "geometries": [{
                "type": "MultiPoint",
@@ -763,7 +762,7 @@
          } else
             console.log('No regular index builds specified.');
          if (specialIndexes.length > 0) {
-            console.log(`\nBuilding exceptional index${(specialIndexes.length == 1) ? '' : 'es'} (no collation support) with commit quorum "${(fCV(4.4) && (isReplSet() || isSharded())) ? indexPrefs.commitQuorum : 'disabled'}":`);
+            console.log(`\nBuilding exceptional index${(specialIndexes.length === 1) ? '' : 'es'} (no collation support) with commit quorum "${(fCV(4.4) && (isReplSet() || isSharded())) ? indexPrefs.commitQuorum : 'disabled'}":`);
             specialIndexes.forEach(index => console.log(`\tkey: ${tojson(index)}`));
             let sIndexing = () => {
                let sOptions = (fCV(4.4) && (isReplSet() || isSharded()))
@@ -795,14 +794,14 @@
    }
 
    function genBulk(batchSize) {
-      console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} document${(totalDocs == 1) ? '' : 's'} in ${totalBatches} batch${(totalBatches == 1) ? '' : 'es'}:`);
+      console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} document${(totalDocs === 1) ? '' : 's'} in ${totalBatches} batch${(totalBatches === 1) ? '' : 'es'}:`);
       for (let i = 0; i < totalBatches; ++i) {
          if (i == totalBatches - 1 && residual > 0) batchSize = residual;
          let bulk = namespace.initializeUnorderedBulkOp();
          for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument(fuzzer, timestamp))
          let result = bulk.execute(writeConcern);
          let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
-         console.log(`\t[Batch ${1 + i}/${totalBatches}] bulk inserted ${bInserted} document${(bInserted == 1) ? '' : 's'}`);
+         console.log(`\t[Batch ${1 + i}/${totalBatches}] bulk inserted ${bInserted} document${(bInserted === 1) ? '' : 's'}`);
       }
 
       return console.log('Generation completed.');
