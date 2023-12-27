@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.2.7"
+ *  Version: "0.2.8"
  *  Description: driver and network latency telemetry PoC
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,16 +13,16 @@ console.clear();
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.2.7" };
-   console.log(`\n\u001b[33m# Running script ${__script.name} v${__script.version} on shell v${version()}\u001b[0m`);
+   let __script = { "name": "latency.js", "version": "0.2.8" };
+   console.log(`\n\x1b[33m# Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    let slowms = 100,
       filter = `Synthetic slow operation at ${performance.now()}`;
    try {
       slowms = db.getSiblingDB('admin').getProfilingStatus().slowms;
    } catch(error) {
-      console.log('\u001b[31m[WARN] failed to aquire the slowms threshold:\u001b[0m', error);
-      console.log('\u001b[31m[WARN] defaulting slowms to 200ms\u001b[0m');
+      console.log('\x1b[31m[WARN] failed to aquire the slowms threshold:\x1b[0m', error);
+      console.log('\x1b[31m[WARN] defaulting slowms to 200ms\x1b[0m');
       slowms = 200;
    }
    // let { slowms = 100 } = db.getSiblingDB('admin').getProfilingStatus();
@@ -93,18 +93,18 @@ console.clear();
    tableWidth = columnWidth + longestValue + spacing;
    padding = longestValue + spacing;
    report = `
-   \u001b[1mMeasurement\u001b[0m
-   \u001b[33m${'-'.repeat(tableWidth)}\u001b[0m
-   \u001b[32m${'Delay/slowms factor:'.padEnd(columnWidth)}\u001b[0m${fomatted(slowms).padStart(padding)}
-   \u001b[32m${'Total measurement time:'.padEnd(columnWidth)}\u001b[0m${fomatted(totalTime).padStart(padding)}
-   \u001b[33m${'='.repeat(tableWidth)}\u001b[0m
+   \x1b[1mMeasurement\x1b[0m
+   \x1b[33m${'━'.repeat(tableWidth)}\x1b[0m
+   \x1b[32m${'Delay/slowms factor:'.padEnd(columnWidth)}\x1b[0m${fomatted(slowms).padStart(padding)}
+   \x1b[32m${'Total measurement time:'.padEnd(columnWidth)}\x1b[0m${fomatted(totalTime).padStart(padding)}
+   \x1b[33m${'═'.repeat(tableWidth)}\x1b[0m
 
-   \u001b[1mLatency breakdown\u001b[0m
-   \u001b[33m${'-'.repeat(tableWidth)}\u001b[0m
-   \u001b[32m${'Server execution time:'.padEnd(columnWidth)}\u001b[0m${fomatted(durationMillis - slowms).padStart(padding)}
-   \u001b[32m${'Network latency (RTT):'.padEnd(columnWidth)}\u001b[0m${fomatted(rtt).padStart(padding)}
-   \u001b[32m${'Driver execution time:'.padEnd(columnWidth)}\u001b[0m${fomatted(totalTime - durationMillis - rtt).padStart(padding)}
-   \u001b[33m${'='.repeat(tableWidth)}\u001b[0m
+   \x1b[1mLatency breakdown\x1b[0m
+   \x1b[33m${'━'.repeat(tableWidth)}\x1b[0m
+   \x1b[32m${'Server execution time:'.padEnd(columnWidth)}\x1b[0m${fomatted(durationMillis - slowms).padStart(padding)}
+   \x1b[32m${'Network latency (RTT):'.padEnd(columnWidth)}\x1b[0m${fomatted(rtt).padStart(padding)}
+   \x1b[32m${'Driver execution time:'.padEnd(columnWidth)}\x1b[0m${fomatted(totalTime - durationMillis - rtt).padStart(padding)}
+   \x1b[33m${'═'.repeat(tableWidth)}\x1b[0m
    `;
    console.log(report);
 })();
