@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.14"
+ *  Version: "0.6.15"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.14" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.15" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -26,7 +26,7 @@
          __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
          __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
       } else {
-         print(`\u001b[31m[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory\u001b[0m`);
+         print(`\x1b[31m[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory\x1b[0m`);
          __lib.path = __lib.name;
       }
       load(__lib.path);
@@ -35,7 +35,7 @@
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    console.clear();
-   console.log(`\n\u001b[33m${__comment}\u001b[0m`);
+   console.log(`\n\x1b[33m${__comment}\x1b[0m`);
 
    /*
     *  User defined parameters
@@ -312,10 +312,10 @@
          console.log(`\nResharding complete.`);
       }
       else if (isSharded() && (shardedOptions.reShard == true) && !fCV(5.0)) {
-         console.log('\u001b[31m[WARN] reshardCollection() requires v5.0+\u001b[0m');
+         console.log('\x1b[31m[WARN] reshardCollection() requires v5.0+\x1b[0m');
       }
 
-      return console.log('\n \u001b[32mFuzzing completed!\u001b[0m\n');
+      return console.log('\n \x1b[32mFuzzing completed!\x1b[0m\n');
    }
 
    function genDocument({
