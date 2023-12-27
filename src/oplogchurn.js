@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.3.11"
+ *  Version: "0.3.12"
  *  Description: measure oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -20,7 +20,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.3.11" };
+   let __script = { "name": "oplogchurn.js", "version": "0.3.12" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -33,7 +33,7 @@
          __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
          __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
       } else {
-         print(`\u001b[31m[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory\u001b[0m`);
+         print(`\x1b[31m[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory\x1b[0m`);
          __lib.path = __lib.name;
       }
       load(__lib.path);
@@ -42,7 +42,7 @@
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    console.clear();
-   console.log(`\n\u001b[33m${__comment}\u001b[0m`);
+   console.log(`\n\x1b[33m${__comment}\x1b[0m`);
 
    /*
     *  Global defaults
@@ -135,10 +135,10 @@
       let oplogChurn = intervalStorageSize / intervalHrs;
 
       // Print results
-      console.log(`\n\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
+      console.log(`\n\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log(`Hostname: ${hostname.padStart(termWidth - 'Hostname: '.length)}`);
       console.log(`dbPath: ${dbPath.padStart(termWidth - 'dbPath: '.length)}`);
-      console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
+      console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       console.log(`${'Start time:'.padEnd(rowHeader)} ${d1.padStart(columnWidth)}`);
       console.log(`${'End time:'.padEnd(rowHeader)} ${d2.padStart(columnWidth)}`);
       console.log(`${'Interval duration:'.padEnd(rowHeader)} ${`${intervalHrs} hr${(intervalHrs == 1) ? '' : 's'}`.padStart(columnWidth)}`);
@@ -146,14 +146,14 @@
       console.log(`${'Interval document count:'.padEnd(rowHeader)} ${docs.toString().padStart(columnWidth)}`);
       console.log(`${'Interval data size:'.padEnd(rowHeader)} ${`${intervalDataSize.toFixed(2)} ${unit}`.padStart(columnWidth)}`);
       console.log(`${'Estimated interval storage size:'.padEnd(rowHeader)} ${`${intervalStorageSize.toFixed(2)} ${unit}`.padStart(columnWidth)}`);
-      console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
+      console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       console.log(`${'Estimated current oplog data churn:'.padEnd(rowHeader)} ${`${oplogChurn.toFixed(2)} ${unit}/hr`.padStart(columnWidth)}`);
-      console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
+      console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log('\n');
    }
 
    if (!isReplSet()) {
-      console.log(`\n\t\u001b[31mHost is not a replica set member....exiting!\u001b[0m`);
+      console.log(`\n\t\x1b[31mHost is not a replica set member....exiting!\x1b[0m`);
       console.log('\n');
    } else main();
 })();
