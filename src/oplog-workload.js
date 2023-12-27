@@ -1,6 +1,6 @@
 /*
  *  Name: "oplog-workload.js"
- *  Version: "0.1.9"
+ *  Version: "0.1.10"
  *  Description: oplog "workload" analysis script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   let __script = { "name": "oplog-workload.js", "version": "0.1.9" };
+   let __script = { "name": "oplog-workload.js", "version": "0.1.10" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -25,7 +25,7 @@
          __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
          __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
       } else {
-         print(`\u001b[31m[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory\u001b[0m`);
+         print(`\x1b[31m[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory\x1b[0m`);
          __lib.path = __lib.name;
       }
       load(__lib.path);
@@ -34,7 +34,7 @@
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    console.clear();
-   console.log(`\n\u001b[33m${__comment}\u001b[0m`);
+   console.log(`\n\x1b[33m${__comment}\x1b[0m`);
 
    /*
     *  User defined parameters
@@ -108,7 +108,7 @@
          ({ '__bsonDataSize': size, '__documentCount': docs } = oplog.aggregate(pipeline, options).toArray()[0]);
       } else {
          console.log('\n');
-         console.log('\u001b[31m[WARN] Using the legacy client side calculation technique\u001b[0m');
+         console.log('\x1b[31m[WARN] Using the legacy client side calculation technique\x1b[0m');
          oplog.aggregate(pipeline, options).forEach(op => {
             size += bsonsize(op);
             ++docs;
@@ -127,10 +127,10 @@
          oplogChurn = size / (factor * ratio * hrs);
 
       // Print results
-      console.log(`\n\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
+      console.log(`\n\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log('Host:'.padEnd(rowHeader), host.padStart(columnWidth));
       console.log(`dbPath: ${dbPath.padStart(termWidth - 'dbPath: '.length)}`);
-      console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
+      console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       console.log('Start time:'.padEnd(rowHeader), d1.padStart(columnWidth));
       console.log('End time:'.padEnd(rowHeader), d2.padStart(columnWidth));
       console.log('Interval duration:'.padEnd(rowHeader),
@@ -150,17 +150,17 @@
          (intervalStorageSize.toFixed(2) + ' ' +
          unit).padStart(columnWidth)
       );
-      console.log(`\u001b[33m${'-'.repeat(termWidth)}\u001b[0m`);
+      console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       console.log('Estimated current oplog churn:'.padEnd(rowHeader),
          (oplogChurn.toFixed(2) + ' ' + unit +
          '/hr').padStart(columnWidth)
       );
-      console.log(`\u001b[33m${'='.repeat(termWidth)}\u001b[0m`);
+      console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log('\n');
    }
 
    if (!isReplSet())
-      console.log('\n\u001b[31m[ERROR] Host is not a replica set member....exiting!\u001b[0m\n')
+      console.log('\n\x1b[31m[ERROR] Host is not a replica set member....exiting!\x1b[0m\n')
    else
       main()
 
