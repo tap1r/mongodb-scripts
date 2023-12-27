@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.7.1"
+ *  Version: "0.7.2"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.7.1"
+      "version": "0.7.2"
 });
 
 /*
@@ -232,7 +232,8 @@ class MetaStats {
       this.shards = (this.proc == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
    }
    get compression() {
-      return this.dataSize / (this.storageSize - this.freeStorageSize - this.overhead);
+      // return this.dataSize / (this.storageSize - this.freeStorageSize - this.overhead);
+      return this.dataSize / (this.storageSize - this.freeStorageSize);
    }
    get totalSize() { // unused
       return this.storageSize + (this.totalIndexSize + this.overhead) * this.nindexes;
