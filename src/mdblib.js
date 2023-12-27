@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.7.0"
+ *  Version: "0.7.1"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.7.0"
+      "version": "0.7.1"
 });
 
 /*
@@ -446,7 +446,7 @@ function hostInfo() {
    try {
       hostInfo = db.hostInfo();
    } catch(error) {
-      console.error(`\u001b[31m[WARN] insufficient rights to execute db.hostInfo()\n${error}\u001b[0m`);
+      console.error(`\x1b[31m[WARN] insufficient rights to execute db.hostInfo()\n${error}\x1b[0m`);
       hostInfo.system.hostname = hello().me.match(/(.*):/)[1];
    }
    return hostInfo;
@@ -460,7 +460,7 @@ function serverCmdLineOpts() {
    try {
       serverCmdLineOpts = db.serverCmdLineOpts();
    } catch(error) {
-      console.error(`\u001b[31m[WARN] insufficient rights to execute db.serverCmdLineOpts()\n${error}\u001b[0m`);
+      console.error(`\x1b[31m[WARN] insufficient rights to execute db.serverCmdLineOpts()\n${error}\x1b[0m`);
       serverCmdLineOpts.parsed.storage.dbPath = 'undefined';
    }
    return serverCmdLineOpts;
