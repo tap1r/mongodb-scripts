@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.7.2"
+ *  Version: "0.8.0"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.7.2"
+      "version": "0.8.0"
 });
 
 /*
@@ -114,37 +114,43 @@ class ScaleFactor {
    /*
     *  Scale formatting preferences
     */
-   constructor(unit = 'MB') {
-      // default to MB
+   constructor(unit = 'MiB') {
+      // default to MiB
       switch (unit.toUpperCase()) {
          case 'B':
-            this.factor = { "name": "bytes", "unit": "B", "symbol": "", "factor": Math.pow(1024, 0), "precision": 0, "pctPoint": 1 };
+            this.factor = { "name": "bytes", "unit": "B", "symbol": "", "factor": Math.pow(1, 0), "precision": 0, "pctPoint": 1 };
             break;
          case 'KB':
-            this.factor = { "name": "kilobytes", "unit": "KB", "symbol": "k", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 };
+            this.factor = { "name": "kilobytes", "unit": "KB", "symbol": "k", "factor": Math.pow(1000, 1), "precision": 2, "pctPoint": 1 };
+            break;
+         case 'KiB':
+            this.factor = { "name": "kibibytes", "unit": "KiB", "symbol": "K", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 };
             break;
          case 'MB':
-            this.factor = { "name": "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
+            this.factor = { "name": "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1000, 2), "precision": 2, "pctPoint": 1 };
+            break;
+         case 'MiB':
+            this.factor = { "name": "mebibytes", "unit": "MiB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
             break;
          case 'GB':
-            this.factor = { "name": "gigabytes", "unit": "GB", "symbol": "G", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 };
+            this.factor = { "name": "gigabytes", "unit": "GB", "symbol": "G", "factor": Math.pow(1000, 3), "precision": 2, "pctPoint": 1 };
+            break;
+         case 'GiB':
+            this.factor = { "name": "gibibytes", "unit": "GiB", "symbol": "G", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 };
             break;
          case 'TB':
-            this.factor = { "name": "terabytes", "unit": "TB", "symbol": "T", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 };
+            this.factor = { "name": "terabytes", "unit": "TB", "symbol": "T", "factor": Math.pow(1000, 4), "precision": 2, "pctPoint": 1 };
+            break;
+         case 'TiB':
+            this.factor = { "name": "tebibytes", "unit": "TiB", "symbol": "T", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 };
             break;
          case 'PB':
-            this.factor = { "name": "petabytes", "unit": "PB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 };
+            this.factor = { "name": "petabytes", "unit": "PB", "symbol": "P", "factor": Math.pow(1000, 5), "precision": 2, "pctPoint": 1 };
             break;
-         case 'EB':
-            this.factor = { "name": "exabytes", "unit": "EB", "symbol": "E", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 };
+         case 'PiB':
+            this.factor = { "name": "pebibytes", "unit": "PiB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 };
             break;
-         case 'ZB':
-            this.factor = { "name": "zettabytes", "unit": "ZB", "symbol": "Z", "factor": Math.pow(1024, 7), "precision": 2, "pctPoint": 1 };
-            break;
-         case 'YB':
-            this.factor = { "name": "yottabytes", "unit": "YB", "symbol": "Y", "factor": Math.pow(1024, 8), "precision": 2, "pctPoint": 1 };
-            break;
-         default: this.factor = { "name": "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
+         default: this.factor = { "name": "mebibytes", "unit": "MiB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
       }
       return this.factor;
    }
@@ -175,10 +181,7 @@ class ScaleFactor {
 //          { "name":  "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 },
 //          { "name":  "gigabytes", "unit": "GB", "symbol": "G", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 },
 //          { "name":  "terabytes", "unit": "TB", "symbol": "T", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 },
-//          { "name":  "petabytes", "unit": "PB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 },
-//          { "name":   "exabytes", "unit": "EB", "symbol": "E", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 },
-//          { "name": "zettabytes", "unit": "ZB", "symbol": "Z", "factor": Math.pow(1024, 7), "precision": 2, "pctPoint": 1 },
-//          { "name": "yottabytes", "unit": "YB", "symbol": "Y", "factor": Math.pow(1024, 8), "precision": 2, "pctPoint": 1 }
+//          { "name":  "petabytes", "unit": "PB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 }
 //       ];
 //    }
 // }
