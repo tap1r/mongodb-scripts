@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.6.0"
+ *  Version: "0.6.1"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -36,7 +36,7 @@
  */
 
 (async(dbFilter, collFilter) => {
-   let __script = { "name": "dbstats.js", "version": "0.6.0" };
+   let __script = { "name": "dbstats.js", "version": "0.6.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -67,15 +67,15 @@
     *  User defined parameters
     */
 
-   // scaler unit B, KB, MB, GB, TB, PB, EB, ZB, YB
-   let scale = new ScaleFactor('MB');
+   // scaler unit B, KiB, MiB, GiB, TiB, PiB
+   let scale = new ScaleFactor('MiB');
 
    /*
     *  Global defaults
     */
 
-   // scaler unit B, KB, MB, GB, TB, PB, EB, ZB, YB
-   typeof scale === 'undefined' && (scale = new ScaleFactor('MB'));
+   // scaler unit B, KiB, MiB, GiB, TiB, PiB
+   typeof scale === 'undefined' && (scale = new ScaleFactor('MiB'));
 
    // formatting preferences
    typeof termWidth === 'undefined' && (termWidth = 134);
@@ -183,6 +183,7 @@
       /*
        *  Print collection level stats
        */
+      compressor = compressor == 'snappy' ? 'snpy' : compressor;
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       console.log(`└\x1b[36m${(' ' + name).padEnd(rowHeader - 1)}\x1b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${orphans.toString().padStart(columnWidth - 5)}`);
    }
@@ -229,7 +230,6 @@
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[1m\x1b[32m${`Namespaces subtotal:\x1b[0m   ${ncollections}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize).padStart(columnWidth) + ' |' + `${formatPct(freeStorageSize, storageSize)}`.padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${orphans.toString().padStart(columnWidth - 5)}`);
       console.log(`\x1b[1m\x1b[32m${`Indexes subtotal:\x1b[0m      ${nindexes}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${`${formatUnit(totalIndexBytesReusable).padStart(columnWidth)} |${`${formatPct(totalIndexBytesReusable, totalIndexSize)}`.padStart(6)}`.padStart(columnWidth + 8)}`);
-      // console.log(`\x1b[1m\x1b[32mShards:\x1b[0m ${shards}`);
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
    }
 
@@ -247,6 +247,7 @@
       console.log(`\x1b[1m\x1b[32m${`All indexes:\x1b[0m           ${nindexes}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ' |' + (formatPct(totalIndexBytesReusable, totalIndexSize)).padStart(6)).padStart(columnWidth + 8)}`);
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[1m\x1b[32mHost:\x1b[0m \x1b[36m${hostname}\x1b[0m   \x1b[1m\x1b[32mType:\x1b[0m \x1b[36m${proc}\x1b[0m   \x1b[1m\x1b[32mVersion:\x1b[0m \x1b[36m${db.version()}\x1b[0m   \x1b[1m\x1b[32mdbPath:\x1b[0m \x1b[36m${dbPath}\x1b[0m`);
+      // console.log(`\x1b[1m\x1b[32mShards:\x1b[0m ${shards}`);
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log('\n');
    }
