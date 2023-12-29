@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.16"
+ *  Version: "0.6.17"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.16" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.17" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -305,13 +305,13 @@
                res = rebalancingOps();
             }
          } else {
-            console.log(`\nMonitoring resharding (async) operations are not supported in the legacy shell\n`);
+            console.log(`\nMonitoring of resharding (via async) operations are not supported in the legacy shell\n`);
             resharding();
          }
          console.log(`\nResharding complete.`);
       }
       else if (isSharded() && (shardedOptions.reShard == true) && !fCV(5.0)) {
-         console.log('\x1b[31m[WARN] reshardCollection() requires v5.0+\x1b[0m');
+         console.log('\x1b[31m[WARN] \x1b[33mreshardCollection() \x1b[31mrequires v5.0+\x1b[0m');
       }
 
       return console.log('\n \x1b[32mFuzzing completed!\x1b[0m\n');
