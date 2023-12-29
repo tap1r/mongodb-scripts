@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.3.12"
+ *  Version: "0.4.0"
  *  Description: measure oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,7 @@
  */
 
 // let intervalHrs = 1; // set interval in hours
-// let scale = new ScaleFactor('MB'); // B, KB, MB, GB, TB, PB, EB, ZB, YB
+// let scale = new ScaleFactor('MiB'); // B, KiB, MiB, GiB, TiB, PiB
 
 (() => {
    /*
@@ -20,7 +20,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.3.12" };
+   let __script = { "name": "oplogchurn.js", "version": "0.4.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -52,8 +52,8 @@
    typeof intervalHrs === 'undefined' && !!(intervalHrs = 1);
 
    if (typeof scale === 'undefined') {
-      // B, KB, MB, GB, TB, PB, EB, ZB, YB
-      ({ unit, factor } = new ScaleFactor('MB'));
+      // B, KiB, MiB, GiB, TiB, PiB
+      ({ unit, factor } = new ScaleFactor('MiB'));
    }
 
    // formatting preferences
@@ -108,7 +108,7 @@
          } });
          ({ '_bsonDataSize': opSize, '_documentCount': docs } = oplog.aggregate(pipeline, options).toArray()[0]);
       } else {
-         console.log('\nWarning: Using the legacy client side calculation technique');
+         console.log('\n\x1b[31mWarning: Using the legacy client side calculation technique\x1b[0m');
          oplog.aggregate(pipeline, options).forEach(op => {
             opSize += bsonsize(op);
             ++docs;
