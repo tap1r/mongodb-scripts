@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.6.1"
+ *  Version: "0.6.2"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -36,7 +36,7 @@
  */
 
 (async(dbFilter, collFilter) => {
-   let __script = { "name": "dbstats.js", "version": "0.6.1" };
+   let __script = { "name": "dbstats.js", "version": "0.6.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -151,24 +151,21 @@
       /*
        *  Pretty format unit
        */
-      // return `${Math.round((metric / scale.factor) * 100) / 100} ${scale.unit}`;
-      return `${(metric / scale.factor).toFixed(2)} ${scale.unit}`;
+      return `${+(metric / scale.factor).toFixed(2)} ${scale.unit}`;
    }
 
    function formatPct(numerator = 0, denominator = 1) {
       /*
        *  Pretty format percentage
        */
-      // return `${Math.round((numerator / denominator) * 1000) / 10}%`;
-      return `${((numerator / denominator) * 100).toFixed(1)}%`;
+      return `${+((numerator / denominator) * 100).toFixed(1)}%`;
    }
 
    function formatRatio(metric) {
       /*
        *  Pretty format ratio
        */
-      // return `${Math.round(metric * 100) / 100}:1`;
-      return `${metric.toFixed(2)}:1`;
+      return `${+metric.toFixed(2)}:1`;
    }
 
    function printCollHeader(collTotal = 0) {
