@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.8.0"
+ *  Version: "0.9.0"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.8.0"
+      "version": "0.9.0"
 });
 
 /*
@@ -156,35 +156,44 @@ class ScaleFactor {
    }
 }
 
-// class AutoFactor { // unused
-//    /*
-//     *  Determine scale factor automatically
-//     */
-//    constructor(input = Math.pow(1024, 2)) {
-//       if (typeof input === 'number' && input >= 0) {
-//          this.scale = $floor(Math.log2(input) / 10);
-//          this.metric = this.metrics[this.scale];
-//          this.format = (input / this.metric.factor).toFixed(this.metric.precision) + this.metric.unit;
-//       } else {
-//          throw new Error(`Invalid scale factor parameter: ${input}`);
-//       }
-//       // return this.format
-//    }
-//    // format(number) {
-//    //    return (number / this.metric.factor).toFixed(this.metric.precision) + this.metric.unit;
-//    // }
-//    get metrics() {
-//       // array indexed by scale
-//       return [
-//          { "name":      "bytes", "unit":  "B", "symbol":  "", "factor": Math.pow(1024, 0), "precision": 0, "pctPoint": 2 },
-//          { "name":  "kilobytes", "unit": "KB", "symbol": "k", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 },
-//          { "name":  "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 },
-//          { "name":  "gigabytes", "unit": "GB", "symbol": "G", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 },
-//          { "name":  "terabytes", "unit": "TB", "symbol": "T", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 },
-//          { "name":  "petabytes", "unit": "PB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 }
-//       ];
-//    }
-// }
+class AutoFactor {
+   /*
+    *  Determine scale factor automatically
+    */
+   constructor() {
+      this.number = 0;
+   }
+   scale(number = this.number) {
+      if (number < 1) number = 1;
+      return Math.floor(Math.log2(number) / 10);
+   }
+   metric(number = this.number) {
+      return this.metrics[this.scale(number)];
+   }
+   format(number = this.number) {
+      this.value(number);
+      return `${+(number / this.metric(number).factor).toFixed(this.metric(number).precision)} ${this.metric(number).symbol}`;
+   }
+   value(number) {
+      if (typeof number === 'number' && number >= 0) {
+         this.number = number;
+      } else {
+         throw new Error(`Invalid scalar value: ${number}`);
+      }
+      return this.number;
+   }
+   get metrics() { // array indexed by scale
+      return [
+         { "unit":      "bytes", "symbol":   "B", "factor": 1,                 "precision": 0, "pctPoint": 2 },
+         { "unit":  "kibibytes", "symbol": "KiB", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 },
+         { "unit":  "mebibytes", "symbol": "MiB", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 },
+         { "unit":  "gibibytes", "symbol": "GiB", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 },
+         { "unit":  "tebibytes", "symbol": "TiB", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 },
+         { "unit":  "pebibytes", "symbol": "PiB", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 },
+         { "unit":  "exbibytes", "symbol": "EiB", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 }
+      ];
+   }
+}
 
 class MetaStats {
    /*
