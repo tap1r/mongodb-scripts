@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.6.2"
+ *  Version: "0.7.0"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -36,7 +36,7 @@
  */
 
 (async(dbFilter, collFilter) => {
-   let __script = { "name": "dbstats.js", "version": "0.6.2" };
+   let __script = { "name": "dbstats.js", "version": "0.7.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -68,14 +68,16 @@
     */
 
    // scaler unit B, KiB, MiB, GiB, TiB, PiB
-   let scale = new ScaleFactor('MiB');
+   // let scale = new ScaleFactor('MiB');
+   // let scaled = new AutoFactor();
 
    /*
     *  Global defaults
     */
 
    // scaler unit B, KiB, MiB, GiB, TiB, PiB
-   typeof scale === 'undefined' && (scale = new ScaleFactor('MiB'));
+   // typeof scale === 'undefined' && (scale = new ScaleFactor('MiB'));
+   typeof scaled === 'undefined' && (scaled = new AutoFactor());
 
    // formatting preferences
    typeof termWidth === 'undefined' && (termWidth = 134);
@@ -151,7 +153,8 @@
       /*
        *  Pretty format unit
        */
-      return `${+(metric / scale.factor).toFixed(2)} ${scale.unit}`;
+      // return `${+(metric / scale.factor).toFixed(2)} ${scale.unit}`;
+      return scaled.format(metric);
    }
 
    function formatPct(numerator = 0, denominator = 1) {
