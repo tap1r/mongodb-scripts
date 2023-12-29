@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.4.0"
+ *  Version: "0.4.1"
  *  Description: measure oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -20,7 +20,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.4.0" };
+   let __script = { "name": "oplogchurn.js", "version": "0.4.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -136,18 +136,18 @@
 
       // Print results
       console.log(`\n\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
-      console.log(`Hostname: ${hostname.padStart(termWidth - 'Hostname: '.length)}`);
-      console.log(`dbPath: ${dbPath.padStart(termWidth - 'dbPath: '.length)}`);
+      console.log(`\x1b[32mHostname:\x1b[0m ${hostname.padStart(termWidth - 'Hostname: '.length)}`);
+      console.log(`\x1b[32mdbPath:\x1b[0m ${dbPath.padStart(termWidth - 'dbPath: '.length)}`);
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
-      console.log(`${'Start time:'.padEnd(rowHeader)} ${d1.padStart(columnWidth)}`);
-      console.log(`${'End time:'.padEnd(rowHeader)} ${d2.padStart(columnWidth)}`);
-      console.log(`${'Interval duration:'.padEnd(rowHeader)} ${`${intervalHrs} hr${(intervalHrs == 1) ? '' : 's'}`.padStart(columnWidth)}`);
-      console.log(`${'Average oplog compression ratio:'.padEnd(rowHeader)} ${`${ratio}:1`.padStart(columnWidth)}`);
-      console.log(`${'Interval document count:'.padEnd(rowHeader)} ${docs.toString().padStart(columnWidth)}`);
-      console.log(`${'Interval data size:'.padEnd(rowHeader)} ${`${intervalDataSize.toFixed(2)} ${unit}`.padStart(columnWidth)}`);
-      console.log(`${'Estimated interval storage size:'.padEnd(rowHeader)} ${`${intervalStorageSize.toFixed(2)} ${unit}`.padStart(columnWidth)}`);
+      console.log(`\x1b[32m${'Start time:'.padEnd(rowHeader)}\x1b[0m ${d1.padStart(columnWidth)}`);
+      console.log(`\x1b[32m${'End time:'.padEnd(rowHeader)}\x1b[0m ${d2.padStart(columnWidth)}`);
+      console.log(`\x1b[32m${'Interval duration:'.padEnd(rowHeader)}\x1b[0m ${`${intervalHrs} hr${(intervalHrs == 1) ? '' : 's'}`.padStart(columnWidth)}`);
+      console.log(`\x1b[32m${'Average oplog compression ratio:'.padEnd(rowHeader)}\x1b[0m ${`${ratio}:1`.padStart(columnWidth)}`);
+      console.log(`\x1b[32m${'Interval document count:'.padEnd(rowHeader)}\x1b[0m ${docs.toString().padStart(columnWidth)}`);
+      console.log(`\x1b[32m${'Interval data size:'.padEnd(rowHeader)}\x1b[0m ${`${intervalDataSize.toFixed(2)} ${unit}`.padStart(columnWidth)}`);
+      console.log(`\x1b[32m${'Estimated interval storage size:'.padEnd(rowHeader)}\x1b[0m ${`${intervalStorageSize.toFixed(2)} ${unit}`.padStart(columnWidth)}`);
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
-      console.log(`${'Estimated current oplog data churn:'.padEnd(rowHeader)} ${`${oplogChurn.toFixed(2)} ${unit}/hr`.padStart(columnWidth)}`);
+      console.log(`\x1b[32m${'Estimated current oplog data churn:'.padEnd(rowHeader)}\x1b[0m ${`${oplogChurn.toFixed(2)} ${unit}/hr`.padStart(columnWidth)}`);
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log('\n');
    }
