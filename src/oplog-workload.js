@@ -1,6 +1,6 @@
 /*
  *  Name: "oplog-workload.js"
- *  Version: "0.1.10"
+ *  Version: "0.2.0"
  *  Description: oplog "workload" analysis script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   let __script = { "name": "oplog-workload.js", "version": "0.1.10" };
+   let __script = { "name": "oplog-workload.js", "version": "0.2.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -46,8 +46,8 @@
    }
 
    if (typeof scale === 'undefined') {
-      // 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'
-      ({ unit, factor } = new ScaleFactor('MB'));
+      // 'B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'
+      ({ unit, factor } = new ScaleFactor('MiB'));
    }
 
    /*
@@ -104,7 +104,6 @@
                "__documentCount": { "$sum": 1 }
             }
          });
-         // console.log(pipeline);
          ({ '__bsonDataSize': size, '__documentCount': docs } = oplog.aggregate(pipeline, options).toArray()[0]);
       } else {
          console.log('\n');
