@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.9.1"
+ *  Version: "0.9.2"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.9.1"
+      "version": "0.9.2"
 });
 
 /*
@@ -175,10 +175,10 @@ class AutoFactor {
       return `${+(number / this.metric(number).factor).toFixed(this.metric(number).precision)} ${this.metric(number).symbol}`;
    }
    value(number) {
-      if (typeof number === 'number' && number >= 0) {
-         this.number = number;
+      if (number >= 0) {
+         this.number = Number(number);
       } else {
-         throw new Error(`Invalid scalar value: ${number}`);
+         throw new Error(`Invalid scalar value or number type: ${number}`);
       }
       return this.number;
    }
@@ -222,8 +222,8 @@ class MetaStats {
       this.compressor = compressor;
       this.collections = []; // usurp dbStats counter for collections list
       this.ncollections = (collections === 0) ? ncollections : +collections; // merge collStats and dbStats n/collections counters
-      this.indexes = indexes; // usurp dbStats counter for indexes list
-      this.nindexes = (nindexes === -1) ? +indexes: nindexes; // merge collStats and dbStats n/indexes counters
+      this.indexes = +indexes; // usurp dbStats counter for indexes list
+      this.nindexes = (nindexes === -1) ? +indexes : nindexes; // merge collStats and dbStats n/indexes counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
       this.totalIndexSize = (indexSize === 0) ? totalIndexSize : indexSize; // merge collStats and dbStats index size counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
@@ -237,13 +237,13 @@ class MetaStats {
       this.dbPath = (this.proc == 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
                   : (this.proc == 'mongos') ? 'sharded'
                   : 'unknown';
-      this.shards = (this.proc == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
+      this.shards = (this.proc == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : [];
    }
    get compression() {
       // return this.dataSize / (this.storageSize - this.freeStorageSize - this.overhead);
       return this.dataSize / (this.storageSize - this.freeStorageSize);
    }
-   get totalSize() { // unused
+   get totalSize() { // unused -  possible conflict with mtm schema
       return this.storageSize + (this.totalIndexSize + this.overhead) * this.nindexes;
    }
 }
@@ -1224,7 +1224,7 @@ function $stats(dbName = db.getName()) {
       (serverVer(5.0) && (shellVer() >= 5.0 || (typeof process !== 'undefined' && shellVer() >= 1.1))) ? { "freeStorage": 1, "scale": 1 } : 1
    );
    stats.name = dbName;
-   if (stats.hasOwnProperty('raw')) {
+   if (stats.hasOwnProperty('raw')) { // detect sharded namespaces schema
       stats.collections = 0;
       stats.views = 0;
       for (let key in stats.raw) {
@@ -1235,6 +1235,7 @@ function $stats(dbName = db.getName()) {
       }
    }
    stats.namespaces = stats.collections + stats.views;
+   delete stats.$clusterTime;
 
    return stats;
 }
