@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.9.0"
+ *  Version: "0.9.1"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.9.0"
+      "version": "0.9.1"
 });
 
 /*
@@ -233,10 +233,6 @@ class MetaStats {
    init() { // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
       this.instance = hello().me;
       this.hostname = hostInfo().system.hostname;
-      // this.hostname = 'unknown';
-      // this.proc = (db.serverStatus().ok) ? db.serverStatus().process : 'unknown';
-      // this.dbPath = (db.serverStatus().process == 'mongod') ? db.serverCmdLineOpts().parsed.storage.dbPath : 'sharded';
-      // this.shards = (db.serverStatus().process == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null;
       this.proc = (db.serverStatus().ok) ? db.serverStatus().process : 'unknown'; //  db.adminCommand({ "listShards": 1 })
       this.dbPath = (this.proc == 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
                   : (this.proc == 'mongos') ? 'sharded'
@@ -321,15 +317,23 @@ function getDBNames(dbFilter = /^.+/) {
    /*
     *  getDBNames substitues for db.getDBNames()
     */
+   let command = {
+      "listDatabases": 1,
+      "nameOnly": true,
+      "authorizedDatabases": true
+   };
    let filterOptions = 'i';
    let filterRegex = new RegExp(dbFilter, filterOptions);
-   return db.adminCommand({
-      "listDatabases": 1,
-      "filter": { "name": filterRegex },
-      "nameOnly": true,
-      "authorizedDatabases": true,
-      // "comment": "list databases" // fCV(4.4)
-   }).databases.map(({ name }) => name);
+   let filter = { "name": filterRegex };
+   let comment = `list databases with ${__lib.name} v${version}`;
+   if (!(isAtlasPlatform('serverless') || isAtlasPlatform('sharedTier||dedicatedReplicaSet'))) {
+      // ignoring filter on unsupported platforms
+      command.filter = filter;
+   }
+   if (fCV(4.4)) {
+      command.comment = comment;
+   }
+   return db.adminCommand(command).databases.map(({ name }) => name);
 };
 
 function getAllNonSystemNamespaces() { // TBA
@@ -400,8 +404,16 @@ function fCV(ver) { // update for shared tier compatibility
    /*
     *  Evaluate feature compatibility version
     */
+   let cmd;
+   try {
+      cmd = db.adminCommand({ "getParameter": 1, "featureCompatibilityVersion": 1 });
+   } catch(error) {
+      // console.error(`\x1b[31m[WARN] cannot obtain fCV from shared tiers or sharded clusters\n${error}\x1b[0m`);
+      cmd = 'incompatible';
+   }
+
    let featureVer = ver => {
-      return (db.serverStatus().process == 'mongod')
+      return (db.serverStatus().process == 'mongod' && cmd != 'incompatible' )
            ? +db.adminCommand({
                "getParameter": 1,
                "featureCompatibilityVersion": 1
@@ -455,13 +467,22 @@ function hostInfo() {
    /*
     *  Forward compatibility with db.hostInfo()
     */
+   // isAtlasPlatform('serverless'||'sharedTier||dedicatedReplicaSet'||'dedicatedShardedCluster');
    let hostInfo = {};
    try {
       hostInfo = db.hostInfo();
    } catch(error) {
       console.error(`\x1b[31m[WARN] insufficient rights to execute db.hostInfo()\n${error}\x1b[0m`);
-      hostInfo.system.hostname = hello().me.match(/(.*):/)[1];
    }
+
+   if (typeof hostInfo.system == 'undefined' && typeof hello().me == 'undefined') {
+      hostInfo = { "system": { "hostname": "serverless" } };
+   } else if (db.serverStatus().process === 'mongos') {
+      hostInfo = db.hostInfo();
+   } else {
+      hostInfo = { "system": { "hostname": hello().me.match(/(.*):/)[1] } };
+   }
+
    return hostInfo;
 }
 
@@ -474,7 +495,10 @@ function serverCmdLineOpts() {
       serverCmdLineOpts = db.serverCmdLineOpts();
    } catch(error) {
       console.error(`\x1b[31m[WARN] insufficient rights to execute db.serverCmdLineOpts()\n${error}\x1b[0m`);
-      serverCmdLineOpts.parsed.storage.dbPath = 'undefined';
+   }
+
+   if (typeof serverCmdLineOpts.parsed.storage == 'undefined') {
+      serverCmdLineOpts = { "parsed": { "storage": { "dbPath": "undefined" } } };
    }
    return serverCmdLineOpts;
 }
@@ -483,10 +507,12 @@ function isAtlasPlatform(type) {
    /*
     *  Evaluate Atlas deployment platform type
     */
-   return (hello().msg === 'isdbgrid' && db.adminCommand({ "atlasVersion": 1 }).ok === 1) ? 'serverless'
-        : (type === 'serverless' && hello().msg === 'isdbgrid' && db.adminCommand({ "atlasVersion": 1 }).ok === 1) ? true
-        : (hello().msg !== 'isdbgrid' && db.adminCommand({ "atlasVersion": 1 }).ok === 1) ? 'sharedTier||dedicatedReplicaSet'
-        : (hello().msg === 'isdbgrid' && typeof db.serverStatus().atlasVersion === 'undefined') ? 'dedicatedShardedCluster'
+   return (typeof type == 'undefined' && typeof hello().msg == 'undefined' && typeof db.serverStatus().atlasVersion == 'undefined') ? 'dedicatedShardedCluster'
+        : (type == 'dedicatedShardedCluster' && typeof hello().msg == 'undefined' && typeof db.serverStatus().atlasVersion == 'undefined') ? true
+        : (typeof type == 'undefined' && hello().msg == 'isdbgrid' && typeof db.serverStatus().atlasVersion != 'undefined') ? 'serverless'
+        : (type == 'serverless' && hello().msg == 'isdbgrid' && typeof db.serverStatus().atlasVersion != 'undefined') ? true
+        : (typeof type == 'undefined' && hello().msg != 'isdbgrid' && typeof db.serverStatus().atlasVersion != 'undefined') ? 'sharedTier||dedicatedReplicaSet'
+        : (type == 'sharedTier||dedicatedReplicaSet' && hello().msg != 'isdbgrid' && typeof db.serverStatus().atlasVersion != 'undefined') ? true
         : false;
 }
 
