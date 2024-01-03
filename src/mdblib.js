@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.9.2"
+ *  Version: "0.9.3"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.9.2"
+      "version": "0.9.3"
 });
 
 /*
@@ -114,38 +114,37 @@ class ScaleFactor {
    /*
     *  Scale formatting preferences
     */
-   constructor(unit = 'MiB') {
-      // default to MiB
+   constructor(unit = 'MiB') { // default to MiB
       switch (unit.toUpperCase()) {
          case 'B':
-            this.factor = { "name": "bytes", "unit": "B", "symbol": "", "factor": Math.pow(1, 0), "precision": 0, "pctPoint": 1 };
+            this.factor = { "name": "bytes",     "unit": "B",  "symbol": "",  "factor": Math.pow(1, 0),     "precision": 0, "pctPoint": 1 };
             break;
          case 'KB':
-            this.factor = { "name": "kilobytes", "unit": "KB", "symbol": "k", "factor": Math.pow(1000, 1), "precision": 2, "pctPoint": 1 };
+            this.factor = { "name": "kilobytes", "unit": "KB", "symbol": "k", "factor": Math.pow(1000, 1),  "precision": 2, "pctPoint": 1 };
             break;
          case 'KiB':
             this.factor = { "name": "kibibytes", "unit": "KiB", "symbol": "K", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 };
             break;
          case 'MB':
-            this.factor = { "name": "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1000, 2), "precision": 2, "pctPoint": 1 };
+            this.factor = { "name": "megabytes", "unit": "MB", "symbol": "M", "factor": Math.pow(1000, 2),  "precision": 2, "pctPoint": 1 };
             break;
          case 'MiB':
             this.factor = { "name": "mebibytes", "unit": "MiB", "symbol": "M", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 };
             break;
          case 'GB':
-            this.factor = { "name": "gigabytes", "unit": "GB", "symbol": "G", "factor": Math.pow(1000, 3), "precision": 2, "pctPoint": 1 };
+            this.factor = { "name": "gigabytes", "unit": "GB", "symbol": "G", "factor": Math.pow(1000, 3),  "precision": 2, "pctPoint": 1 };
             break;
          case 'GiB':
             this.factor = { "name": "gibibytes", "unit": "GiB", "symbol": "G", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 };
             break;
          case 'TB':
-            this.factor = { "name": "terabytes", "unit": "TB", "symbol": "T", "factor": Math.pow(1000, 4), "precision": 2, "pctPoint": 1 };
+            this.factor = { "name": "terabytes", "unit": "TB", "symbol": "T", "factor": Math.pow(1000, 4),  "precision": 2, "pctPoint": 1 };
             break;
          case 'TiB':
             this.factor = { "name": "tebibytes", "unit": "TiB", "symbol": "T", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 };
             break;
          case 'PB':
-            this.factor = { "name": "petabytes", "unit": "PB", "symbol": "P", "factor": Math.pow(1000, 5), "precision": 2, "pctPoint": 1 };
+            this.factor = { "name": "petabytes", "unit": "PB", "symbol": "P", "factor": Math.pow(1000, 5),  "precision": 2, "pctPoint": 1 };
             break;
          case 'PiB':
             this.factor = { "name": "pebibytes", "unit": "PiB", "symbol": "P", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 };
@@ -185,7 +184,7 @@ class AutoFactor {
    get metrics() { // array indexed by scale
       return [
          { "unit":      "bytes", "symbol":   "B", "factor": 1,                 "precision": 0, "pctPoint": 2 },
-         { "unit":  "kibibytes", "symbol": "KiB", "factor": Math.pow(1024, 1), "precision": 2, "pctPoint": 1 },
+         { "unit":  "kibibytes", "symbol": "KiB", "factor": 1024,              "precision": 2, "pctPoint": 1 },
          { "unit":  "mebibytes", "symbol": "MiB", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 },
          { "unit":  "gibibytes", "symbol": "GiB", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 },
          { "unit":  "tebibytes", "symbol": "TiB", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 },
@@ -222,7 +221,7 @@ class MetaStats {
       this.compressor = compressor;
       this.collections = []; // usurp dbStats counter for collections list
       this.ncollections = (collections === 0) ? ncollections : +collections; // merge collStats and dbStats n/collections counters
-      this.indexes = +indexes; // usurp dbStats counter for indexes list
+      this.indexes = indexes; // usurp dbStats counter for indexes list
       this.nindexes = (nindexes === -1) ? +indexes : nindexes; // merge collStats and dbStats n/indexes counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
       this.totalIndexSize = (indexSize === 0) ? totalIndexSize : indexSize; // merge collStats and dbStats index size counters
@@ -233,7 +232,7 @@ class MetaStats {
    init() { // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
       this.instance = hello().me;
       this.hostname = hostInfo().system.hostname;
-      this.proc = (db.serverStatus().ok) ? db.serverStatus().process : 'unknown'; //  db.adminCommand({ "listShards": 1 })
+      this.proc = (db.serverStatus().ok) ? db.serverStatus().process : 'unknown'; // db.adminCommand({ "listShards": 1 })
       this.dbPath = (this.proc == 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
                   : (this.proc == 'mongos') ? 'sharded'
                   : 'unknown';
@@ -315,7 +314,7 @@ function isSharded() {
 
 function getDBNames(dbFilter = /^.+/) {
    /*
-    *  getDBNames substitues for db.getDBNames()
+    *  getDBNames substitute for db.getDBNames()
     */
    let command = {
       "listDatabases": 1,
@@ -400,7 +399,7 @@ function serverVer(ver) {
         : svrVer();
 }
 
-function fCV(ver) { // update for shared tier compatibility
+function fCV(ver) { // updated for shared tier compatibility
    /*
     *  Evaluate feature compatibility version
     */
@@ -472,15 +471,15 @@ function hostInfo() {
    try {
       hostInfo = db.hostInfo();
    } catch(error) {
-      console.error(`\x1b[31m[WARN] insufficient rights to execute db.hostInfo()\n${error}\x1b[0m`);
+      // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.hostInfo()\n${error}\x1b[0m`);
    }
 
-   if (typeof hostInfo.system == 'undefined' && typeof hello().me == 'undefined') {
+   if (typeof hostInfo.system === 'undefined' && typeof hello().me === 'undefined') {
       hostInfo = { "system": { "hostname": "serverless" } };
-   } else if (db.serverStatus().process === 'mongos') {
-      hostInfo = db.hostInfo();
-   } else {
+   } else if (typeof hello().me !== 'undefined') {
       hostInfo = { "system": { "hostname": hello().me.match(/(.*):/)[1] } };
+   } else {
+      hostInfo = { "system": { "hostname": "undefined" } };
    }
 
    return hostInfo;
@@ -494,10 +493,10 @@ function serverCmdLineOpts() {
    try {
       serverCmdLineOpts = db.serverCmdLineOpts();
    } catch(error) {
-      console.error(`\x1b[31m[WARN] insufficient rights to execute db.serverCmdLineOpts()\n${error}\x1b[0m`);
+      // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.serverCmdLineOpts()\n${error}\x1b[0m`);
    }
 
-   if (typeof serverCmdLineOpts.parsed.storage == 'undefined') {
+   if (typeof serverCmdLineOpts.parsed.storage === 'undefined') {
       serverCmdLineOpts = { "parsed": { "storage": { "dbPath": "undefined" } } };
    }
    return serverCmdLineOpts;
@@ -608,10 +607,10 @@ function $getRandRegex() {
     *  generate random regex
     */
    let regexes = [
-      /[a-z0-9]/,
       /[a-z]/,
       /[A-Z]/,
       /[0-9]/,
+      /[a-z0-9]/,
       /[A-Z0-9]/,
       /[a-zA-Z0-9]/,
       /[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/,
@@ -698,7 +697,7 @@ function $genRandWord() { // TBA
    /*
     *  generate random word from a dictionary
     */
-   let dict = '/usr/share/dict/words';  // /path/to/dictionary
+   let dict = '/usr/share/dict/words'; // /path/to/dictionary
    let word = '';
 
    return word;
