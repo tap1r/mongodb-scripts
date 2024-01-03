@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.9.3"
+ *  Version: "0.9.4"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.9.3"
+      "version": "0.9.4"
 });
 
 /*
@@ -103,6 +103,7 @@ if (typeof console === 'undefined') {
    console.log = print;
    console.clear = () => _runMongoProgram('clear');
    console.error = tojson;
+   console.debug = tojson;
    console.dir = tojson;
 }
 
@@ -219,7 +220,7 @@ class MetaStats {
       this.objects = +objects;
       this.orphans = +orphans;
       this.compressor = compressor;
-      this.collections = []; // usurp dbStats counter for collections list
+      this.collections = []; // usurp dbStats counter for collections list []
       this.ncollections = (collections === 0) ? ncollections : +collections; // merge collStats and dbStats n/collections counters
       this.indexes = indexes; // usurp dbStats counter for indexes list
       this.nindexes = (nindexes === -1) ? +indexes : nindexes; // merge collStats and dbStats n/indexes counters
@@ -232,7 +233,7 @@ class MetaStats {
    init() { // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
       this.instance = hello().me;
       this.hostname = hostInfo().system.hostname;
-      this.proc = (db.serverStatus().ok) ? db.serverStatus().process : 'unknown'; // db.adminCommand({ "listShards": 1 })
+      this.proc = (db.serverStatus().ok) ? db.serverStatus().process : 'unknown';
       this.dbPath = (this.proc == 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
                   : (this.proc == 'mongos') ? 'sharded'
                   : 'unknown';
@@ -242,7 +243,7 @@ class MetaStats {
       // return this.dataSize / (this.storageSize - this.freeStorageSize - this.overhead);
       return this.dataSize / (this.storageSize - this.freeStorageSize);
    }
-   get totalSize() { // unused -  possible conflict with mtm schema
+   get totalSize() { // unused / possible conflict with mtm schema
       return this.storageSize + (this.totalIndexSize + this.overhead) * this.nindexes;
    }
 }
@@ -252,9 +253,7 @@ function $rand() {
     *  Choose your preferred PRNG
     */
    if (typeof process !== 'undefined') {
-      /*
-       *  mongosh/nodejs detected
-       */
+      // mongosh/nodejs detected
       return crypto.webcrypto.getRandomValues(new Uint32Array(1))[0] / Uint32MaxVal;
    } else {
       // default PRNG
@@ -314,17 +313,22 @@ function isSharded() {
 
 function getDBNames(dbFilter = /^.+/) {
    /*
-    *  getDBNames substitute for db.getDBNames()
+    *  getDBNames substitute for Mongo.getDBNames()
     */
    let command = {
       "listDatabases": 1,
       "nameOnly": true,
       "authorizedDatabases": true
    };
+   let options = {
+      "readPreference": (typeof readPref !== 'undefined') ? readPref
+                      : (hello().secondary) ? 'secondaryPreferred'
+                      : 'primaryPreferred'
+   };
    let filterOptions = 'i';
    let filterRegex = new RegExp(dbFilter, filterOptions);
    let filter = { "name": filterRegex };
-   let comment = `list databases with ${__lib.name} v${version}`;
+   let comment = `list databases with ${__lib.name} v${__lib.version}`;
    if (!(isAtlasPlatform('serverless') || isAtlasPlatform('sharedTier||dedicatedReplicaSet'))) {
       // ignoring filter on unsupported platforms
       command.filter = filter;
@@ -332,7 +336,10 @@ function getDBNames(dbFilter = /^.+/) {
    if (fCV(4.4)) {
       command.comment = comment;
    }
-   return db.adminCommand(command).databases.map(({ name }) => name);
+   slaveOk(options.readPreference);
+   let dbs = (shellVer() >= 2.0 && typeof process !== 'undefined') ? db.getSiblingDB('admin').runCommand(command, options)
+           : db.getSiblingDB('admin').runCommand(command);
+   return dbs.databases.map(({ name }) => name);
 };
 
 function getAllNonSystemNamespaces() { // TBA
