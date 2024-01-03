@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.7.0"
+ *  Version: "0.7.1"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -36,7 +36,7 @@
  */
 
 (async(dbFilter, collFilter) => {
-   let __script = { "name": "dbstats.js", "version": "0.7.0" };
+   let __script = { "name": "dbstats.js", "version": "0.7.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -85,7 +85,7 @@
    typeof rowHeader === 'undefined' && (rowHeader = 40);
 
    // connection preferences
-   typeof readPref === 'undefined' && (readPref = (hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
+   typeof readPref === 'undefined' && (readPref = (hello().secondary) ? 'secondaryPreferred' : 'primaryPreferred');
 
    async function main() {
       /*
@@ -105,11 +105,6 @@
          let database = new MetaStats($stats(dbName));
          database.init();
          printDbHeader(database);
-         // let collections = db.getSiblingDB(dbName).getCollectionInfos({
-         //       "type": /^(collection|timeseries)$/,
-         //       "name": /(?:^(?!(system\..+|replset\..+)$).+)/
-         //    }, true, true
-         // );
          let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/;
          collFilter = new RegExp(collFilter);
          let collections = db.getSiblingDB(dbName).getCollectionInfos({
