@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.10.0"
+ *  Version: "0.10.1"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.10.0"
+      "version": "0.10.1"
 });
 
 /*
@@ -217,13 +217,13 @@ class MetaStats {
       this.dataSize = dataSize;
       this.storageSize = (storageSize == 0) ? 4096 : storageSize;
       this.freeStorageSize = freeStorageSize;
-      this.objects = +objects;
-      this.orphans = +orphans;
+      this.objects = objects;
+      this.orphans = orphans;
       this.compressor = compressor;
       this.collections = []; // usurp dbStats counter for collections list []
-      this.ncollections = (collections == 0) ? ncollections : +collections; // merge collStats and dbStats n/collections counters
+      this.ncollections = (collections == 0) ? ncollections : collections; // merge collStats and dbStats n/collections counters
       this.indexes = indexes; // usurp dbStats counter for indexes list
-      this.nindexes = (nindexes === -1) ? +indexes : nindexes; // merge collStats and dbStats n/indexes counters
+      this.nindexes = (nindexes == -1) ? +indexes : nindexes; // merge collStats and dbStats n/indexes counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
       this.totalIndexSize = (indexSize == 0) ? totalIndexSize : indexSize; // merge collStats and dbStats index size counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
@@ -243,7 +243,7 @@ class MetaStats {
       // return this.dataSize / (this.storageSize - this.freeStorageSize - this.overhead);
       return this.dataSize / (this.storageSize - this.freeStorageSize);
    }
-   get totalSize() { // unused / possible conflict with mtm schema
+   get totalStorageSize() { // unused
       return this.storageSize + (this.totalIndexSize + this.overhead) * this.nindexes;
    }
 }
