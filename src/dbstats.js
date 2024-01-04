@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.7.2"
+ *  Version: "0.7.3"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -36,7 +36,7 @@
  */
 
 (async(dbFilter, collFilter) => {
-   let __script = { "name": "dbstats.js", "version": "0.7.2" };
+   let __script = { "name": "dbstats.js", "version": "0.7.3" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -208,8 +208,10 @@
       /*
        *  Print index level stats
        */
+      let indexWidth = rowHeader + columnWidth * 2;
       console.log(`  \x1b[33m${'━'.repeat(termWidth - 2)}\x1b[0m`);
-      console.log(`   \x1b[31m${name.padEnd(rowHeader + columnWidth * 2)}\x1b[0m ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)}`);
+      if (name.length > 64) name = `${name.substr(indexWidth)}~`;
+      console.log(`   \x1b[31m${name.padEnd(indexWidth)}\x1b[0m ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${''.toString().padStart(columnWidth)} ${''.toString().padStart(columnWidth - 5)}`);
    }
 
    function printDbHeader({ name } = {}) {
