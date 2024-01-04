@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.10.1"
+ *  Version: "0.10.2"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.10.1"
+      "version": "0.10.2"
 });
 
 /*
@@ -1247,7 +1247,10 @@ function $stats(dbName = db.getName()) {
          }
       }
    }
-   stats.namespaces = stats.collections + stats.views;
+   stats.collections = +stats.collections;
+   stats.views = +stats.views;
+   stats.indexes = +stats.indexes;
+   stats.namespaces = +stats.collections + +stats.views;
    stats.objects = +stats.objects;
    stats.dataSize = +stats.dataSize;
    stats.storageSize = +stats.storageSize;
@@ -1452,6 +1455,11 @@ function $collStats(dbName = db.getName(), collName = '') {
       ];
 
    return namespace.aggregate(pipeline, options).toArray()[0];
+}
+
+function $arrSort(x ,y) {
+
+   (x, y) => x['file bytes available for reuse'] - y['file bytes available for reuse']
 }
 
 // EOF
