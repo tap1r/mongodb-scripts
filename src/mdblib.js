@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.9.4"
+ *  Version: "0.10.0"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.9.4"
+      "version": "0.10.0"
 });
 
 /*
@@ -215,23 +215,23 @@ class MetaStats {
       // this.shards = (async() => { return (db.serverStatus().process === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null })();
       this.name = name;
       this.dataSize = dataSize;
-      this.storageSize = storageSize;
+      this.storageSize = (storageSize == 0) ? 4096 : storageSize;
       this.freeStorageSize = freeStorageSize;
       this.objects = +objects;
       this.orphans = +orphans;
       this.compressor = compressor;
       this.collections = []; // usurp dbStats counter for collections list []
-      this.ncollections = (collections === 0) ? ncollections : +collections; // merge collStats and dbStats n/collections counters
+      this.ncollections = (collections == 0) ? ncollections : +collections; // merge collStats and dbStats n/collections counters
       this.indexes = indexes; // usurp dbStats counter for indexes list
       this.nindexes = (nindexes === -1) ? +indexes : nindexes; // merge collStats and dbStats n/indexes counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
-      this.totalIndexSize = (indexSize === 0) ? totalIndexSize : indexSize; // merge collStats and dbStats index size counters
+      this.totalIndexSize = (indexSize == 0) ? totalIndexSize : indexSize; // merge collStats and dbStats index size counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
       // this.overhead = (typeof internalPageSize === 'number') ? internalPageSize : 4096; // 4KB min allocation block size
       this.overhead = 1024; // unused
    }
    init() { // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
-      this.instance = hello().me;
+      this.instance = (isAtlasPlatform('serverless')) ? 'serverless' : hello().me;
       this.hostname = hostInfo().system.hostname;
       this.proc = (db.serverStatus().ok) ? db.serverStatus().process : 'unknown';
       this.dbPath = (this.proc == 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
@@ -318,7 +318,9 @@ function getDBNames(dbFilter = /^.+/) {
    let command = {
       "listDatabases": 1,
       "nameOnly": true,
-      "authorizedDatabases": true
+      "authorizedDatabases": (!(isAtlasPlatform('serverless') || isAtlasPlatform('sharedTier||dedicatedReplicaSet')))
+                           ? true
+                           : false
    };
    let options = {
       "readPreference": (typeof readPref !== 'undefined') ? readPref
@@ -328,6 +330,9 @@ function getDBNames(dbFilter = /^.+/) {
    let filterOptions = 'i';
    let filterRegex = new RegExp(dbFilter, filterOptions);
    let filter = { "name": filterRegex };
+   let restrictedNamespaces = (isAtlasPlatform('serverless')) ? ['admin', 'local']
+                            : (isAtlasPlatform('sharedTier||dedicatedReplicaSet')) ? ['admin', 'local']
+                            : [];
    let comment = `list databases with ${__lib.name} v${__lib.version}`;
    if (!(isAtlasPlatform('serverless') || isAtlasPlatform('sharedTier||dedicatedReplicaSet'))) {
       // ignoring filter on unsupported platforms
@@ -339,7 +344,7 @@ function getDBNames(dbFilter = /^.+/) {
    slaveOk(options.readPreference);
    let dbs = (shellVer() >= 2.0 && typeof process !== 'undefined') ? db.getSiblingDB('admin').runCommand(command, options)
            : db.getSiblingDB('admin').runCommand(command);
-   return dbs.databases.map(({ name }) => name);
+   return dbs.databases.map(({ name }) => name).filter(namespace => !restrictedNamespaces.includes(namespace));
 };
 
 function getAllNonSystemNamespaces() { // TBA
@@ -483,10 +488,12 @@ function hostInfo() {
 
    if (typeof hostInfo.system === 'undefined' && typeof hello().me === 'undefined') {
       hostInfo = { "system": { "hostname": "serverless" } };
-   } else if (typeof hello().me !== 'undefined') {
+   } else if (typeof hostInfo.system === 'undefined' && typeof hello().me !== 'undefined') {
       hostInfo = { "system": { "hostname": hello().me.match(/(.*):/)[1] } };
+   } else if (typeof hostInfo.system !== 'undefined' && typeof hello().me === 'undefined') {
+      // hostInfo;
    } else {
-      hostInfo = { "system": { "hostname": "undefined" } };
+      hostInfo = { "system": { "hostname": "unknown" } };
    }
 
    return hostInfo;
@@ -1241,6 +1248,13 @@ function $stats(dbName = db.getName()) {
       }
    }
    stats.namespaces = stats.collections + stats.views;
+   stats.objects = +stats.objects;
+   stats.dataSize = +stats.dataSize;
+   stats.storageSize = +stats.storageSize;
+   stats.totalFreeStorageSize = +stats.totalFreeStorageSize;
+   stats.indexSize = +stats.indexSize;
+   stats.indexFreeStorageSize = +stats.indexFreeStorageSize;
+   stats.fileSize = +stats.fileSize;
    delete stats.$clusterTime;
 
    return stats;
