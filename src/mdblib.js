@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.10.2"
+ *  Version: "0.10.3"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.10.2"
+      "version": "0.10.3"
 });
 
 /*
@@ -588,6 +588,18 @@ const int64MinVal = -Math.pow(2, 63);
 const int64MaxVal = Math.pow(2, 63) - 1;
 const dec128MinVal = -10 * Math.pow(2, 110);
 const dec128MaxVal = 10 * Math.pow(2, 110) - 1;
+
+function compactionHelper(type = 'collection', storageSize = 4096, freeStorageSize = 0) {
+   let compactCollectionThreshold = 0.2,
+      compactIndexThreshold = 0.5,
+      minSizeBytes = 2097152,
+      syncThreshold = 0.5;
+   
+   return (type == 'collection' && storageSize > minSizeBytes && (freeStorageSize / storageSize) > compactCollectionThreshold) ? true
+        : (type == 'index' && storageSize > minSizeBytes && (freeStorageSize / storageSize) > compactIndexThreshold) ? true
+        : (type == 'dbPath' && storageSize > minSizeBytes && (freeStorageSize / storageSize) > syncThreshold) ? true
+        : false;
+};
 
 function $NumberLong(arg) {
    /*
@@ -1254,10 +1266,11 @@ function $stats(dbName = db.getName()) {
    stats.objects = +stats.objects;
    stats.dataSize = +stats.dataSize;
    stats.storageSize = +stats.storageSize;
-   stats.totalFreeStorageSize = +stats.totalFreeStorageSize;
+   stats.totalFreeStorageSize = (typeof stats.totalFreeStorageSize === 'undefined') ? 0 : +stats.totalFreeStorageSize;
    stats.indexSize = +stats.indexSize;
-   stats.indexFreeStorageSize = +stats.indexFreeStorageSize;
-   stats.fileSize = +stats.fileSize;
+   stats.indexFreeStorageSize = (typeof stats.indexFreeStorageSize === 'undefined') ? 0 : +stats.indexFreeStorageSize;
+   stats.fileSize = (typeof stats.fileSize === 'undefined') ? 0 : +stats.fileSize;
+   stats.numExtents = (typeof stats.numExtents === 'undefined') ? 0 : +stats.numExtents;
    delete stats.$clusterTime;
 
    return stats;
@@ -1455,11 +1468,6 @@ function $collStats(dbName = db.getName(), collName = '') {
       ];
 
    return namespace.aggregate(pipeline, options).toArray()[0];
-}
-
-function $arrSort(x ,y) {
-
-   (x, y) => x['file bytes available for reuse'] - y['file bytes available for reuse']
 }
 
 // EOF
