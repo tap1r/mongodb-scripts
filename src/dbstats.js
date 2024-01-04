@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.7.1"
+ *  Version: "0.7.2"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -36,7 +36,7 @@
  */
 
 (async(dbFilter, collFilter) => {
-   let __script = { "name": "dbstats.js", "version": "0.7.1" };
+   let __script = { "name": "dbstats.js", "version": "0.7.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -117,13 +117,18 @@
             let collection = new MetaStats($collStats(dbName, collName));
             collection.init();
             printCollection(collection);
+            collection.indexes.sort((x, y) => x.name.localeCompare(y.name)); // ASC
+            // collection.indexes.sort((x, y) => y.name.localeCompare(x.name)); // DESC
+            // collection.indexes.sort((x, y) => x['file size in bytes'] - y['file size in bytes']); // ASC
+            // collection.indexes.sort((x, y) => y['file size in bytes'] - x['file size in bytes']); // DESC
+            // collection.indexes.sort((x, y) => x['file bytes available for reuse'] - y['file bytes available for reuse']); // ASC
+            // collection.indexes.sort((x, y) => y['file bytes available for reuse'] - x['file bytes available for reuse']); // DESC
             collection.indexes.forEach(printIndex);
             database.freeStorageSize += collection.freeStorageSize;
             database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
          });
          let views = db.getSiblingDB(dbName).getCollectionInfos({
                "type": "view",
-               // "name": /(?:^(?!(system\..+|replset\..+)$).+)/
                "name": collFilter
             }, true, true
          );
