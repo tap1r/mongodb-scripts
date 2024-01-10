@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.10.4"
+ *  Version: "0.10.5"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.10.4"
+      "version": "0.10.5"
 });
 
 /*
@@ -166,6 +166,9 @@ class AutoFactor {
    scale(number = this.number) {
       if (number < 1) number = 1;
       return Math.floor(Math.log2(number) / 10);
+   }
+   factor(number = this.number) {
+      return Math.pow(1024, this.scale(number));
    }
    metric(number = this.number) {
       return this.metrics[this.scale(number)];
@@ -490,7 +493,7 @@ function hostInfo() {
       hostInfo = { "system": { "hostname": "serverless" } };
    } else if (typeof hostInfo.system === 'undefined' && typeof hello().me !== 'undefined') {
       hostInfo = { "system": { "hostname": hello().me.match(/(.*):/)[1] } };
-   } else if (typeof hostInfo.system !== 'undefined' && typeof hello().me === 'undefined') {
+   } else if (typeof hostInfo.system !== 'undefined') { // && typeof hello().me === 'undefined') {
       // hostInfo;
    } else {
       hostInfo = { "system": { "hostname": "unknown" } };
