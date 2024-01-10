@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.8.1"
+ *  Version: "0.8.2"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -36,7 +36,7 @@
  */
 
 (async(dbFilter, collFilter) => {
-   let __script = { "name": "dbstats.js", "version": "0.8.1" };
+   let __script = { "name": "dbstats.js", "version": "0.8.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -67,17 +67,15 @@
     *  User defined parameters
     */
 
-   // scaler unit B, KiB, MiB, GiB, TiB, PiB
-   // let scale = new ScaleFactor('MiB');
-   // let scaled = new AutoFactor();
+   // let dbFilter = /^.+/;
+   // let collFilter /^.+/;
 
    /*
     *  Global defaults
     */
 
    // scaler unit B, KiB, MiB, GiB, TiB, PiB
-   // typeof scale === 'undefined' && (scale = new ScaleFactor('MiB'));
-   typeof scaled === 'undefined' && (scaled = new AutoFactor());
+   let scaled = new AutoFactor();
 
    // formatting preferences
    typeof termWidth === 'undefined' && (termWidth = 137);
@@ -217,7 +215,9 @@
        *  Print index level stats
        */
       let indexWidth = rowHeader + columnWidth * 2;
-      let compaction = compactionHelper('index', storageSize, freeStorageSize) ? 'rebuild' : '';
+      let compaction = (name == '_id_' && compactionHelper('index', storageSize, freeStorageSize)) ? 'compact()'
+                     : compactionHelper('index', storageSize, freeStorageSize) ? 'rebuild'
+                     : '';
       console.log(`  \x1b[33m${'━'.repeat(termWidth - 2)}\x1b[0m`);
       if (name.length > 64) name = `${name.substr(indexWidth)}~`;
       console.log(`   \x1b[31m${name.padEnd(indexWidth)}\x1b[0m ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${''.toString().padStart(columnWidth)} \x1b[36m${compaction.padStart(columnWidth - 2)}\x1b[0m`);
