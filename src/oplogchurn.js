@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.4.1"
+ *  Version: "0.5.0"
  *  Description: measure oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -20,7 +20,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.4.1" };
+   let __script = { "name": "oplogchurn.js", "version": "0.5.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -51,11 +51,6 @@
    // set interval in hours
    typeof intervalHrs === 'undefined' && !!(intervalHrs = 1);
 
-   if (typeof scale === 'undefined') {
-      // B, KiB, MiB, GiB, TiB, PiB
-      ({ unit, factor } = new ScaleFactor('MiB'));
-   }
-
    // formatting preferences
    typeof termWidth === 'undefined' && !!(termWidth = 62);
    typeof columnWidth === 'undefined' && !!(columnWidth = 25);
@@ -68,7 +63,7 @@
       /*
        *  main
        */
-      let opSize = 0, docs = 0, date = new Date();
+      let opSize = 0, docs = 0, date = new Date(), scaled = new AutoFactor();
       let t2 = Math.floor(date.getTime() / 1000.0), // end timestamp
          d2 = date.toISOString(), // end datetime
          t1 = Math.floor(date.setHours(date.getHours() - intervalHrs) / 1000.0), // start timestamp
@@ -116,23 +111,23 @@
       }
 
       // Get host info
-      let { 'system': { hostname } } = db.hostInfo(),
+      let { 'system': { hostname } } = hostInfo(),
          { 'parsed': { 'storage': { dbPath } } } = db.serverCmdLineOpts(),
-         // Get oplog stats
+         // Get oplog collection stats
          { 'wiredTiger': {
             creationString,
             'block-manager': {
                'file bytes available for reuse': blocksFree,
-               'file size in bytes': storageSize,
+               'file size in bytes': storageSize
             } },
             size,
             internalPageSize = (creationString.match(/internal_page_max=(\d+)/)[1] * 1024)
          } = oplog.stats();
       let overhead = internalPageSize;
       let ratio = +((size / (storageSize - blocksFree - overhead)).toFixed(2)),
-         intervalDataSize = opSize / factor;
-      let intervalStorageSize = intervalDataSize / ratio;
-      let oplogChurn = intervalStorageSize / intervalHrs;
+         intervalDataSize = scaled.format(opSize);
+      let intervalStorageSize = scaled.format(opSize / ratio);
+      let oplogChurn = scaled.format(opSize / ratio / intervalHrs);
 
       // Print results
       console.log(`\n\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
@@ -144,10 +139,10 @@
       console.log(`\x1b[32m${'Interval duration:'.padEnd(rowHeader)}\x1b[0m ${`${intervalHrs} hr${(intervalHrs == 1) ? '' : 's'}`.padStart(columnWidth)}`);
       console.log(`\x1b[32m${'Average oplog compression ratio:'.padEnd(rowHeader)}\x1b[0m ${`${ratio}:1`.padStart(columnWidth)}`);
       console.log(`\x1b[32m${'Interval document count:'.padEnd(rowHeader)}\x1b[0m ${docs.toString().padStart(columnWidth)}`);
-      console.log(`\x1b[32m${'Interval data size:'.padEnd(rowHeader)}\x1b[0m ${`${intervalDataSize.toFixed(2)} ${unit}`.padStart(columnWidth)}`);
-      console.log(`\x1b[32m${'Estimated interval storage size:'.padEnd(rowHeader)}\x1b[0m ${`${intervalStorageSize.toFixed(2)} ${unit}`.padStart(columnWidth)}`);
+      console.log(`\x1b[32m${'Interval data size:'.padEnd(rowHeader)}\x1b[0m ${`${intervalDataSize}`.padStart(columnWidth)}`);
+      console.log(`\x1b[32m${'Estimated interval storage size:'.padEnd(rowHeader)}\x1b[0m ${`${intervalStorageSize}`.padStart(columnWidth)}`);
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
-      console.log(`\x1b[32m${'Estimated current oplog data churn:'.padEnd(rowHeader)}\x1b[0m ${`${oplogChurn.toFixed(2)} ${unit}/hr`.padStart(columnWidth)}`);
+      console.log(`\x1b[32m${'Estimated current oplog data churn:'.padEnd(rowHeader)}\x1b[0m ${`${oplogChurn}/hr`.padStart(columnWidth)}`);
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log('\n');
    }
