@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.10.3"
+ *  Version: "0.10.4"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.10.3"
+      "version": "0.10.4"
 });
 
 /*
@@ -520,12 +520,14 @@ function isAtlasPlatform(type) {
    /*
     *  Evaluate Atlas deployment platform type
     */
-   return (typeof type == 'undefined' && typeof hello().msg == 'undefined' && typeof db.serverStatus().atlasVersion == 'undefined') ? 'dedicatedShardedCluster'
-        : (type == 'dedicatedShardedCluster' && typeof hello().msg == 'undefined' && typeof db.serverStatus().atlasVersion == 'undefined') ? true
-        : (typeof type == 'undefined' && hello().msg == 'isdbgrid' && typeof db.serverStatus().atlasVersion != 'undefined') ? 'serverless'
-        : (type == 'serverless' && hello().msg == 'isdbgrid' && typeof db.serverStatus().atlasVersion != 'undefined') ? true
-        : (typeof type == 'undefined' && hello().msg != 'isdbgrid' && typeof db.serverStatus().atlasVersion != 'undefined') ? 'sharedTier||dedicatedReplicaSet'
-        : (type == 'sharedTier||dedicatedReplicaSet' && hello().msg != 'isdbgrid' && typeof db.serverStatus().atlasVersion != 'undefined') ? true
+   let { 'msg': helloMsg } = hello();
+   let { atlasVersion } = db.serverStatus();
+   return (typeof type === 'undefined' && typeof helloMsg === 'undefined' && typeof atlasVersion === 'undefined') ? 'dedicatedShardedCluster'
+        : (type == 'dedicatedShardedCluster' && typeof helloMsg === 'undefined' && typeof atlasVersion === 'undefined') ? true
+        : (typeof type === 'undefined' && helloMsg == 'isdbgrid' && typeof atlasVersion !== 'undefined') ? 'serverless'
+        : (type == 'serverless' && helloMsg == 'isdbgrid' && typeof atlasVersion !== 'undefined') ? true
+        : (typeof type === 'undefined' && helloMsg != 'isdbgrid' && typeof atlasVersion !== 'undefined') ? 'sharedTier||dedicatedReplicaSet'
+        : (type == 'sharedTier||dedicatedReplicaSet' && helloMsg != 'isdbgrid' && typeof atlasVersion !== 'undefined') ? true
         : false;
 }
 
@@ -590,11 +592,11 @@ const dec128MinVal = -10 * Math.pow(2, 110);
 const dec128MaxVal = 10 * Math.pow(2, 110) - 1;
 
 function compactionHelper(type = 'collection', storageSize = 4096, freeStorageSize = 0) {
-   let compactCollectionThreshold = 0.2,
-      compactIndexThreshold = 0.5,
-      minSizeBytes = 2097152,
-      syncThreshold = 0.5;
-   
+   let compactCollectionThreshold = 0.2,  // 20% reusable bytes
+      compactIndexThreshold = 0.5,        // 50% reusable bytes
+      minSizeBytes = 2097152,             // 2MB as WT ignores anything smaller
+      syncThreshold = 0.5;                // 50% total reusable bytes
+
    return (type == 'collection' && storageSize > minSizeBytes && (freeStorageSize / storageSize) > compactCollectionThreshold) ? true
         : (type == 'index' && storageSize > minSizeBytes && (freeStorageSize / storageSize) > compactIndexThreshold) ? true
         : (type == 'dbPath' && storageSize > minSizeBytes && (freeStorageSize / storageSize) > syncThreshold) ? true
