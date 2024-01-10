@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.0"
+ *  Version: "0.5.1"
  *  Description: measure oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -12,7 +12,6 @@
  */
 
 // let intervalHrs = 1; // set interval in hours
-// let scale = new ScaleFactor('MiB'); // B, KiB, MiB, GiB, TiB, PiB
 
 (() => {
    /*
@@ -20,7 +19,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.5.0" };
+   let __script = { "name": "oplogchurn.js", "version": "0.5.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
