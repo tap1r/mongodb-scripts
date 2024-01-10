@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.8.0"
+ *  Version: "0.8.1"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -36,7 +36,7 @@
  */
 
 (async(dbFilter, collFilter) => {
-   let __script = { "name": "dbstats.js", "version": "0.8.0" };
+   let __script = { "name": "dbstats.js", "version": "0.8.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -101,7 +101,10 @@
        */
       let dbPath = new MetaStats();
       dbPath.init();
-      getDBNames(dbFilter).map(dbName => {
+      let dbNames = getDBNames(dbFilter);
+      dbNames.sort((x, y) => x.localeCompare(y)); // ASC
+      // dbNames.sort((x, y) => y.localeCompare(x)); // DESC
+      dbNames.map(dbName => {
          let database = new MetaStats($stats(dbName));
          database.init();
          printDbHeader(database);
@@ -112,6 +115,8 @@
                "name": collFilter
             }, true, true
          ).filter(({ 'name': collName }) => collName.match(systemFilter));
+         collections.sort((x, y) => x.name.localeCompare(y.name)); // ASC
+         // collections.sort((x, y) => y.name.localeCompare(x.name)); // DESC
          printCollHeader(collections.length);
          collections.map(({ 'name': collName }) => {
             let collection = new MetaStats($collStats(dbName, collName));
@@ -132,6 +137,8 @@
                "name": collFilter
             }, true, true
          );
+         views.sort((x, y) => x.name.localeCompare(y.name)); // ASC
+         // views.sort((x, y) => y.name.localeCompare(x.name)); // DESC
          printViewHeader(views.length);
          views.map(({ name }) => printView(name));
          printDb(database);
