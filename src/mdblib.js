@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.10.6"
+ *  Version: "0.10.7"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.10.6"
+      "version": "0.10.7"
 });
 
 /*
@@ -50,11 +50,11 @@ if (typeof String.prototype.padStart === 'undefined') {
       targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
       padString = String(typeof padString !== 'undefined' ? padString : ' ');
       if (this.length >= targetLength)
-         return String(this)
+         return String(this);
       else {
          targetLength = targetLength - this.length;
          if (targetLength > padString.length)
-            padString += padString.repeat(targetLength / padString.length) // append to original to ensure we are longer than needed
+            padString += padString.repeat(targetLength / padString.length); // append to original to ensure we are longer than needed
 
          return padString.slice(0, targetLength) + String(this);
       }
@@ -69,11 +69,11 @@ if (typeof String.prototype.padEnd === 'undefined') {
       targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
       padString = String(typeof padString !== 'undefined' ? padString : ' ');
       if (this.length > targetLength)
-         return String(this)
+         return String(this);
       else {
          targetLength = targetLength - this.length;
          if (targetLength > padString.length)
-            padString += padString.repeat(targetLength / padString.length) // append to original to ensure we are longer than needed
+            padString += padString.repeat(targetLength / padString.length); // append to original to ensure we are longer than needed
 
          return String(this) + padString.slice(0, targetLength);
       }
@@ -297,6 +297,7 @@ function getDBNames(dbFilter = /^.+/) {
       command.filter = filter;
    }
    if (fCV(4.4)) {
+      // ignoring comment on unsupported versions
       command.comment = comment;
    }
    slaveOk(options.readPreference);
@@ -365,7 +366,7 @@ function serverVer(ver) {
     */
    let svrVer = () => +db.version().match(/^\d+\.\d+/);
    return (typeof ver !== 'undefined' && ver <= svrVer()) ? true
-        : (typeof ver !== 'undefined' && ver > svrVer()) ? false
+        : (typeof ver !== 'undefined' && ver >  svrVer()) ? false
         : svrVer();
 }
 
@@ -390,7 +391,7 @@ function fCV(ver) { // updated for shared tier compatibility
            : serverVer(ver);
    }
    return (typeof ver !== 'undefined' && ver <= featureVer()) ? true
-        : (typeof ver !== 'undefined' && ver > featureVer()) ? false
+        : (typeof ver !== 'undefined' && ver >  featureVer()) ? false
         : featureVer();
 }
 
@@ -400,7 +401,7 @@ function shellVer(ver) {
     */
    let shell = () => +version().match(/^\d+\.\d+/);
    return (typeof ver !== 'undefined' && ver <= shell()) ? true
-        : (typeof ver !== 'undefined' && ver > shell()) ? false
+        : (typeof ver !== 'undefined' && ver >  shell()) ? false
         : shell();
 }
 
@@ -550,14 +551,17 @@ const dec128MinVal = -10 * Math.pow(2, 110);
 const dec128MaxVal = 10 * Math.pow(2, 110) - 1;
 
 function compactionHelper(type = 'collection', storageSize = 4096, freeStorageSize = 0) {
-   let compactCollectionThreshold = 0.2,  // 20% reusable bytes
-      compactIndexThreshold = 0.5,        // 50% reusable bytes
+   let compactCollectionThreshold = 0.2,  // 20% reusable collection bytes
+      compactIndexThreshold = 0.5,        // 50% reusable index bytes
       minSizeBytes = 2097152,             // 2MB as WT ignores anything smaller
-      syncThreshold = 0.5;                // 50% total reusable bytes
+      syncThreshold = 0.5;                // 50% total dbPath reusable bytes
 
-   return (type == 'collection' && storageSize > minSizeBytes && (freeStorageSize / storageSize) > compactCollectionThreshold) ? true
-        : (type == 'index' && storageSize > minSizeBytes && (freeStorageSize / storageSize) > compactIndexThreshold) ? true
-        : (type == 'dbPath' && storageSize > minSizeBytes && (freeStorageSize / storageSize) > syncThreshold) ? true
+   let sizeThreshold = storageSize > minSizeBytes,
+      freeThreshold = freeStorageSize / storageSize;
+
+   return (type == 'collection' && sizeThreshold && freeThreshold > compactCollectionThreshold) ? true
+        : (type == 'index'      && sizeThreshold && freeThreshold > compactIndexThreshold)      ? true
+        : (type == 'dbPath'     && sizeThreshold && freeThreshold > syncThreshold)              ? true
         : false;
 };
 
