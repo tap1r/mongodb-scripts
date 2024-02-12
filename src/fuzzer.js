@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.17"
+ *  Version: "0.6.18"
  *  Description: pseudorandom data generator, with some fuzzing capability
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,7 +13,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.17" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.18" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -45,7 +45,8 @@
       collName = 'collection',        // collection name
       totalDocs = $getRandExp(3.5),   // number of documents to generate per namespace
       dropNamespace = false,          // drop collection prior to generating data
-      compressor = 'best',            // ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
+      compressor = 'best',            // collection compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
+      idxCompressor = compressor,     // index compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best'] (defaults to collection)
       // compressionOptions = -1,     // [-1|0|1|2|3|4|5|6|7|8|9] compression level
       idioma = 'en',                  // ['en'|'es'|'de'|'fr'|'zh']
       collation = { /* collation options */
@@ -134,7 +135,8 @@
          // "sparse": true,
          // "expireAfterSeconds": expireAfterSeconds,
          // "hidden": hidden,
-         "collation": collation
+         "collation": collation,
+         // "storageEngine": { "wiredTiger": { "configString": `block_compressor=${idxCompressor}` } }
       },
       specialIndexes = [ /* index types unsupported by collations */
          { "location.coordinates": "2d" },
@@ -149,6 +151,7 @@
          // "expireAfterSeconds": expireAfterSeconds,
          // "hidden": hidden,
          "collation": { "locale": "simple" },
+         // "storageEngine": { "wiredTiger": { "configString": `block_compressor=${idxCompressor}` } },
          "default_language": idioma
       };
 
