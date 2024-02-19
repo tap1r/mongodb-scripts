@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.10.7"
+ *  Version: "0.10.8"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.10.7"
+      "version": "0.10.8"
 });
 
 /*
@@ -1216,10 +1216,10 @@ function $stats(dbName = db.getName()) {
    if (stats.hasOwnProperty('raw')) { // detect sharded namespaces schema
       stats.collections = 0;
       stats.views = 0;
-      for (let key in stats.raw) {
-         if (stats.raw.hasOwnProperty(key)) {
-            stats.collections += +stats.raw[key].collections;
-            stats.views += +stats.raw[key].views;
+      for (let shard in stats.raw) {
+         if (stats.raw.hasOwnProperty(shard)) {
+            stats.collections += +stats.raw[shard].collections;
+            stats.views += +stats.raw[shard].views;
          }
       }
    }
