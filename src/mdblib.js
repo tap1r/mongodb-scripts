@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.10.8"
+ *  Version: "0.10.9"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.10.8"
+      "version": "0.10.9"
 });
 
 /*
@@ -136,7 +136,7 @@ class AutoFactor {
       if (number >= 0) {
          this.number = Number(number);
       } else {
-         throw new Error(`Invalid scalar value or number type: ${number}`);
+         throw new Error(`Invalid scalar value or number type for AutoFactor: ${number}`);
       }
       return this.number;
    }
@@ -184,12 +184,14 @@ class MetaStats {
       this.nindexes = (nindexes == -1) ? +indexes : nindexes; // merge collStats and dbStats n/indexes counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
       this.totalIndexSize = (indexSize == 0) ? totalIndexSize : indexSize; // merge collStats and dbStats index size counters
-      this.totalIndexBytesReusable = totalIndexBytesReusable;
+      // this.totalIndexBytesReusable = indexFreeStorageSize;
       // this.overhead = (typeof internalPageSize === 'number') ? internalPageSize : 4096; // 4KB min allocation block size
       this.overhead = 1024; // unused
    }
    init() { // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
-      this.instance = (isAtlasPlatform('serverless')) ? 'serverless' : hello().me;
+      this.instance = (isAtlasPlatform('serverless')) ? 'serverless'
+                    : (isSharded()) ? 'sharded'
+                    : hello().me;
       this.hostname = hostInfo().system.hostname;
       this.proc = (db.serverStatus().ok) ? db.serverStatus().process : 'unknown';
       this.dbPath = (this.proc == 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
@@ -1216,10 +1218,16 @@ function $stats(dbName = db.getName()) {
    if (stats.hasOwnProperty('raw')) { // detect sharded namespaces schema
       stats.collections = 0;
       stats.views = 0;
+      stats.freeStorageSize = 0;
+      stats.indexFreeStorageSize = 0;
       for (let shard in stats.raw) {
          if (stats.raw.hasOwnProperty(shard)) {
             stats.collections += +stats.raw[shard].collections;
             stats.views += +stats.raw[shard].views;
+            // stats.freeStorageSize += +stats.raw[shard].freeStorageSize;
+            stats.freeStorageSize += (typeof stats.raw[shard].freeStorageSize === 'undefined') ? 0 : +stats.raw[shard].freeStorageSize;
+            // stats.indexFreeStorageSize += +stats.raw[shard].indexFreeStorageSize;
+            stats.indexFreeStorageSize += (typeof stats.raw[shard].indexFreeStorageSize === 'undefined') ? 0 : +stats.raw[shard].indexFreeStorageSize;
          }
       }
    }
@@ -1230,12 +1238,17 @@ function $stats(dbName = db.getName()) {
    stats.objects = +stats.objects;
    stats.dataSize = +stats.dataSize;
    stats.storageSize = +stats.storageSize;
-   stats.totalFreeStorageSize = (typeof stats.totalFreeStorageSize === 'undefined') ? 0 : +stats.totalFreeStorageSize;
    stats.indexSize = +stats.indexSize;
    stats.indexFreeStorageSize = (typeof stats.indexFreeStorageSize === 'undefined') ? 0 : +stats.indexFreeStorageSize;
-   stats.fileSize = (typeof stats.fileSize === 'undefined') ? 0 : +stats.fileSize;
-   stats.numExtents = (typeof stats.numExtents === 'undefined') ? 0 : +stats.numExtents;
+   stats.totalIndexBytesReusable = stats.indexFreeStorageSize;
+   stats.scaleFactor = +stats.scaleFactor;
+   delete stats.fileSize;
+   delete stats.totalSize;
+   delete totalFreeStorageSize;
+   delete stats.numExtents;
    delete stats.$clusterTime;
+   delete stats.operationTime;
+   delete stats.ok;
 
    return stats;
 }
