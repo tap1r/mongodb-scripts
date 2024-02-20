@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.8.3"
+ *  Version: "0.8.4"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -36,7 +36,7 @@
  */
 
 (async(dbFilter, collFilter) => {
-   let __script = { "name": "dbstats.js", "version": "0.8.3" };
+   let __script = { "name": "dbstats.js", "version": "0.8.4" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -127,8 +127,8 @@
             // collection.indexes.sort((x, y) => x['file bytes available for reuse'] - y['file bytes available for reuse']); // ASC
             // collection.indexes.sort((x, y) => y['file bytes available for reuse'] - x['file bytes available for reuse']); // DESC
             collection.indexes.forEach(printIndex);
-            database.freeStorageSize += collection.freeStorageSize;
-            database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
+            // database.freeStorageSize += collection.freeStorageSize;
+            // database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
          });
          let views = db.getSiblingDB(dbName).getCollectionInfos({
                "type": "view",
@@ -184,7 +184,7 @@
       console.log(`\x1b[1m\x1b[32mCollections (visible):\x1b[0m${' '.repeat(1)}${collTotal}`);
    }
 
-   function printCollection({ name, dataSize, compression, compressor, storageSize, freeStorageSize, objects, orphans }) {
+   function printCollection({ name, dataSize, compression, compressor, storageSize, freeStorageSize, objects }) {
       /*
        *  Print collection level stats
        */
@@ -235,7 +235,7 @@
    }
 
    function printDb({
-         dataSize, compression, storageSize, freeStorageSize, objects, orphans, ncollections, nindexes, totalIndexSize, totalIndexBytesReusable
+         dataSize, compression, storageSize, freeStorageSize, objects, ncollections, nindexes, totalIndexSize, totalIndexBytesReusable
       }) {
       /*
        *  Print DB level rollup stats
@@ -247,7 +247,7 @@
    }
 
    function printDbPath({
-         dbPath, proc, hostname, compression, dataSize, storageSize, freeStorageSize, objects, orphans, ncollections, nindexes, totalIndexSize, totalIndexBytesReusable
+         dbPath, proc, hostname, compression, dataSize, storageSize, freeStorageSize, objects, ncollections, nindexes, totalIndexSize, totalIndexBytesReusable
       }) {
       /*
        *  Print total dbPath rollup stats
