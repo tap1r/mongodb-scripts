@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.10.9"
+ *  Version: "0.10.10"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.10.9"
+      "version": "0.10.10"
 });
 
 /*
@@ -1212,7 +1212,7 @@ function $stats(dbName = db.getName()) {
     */
    let stats = db.getSiblingDB(dbName).stats( // max precision due to SERVER-69036
       // MONGOSH-1108 (mongosh v1.2.0) & SERVER-62277 (mongod v5.0.6)
-      (serverVer(5.0) && (shellVer() >= 5.0 || (typeof process !== 'undefined' && shellVer() >= 1.1))) ? { "freeStorage": 1, "scale": 1 } : 1
+      (serverVer(5.0) && (shellVer() >= 5.0 || (typeof process !== 'undefined' && shellVer() >= 1.2))) ? { "freeStorage": 1, "scale": 1 } : 1
    );
    stats.name = dbName;
    if (stats.hasOwnProperty('raw')) { // detect sharded namespaces schema
