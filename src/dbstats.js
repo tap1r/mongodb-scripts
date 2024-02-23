@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.8.4"
+ *  Version: "0.8.5"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -36,7 +36,7 @@
  */
 
 (async(dbFilter, collFilter) => {
-   let __script = { "name": "dbstats.js", "version": "0.8.4" };
+   let __script = { "name": "dbstats.js", "version": "0.8.5" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -190,7 +190,9 @@
        */
       compressor = (compressor == 'snappy') ? 'snpy' : compressor;
       let collWidth = rowHeader - 3;
-      let compaction = compactionHelper('collection', storageSize, freeStorageSize) ? 'compact' : '';
+      let compaction = (name == 'oplog.rs' && compactionHelper('collection', storageSize, freeStorageSize)) ? 'wait'
+                     : compactionHelper('collection', storageSize, freeStorageSize) ? 'compact'
+                     : '-';
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       if (name.length > 45) name = `${name.substring(0, collWidth)}~`;
       console.log(`└\x1b[36m${(' ' + name).padEnd(rowHeader - 1)}\x1b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${compaction.padStart(columnWidth - 2)}\x1b[0m`);
