@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.8.5"
+ *  Version: "0.8.6"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -36,7 +36,7 @@
  */
 
 (async(dbFilter, collFilter) => {
-   let __script = { "name": "dbstats.js", "version": "0.8.5" };
+   let __script = { "name": "dbstats.js", "version": "0.8.6" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -54,7 +54,7 @@
       }
       load(__lib.path);
    }
-   let __comment = `# Running script ${__script.name} v${__script.version}`;
+   let __comment = `#### Running script ${__script.name} v${__script.version}`;
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    console.clear();
