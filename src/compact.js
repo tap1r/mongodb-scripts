@@ -1,6 +1,6 @@
 /*
  *  Name: "compact.js"
- *  Version: "0.2.4"
+ *  Version: "0.2.5"
  *  Description: schrödinger's page reproduction
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -24,13 +24,13 @@ let options = {
    /*
     *  ...
     */
-   let __script = { "name": "compact.js", "version": "0.2.4" };
-   console.log(`\n\x1b[33m# Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
+   let __script = { "name": "compact.js", "version": "0.2.5" };
+   console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
    let namespace = db.getSiblingDB(dbName).getCollection(collName);
    if (!namespace.exists()) {
       throw `\x1b[31mnamespace "${dbName}.${collName}" does not exist\x1b[0m`;
    }
-   let dbFilter = "database", collFilter = "collection";
+   let dbFilter = 'database', collFilter = 'collection';
 
    let randFilter = { "$expr": { "$gt": [n / 100, { "$rand": {} }] } };
    // let update = { "$set": { "x": Math.random() } };
@@ -73,7 +73,7 @@ let options = {
    load('dbstats.js');
 
    // compact()
-   for (let i = 1; i <= compactions; ++i) {    
+   for (let i = 1; i <= compactions; ++i) {
       console.log(`Compacting collection ${i} of ${compactions}`);
       db.getSiblingDB(dbName).runCommand({ "compact": collName });
 
