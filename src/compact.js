@@ -1,6 +1,6 @@
 /*
  *  Name: "compact.js"
- *  Version: "0.2.5"
+ *  Version: "0.2.6"
  *  Description: schrödinger's page reproduction
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -15,22 +15,21 @@ let options = {
    "dbName": "database",
    "collName": "collection",
    // "n": 25, // = % chance of being matched
+   // "pattern": "random",
    "rounds": 1, // iterations of entropy
    // "compactions": 1
 };
 
-(({ dbName = undefined, collName = undefined,
-    n = 25, rounds = 5, compactions = 1 } = {}) => {
+(({ dbName, collName, n = 25, rounds = 5, compactions = 1 } = {}) => {
    /*
     *  ...
     */
-   let __script = { "name": "compact.js", "version": "0.2.5" };
+   let __script = { "name": "compact.js", "version": "0.2.6" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
    let namespace = db.getSiblingDB(dbName).getCollection(collName);
    if (!namespace.exists()) {
-      throw `\x1b[31mnamespace "${dbName}.${collName}" does not exist\x1b[0m`;
+      throw `\x1b[31m[ERROR] namespace "${dbName}.${collName}" does not exist\x1b[0m`;
    }
-   let dbFilter = 'database', collFilter = 'collection';
 
    let randFilter = { "$expr": { "$gt": [n / 100, { "$rand": {} }] } };
    // let update = { "$set": { "x": Math.random() } };
@@ -68,14 +67,17 @@ let options = {
    */
 
    // Report dbStats pre-compaction
-
    console.log('Gathering pre-compaction dbStats');
    load('dbstats.js');
 
    // compact()
+   let dbContext = db.getSiblingDB(dbName);
+   let command = { "compact": collName };
+   let options = { "readPreference": "secondary" };
    for (let i = 1; i <= compactions; ++i) {
       console.log(`Compacting collection ${i} of ${compactions}`);
-      db.getSiblingDB(dbName).runCommand({ "compact": collName });
+      let { bytesFreed } = (shellVer() >= 2.0 && typeof process !== 'undefined') ? dbContext.runCommand(command, options)
+                         : dbContext.runCommand(command);
 
       /*
          db.getSiblingDB('admin').aggregate([
@@ -98,12 +100,12 @@ let options = {
             }
          }
       */
+      console.log(`bytesFreed: ${bytesFreed}`);
    }
 
    // Report final dbStats post-compaction
-
    console.log('Gathering post-compaction dbStats');
    load('dbstats.js');
-})(options);
+})({ 'dbName': dbFilter, 'collName': collFilter } = options);
 
 // EOF
