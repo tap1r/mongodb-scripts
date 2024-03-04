@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.2.8"
+ *  Version: "0.2.9"
  *  Description: driver and network latency telemetry PoC
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -13,8 +13,8 @@ console.clear();
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.2.8" };
-   console.log(`\n\x1b[33m# Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
+   let __script = { "name": "latency.js", "version": "0.2.9" };
+   console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    let slowms = 100,
       filter = `Synthetic slow operation at ${performance.now()}`;
@@ -25,7 +25,6 @@ console.clear();
       console.log('\x1b[31m[WARN] defaulting slowms to 200ms\x1b[0m');
       slowms = 200;
    }
-   // let { slowms = 100 } = db.getSiblingDB('admin').getProfilingStatus();
    let pipeline = [
          { "$currentOp": { } },
          { "$limit": 1 },
@@ -43,9 +42,10 @@ console.clear();
          "cursor": { "batchSize": 1 },
          "readConcern": { "level": "local" }
       },
-      rtt, t0, t1, t2, t3, totalTime,
-      report, tableWidth, padding, longestValue,
-      columnWidth = 24, spacing = 2;
+      rtt, t0, t1, t2, t3, totalTime, timestamp,
+      report, tableWidth, spacing, hostLength, timeLength,
+      hostname = db.hostInfo().system.hostname,
+      proc = db.serverStatus().process;
 
    try {
       t0 = process.hrtime();
@@ -56,7 +56,7 @@ console.clear();
       throw error;
    }
 
-   let { 'attr': { 'durationMillis': durationMillis }
+   let { 'attr': { durationMillis }
       } = db.adminCommand(
          { "getLog": "global" }
       ).log.map(
@@ -75,6 +75,7 @@ console.clear();
       throw error;
    }
 
+   timestamp = new Date().toISOString();
    totalTime = t1[0] * 1000 + (t1[1] / 1000000.0);
    rtt = t3[0] * 1000 + (t3[1] / 1000000.0);
 
@@ -89,21 +90,25 @@ console.clear();
       }).format(duration);
    }
 
-   longestValue = fomatted(totalTime).length;
-   tableWidth = columnWidth + longestValue + spacing;
-   padding = longestValue + spacing;
+   spacing = 1;
+   hostLength = 'Target host:'.length + spacing + hostname.length;
+   timeLength = 'Timestamp:'.length + spacing + timestamp.length;
+   tableWidth = Math.max(hostLength, timeLength);
    report = `
-   \x1b[1mMeasurement\x1b[0m
+   \x1b[1mInternal metrics\x1b[0m
    \x1b[33m${'━'.repeat(tableWidth)}\x1b[0m
-   \x1b[32m${'Delay/slowms factor:'.padEnd(columnWidth)}\x1b[0m${fomatted(slowms).padStart(padding)}
-   \x1b[32m${'Total measurement time:'.padEnd(columnWidth)}\x1b[0m${fomatted(totalTime).padStart(padding)}
+   \x1b[32m${'Target host:'}\x1b[0m${hostname.padStart(tableWidth - 12)}
+   \x1b[32m${'Process type:'}\x1b[0m${proc.padStart(tableWidth - 13)}
+   \x1b[32m${'Timestamp:'}\x1b[0m${timestamp.padStart(tableWidth - 10)}
+   \x1b[32m${'Delay factor (slowms):'}\x1b[0m${fomatted(slowms).padStart(tableWidth - 22)}
+   \x1b[32m${'Total measurement time:'}\x1b[0m${fomatted(totalTime).padStart(tableWidth - 23)}
    \x1b[33m${'═'.repeat(tableWidth)}\x1b[0m
 
    \x1b[1mLatency breakdown\x1b[0m
    \x1b[33m${'━'.repeat(tableWidth)}\x1b[0m
-   \x1b[32m${'Server execution time:'.padEnd(columnWidth)}\x1b[0m${fomatted(durationMillis - slowms).padStart(padding)}
-   \x1b[32m${'Network latency (RTT):'.padEnd(columnWidth)}\x1b[0m${fomatted(rtt).padStart(padding)}
-   \x1b[32m${'Driver execution time:'.padEnd(columnWidth)}\x1b[0m${fomatted(totalTime - durationMillis - rtt).padStart(padding)}
+   \x1b[32m${'Server execution time:'}\x1b[0m${fomatted(durationMillis - slowms).padStart(tableWidth - 22)}
+   \x1b[32m${'Network latency (RTT):'}\x1b[0m${fomatted(rtt).padStart(tableWidth - 22)}
+   \x1b[32m${'Driver execution time:'}\x1b[0m${fomatted(totalTime - durationMillis - rtt).padStart(tableWidth - 22)}
    \x1b[33m${'═'.repeat(tableWidth)}\x1b[0m
    `;
    console.log(report);
