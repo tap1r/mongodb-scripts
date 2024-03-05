@@ -1,11 +1,11 @@
 /*
  *  Name: "compact.js"
- *  Version: "0.2.6"
+ *  Version: "0.2.7"
  *  Description: schrödinger's page reproduction
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "mongosh [connection options] --quiet compact.js"
+// Usage: "mongosh [connection options] --quiet -f compact.js"
 
 /*
  *  User defined parameters
@@ -17,14 +17,14 @@ let options = {
    // "n": 25, // = % chance of being matched
    // "pattern": "random",
    "rounds": 1, // iterations of entropy
-   // "compactions": 1
+   "compactions": 1 // iterations of compact
 };
 
-(({ dbName, collName, n = 25, rounds = 5, compactions = 1 } = {}) => {
+(({ dbName, collName, n = 25, rounds = 5, compactions = 1, 'dbName': dbFilter, 'collName': collFilter } = options) => {
    /*
     *  ...
     */
-   let __script = { "name": "compact.js", "version": "0.2.6" };
+   let __script = { "name": "compact.js", "version": "0.2.7" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
    let namespace = db.getSiblingDB(dbName).getCollection(collName);
    if (!namespace.exists()) {
@@ -50,12 +50,10 @@ let options = {
    }
 
    // Report initial dbStats
-
    console.log('Gathering initial dbStats');
    load('dbstats.js');
 
    // "touch" documents to force page re-writes
-
    /*
       console.log('Setting');
       try { namespace.updateMany(updateFilter, setOptions) }
@@ -106,6 +104,6 @@ let options = {
    // Report final dbStats post-compaction
    console.log('Gathering post-compaction dbStats');
    load('dbstats.js');
-})({ 'dbName': dbFilter, 'collName': collFilter } = options);
+})();
 
 // EOF
