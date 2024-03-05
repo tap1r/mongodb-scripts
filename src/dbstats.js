@@ -1,11 +1,21 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.8.6"
+ *  Version: "0.8.7"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "[mongo|mongosh] [connection options] --quiet dbstats.js"
+
+/*
+ *  Examples of using namespace filters:
+ *  [mongo|mongosh] [connection options] --quiet --eval "dbFilter = '^d.+'" dbstats.js
+ *  [mongo|mongosh] [connection options] --quiet --eval "dbFilter = /^d.+/" dbstats.js
+ *  [mongo|mongosh] [connection options] --quiet --eval "dbFilter = 'database'" dbstats.js
+ *  [mongo|mongosh] [connection options] --quiet --eval "dbFilter = /(^(?!(d.+)).+)/" dbstats.js
+ *  [mongo|mongosh] [connection options] --quiet --eval "dbFilter = 'database', collFilter = 'collection'" dbstats.js
+ *  [mongo|mongosh] [connection options] --quiet --eval "dbFilter = 'database', collFilter = /collection/i" dbstats.js
+ */
 
 (() => {
    /*
@@ -35,8 +45,8 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-(async(dbFilter, collFilter) => {
-   let __script = { "name": "dbstats.js", "version": "0.8.6" };
+(async() => {
+   let __script = { "name": "dbstats.js", "version": "0.8.7" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -67,8 +77,8 @@
     *  User defined parameters
     */
 
-   // let dbFilter = /^.+/;
-   // let collFilter /^.+/;
+   typeof dbFilter === 'undefined' && (dbFilter = /^.+/) || dbFilter;
+   typeof collFilter === 'undefined' && (collFilter = /^.+/) || collFilter;
 
    /*
     *  Global defaults
@@ -269,9 +279,6 @@
    }
 
    await main();
-})(
-   typeof dbFilter === 'undefined' && (dbFilter = /^.+/) || dbFilter,
-   typeof collFilter === 'undefined' && (collFilter = /^.+/) || collFilter
-);
+})();
 
 // EOF
