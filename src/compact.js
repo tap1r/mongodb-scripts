@@ -1,6 +1,6 @@
 /*
  *  Name: "compact.js"
- *  Version: "0.2.7"
+ *  Version: "0.2.8"
  *  Description: schrödinger's page reproduction
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -20,12 +20,14 @@ let options = {
    "compactions": 1 // iterations of compact
 };
 
-(({ dbName, collName, n = 25, rounds = 5, compactions = 1, 'dbName': dbFilter, 'collName': collFilter } = options) => {
+(({ dbName, collName, n = 25, rounds = 5, compactions = 1 } = options) => {
    /*
     *  ...
     */
-   let __script = { "name": "compact.js", "version": "0.2.7" };
+   let __script = { "name": "compact.js", "version": "0.2.8" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
+
+   let dbFilter = dbName, collFilter = collName, reportLog;
    let namespace = db.getSiblingDB(dbName).getCollection(collName);
    if (!namespace.exists()) {
       throw `\x1b[31m[ERROR] namespace "${dbName}.${collName}" does not exist\x1b[0m`;
@@ -40,7 +42,7 @@ let options = {
        */
       console.log(`\nRound ${i} of ${rounds}:\tGenerating data`);
       load('fuzzer.js');
-      console.log('\tPruning data');
+      console.log('Pruning data');
       // delete n% of existing documents
       try { namespace.deleteMany(randFilter) }
       catch(e) { console.log(e) }
@@ -53,29 +55,18 @@ let options = {
    console.log('Gathering initial dbStats');
    load('dbstats.js');
 
-   // "touch" documents to force page re-writes
-   /*
-      console.log('Setting');
-      try { namespace.updateMany(updateFilter, setOptions) }
-      catch(e) { print(e) }
-
-      console.log('Unsetting');
-      try { namespace.updateMany(updateFilter, unsetOptions) }
-      catch(e) { print(e) }
-   */
-
    // Report dbStats pre-compaction
    console.log('Gathering pre-compaction dbStats');
    load('dbstats.js');
 
    // compact()
    let dbContext = db.getSiblingDB(dbName);
-   let command = { "compact": collName };
-   let options = { "readPreference": "secondary" };
+   let compactCmd = { "compact": collName };
+   let compactCmdOptions = { "readPreference": "secondary" };
    for (let i = 1; i <= compactions; ++i) {
       console.log(`Compacting collection ${i} of ${compactions}`);
-      let { bytesFreed } = (shellVer() >= 2.0 && typeof process !== 'undefined') ? dbContext.runCommand(command, options)
-                         : dbContext.runCommand(command);
+      let { bytesFreed } = (shellVer() >= 2.0 && typeof process !== 'undefined') ? dbContext.runCommand(compactCmd, compactCmdOptions)
+                         : dbContext.runCommand(compactCmd);
 
       /*
          db.getSiblingDB('admin').aggregate([
@@ -104,6 +95,8 @@ let options = {
    // Report final dbStats post-compaction
    console.log('Gathering post-compaction dbStats');
    load('dbstats.js');
+
+   // console.log(reportLog);
 })();
 
 // EOF
