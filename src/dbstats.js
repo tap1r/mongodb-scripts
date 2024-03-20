@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.8.7"
+ *  Version: "0.8.8"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -32,7 +32,7 @@
       adminRoles = ['clusterAdmin', 'atlasAdmin', 'backup', 'root', '__system'];
       authzRoles = ['readAnyDatabase', 'readWriteAnyDatabase', 'dbAdminAnyDatabase'],
       adminRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => role == adminRoles.includes(role) && authDb == 'admin'),
-      monitorRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => authDb == role == 'clusterMonitor' && authDb == 'admin'),
+      monitorRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => role == 'clusterMonitor' && authDb == 'admin'),
       dbRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => authzRoles.includes(role) && authDb == 'admin');
    if (!(!(!!authenticatedUsers.length) || !!adminRoles.length || !!monitorRoles.length && !!dbRoles.length)) {
       print('\x1b[31m[WARN] authz privileges may be inadequate and results may vary\x1b[0m');
@@ -46,7 +46,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.8.7" };
+   let __script = { "name": "dbstats.js", "version": "0.8.8" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -68,7 +68,7 @@
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    console.clear();
-   console.log(`\n\x1b[33m${__comment}\x1b[0m`);
+   console.log(`\x1b[33m${__comment}\x1b[0m`);
    if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n\x1b[31m[WARN] Possible incompatible shell version detected: ${shellVer()}\x1b[0m`);
    if (shellVer() < 1.0 && typeof process !== 'undefined') console.log(`\n\x1b[31m[WARN] Possible incompatible non-GA shell version detected: ${shellVer()}\x1b[0m`);
    if (serverVer() < 4.2) console.log(`\n\x1b[31m[ERROR] Unsupported mongod/s version detected: ${serverVer()}\x1b[0m`);
