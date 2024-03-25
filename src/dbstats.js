@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.8.8"
+ *  Version: "0.8.9"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -20,23 +20,23 @@
 (() => {
    /*
     *  Ensure authorized users have the following minimum required roles
-    *  clusterMonitor@admin and readAnyDatabase@admin
+    *  clusterMonitor@admin && readAnyDatabase@admin
     */
    try {
       db.adminCommand({ "features": 1 });
-   } catch(error) {
-      // MongoServerError: command features requires authentication
+   } catch(error) { // MongoServerError: command features requires authentication
       print('\x1b[31m[ERR] MongoServerError: features command requires authentication\x1b[0m');
    }
-   let { 'authInfo': { authenticatedUsers, authenticatedUserRoles } } = db.adminCommand({ "connectionStatus": 1 }),
-      adminRoles = ['clusterAdmin', 'atlasAdmin', 'backup', 'root', '__system'];
-      authzRoles = ['readAnyDatabase', 'readWriteAnyDatabase', 'dbAdminAnyDatabase'],
-      adminRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => role == adminRoles.includes(role) && authDb == 'admin'),
-      monitorRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => role == 'clusterMonitor' && authDb == 'admin'),
-      dbRoles = authenticatedUserRoles.filter(({ role, 'db': authDb }) => authzRoles.includes(role) && authDb == 'admin');
-   if (!(!(!!authenticatedUsers.length) || !!adminRoles.length || !!monitorRoles.length && !!dbRoles.length)) {
-      print('\x1b[31m[WARN] authz privileges may be inadequate and results may vary\x1b[0m');
-      print('\x1b[31m[WARN] consider inheriting built-in roles \x1b[33mclusterMonitor@admin\x1b[31m and \x1b[33mreadAnyDatabase@admin\x1b[0m');
+   let monitorRoles = ['clusterMonitor'],
+      adminRoles = ['clusterAdmin', 'atlasAdmin', 'backup', 'root', '__system'],
+      dbRoles = ['readAnyDatabase', 'readWriteAnyDatabase', 'dbAdminAnyDatabase'];
+   let { 'authInfo': { authenticatedUsers, authenticatedUserRoles } } = db.adminCommand({ "connectionStatus": 1 });
+   let authz = authenticatedUserRoles.filter(({ role, db }) => dbRoles.includes(role) && db == 'admin'),
+      users = authenticatedUserRoles.filter(({ role, db }) => adminRoles.includes(role) && db == 'admin'),
+      monitors = authenticatedUserRoles.filter(({ role, db }) => monitorRoles.includes(role) && db == 'admin');
+   if (!(!(!!authenticatedUsers.length) || !!users.length || !!monitors.length && !!authz.length)) {
+      print('\x1b[31m[WARN] The connecting user\'s authz privileges may be inadequate to report all namespaces statistics\x1b[0m');
+      print('\x1b[31m[WARN] consider inheriting the built-in roles for \x1b[33mclusterMonitor@admin\x1b[31m and \x1b[33mreadAnyDatabase@admin\x1b[31m at a minimum\x1b[0m');
    }
 })();
 
@@ -46,7 +46,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.8.8" };
+   let __script = { "name": "dbstats.js", "version": "0.8.9" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
