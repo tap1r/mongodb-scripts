@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.10.10"
+ *  Version: "0.10.11"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.10.10"
+      "version": "0.10.11"
 });
 
 /*
@@ -1224,9 +1224,7 @@ function $stats(dbName = db.getName()) {
          if (stats.raw.hasOwnProperty(shard)) {
             stats.collections += +stats.raw[shard].collections;
             stats.views += +stats.raw[shard].views;
-            // stats.freeStorageSize += +stats.raw[shard].freeStorageSize;
             stats.freeStorageSize += (typeof stats.raw[shard].freeStorageSize === 'undefined') ? 0 : +stats.raw[shard].freeStorageSize;
-            // stats.indexFreeStorageSize += +stats.raw[shard].indexFreeStorageSize;
             stats.indexFreeStorageSize += (typeof stats.raw[shard].indexFreeStorageSize === 'undefined') ? 0 : +stats.raw[shard].indexFreeStorageSize;
          }
       }
