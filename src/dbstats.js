@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.8.10"
+ *  Version: "0.8.11"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -9,12 +9,13 @@
 
 /*
  *  Examples of using namespace filters:
- *  [mongo|mongosh] [connection options] --quiet --eval "dbFilter = '^d.+'" dbstats.js
- *  [mongo|mongosh] [connection options] --quiet --eval "dbFilter = /^d.+/" dbstats.js
- *  [mongo|mongosh] [connection options] --quiet --eval "dbFilter = 'database'" dbstats.js
- *  [mongo|mongosh] [connection options] --quiet --eval "dbFilter = /(^(?!(d.+)).+)/" dbstats.js
- *  [mongo|mongosh] [connection options] --quiet --eval "dbFilter = 'database', collFilter = 'collection'" dbstats.js
- *  [mongo|mongosh] [connection options] --quiet --eval "dbFilter = 'database', collFilter = /collection/i" dbstats.js
+ *
+ *  [mongo|mongosh] [connection options] --quiet --eval "let dbFilter = 'database'" dbstats.js
+ *  [mongo|mongosh] [connection options] --quiet --eval "let dbFilter = '^d.+'" dbstats.js
+ *  [mongo|mongosh] [connection options] --quiet --eval "let dbFilter = /^d.+/i" dbstats.js
+ *  [mongo|mongosh] [connection options] --quiet --eval "let dbFilter = /(^(?!(d.+)).+)/" dbstats.js
+ *  [mongo|mongosh] [connection options] --quiet --eval "let dbFilter = 'database', collFilter = 'collection'" dbstats.js
+ *  [mongo|mongosh] [connection options] --quiet --eval "let dbFilter = 'database', collFilter = /collection/i" dbstats.js
  */
 
 (() => {
@@ -46,7 +47,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.8.10" };
+   let __script = { "name": "dbstats.js", "version": "0.8.11" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -117,10 +118,9 @@
          database.init();
          printDbHeader(database);
          let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/;
-         collFilter = new RegExp(collFilter);
          let collections = db.getSiblingDB(dbName).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
-               "name": collFilter
+               "name": new RegExp(collFilter)
             }, true, true
          ).filter(({ 'name': collName }) => collName.match(systemFilter));
          collections.sort((x, y) => x.name.localeCompare(y.name)); // ASC
@@ -142,7 +142,7 @@
          });
          let views = db.getSiblingDB(dbName).getCollectionInfos({
                "type": "view",
-               "name": collFilter
+               "name": new RegExp(collFilter)
             }, true, true
          );
          views.sort((x, y) => x.name.localeCompare(y.name)); // ASC
