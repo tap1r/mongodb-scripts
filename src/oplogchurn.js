@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.2"
+ *  Version: "0.5.3"
  *  Description: measure oplog churn rate script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,10 +8,9 @@
 // Usage: "[mongo|mongosh] [connection options] --quiet oplogchurn.js"
 
 /*
- *  User defined parameters
+ *  Custom parameters:
+ *  [mongo|mongosh] [connection options] --quiet --eval "let intervalHrs = 1;" [-f|--file] oplogchurn.js
  */
-
-// let intervalHrs = 1; // set interval in hours
 
 (() => {
    /*
@@ -19,7 +18,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.5.2" };
+   let __script = { "name": "oplogchurn.js", "version": "0.5.3" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -41,19 +40,19 @@
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    console.clear();
-   console.log(`\n\x1b[33m${__comment}\x1b[0m`);
+   console.log(`\x1b[33m${__comment}\x1b[0m`);
 
    /*
     *  Global defaults
     */
 
    // set interval in hours
-   typeof intervalHrs === 'undefined' && !!(intervalHrs = 1);
+   typeof intervalHrs === 'undefined' && (intervalHrs = 1) || intervalHrs;
 
    // formatting preferences
-   typeof termWidth === 'undefined' && !!(termWidth = 62);
-   typeof columnWidth === 'undefined' && !!(columnWidth = 25);
-   typeof rowHeader === 'undefined' && !!(rowHeader = 36);
+   typeof termWidth === 'undefined' && (termWidth = 62) || termWidth;
+   typeof columnWidth === 'undefined' && (columnWidth = 25) || columnWidth;
+   typeof rowHeader === 'undefined' && (rowHeader = 36) || rowHeader;
 
    // connection preferences
    (typeof readPref === 'undefined') && !!(readPref = (hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
@@ -129,7 +128,8 @@
       let oplogChurn = scaled.format(opSize / ratio / intervalHrs);
 
       // Print results
-      console.log(`\n\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
+      console.log('\n');
+      console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[32mHostname:\x1b[0m ${hostname.padStart(termWidth - 'Hostname: '.length)}`);
       console.log(`\x1b[32mdbPath:\x1b[0m ${dbPath.padStart(termWidth - 'dbPath: '.length)}`);
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
@@ -147,7 +147,8 @@
    }
 
    if (!isReplSet()) {
-      console.log(`\n\t\x1b[31mHost is not a replica set member....exiting!\x1b[0m`);
+      console.log('\n');
+      console.log(`\t\x1b[31mHost is not a replica set member....exiting!\x1b[0m`);
       console.log('\n');
    } else main();
 })();
