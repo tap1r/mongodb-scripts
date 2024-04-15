@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.9.0"
+ *  Version: "0.9.1"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -120,7 +120,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.9.0" };
+   let __script = { "name": "dbstats.js", "version": "0.9.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -142,9 +142,9 @@
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    console.log(`\n\n\x1b[33m${__comment}\x1b[0m`);
-   if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n\x1b[31m[WARN] Possibly incompatible legacy shell version detected: ${shellVer()}\x1b[0m`);
-   if (shellVer() < 1.0 && typeof process !== 'undefined') console.log(`\n\x1b[31m[WARN] Possible incompatible non-GA shell version detected: ${shellVer()}\x1b[0m`);
-   if (serverVer() < 4.2) console.log(`\n\x1b[31m[ERROR] Unsupported mongod/s version detected: ${serverVer()}\x1b[0m`);
+   if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n\x1b[31m[WARN] Possibly incompatible legacy shell version detected: ${version()}\x1b[0m`);
+   if (shellVer() < 1.0 && typeof process !== 'undefined') console.log(`\n\x1b[31m[WARN] Possible incompatible non-GA shell version detected: ${version()}\x1b[0m`);
+   if (serverVer() < 4.2) console.log(`\n\x1b[31m[ERROR] Unsupported mongod/s version detected: ${db.version()}\x1b[0m`);
 
    /*
     *  User defined parameters
@@ -219,7 +219,7 @@
       }
    };
 
-   typeof options === 'undefined' && (options = {}) || options;
+   typeof options === 'undefined' && (options = { filter: {}, sort: {} }) || options;
 
    /*
     *  Global defaults
@@ -241,7 +241,10 @@
        *  main
        */
       slaveOk(readPref);
+      // let dbStats = await getStats();
       printDbPath(await getStats());
+      // printDbPath(dbStats);
+      // console.log(util.inspect(dbStats, { "depth": null, "colors": true }));
    }
 
    async function getStats() {
@@ -253,7 +256,7 @@
       dbPath.init();
       // let dbNames = getDBNames(dbFilter).toSorted(sortAsc); // mongosh only
       let dbNames = getDBNames(dbFilter).sort(sortAsc);
-      dbNames.map(dbName => {
+      dbPath.databases = dbNames.map(dbName => {
          let database = new MetaStats($stats(dbName));
          database.init();
          printDbHeader(database);
@@ -264,7 +267,8 @@
             }, true, true
          // ).filter(({ 'name': collName }) => collName.match(systemFilter)).toSorted(sortNameAsc); // mongosh only
          ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
-         let collections = collNames.map(({ 'name': collName }) => {
+         // let collections = collNames.map(({ 'name': collName }) => {
+         database.collections = collNames.map(({ 'name': collName }) => {
             let collection = new MetaStats($collStats(dbName, collName));
             collection.init();
             collection.indexes.sort(sortBy('index'));
@@ -272,19 +276,24 @@
             // database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
             return collection;
          }).sort(sortBy('collection'));
-         let views = db.getSiblingDB(dbName).getCollectionInfos({
+         // let views = db.getSiblingDB(dbName).getCollectionInfos({
+         database.views = db.getSiblingDB(dbName).getCollectionInfos({
                "type": "view",
                "name": new RegExp(collFilter)
             }, true, true
          ).sort(sortBy('view'));
-         printCollHeader(collections.length);
+         // printCollHeader(collections.length);
+         printCollHeader(database.collections.length);
 
-         collections.map(collection => {
+         // let collections.map(collection => {
+         database.collections.forEach(collection => {
             printCollection(collection);
             collection.indexes.forEach(printIndex);
          });
-         printViewHeader(views.length);
-         views.map(({ name }) => printView(name));
+         // printViewHeader(views.length);
+         printViewHeader(database.views.length);
+         // views.map(({ name }) => printView(name));
+         database.views.map(({ name }) => printView(name));
          printDb(database);
          dbPath.ncollections += database.ncollections;
          dbPath.nindexes += database.nindexes;
@@ -295,7 +304,9 @@
          dbPath.orphans += database.orphans;
          dbPath.totalIndexSize += database.totalIndexSize;
          dbPath.totalIndexBytesReusable += database.totalIndexBytesReusable;
-      });
+
+         return database;
+      }); // .sort(sortBy('db'));
       // let dbNames = getDBNames(dbFilter).sort(sortBy('db'));
 
       return dbPath;
