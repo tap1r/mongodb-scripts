@@ -1,21 +1,94 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.8.11"
+ *  Version: "0.9.0"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "[mongo|mongosh] [connection options] --quiet dbstats.js"
+// Usage: "[mongo|mongosh] [connection options] --quiet [--eval "let options = {...};"] [-f|--file] dbstats.js"
 
 /*
- *  Examples of using namespace filters:
+ *  options = {
+ *     filter: {
+ *        db: <null|<string>|/<regex>/>,
+ *        collection: <null|<string>|/<regex>/>
+ *     },
+ *     sort: {
+ *        db: { // TBA
+ *           name: <1|-1>,
+ *           dataSize: <1|-1>,
+ *           storageSize: <1|-1>,
+ *           freeStorageSize: <1|-1>,
+ *           reuse: <1|-1>, // TBA
+ *           compaction: <1|-1>, // TBA
+ *           compression: <1|-1>, // TBA
+ *           objects: <1|-1>
+ *        },
+ *        collection: {
+ *           name: <1|-1>,
+ *           dataSize: <1|-1>,
+ *           storageSize: <1|-1>,
+ *           freeStorageSize: <1|-1>,
+ *           reuse: <1|-1>, // TBA
+ *           compaction: <1|-1>, // TBA
+ *           compression: <1|-1>, // TBA
+ *           objects: <1|-1>
+ *        },
+ *        view: {
+ *           name: <1|-1>
+ *        },
+ *        namespace: { // TBA
+ *           name: <1|-1>,
+ *           dataSize: <1|-1>,
+ *           storageSize: <1|-1>,
+ *           freeStorageSize: <1|-1>,
+ *           reuse: <1|-1>,
+ *           compaction: <1|-1>,
+ *           compression: <1|-1>,
+ *           objects: <1|-1>
+ *        },
+ *        index: {
+ *           name: <1|-1>,
+ *           idxDataSize: <1|-1>, // TBA (inferred from "storageSize - freeStorageSize")
+ *           idxStorageSize: <1|-1>,
+ *           idxFreeStorageSize: <1|-1>,
+ *           reuse: <1|-1>, // TBA
+ *           compaction: <1|-1> // TBA
+ *        }
+ *     },
+ *     "minThreshold": { // TBA
+ *        "dataSize": <int>,
+ *        "storageSize": <int>,
+ *        "freeStorageSize": <int>,
+ *        "reuse": <int>,
+ *        "compression": <int>,
+ *        "objects": <int>
+ *     },
+ *     output: { // TBA
+ *        format: <'table'|'json'|'html'>,
+ *        topology: <'summary'|'expanded'>,
+ *        colour: <true|false>,
+ *        verbosity: <'full'|'summary'|'summaryIdx'|'compactOnly'/>
+ *     },
+ *     topology: { // TBA
+ *        discover: <true|false>,
+ *        replica: <'summary'|'expanded'>,
+ *        sharded: <'summary'|'expanded'>
+ *     }
+ *  }
+ */
+
+/*
+ *  Examples of using filters with namespace regex:
  *
- *  [mongo|mongosh] [connection options] --quiet --eval "let dbFilter = 'database'" dbstats.js
- *  [mongo|mongosh] [connection options] --quiet --eval "let dbFilter = '^d.+'" dbstats.js
- *  [mongo|mongosh] [connection options] --quiet --eval "let dbFilter = /^d.+/i" dbstats.js
- *  [mongo|mongosh] [connection options] --quiet --eval "let dbFilter = /(^(?!(d.+)).+)/" dbstats.js
- *  [mongo|mongosh] [connection options] --quiet --eval "let dbFilter = 'database', collFilter = 'collection'" dbstats.js
- *  [mongo|mongosh] [connection options] --quiet --eval "let dbFilter = 'database', collFilter = /collection/i" dbstats.js
+ *    mongosh --quiet --eval "let options = { filter: { db: 'database' };" -f dbstats.js
+ *    mongosh --quiet --eval "let options = { filter: { collection: '^c.+' };" -f dbstats.js
+ *    mongosh --quiet --eval "let options = { filter: { db: /(^(?!(d.+)).+)/i, collection: /collection/i };" -f dbstats.js
+ *
+ *  Examples of using sorting:
+ *
+ *    mongosh --quiet --eval "let options = { sort: { collection: { dataSize: -1 }, index: { idxStorageSize: -1 } };" -f dbstats.js
+ *    mongosh --quiet --eval "let options = { sort: { collection: { freeStorageSize: -1 }, index: { idxFreeStorageSize: -1 } };" -f dbstats.js
  */
 
 (() => {
@@ -47,7 +120,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.8.11" };
+   let __script = { "name": "dbstats.js", "version": "0.9.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -68,9 +141,8 @@
    let __comment = `#### Running script ${__script.name} v${__script.version}`;
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
-   // console.clear();
    console.log(`\n\n\x1b[33m${__comment}\x1b[0m`);
-   if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n\x1b[31m[WARN] Possible incompatible shell version detected: ${shellVer()}\x1b[0m`);
+   if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n\x1b[31m[WARN] Possibly incompatible legacy shell version detected: ${shellVer()}\x1b[0m`);
    if (shellVer() < 1.0 && typeof process !== 'undefined') console.log(`\n\x1b[31m[WARN] Possible incompatible non-GA shell version detected: ${shellVer()}\x1b[0m`);
    if (serverVer() < 4.2) console.log(`\n\x1b[31m[ERROR] Unsupported mongod/s version detected: ${serverVer()}\x1b[0m`);
 
@@ -78,8 +150,76 @@
     *  User defined parameters
     */
 
-   typeof dbFilter === 'undefined' && (dbFilter = /^.+/) || dbFilter;
-   typeof collFilter === 'undefined' && (collFilter = /^.+/) || collFilter;
+   let optionDefaults = {
+      "filter": {
+         "db": /^.+/,
+         "collection":/^.+/
+      },
+      "sort": {
+         "db": {
+            "name": 0,
+            "dataSize": 0,
+            "storageSize": 0,
+            "freeStorageSize": 0,
+            "reuse": 0, // TBA
+            "compression": 0,
+            "objects": 0,
+            "compaction": 0 // TBA
+         },
+         "collection": {
+            "name": 0,
+            "dataSize": 0,
+            "storageSize": 0,
+            "freeStorageSize": 0,
+            "reuse": 0, // TBA
+            "compression": 0,
+            "objects": 0,
+            "compaction": 0 // TBA
+         },
+         "view": {
+            "name": 1
+         },
+         "namespace": { // TBA
+            "name": 1,
+            "dataSize": 0,
+            "storageSize": 0,
+            "freeStorageSize": 0,
+            "reuse": 0,
+            "compression": 0,
+            "objects": 0,
+            "compaction": 0
+         },
+         "index": {
+            "name": 0,
+            "idxDataSize": 0, // TBA (inferred from "storageSize - freeStorageSize")
+            "idxStorageSize": 0,
+            "idxFreeStorageSize": 0,
+            "reuse": 0, // TBA
+            "compaction": 0 // TBA
+         }
+      },
+      "minThreshold": { // TBA
+         "dataSize": 0,
+         "storageSize": 0,
+         "freeStorageSize": 0,
+         "reuse": 0,
+         "compression": 0,
+         "objects": 0
+      },
+      "output": { // TBA
+         "format": 'table', // ['table'|'json'|'html']
+         "topology": 'summary', // ['summary'|'expanded']
+         "colour": true, // [true|false]
+         "verbosity": 'full' // ['full'|'summary'|'summaryIdx'|'compactOnly']
+      },
+      "topology": { // TBA
+         "discover": true, // [true|false]
+         "replica": 'summary', // ['summary'|'expanded']
+         "sharded": 'summary' // ['summary'|'expanded']
+      }
+   };
+
+   typeof options === 'undefined' && (options = {}) || options;
 
    /*
     *  Global defaults
@@ -89,12 +229,12 @@
    let scaled = new AutoFactor();
 
    // formatting preferences
-   typeof termWidth === 'undefined' && (termWidth = 137);
-   typeof columnWidth === 'undefined' && (columnWidth = 14);
-   typeof rowHeader === 'undefined' && (rowHeader = 40);
+   typeof termWidth === 'undefined' && (termWidth = 137) || termWidth;
+   typeof columnWidth === 'undefined' && (columnWidth = 14) || columnWidth;
+   typeof rowHeader === 'undefined' && (rowHeader = 40) || rowHeader;
 
    // connection preferences
-   typeof readPref === 'undefined' && (readPref = (hello().secondary) ? 'secondaryPreferred' : 'primaryPreferred');
+   typeof readPref === 'undefined' && (readPref = (hello().secondary) ? 'primaryPreferred' : 'secondaryPreferred');
 
    async function main() {
       /*
@@ -108,45 +248,41 @@
       /*
        *  Gather DB stats (and print)
        */
+      let { 'db': dbFilter, 'collection': collFilter } = { ...optionDefaults.filter, ...options.filter };
       let dbPath = new MetaStats();
       dbPath.init();
-      let dbNames = getDBNames(dbFilter);
-      dbNames.sort((x, y) => x.localeCompare(y)); // ASC
-      // dbNames.sort((x, y) => y.localeCompare(x)); // DESC
+      // let dbNames = getDBNames(dbFilter).toSorted(sortAsc); // mongosh only
+      let dbNames = getDBNames(dbFilter).sort(sortAsc);
       dbNames.map(dbName => {
          let database = new MetaStats($stats(dbName));
          database.init();
          printDbHeader(database);
          let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/;
-         let collections = db.getSiblingDB(dbName).getCollectionInfos({
+         let collNames = db.getSiblingDB(dbName).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
                "name": new RegExp(collFilter)
             }, true, true
-         ).filter(({ 'name': collName }) => collName.match(systemFilter));
-         collections.sort((x, y) => x.name.localeCompare(y.name)); // ASC
-         // collections.sort((x, y) => y.name.localeCompare(x.name)); // DESC
-         printCollHeader(collections.length);
-         collections.map(({ 'name': collName }) => {
+         // ).filter(({ 'name': collName }) => collName.match(systemFilter)).toSorted(sortNameAsc); // mongosh only
+         ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
+         let collections = collNames.map(({ 'name': collName }) => {
             let collection = new MetaStats($collStats(dbName, collName));
             collection.init();
-            printCollection(collection);
-            collection.indexes.sort((x, y) => x.name.localeCompare(y.name)); // ASC
-            // collection.indexes.sort((x, y) => y.name.localeCompare(x.name)); // DESC
-            // collection.indexes.sort((x, y) => x['file size in bytes'] - y['file size in bytes']); // ASC
-            // collection.indexes.sort((x, y) => y['file size in bytes'] - x['file size in bytes']); // DESC
-            // collection.indexes.sort((x, y) => x['file bytes available for reuse'] - y['file bytes available for reuse']); // ASC
-            // collection.indexes.sort((x, y) => y['file bytes available for reuse'] - x['file bytes available for reuse']); // DESC
-            collection.indexes.forEach(printIndex);
+            collection.indexes.sort(sortBy('index'));
             // database.freeStorageSize += collection.freeStorageSize;
             // database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
-         });
+            return collection;
+         }).sort(sortBy('collection'));
          let views = db.getSiblingDB(dbName).getCollectionInfos({
                "type": "view",
                "name": new RegExp(collFilter)
             }, true, true
-         );
-         views.sort((x, y) => x.name.localeCompare(y.name)); // ASC
-         // views.sort((x, y) => y.name.localeCompare(x.name)); // DESC
+         ).sort(sortBy('view'));
+         printCollHeader(collections.length);
+
+         collections.map(collection => {
+            printCollection(collection);
+            collection.indexes.forEach(printIndex);
+         });
          printViewHeader(views.length);
          views.map(({ name }) => printView(name));
          printDb(database);
@@ -160,8 +296,208 @@
          dbPath.totalIndexSize += database.totalIndexSize;
          dbPath.totalIndexBytesReusable += database.totalIndexBytesReusable;
       });
+      // let dbNames = getDBNames(dbFilter).sort(sortBy('db'));
 
       return dbPath;
+   }
+
+   function sortBy(type) {
+      /*
+       *  sortBy value
+       */
+      // console.log(`options:`, options);
+      let sortOptions = { ...optionDefaults.sort[type], ...options.sort[type] };
+      // console.log(`sortOptions:`, sortOptions);
+      let sortKey = Object.keys(sortOptions).find(key => sortOptions[key] !== 0) || 'name';
+      let sortValue = sortOptions[sortKey];
+      // console.log(`sortKey:`, sortKey, `sortValue:`, sortValue);
+      switch (sortValue) {
+         case -1:
+            sortValue = 'desc';
+            break;
+         default:
+            sortValue = 'asc';
+      }
+
+      let sortFns = {
+         "sort": {
+            "asc": sortAsc,
+            "desc": sortDesc
+         },
+         "name": {
+            "asc": sortNameAsc,
+            "desc": sortNameDesc
+         },
+         "dataSize": {
+            "asc": sortDataSizeAsc,
+            "desc": sortDataSizeDesc
+         },
+         "storageSize": {
+            "asc": storageSizeAsc,
+            "desc": storageSizeDesc
+         },
+         "freeStorageSize": {
+            "asc": sortFreeStorageSizeAsc,
+            "desc": sortFreeStorageSizeDesc
+         },
+         "idxDataSize": {
+            "asc": sortIdxDataSizeAsc,
+            "desc": sortIdxDataSizeDesc
+         },
+         "idxStorageSize": {
+            "asc": sortIdxStorageSizeAsc,
+            "desc": sortIdxStorageSizeDesc
+         },
+         "idxFreeStorageSize": {
+            "asc": sortIdxFreeStorageSizeAsc,
+            "desc": sortIdxFreeStorageSizeDesc
+         },
+         "reuse": { // TBA
+            "asc": sortAsc,
+            "desc": sortDesc
+         },
+         "compression": { // TBA
+            "asc": sortAsc,
+            "desc": sortDesc
+         },
+         "objects": {
+            "asc": sortObjectsAsc,
+            "desc": sortObjectsDesc
+         },
+         "compaction": { // TBA
+            "asc": sortAsc,
+            "desc": sortDesc
+         }
+      };
+
+      // console.log(`sortFn:`, sortFns[sortKey][sortValue]);
+      return sortFns[sortKey][sortValue];
+   }
+
+   function sortAsc(x, y) {
+      /*
+       *  sort by value ascending
+       */
+      return x.localeCompare(y);
+   }
+
+   function sortDesc(x, y) {
+      /*
+       *  sort by value descending
+       */
+      return y.localeCompare(x);
+   }
+
+   function sortNameAsc(x, y) {
+      /*
+       *  sort by name ascending
+       */
+      return x.name.localeCompare(y.name);
+   }
+
+   function sortNameDesc(x, y) {
+      /*
+       *  sort by name descending
+       */
+      return y.name.localeCompare(x.name);
+   }
+
+   function sortDataSizeAsc(x, y) {
+      /*
+       *  sort by dataSize ascending
+       */
+      return x.dataSize - y.dataSize;
+   }
+
+   function sortDataSizeDesc(x, y) {
+      /*
+       *  sort by dataSize descending
+       */
+      return y.dataSize - x.dataSize;
+   }
+
+   function sortIdxStorageSizeAsc(x, y) {
+      /*
+       *  sort by index dataSize ascending
+       */
+      return x['file size in bytes'] - y['file size in bytes'];
+   }
+
+   function sortIdxStorageSizeDesc(x, y) {
+      /*
+       *  sort by index dataSize descending
+       */
+      return y['file size in bytes'] - x['file size in bytes'];
+   }
+
+   function sortIdxDataSizeAsc(x, y) {
+      /*
+       *  sort by index "dataSize" ascending
+       */
+      return (x['file size in bytes'] - x['file bytes available for reuse']) - (y['file bytes available for reuse'] - y['file size in bytes']);
+   }
+
+   function sortIdxDataSizeDesc(x, y) {
+      /*
+       *  sort by index "dataSize" descending
+       */
+      return (y['file size in bytes'] - y['file bytes available for reuse']) - (x['file bytes available for reuse'] - x['file size in bytes']);
+   }
+
+   function sortIdxFreeStorageSizeAsc(x, y) {
+      /*
+       *  sort by index freeStorageSize ascending
+       */
+      return x['file bytes available for reuse'] - y['file bytes available for reuse'];
+   }
+
+   function sortIdxFreeStorageSizeDesc(x, y) {
+      /*
+       *  sort by index freeStorageSize descending
+       */
+      return y['file bytes available for reuse'] - x['file bytes available for reuse'];
+   }
+
+   function storageSizeAsc(x, y) {
+      /*
+       *  sort by 'file size in bytes' ascending
+       */
+      return x.storageSize - y.storageSize;
+   }
+
+   function storageSizeDesc(x, y) {
+      /*
+       *  sort by 'file size in bytes' descending
+       */
+      return y.storageSize - x.storageSize;
+   }
+
+   function sortFreeStorageSizeAsc(x, y) {
+      /*
+       *  sort by 'file bytes available for reuse' ascending
+       */
+      return x.freeStorageSize - y.freeStorageSize;
+   }
+
+   function sortFreeStorageSizeDesc(x, y) {
+      /*
+       *  sort by 'file bytes available for reuse' descending
+       */
+      return y.freeStorageSize - x.freeStorageSize;
+   }
+
+      function sortObjectsAsc(x, y) {
+      /*
+       *  sort by objects/document count ascending
+       */
+      return x.objects - y.objects;
+   }
+
+   function sortObjectsDesc(x, y) {
+      /*
+       *  sort by objects/document count descending
+       */
+      return y.objects - x.objects;
    }
 
    function formatUnit(metric) {
