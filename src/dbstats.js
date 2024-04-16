@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.9.2"
+ *  Version: "0.9.3"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -68,11 +68,11 @@
  *        "compression": <int>,
  *        "objects": <int>
  *     },
- *     output: { // TBA
+ *     output: {
  *        format: <'table'|'json'|'html'>,
- *        topology: <'summary'|'expanded'>,
- *        colour: <true|false>,
- *        verbosity: <'full'|'summary'|'summaryIdx'|'compactOnly'/>
+ *        topology: <'summary'|'expanded'>, // TBA
+ *        colour: <true|false>, // TBA
+ *        verbosity: <'full'|'summary'|'summaryIdx'|'compactOnly'/> // TBA
  *     },
  *     topology: { // TBA
  *        discover: <true|false>,
@@ -85,14 +85,20 @@
 /*
  *  Examples of using filters with namespace regex:
  *
- *    mongosh --quiet --eval "let options = { filter: { db: 'database' };" -f dbstats.js
- *    mongosh --quiet --eval "let options = { filter: { collection: '^c.+' };" -f dbstats.js
- *    mongosh --quiet --eval "let options = { filter: { db: /(^(?!(d.+)).+)/i, collection: /collection/i };" -f dbstats.js
+ *    mongosh --quiet --eval "let options = { filter: { db: 'database' } };" -f dbstats.js
+ *    mongosh --quiet --eval "let options = { filter: { collection: '^c.+' } };" -f dbstats.js
+ *    mongosh --quiet --eval "let options = { filter: { db: /(^(?!(d.+)).+)/i, collection: /collection/i } };" -f dbstats.js
  *
  *  Examples of using sorting:
  *
- *    mongosh --quiet --eval "let options = { sort: { collection: { dataSize: -1 }, index: { idxStorageSize: -1 } };" -f dbstats.js
- *    mongosh --quiet --eval "let options = { sort: { collection: { freeStorageSize: -1 }, index: { idxFreeStorageSize: -1 } };" -f dbstats.js
+ *    mongosh --quiet --eval "let options = { sort: { collection: { dataSize: -1 }, index: { idxStorageSize: -1 } } };" -f dbstats.js
+ *    mongosh --quiet --eval "let options = { sort: { collection: { freeStorageSize: -1 }, index: { idxFreeStorageSize: -1 } } };" -f dbstats.js
+ * 
+ *  Examples of using formatting:
+ *
+ *    mongosh --quiet --eval "let options = { output: { format: 'table' } };" -f dbstats.js
+ *    mongosh --quiet --eval "let options = { output: { format: 'json' } };" -f dbstats.js
+ *    mongosh --quiet --eval "let options = { output: { format: 'html' } };" -f dbstats.js
  */
 
 (() => {
@@ -124,7 +130,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.9.2" };
+   let __script = { "name": "dbstats.js", "version": "0.9.3" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -187,7 +193,7 @@
             "name": 1
          },
          "namespace": { // TBA
-            "name": 1,
+            "name": 0,
             "dataSize": 0,
             "storageSize": 0,
             "freeStorageSize": 0,
@@ -213,11 +219,11 @@
          "compression": 0,
          "objects": 0
       },
-      "output": { // TBA
+      "output": {
          "format": 'table', // ['table'|'json'|'html']
-         "topology": 'summary', // ['summary'|'expanded']
-         "colour": true, // [true|false]
-         "verbosity": 'full' // ['full'|'summary'|'summaryIdx'|'compactOnly']
+         "topology": 'summary', // ['summary'|'expanded'] // TBA
+         "colour": true, // [true|false] // TBA
+         "verbosity": 'full' // ['full'|'summary'|'summaryIdx'|'compactOnly'] // TBA
       },
       "topology": { // TBA
          "discover": true, // [true|false]
@@ -226,7 +232,10 @@
       }
    };
 
-   typeof options === 'undefined' && (options = { filter: {}, sort: {} }) || options;
+   typeof options === 'undefined' && (options = optionDefaults);
+   let filterOptions = { ...optionDefaults.filter, ...options.filter };
+   let sortOptions = { ...optionDefaults.sort, ...options.sort };
+   let outputOptions = { ...optionDefaults.output, ...options.output };
 
    /*
     *  Global defaults
@@ -247,12 +256,21 @@
       /*
        *  main
        */
+      let { 'format': formatOutput = 'table' } = outputOptions;
+
       slaveOk(readPref);
-      // printDbPath(await getStats());
       let dbStats = await getStats();
-      printStats(dbStats);
-      // jsonOut(dbStats);
-      // htmlOut(dbStats);
+
+      switch (formatOutput) {
+         case 'json':
+            jsonOut(dbStats);
+            break;
+         case 'html':
+            htmlOut(dbStats);
+            break;
+         default: // table
+            printStats(dbStats);
+      }
 
       return;
    }
@@ -261,7 +279,7 @@
       /*
        *  Gather DB stats
        */
-      let { 'db': dbFilter = /^.+/, 'collection': collFilter = /^.+/ } = { ...optionDefaults.filter, ...options.filter };
+      let { 'db': dbFilter = /^.+/, 'collection': collFilter = /^.+/ } = filterOptions;
       let dbPath = new MetaStats();
       dbPath.init();
       // let dbNames = getDBNames(dbFilter).toSorted(sortAsc); // mongosh only
@@ -282,6 +300,15 @@
             collection.indexes.sort(sortBy('index'));
             // database.freeStorageSize += collection.freeStorageSize;
             // database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
+            delete collection.databases;
+            delete collection.collections;
+            delete collection.views;
+            delete collection.ncollections;
+            delete collection.instance;
+            delete collection.hostname;
+            delete collection.proc;
+            delete collection.dbPath;
+
             return collection;
          }).sort(sortBy('collection'));
          database.views = db.getSiblingDB(dbName).getCollectionInfos({
@@ -298,10 +325,21 @@
          dbPath.orphans += database.orphans;
          dbPath.totalIndexSize += database.totalIndexSize;
          dbPath.totalIndexBytesReusable += database.totalIndexBytesReusable;
+         delete database.databases;
+         delete database.instance;
+         delete database.hostname;
+         delete database.proc;
+         delete database.dbPath;
 
          return database;
       // }).toSorted(sortBy('db')); // mongosh only
       }).sort(sortBy('db'));
+
+      delete dbPath.name;
+      delete dbPath.collections;
+      delete dbPath.views;
+      delete dbPath.indexes;
+      delete dbPath.compressor;
 
       return dbPath;
    }
@@ -330,7 +368,7 @@
       /*
        *  JSON out
        */
-      console.log(util.inspect(dbStats, { "depth": null, "colors": true }));
+      console.log(dbStats);
 
       return;
    }
@@ -348,12 +386,9 @@
       /*
        *  sortBy value
        */
-      // console.log(`options:`, options);
-      let sortOptions = { ...optionDefaults.sort[type], ...options.sort[type] };
-      // console.log(`sortOptions:`, sortOptions);
-      let sortKey = Object.keys(sortOptions).find(key => sortOptions[key] !== 0) || 'name';
-      let sortValue = sortOptions[sortKey];
-      // console.log(`sortKey:`, sortKey, `sortValue:`, sortValue);
+      let sortByType = sortOptions[type];
+      let sortKey = Object.keys(sortByType).find(key => sortByType[key] !== 0) || 'name';
+      let sortValue = sortByType[sortKey];
       switch (sortValue) {
          case -1:
             sortValue = 'desc';
@@ -413,7 +448,6 @@
          }
       };
 
-      // console.log(`sortFn:`, sortFns[sortKey][sortValue]);
       return sortFns[sortKey][sortValue];
    }
 
