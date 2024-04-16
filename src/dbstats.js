@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.9.1"
+ *  Version: "0.9.2"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -14,46 +14,50 @@
  *        collection: <null|<string>|/<regex>/>
  *     },
  *     sort: {
- *        db: { // TBA
- *           name: <1|-1>,
- *           dataSize: <1|-1>,
- *           storageSize: <1|-1>,
- *           freeStorageSize: <1|-1>,
- *           reuse: <1|-1>, // TBA
- *           compaction: <1|-1>, // TBA
- *           compression: <1|-1>, // TBA
- *           objects: <1|-1>
+ *        db: {
+ *           name: <1|0|-1>,
+ *           dataSize: <1|0|-1>,
+ *           storageSize: <1|0|-1>,
+ *           freeStorageSize: <1|0|-1>,
+ *           idxStorageSize: <1|0|-1>, // TBA
+ *           freeStorageSize: <1|0|-1>,
+ *           idxFreeStorageSize: <1|0|-1>, // TBA
+ *           reuse: <1|0|-1>, // TBA
+ *           idxReuse: <1|0|-1>, // TBA
+ *           compaction: <1|0|-1>, // TBA
+ *           compression: <1|0|-1>, // TBA
+ *           objects: <1|0|-1>
  *        },
  *        collection: {
- *           name: <1|-1>,
- *           dataSize: <1|-1>,
- *           storageSize: <1|-1>,
- *           freeStorageSize: <1|-1>,
- *           reuse: <1|-1>, // TBA
- *           compaction: <1|-1>, // TBA
- *           compression: <1|-1>, // TBA
- *           objects: <1|-1>
+ *           name: <1|0|-1>,
+ *           dataSize: <1|0|-1>,
+ *           storageSize: <1|0|-1>,
+ *           freeStorageSize: <1|0|-1>,
+ *           reuse: <1|0|-1>, // TBA
+ *           compaction: <1|0|-1>, // TBA
+ *           compression: <1|0|-1>, // TBA
+ *           objects: <1|0|-1>
  *        },
  *        view: {
- *           name: <1|-1>
+ *           name: <1|0|-1>
  *        },
  *        namespace: { // TBA
- *           name: <1|-1>,
- *           dataSize: <1|-1>,
- *           storageSize: <1|-1>,
- *           freeStorageSize: <1|-1>,
- *           reuse: <1|-1>,
- *           compaction: <1|-1>,
- *           compression: <1|-1>,
- *           objects: <1|-1>
+ *           name: <1|0|-1>,
+ *           dataSize: <1|0|-1>,
+ *           storageSize: <1|0|-1>,
+ *           freeStorageSize: <1|0|-1>,
+ *           reuse: <1|0|-1>,
+ *           compaction: <1|0|-1>,
+ *           compression: <1|0|-1>,
+ *           objects: <1|0|-1>
  *        },
  *        index: {
- *           name: <1|-1>,
- *           idxDataSize: <1|-1>, // TBA (inferred from "storageSize - freeStorageSize")
- *           idxStorageSize: <1|-1>,
- *           idxFreeStorageSize: <1|-1>,
- *           reuse: <1|-1>, // TBA
- *           compaction: <1|-1> // TBA
+ *           name: <1|0|-1>,
+ *           idxDataSize: <1|0|-1>, // TBA (inferred from "storageSize - freeStorageSize")
+ *           idxStorageSize: <1|0|-1>,
+ *           idxFreeStorageSize: <1|0|-1>,
+ *           reuse: <1|0|-1>, // TBA
+ *           compaction: <1|0|-1> // TBA
  *        }
  *     },
  *     "minThreshold": { // TBA
@@ -120,7 +124,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.9.1" };
+   let __script = { "name": "dbstats.js", "version": "0.9.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -153,15 +157,18 @@
    let optionDefaults = {
       "filter": {
          "db": /^.+/,
-         "collection":/^.+/
+         "collection": /^.+/
       },
       "sort": {
          "db": {
             "name": 0,
             "dataSize": 0,
             "storageSize": 0,
+            "idxStorageSize": 0, // TBA
             "freeStorageSize": 0,
+            "idxFreeStorageSize": 0, // TBA
             "reuse": 0, // TBA
+            "idxReuse": 0, // TBA
             "compression": 0,
             "objects": 0,
             "compaction": 0 // TBA
@@ -241,17 +248,20 @@
        *  main
        */
       slaveOk(readPref);
-      // let dbStats = await getStats();
-      printDbPath(await getStats());
-      // printDbPath(dbStats);
-      // console.log(util.inspect(dbStats, { "depth": null, "colors": true }));
+      // printDbPath(await getStats());
+      let dbStats = await getStats();
+      printStats(dbStats);
+      // jsonOut(dbStats);
+      // htmlOut(dbStats);
+
+      return;
    }
 
    async function getStats() {
       /*
-       *  Gather DB stats (and print)
+       *  Gather DB stats
        */
-      let { 'db': dbFilter, 'collection': collFilter } = { ...optionDefaults.filter, ...options.filter };
+      let { 'db': dbFilter = /^.+/, 'collection': collFilter = /^.+/ } = { ...optionDefaults.filter, ...options.filter };
       let dbPath = new MetaStats();
       dbPath.init();
       // let dbNames = getDBNames(dbFilter).toSorted(sortAsc); // mongosh only
@@ -259,7 +269,6 @@
       dbPath.databases = dbNames.map(dbName => {
          let database = new MetaStats($stats(dbName));
          database.init();
-         printDbHeader(database);
          let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/;
          let collNames = db.getSiblingDB(dbName).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
@@ -267,7 +276,6 @@
             }, true, true
          // ).filter(({ 'name': collName }) => collName.match(systemFilter)).toSorted(sortNameAsc); // mongosh only
          ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
-         // let collections = collNames.map(({ 'name': collName }) => {
          database.collections = collNames.map(({ 'name': collName }) => {
             let collection = new MetaStats($collStats(dbName, collName));
             collection.init();
@@ -276,25 +284,11 @@
             // database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
             return collection;
          }).sort(sortBy('collection'));
-         // let views = db.getSiblingDB(dbName).getCollectionInfos({
          database.views = db.getSiblingDB(dbName).getCollectionInfos({
                "type": "view",
                "name": new RegExp(collFilter)
             }, true, true
          ).sort(sortBy('view'));
-         // printCollHeader(collections.length);
-         printCollHeader(database.collections.length);
-
-         // let collections.map(collection => {
-         database.collections.forEach(collection => {
-            printCollection(collection);
-            collection.indexes.forEach(printIndex);
-         });
-         // printViewHeader(views.length);
-         printViewHeader(database.views.length);
-         // views.map(({ name }) => printView(name));
-         database.views.map(({ name }) => printView(name));
-         printDb(database);
          dbPath.ncollections += database.ncollections;
          dbPath.nindexes += database.nindexes;
          dbPath.dataSize += database.dataSize;
@@ -306,10 +300,48 @@
          dbPath.totalIndexBytesReusable += database.totalIndexBytesReusable;
 
          return database;
-      }); // .sort(sortBy('db'));
-      // let dbNames = getDBNames(dbFilter).sort(sortBy('db'));
+      // }).toSorted(sortBy('db')); // mongosh only
+      }).sort(sortBy('db'));
 
       return dbPath;
+   }
+
+   function printStats(dbStats = {}) {
+      /*
+       *  Print DB stats report
+       */
+      dbStats.databases.forEach(database => {
+         printDbHeader(database);
+         printCollHeader(database.collections.length);
+         database.collections.forEach(collection => {
+            printCollection(collection);
+            collection.indexes.forEach(printIndex);
+         });
+         printViewHeader(database.views.length);
+         database.views.forEach(({ name }) => printView(name));
+         printDb(database);
+      });
+      printDbPath(dbStats);
+
+      return;
+   }
+
+   function jsonOut(dbStats = {}) {
+      /*
+       *  JSON out
+       */
+      console.log(util.inspect(dbStats, { "depth": null, "colors": true }));
+
+      return;
+   }
+
+   function htmlOut(dbStats = {}) {
+      /*
+       *  HTML out
+       */
+      console.log('HTML support TBA');
+
+      return;
    }
 
    function sortBy(type) {
@@ -497,7 +529,7 @@
       return y.freeStorageSize - x.freeStorageSize;
    }
 
-      function sortObjectsAsc(x, y) {
+   function sortObjectsAsc(x, y) {
       /*
        *  sort by objects/document count ascending
        */
@@ -539,9 +571,11 @@
        */
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[1;32mCollections (visible):\x1b[0m${' '.repeat(1)}${collTotal}`);
+
+      return;
    }
 
-   function printCollection({ name, dataSize, compression, compressor, storageSize, freeStorageSize, objects }) {
+   function printCollection({ name, dataSize, compression, compressor, storageSize, freeStorageSize, objects } = {}) {
       /*
        *  Print collection level stats
        */
@@ -553,6 +587,8 @@
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       if (name.length > 45) name = `${name.substring(0, collWidth)}~`;
       console.log(`└\x1b[36m${(' ' + name).padEnd(rowHeader - 1)}\x1b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${compaction.padStart(columnWidth - 2)}\x1b[0m`);
+
+      return;
    }
 
    function printViewHeader(viewTotal = 0) {
@@ -561,6 +597,8 @@
        */
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[1;32mViews (visible):\x1b[0m${' '.repeat(7)}${viewTotal}`);
+
+      return;
    }
 
    function printView(viewName = 'unknown') {
@@ -569,6 +607,8 @@
        */
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       console.log(` \x1b[36m${viewName}\x1b[0m`);
+
+      return;
    }
 
    function printIndex({ name, 'file size in bytes': storageSize, 'file bytes available for reuse': freeStorageSize } = {}) {
@@ -582,6 +622,8 @@
       console.log(`  \x1b[33m${'━'.repeat(termWidth - 2)}\x1b[0m`);
       if (name.length > 64) name = `${name.substring(0, indexWidth)}~`;
       console.log(`   \x1b[31m${name.padEnd(indexWidth)}\x1b[0m ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${''.toString().padStart(columnWidth)} \x1b[36m${compaction.padStart(columnWidth - 2)}\x1b[0m`);
+
+      return;
    }
 
    function printDbHeader({ name } = {}) {
@@ -591,6 +633,8 @@
       console.log('\n');
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[1;32m${`Database:\x1b[0m \x1b[36m${name}`.padEnd(rowHeader + 9)}\x1b[0m \x1b[1;32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks | reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Compaction'.padStart(columnWidth - 1)}\x1b[0m`);
+
+      return;
    }
 
    function printDb({
@@ -603,6 +647,8 @@
       console.log(`\x1b[1;32m${`Namespaces subtotal:\x1b[0m   ${ncollections}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize).padStart(columnWidth) + ' |' + `${formatPct(freeStorageSize, storageSize)}`.padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${''.padStart(columnWidth - 2)}`);
       console.log(`\x1b[1;32m${`Indexes subtotal:\x1b[0m      ${nindexes}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${`${formatUnit(totalIndexBytesReusable).padStart(columnWidth)} |${`${formatPct(totalIndexBytesReusable, totalIndexSize)}`.padStart(6)}`.padStart(columnWidth + 8)}`);
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
+
+      return;
    }
 
    function printDbPath({
@@ -623,6 +669,8 @@
       // console.log(`\x1b[1;32mShards:\x1b[0m ${shards}`);
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log('\n');
+
+      return;
    }
 
    await main();
