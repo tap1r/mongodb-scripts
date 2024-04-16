@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.10.11"
+ *  Version: "0.11.0"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.10.11"
+      "version": "0.11.0"
 });
 
 /*
@@ -178,7 +178,9 @@ class MetaStats {
       this.objects = objects;
       this.orphans = orphans;
       this.compressor = compressor;
-      this.collections = []; // usurp dbStats counter for collections list []
+      this.collections = []; // usurp dbStats counter for collections list
+      this.databases = [];
+      this.views = [];
       this.ncollections = (collections == 0) ? ncollections : collections; // merge collStats and dbStats n/collections counters
       this.indexes = indexes; // usurp dbStats counter for indexes list
       this.nindexes = (nindexes == -1) ? +indexes : nindexes; // merge collStats and dbStats n/indexes counters
