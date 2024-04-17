@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.9.3"
+ *  Version: "0.9.4"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -130,7 +130,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.9.3" };
+   let __script = { "name": "dbstats.js", "version": "0.9.4" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -162,8 +162,8 @@
 
    let optionDefaults = {
       "filter": {
-         "db": /^.+/,
-         "collection": /^.+/
+         "db": new RegExp(/^.+/),
+         "collection": new RegExp(/^.+/)
       },
       "sort": {
          "db": {
@@ -220,10 +220,10 @@
          "objects": 0
       },
       "output": {
-         "format": 'table', // ['table'|'json'|'html']
-         "topology": 'summary', // ['summary'|'expanded'] // TBA
+         "format": "table", // ['table'|'json'|'html']
+         "topology": "summary", // ['summary'|'expanded'] // TBA
          "colour": true, // [true|false] // TBA
-         "verbosity": 'full' // ['full'|'summary'|'summaryIdx'|'compactOnly'] // TBA
+         "verbosity": "full" // ['full'|'summary'|'summaryIdx'|'compactOnly'] // TBA
       },
       "topology": { // TBA
          "discover": true, // [true|false]
@@ -279,12 +279,13 @@
       /*
        *  Gather DB stats
        */
-      let { 'db': dbFilter = /^.+/, 'collection': collFilter = /^.+/ } = filterOptions;
+      let { 'db': dbFilter, 'collection': collFilter } = filterOptions;
       let dbPath = new MetaStats();
       dbPath.init();
       // let dbNames = getDBNames(dbFilter).toSorted(sortAsc); // mongosh only
       let dbNames = getDBNames(dbFilter).sort(sortAsc);
       dbPath.databases = dbNames.map(dbName => {
+      // dbPath.databases = dbNames.map(async dbName => {
          let database = new MetaStats($stats(dbName));
          database.init();
          let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/;
@@ -334,7 +335,8 @@
          return database;
       // }).toSorted(sortBy('db')); // mongosh only
       }).sort(sortBy('db'));
-
+      // await Promise.allSettled(dbPath.databases);
+      // dbPath.databases; // .sort(sortBy('db'));
       delete dbPath.name;
       delete dbPath.collections;
       delete dbPath.views;
@@ -368,7 +370,7 @@
       /*
        *  JSON out
        */
-      console.log(dbStats);
+      printjson(dbStats);
 
       return;
    }
