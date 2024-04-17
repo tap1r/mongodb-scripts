@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.9.4"
+ *  Version: "0.10.0"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -60,7 +60,7 @@
  *           compaction: <1|0|-1> // TBA
  *        }
  *     },
- *     "minThreshold": { // TBA
+ *     "limit": { // TBA
  *        "dataSize": <int>,
  *        "storageSize": <int>,
  *        "freeStorageSize": <int>,
@@ -98,7 +98,6 @@
  *
  *    mongosh --quiet --eval "let options = { output: { format: 'table' } };" -f dbstats.js
  *    mongosh --quiet --eval "let options = { output: { format: 'json' } };" -f dbstats.js
- *    mongosh --quiet --eval "let options = { output: { format: 'html' } };" -f dbstats.js
  */
 
 (() => {
@@ -130,7 +129,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.9.4" };
+   let __script = { "name": "dbstats.js", "version": "0.10.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -211,7 +210,7 @@
             "compaction": 0 // TBA
          }
       },
-      "minThreshold": { // TBA
+      "limit": { // TBA
          "dataSize": 0,
          "storageSize": 0,
          "freeStorageSize": 0,
@@ -236,6 +235,8 @@
    let filterOptions = { ...optionDefaults.filter, ...options.filter };
    let sortOptions = { ...optionDefaults.sort, ...options.sort };
    let outputOptions = { ...optionDefaults.output, ...options.output };
+   let limitOptions = { ...optionDefaults.output, ...options.limit };
+   let topologyOptions = { ...optionDefaults.output, ...options.topology };
 
    /*
     *  Global defaults
@@ -284,8 +285,7 @@
       dbPath.init();
       // let dbNames = getDBNames(dbFilter).toSorted(sortAsc); // mongosh only
       let dbNames = getDBNames(dbFilter).sort(sortAsc);
-      dbPath.databases = dbNames.map(dbName => {
-      // dbPath.databases = dbNames.map(async dbName => {
+      let dbFetchTasks = dbNames.map(async dbName => {
          let database = new MetaStats($stats(dbName));
          database.init();
          let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/;
@@ -295,7 +295,7 @@
             }, true, true
          // ).filter(({ 'name': collName }) => collName.match(systemFilter)).toSorted(sortNameAsc); // mongosh only
          ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
-         database.collections = collNames.map(({ 'name': collName }) => {
+         let collFetchTasks = collNames.map(({ 'name': collName }) => {
             let collection = new MetaStats($collStats(dbName, collName));
             collection.init();
             collection.indexes.sort(sortBy('index'));
@@ -311,7 +311,9 @@
             delete collection.dbPath;
 
             return collection;
-         }).sort(sortBy('collection'));
+         });
+         database.collections = await Promise.all(collFetchTasks);
+         database.collections.sort(sortBy('collection'));
          database.views = db.getSiblingDB(dbName).getCollectionInfos({
                "type": "view",
                "name": new RegExp(collFilter)
@@ -333,10 +335,12 @@
          delete database.dbPath;
 
          return database;
-      // }).toSorted(sortBy('db')); // mongosh only
-      }).sort(sortBy('db'));
-      // await Promise.allSettled(dbPath.databases);
-      // dbPath.databases; // .sort(sortBy('db'));
+      });
+      dbPath.databases = await Promise.all(dbFetchTasks);
+      // await Promise.allSettled(dbFetchTasks).then(results => {
+      //    dbPath.databases = results.map(({ status, value }) => (status == 'fulfilled') && value).sort(sortBy('db'));;
+      // });
+      dbPath.databases.sort(sortBy('db'));
       delete dbPath.name;
       delete dbPath.collections;
       delete dbPath.views;
