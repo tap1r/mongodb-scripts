@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.10.1"
+ *  Version: "0.10.2"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -129,7 +129,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.10.1" };
+   let __script = { "name": "dbstats.js", "version": "0.10.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -287,7 +287,7 @@
       let dbNames = getDBNames(dbFilter).sort(sortAsc);
       let dbFetchTasks = dbNames.map(async dbName => {
          let database = new MetaStats($stats(dbName));
-         database.init();
+         // database.init();
          let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/;
          let collNames = db.getSiblingDB(dbName).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
@@ -297,7 +297,7 @@
          ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
          let collFetchTasks = collNames.map(({ 'name': collName }) => {
             let collection = new MetaStats($collStats(dbName, collName));
-            collection.init();
+            // collection.init();
             collection.indexes.sort(sortBy('index'));
             // database.freeStorageSize += collection.freeStorageSize;
             // database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
