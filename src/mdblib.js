@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.11.0"
+ *  Version: "0.11.1"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.11.0"
+      "version": "0.11.1"
 });
 
 /*
@@ -1259,7 +1259,7 @@ function $collStats(dbName = db.getName(), collName = '') {
     */
    let namespace = db.getSiblingDB(dbName).getCollection(collName);
    let options = {
-         "allowDiskUse": true,
+         "allowDiskUse": false,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
          "comment": `run by ${__lib.name} sharding compatible $collStats wrapper`
