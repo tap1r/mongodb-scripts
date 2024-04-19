@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.10.0"
+ *  Version: "0.10.1"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -129,7 +129,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.10.0" };
+   let __script = { "name": "dbstats.js", "version": "0.10.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -235,8 +235,8 @@
    let filterOptions = { ...optionDefaults.filter, ...options.filter };
    let sortOptions = { ...optionDefaults.sort, ...options.sort };
    let outputOptions = { ...optionDefaults.output, ...options.output };
-   let limitOptions = { ...optionDefaults.output, ...options.limit };
-   let topologyOptions = { ...optionDefaults.output, ...options.topology };
+   let limitOptions = { ...optionDefaults.limit, ...options.limit };
+   let topologyOptions = { ...optionDefaults.topology, ...options.topology };
 
    /*
     *  Global defaults
@@ -251,7 +251,7 @@
    typeof rowHeader === 'undefined' && (rowHeader = 40) || rowHeader;
 
    // connection preferences
-   typeof readPref === 'undefined' && (readPref = (hello().secondary) ? 'primaryPreferred' : 'secondaryPreferred');
+   typeof readPref === 'undefined' && (readPref = (hello().secondary) ? 'secondaryPreferred' : 'primaryPreferred');
 
    async function main() {
       /*
