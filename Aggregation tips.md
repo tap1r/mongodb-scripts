@@ -3,32 +3,29 @@
 ## (Pre-4.2) dynamic variables: using _current time_ to fetch the latest _n_ days (difference from the _isodate_ field)
 
 ```javascript
-var dbName = 'database', collName = 'collection';
-var offset = 1 * (24 * 3600 * 1000); // 1 day (in milliseconds)
-var options = { "allowDiskUse": true };
-var agg = [
-    {
-       $lookup: {
-            from: "any",
-            pipeline: [
-                    { $collStats: {} },
-                    { $replaceRoot: { "newRoot": { "localTime": "$localTime" } } }
-                ],
-            as: "__now"
-        }
-    },{
-        $addFields: { "__now": { $arrayElemAt: ["$__now", 0] } }
-    },{
-        $match: {
-            $expr: {
-                $gte: ["$isodate", { $subtract: ["$__now.localTime", offset] }]
-            }
-        }
-    },{
-        $project: { "__now": 0 }
-    }
-];
-db.getSiblingDB(dbName).getCollection(collName).aggregate(agg, options);
+(() => {
+   let dbName = 'database', collName = 'collection';
+   let offset = 1 * (24 * 3600 * 1000); // 1 day (in milliseconds)
+   let options = { "allowDiskUse": true };
+   let pipeline = [
+      { "$lookup": {
+         "from": "any",
+         "pipeline": [
+            { "$collStats": {} },
+            { "$replaceRoot": { "newRoot": { "localTime": "$localTime" } } }
+         ],
+         "as": "__now"
+      } },
+      { "$addFields": { "__now": { "$arrayElemAt": ["$__now", 0] } }
+      },
+      { "$match": {
+         "$expr": {
+            "$gte": ["$isodate", { "$subtract": ["$__now.localTime", offset] }]
+      } } },
+      { "$project": { "__now": 0 } }
+   ];
+   console.log(db.getSiblingDB(dbName).getCollection(collName).aggregate(pipeline, options));
+})();
 ```
 
 ## Measuring real-time _oplog_ churn
