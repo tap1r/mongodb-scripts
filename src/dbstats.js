@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.10.2"
+ *  Version: "0.10.3"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -129,7 +129,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.10.2" };
+   let __script = { "name": "dbstats.js", "version": "0.10.3" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -230,7 +230,6 @@
          "sharded": 'summary' // ['summary'|'expanded']
       }
    };
-
    typeof options === 'undefined' && (options = optionDefaults);
    let filterOptions = { ...optionDefaults.filter, ...options.filter };
    let sortOptions = { ...optionDefaults.sort, ...options.sort };
@@ -270,7 +269,7 @@
             htmlOut(dbStats);
             break;
          default: // table
-            printStats(dbStats);
+            tableOut(dbStats);
       }
 
       return;
@@ -350,9 +349,9 @@
       return dbPath;
    }
 
-   function printStats(dbStats = {}) {
+   function tableOut(dbStats = {}) {
       /*
-       *  Print DB stats report
+       *  Print plain tabular report
        */
       dbStats.databases.forEach(database => {
          printDbHeader(database);
@@ -679,7 +678,7 @@
 
    function printDb({
          dataSize, compression, storageSize, freeStorageSize, objects, ncollections, nindexes, totalIndexSize, totalIndexBytesReusable
-      }) {
+      } = {}) {
       /*
        *  Print DB level rollup stats
        */
@@ -693,7 +692,7 @@
 
    function printDbPath({
          dbPath, proc, hostname, compression, dataSize, storageSize, freeStorageSize, objects, ncollections, nindexes, totalIndexSize, totalIndexBytesReusable
-      }) {
+      } = {}) {
       /*
        *  Print total dbPath rollup stats
        */
