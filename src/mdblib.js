@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.11.1"
+ *  Version: "0.11.2"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.11.1"
+      "version": "0.11.2"
 });
 
 /*
@@ -1425,8 +1425,8 @@ function $collStats(dbName = db.getName(), collName = '') {
                               ] },
                               [{
                                  "name": "$$this.name",
-                                 "file size in bytes": { "$sum": [{ "$arrayElemAt": ["$$value.file size in bytes", -1] }, "$$this.file size in bytes"] },
-                                 "file bytes available for reuse": { "$sum": [{ "$arrayElemAt": ["$$value.file bytes available for reuse", -1] }, "$$this.file bytes available for reuse"] }
+                                 "storageSize": { "$sum": [{ "$arrayElemAt": ["$$value.file size in bytes", -1] }, "$$this.file size in bytes"] },
+                                 "freeStorageSize": { "$sum": [{ "$arrayElemAt": ["$$value.file bytes available for reuse", -1] }, "$$this.file bytes available for reuse"] }
                         }]] },
                         "else": {
                            "$concatArrays": ["$$value", ["$$this"]]
