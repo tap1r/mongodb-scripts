@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.10.3"
+ *  Version: "0.10.4"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -129,7 +129,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.10.3" };
+   let __script = { "name": "dbstats.js", "version": "0.10.4" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -502,42 +502,42 @@
       /*
        *  sort by index dataSize ascending
        */
-      return x['file size in bytes'] - y['file size in bytes'];
+      return x.storageSize - y.storageSize;
    }
 
    function sortIdxStorageSizeDesc(x, y) {
       /*
        *  sort by index dataSize descending
        */
-      return y['file size in bytes'] - x['file size in bytes'];
+      return y.storageSize - x.storageSize;
    }
 
    function sortIdxDataSizeAsc(x, y) {
       /*
        *  sort by index "dataSize" ascending
        */
-      return (x['file size in bytes'] - x['file bytes available for reuse']) - (y['file bytes available for reuse'] - y['file size in bytes']);
+      return x.storageSize - x.freeStorageSize - y.storageSize - y.freeStorageSize;
    }
 
    function sortIdxDataSizeDesc(x, y) {
       /*
        *  sort by index "dataSize" descending
        */
-      return (y['file size in bytes'] - y['file bytes available for reuse']) - (x['file bytes available for reuse'] - x['file size in bytes']);
+      return y.storageSize - y.freeStorageSize - x.storageSize - x.freeStorageSize;
    }
 
    function sortIdxFreeStorageSizeAsc(x, y) {
       /*
        *  sort by index freeStorageSize ascending
        */
-      return x['file bytes available for reuse'] - y['file bytes available for reuse'];
+      return x.freeStorageSize - y.freeStorageSize;
    }
 
    function sortIdxFreeStorageSizeDesc(x, y) {
       /*
        *  sort by index freeStorageSize descending
        */
-      return y['file bytes available for reuse'] - x['file bytes available for reuse'];
+      return y.freeStorageSize - x.freeStorageSize;
    }
 
    function storageSizeAsc(x, y) {
@@ -650,7 +650,7 @@
       return;
    }
 
-   function printIndex({ name, 'file size in bytes': storageSize, 'file bytes available for reuse': freeStorageSize } = {}) {
+   function printIndex({ name, storageSize, freeStorageSize } = {}) {
       /*
        *  Print index level stats
        */
