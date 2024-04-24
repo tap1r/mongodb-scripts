@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.10.4"
+ *  Version: "0.10.5"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -41,8 +41,8 @@
  *        view: {
  *           name: <1|0|-1>
  *        },
- *        namespace: { // TBA
- *           name: <1|0|-1>,
+ *        namespace: {
+ *           namespace: <1|0|-1>,
  *           dataSize: <1|0|-1>,
  *           storageSize: <1|0|-1>,
  *           freeStorageSize: <1|0|-1>,
@@ -69,7 +69,7 @@
  *        "objects": <int>
  *     },
  *     output: {
- *        format: <'table'|'json'|'html'>,
+ *        format: <'table'|'nsTable'|'json'|'html'>,
  *        topology: <'summary'|'expanded'>, // TBA
  *        colour: <true|false>, // TBA
  *        verbosity: <'full'|'summary'|'summaryIdx'|'compactOnly'/> // TBA
@@ -129,7 +129,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.10.4" };
+   let __script = { "name": "dbstats.js", "version": "0.10.5" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -191,15 +191,16 @@
          "view": {
             "name": 1
          },
-         "namespace": { // TBA
-            "name": 0,
+         "namespace": {
+            "name": 0, // do not use
+            "namespace": 0,
             "dataSize": 0,
             "storageSize": 0,
             "freeStorageSize": 0,
-            "reuse": 0,
-            "compression": 0,
+            "reuse": 0, // TBA
+            "compression": 0, // TBA
             "objects": 0,
-            "compaction": 0
+            "compaction": 0 // TBA
          },
          "index": {
             "name": 0,
@@ -219,7 +220,7 @@
          "objects": 0
       },
       "output": {
-         "format": "table", // ['table'|'json'|'html']
+         "format": "table", // ['table'|'nsTable'|'json'|'html']
          "topology": "summary", // ['summary'|'expanded'] // TBA
          "colour": true, // [true|false] // TBA
          "verbosity": "full" // ['full'|'summary'|'summaryIdx'|'compactOnly'] // TBA
@@ -267,6 +268,9 @@
             break;
          case 'html':
             htmlOut(dbStats);
+            break;
+         case 'nsTable':
+            nsTableOut(dbStats);
             break;
          default: // table
             tableOut(dbStats);
@@ -318,6 +322,9 @@
                "name": new RegExp(collFilter)
             }, true, true
          ).sort(sortBy('view'));
+         // ).map(({ name, 'options': { viewOn } }) => {
+         //    return { "name": name, "viewOn": viewOn }
+         // }).sort(sortBy('view'));
          dbPath.ncollections += database.ncollections;
          dbPath.nindexes += database.nindexes;
          dbPath.dataSize += database.dataSize;
@@ -369,10 +376,39 @@
       return;
    }
 
+   function nsTableOut(dbStats = {}) {
+      /*
+       *  Print aggregated namespaces tabular report
+       */
+      let namespaces = dbStats.databases.flatMap(database => {
+         return database.collections.reduce((collections, collection) => {
+            let namespace = database.name + '.' + collection.name;
+            delete collection.name;
+            let updatedCollection = { ...{ "namespace": namespace }, ...collection, ...{ compression: 0 }
+            // , ...{ get compression() {
+            //    return this.dataSize / (this.storageSize - this.freeStorageSize);
+            // } }
+            };
+            collections.push(updatedCollection);
+            return collections;
+         }, []);
+      }).sort(sortBy('namespace'));
+
+      printNSHeader(namespaces.length);
+      namespaces.forEach(namespace => {
+         printNamespace(namespace);
+         namespace.indexes.forEach(printIndex);
+      });
+      printDbPath(dbStats);
+
+      return;
+   }
+
    function jsonOut(dbStats = {}) {
       /*
        *  JSON out
        */
+      console.log('\n');
       printjson(dbStats);
 
       return;
@@ -410,6 +446,10 @@
          "name": {
             "asc": sortNameAsc,
             "desc": sortNameDesc
+         },
+         "namespace": {
+            "asc": sortNamespaceAsc,
+            "desc": sortNamespaceDesc
          },
          "dataSize": {
             "asc": sortDataSizeAsc,
@@ -482,6 +522,20 @@
        *  sort by name descending
        */
       return y.name.localeCompare(x.name);
+   }
+
+   function sortNamespaceAsc(x, y) {
+      /*
+       *  sort by namespace ascending
+       */
+      return x.namespace.localeCompare(y.namespace);
+   }
+
+   function sortNamespaceDesc(x, y) {
+      /*
+       *  sort by namespace descending
+       */
+      return y.namespace.localeCompare(x.namespace);
    }
 
    function sortDataSizeAsc(x, y) {
@@ -614,6 +668,17 @@
       return;
    }
 
+   function printNSHeader(nsTotal = 0) {
+      /*
+       *  Print namespace table header
+       */
+      console.log('\n');
+      console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
+      console.log(`\x1b[1;32m${`Namespaces (visible):\x1b[0m${' '.repeat(1)}${nsTotal}`.padEnd(rowHeader + 4)}\x1b[0m \x1b[1;32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks | reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Compaction'.padStart(columnWidth - 1)}\x1b[0m`);
+
+      return;
+   }
+
    function printCollection({ name, dataSize, compression, compressor, storageSize, freeStorageSize, objects } = {}) {
       /*
        *  Print collection level stats
@@ -626,6 +691,22 @@
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       if (name.length > 45) name = `${name.substring(0, collWidth)}~`;
       console.log(`└\x1b[36m${(' ' + name).padEnd(rowHeader - 1)}\x1b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${compaction.padStart(columnWidth - 2)}\x1b[0m`);
+
+      return;
+   }
+
+   function printNamespace({ namespace, dataSize, compression, compressor, storageSize, freeStorageSize, objects } = {}) {
+      /*
+       *  Print namespace level stats
+       */
+      compressor = (compressor == 'snappy') ? 'snpy' : compressor;
+      let collWidth = rowHeader - 3;
+      let compaction = (namespace == 'local.oplog.rs' && compactionHelper('collection', storageSize, freeStorageSize)) ? 'wait'
+                     : compactionHelper('collection', storageSize, freeStorageSize) ? 'compact'
+                     : '-';
+      console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
+      if (namespace.length > 45) namespace = `${namespace.substring(0, collWidth)}~`;
+      console.log(`└\x1b[36m${(' ' + namespace).padEnd(rowHeader - 1)}\x1b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${compaction.padStart(columnWidth - 2)}\x1b[0m`);
 
       return;
    }
