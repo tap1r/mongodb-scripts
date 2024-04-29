@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.10.6"
+ *  Version: "0.10.7"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -129,7 +129,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.10.6" };
+   let __script = { "name": "dbstats.js", "version": "0.10.7" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -286,20 +286,26 @@
       let { 'db': dbFilter, 'collection': collFilter } = filterOptions;
       let dbPath = new MetaStats();
       dbPath.init();
-      // let dbNames = getDBNames(dbFilter).toSorted(sortAsc); // mongosh only
-      let dbNames = getDBNames(dbFilter).sort(sortAsc);
+      let dbNames = (typeof process !== 'undefined')
+                  ? getDBNames(dbFilter).toSorted(sortAsc) // mongosh optimised
+                  : getDBNames(dbFilter).sort(sortAsc);    // legacy shell method
       let dbFetchTasks = dbNames.map(async dbName => {
          let database = new MetaStats($stats(dbName));
          // database.init();
          let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/;
-         let collNames = db.getSiblingDB(dbName).getCollectionInfos({
-               "type": /^(collection|timeseries)$/,
-               "name": new RegExp(collFilter)
-            },
-            (typeof process !== 'undefined') ? { "nameOnly": true } : true,
-            true
-         // ).filter(({ 'name': collName }) => collName.match(systemFilter)).toSorted(sortNameAsc); // mongosh only
-         ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
+         let collNames = (typeof process !== 'undefined')
+                       ? db.getSiblingDB(dbName).getCollectionInfos({ // mongosh optimised
+                              "type": /^(collection|timeseries)$/,
+                              "name": new RegExp(collFilter)
+                           },
+                           { "nameOnly": true }, true
+                        ).filter(({ 'name': collName }) => collName.match(systemFilter)).toSorted(sortNameAsc)
+                       : db.getSiblingDB(dbName).getCollectionInfos({ // legacy shell method
+                              "type": /^(collection|timeseries)$/,
+                              "name": new RegExp(collFilter)
+                           },
+                           true, true
+                        ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
          let collFetchTasks = collNames.map(({ 'name': collName }) => {
             let collection = new MetaStats($collStats(dbName, collName));
             // collection.init();
