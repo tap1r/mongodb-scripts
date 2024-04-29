@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.11.2"
+ *  Version: "0.11.3"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.11.2"
+      "version": "0.11.3"
 });
 
 /*
@@ -25,8 +25,8 @@ if (typeof idiomas === 'undefined') (
    idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', 'pt', 'ro', 'ru', 'es', 'sv', 'tr']
 );
 if (typeof pid === 'undefined') {
-   if (db.serverStatus().ok)
-      (pid = +db.serverStatus().pid);
+   if (serverStatus().ok)
+      (pid = +serverStatus().pid);
    else
       (pid = $getRandInt(0, 99999));
 };
@@ -168,9 +168,9 @@ class MetaStats {
        */
       // this.instance = (async() => { return await hello().me })();
       // this.hostname = (async() => { return hostInfo().system.hostname })();
-      // this.proc = (async() => { return db.serverStatus().process })();
-      // this.dbPath = (async() => { return (db.serverStatus().process === 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath : null })();
-      // this.shards = (async() => { return (db.serverStatus().process === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null })();
+      // this.proc = (async() => { return serverStatus().process })();
+      // this.dbPath = (async() => { return (serverStatus().process === 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath : null })();
+      // this.shards = (async() => { return (serverStatus().process === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null })();
       this.name = name;
       this.dataSize = dataSize;
       this.storageSize = (storageSize == 0) ? 4096 : storageSize;
@@ -195,7 +195,7 @@ class MetaStats {
                     : (isSharded()) ? 'sharded'
                     : hello().me;
       this.hostname = hostInfo().system.hostname;
-      this.proc = (db.serverStatus().ok) ? db.serverStatus().process : 'unknown';
+      this.proc = (serverStatus().ok) ? serverStatus().process : 'unknown';
       this.dbPath = (this.proc == 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
                   : (this.proc == 'mongos') ? 'sharded'
                   : 'unknown';
@@ -267,7 +267,7 @@ function isSharded() {
    /*
     *  Determine if current host is a mongos
     */
-   let proc = (db.serverStatus().ok) ? db.serverStatus().process
+   let proc = (serverStatus().ok) ? serverStatus().process
             : (db.adminCommand({ "listShards": 1 }).shards) ? 'mongos'
             : 'unknown';
    return proc == 'mongos';
@@ -387,7 +387,7 @@ function fCV(ver) { // updated for shared tier compatibility
    }
 
    let featureVer = ver => {
-      return (db.serverStatus().process == 'mongod' && cmd != 'incompatible' )
+      return (serverStatus().process == 'mongod' && cmd != 'incompatible' )
            ? +db.adminCommand({
                "getParameter": 1,
                "featureCompatibilityVersion": 1
@@ -484,7 +484,7 @@ function isAtlasPlatform(type) {
     *  Evaluate Atlas deployment platform type
     */
    let { 'msg': helloMsg } = hello();
-   let { atlasVersion } = db.serverStatus();
+   let { atlasVersion } = serverStatus();
    return (typeof type === 'undefined' && typeof helloMsg === 'undefined' && typeof atlasVersion === 'undefined') ? 'dedicatedShardedCluster'
         : (type == 'dedicatedShardedCluster' && typeof helloMsg === 'undefined' && typeof atlasVersion === 'undefined') ? true
         : (typeof type === 'undefined' && helloMsg == 'isdbgrid' && typeof atlasVersion !== 'undefined') ? 'serverless'
@@ -492,6 +492,80 @@ function isAtlasPlatform(type) {
         : (typeof type === 'undefined' && helloMsg != 'isdbgrid' && typeof atlasVersion !== 'undefined') ? 'sharedTier||dedicatedReplicaSet'
         : (type == 'sharedTier||dedicatedReplicaSet' && helloMsg != 'isdbgrid' && typeof atlasVersion !== 'undefined') ? true
         : false;
+}
+
+function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
+   /*
+    *  opt-in version of db.serverStatus()
+    */
+   let serverStatusOptionsDefaults = {
+      "activeIndexBuilds": false,
+      "asserts": false,
+      "batchedDeletes": false,
+      "bucketCatalog": false,
+      "catalogStats": false,
+      "changeStreamPreImages": false,
+      "collectionCatalog": false,
+      "connections": false,
+      "defaultRWConcern": false,
+      "electionMetrics": false,
+      "encryptionAtRest": false,
+      "extra_info": false,
+      "featureCompatibilityVersion": false,
+      "flowControl": false,
+      "globalLock": false,
+      "health": false,
+      "hedgingMetrics": false,
+      "indexBuilds": false,
+      "indexBulkBuilder": false,
+      "indexStats": false,
+      "internalTransactions": false,
+      "Instance Information": false,
+      "latchAnalysis": false,
+      "locks": false,
+      "logicalSessionRecordCache": false,
+      "metrics": false,
+      "mirroredReads": false,
+      "network": false,
+      "opLatencies": false,
+      "opReadConcernCounters": false,
+      "opWriteConcernCounters": false,
+      "opcounters": false,
+      "opcountersRepl": false,
+      "oplogTruncation": false,
+      "planCache": false,
+      "queryAnalyzers": false,
+      "readConcernCounters": false,
+      "readPreferenceCounters": false,
+      "repl": false,
+      "scramCache": false,
+      "security": false,
+      "sharding": false,
+      "shardingStatistics": false,
+      "shardedIndexConsistency": false,
+      "shardSplits": false,
+      "storageEngine": false,
+      "tcmalloc": false,
+      "tenantMigrations": false,
+      "trafficRecording": false,
+      "transactions": false,
+      "transportSecurity": false,
+      "twoPhaseCommitCoordinator": false,
+      "watchdog": false,
+      "wiredTiger": false,
+      "writeBacksQueued": false
+   };
+   let options = {
+      "readPreference": (typeof readPref !== 'undefined') ? readPref
+                      : (hello().secondary) ? 'secondaryPreferred'
+                      : 'primaryPreferred'
+   };
+
+   return db.adminCommand({
+      "serverStatus": true,
+      ...{ ...serverStatusOptionsDefaults, ...serverStatusOptions },
+      options
+   });
 }
 
 if (typeof db.prototype.isMaster === 'undefined') {
