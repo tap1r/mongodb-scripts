@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.10.7"
+ *  Version: "0.10.8"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -129,7 +129,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.10.7" };
+   let __script = { "name": "dbstats.js", "version": "0.10.8" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -284,6 +284,8 @@
        *  Gather DB stats
        */
       let { 'db': dbFilter, 'collection': collFilter } = filterOptions;
+      collFilter = new RegExp(collFilter);
+      let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/;
       let dbPath = new MetaStats();
       dbPath.init();
       let dbNames = (typeof process !== 'undefined')
@@ -291,24 +293,21 @@
                   : getDBNames(dbFilter).sort(sortAsc);    // legacy shell method
       let dbFetchTasks = dbNames.map(async dbName => {
          let database = new MetaStats($stats(dbName));
-         // database.init();
-         let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/;
          let collNames = (typeof process !== 'undefined')
                        ? db.getSiblingDB(dbName).getCollectionInfos({ // mongosh optimised
                               "type": /^(collection|timeseries)$/,
-                              "name": new RegExp(collFilter)
+                              "name": collFilter
                            },
                            { "nameOnly": true }, true
-                        ).filter(({ 'name': collName }) => collName.match(systemFilter)).toSorted(sortNameAsc)
+                         ).filter(({ 'name': collName }) => collName.match(systemFilter)).toSorted(sortNameAsc)
                        : db.getSiblingDB(dbName).getCollectionInfos({ // legacy shell method
                               "type": /^(collection|timeseries)$/,
-                              "name": new RegExp(collFilter)
+                              "name": collFilter
                            },
                            true, true
-                        ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
-         let collFetchTasks = collNames.map(({ 'name': collName }) => {
-            let collection = new MetaStats($collStats(dbName, collName));
-            // collection.init();
+                         ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
+         let collFetchTasks = collNames.map(async({ 'name': collName }) => {
+            let collection = await new MetaStats($collStats(dbName, collName));
             collection.indexes.sort(sortBy('index'));
             // database.freeStorageSize += collection.freeStorageSize;
             // database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
@@ -327,7 +326,7 @@
          database.collections.sort(sortBy('collection'));
          database.views = db.getSiblingDB(dbName).getCollectionInfos({
                "type": "view",
-               "name": new RegExp(collFilter)
+               "name": collFilter
             },
             (typeof process !== 'undefined') ? { "nameOnly": true } : true,
             true
@@ -350,9 +349,6 @@
          return database;
       });
       dbPath.databases = await Promise.all(dbFetchTasks);
-      // await Promise.allSettled(dbFetchTasks).then(results => {
-      //    dbPath.databases = results.map(({ status, value }) => (status == 'fulfilled') && value).sort(sortBy('db'));;
-      // });
       dbPath.databases.sort(sortBy('db'));
       delete dbPath.name;
       delete dbPath.collections;
