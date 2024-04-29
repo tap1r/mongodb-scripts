@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.10.5"
+ *  Version: "0.10.6"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -129,7 +129,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.10.5" };
+   let __script = { "name": "dbstats.js", "version": "0.10.6" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -295,7 +295,9 @@
          let collNames = db.getSiblingDB(dbName).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
                "name": new RegExp(collFilter)
-            }, true, true
+            },
+            (typeof process !== 'undefined') ? { "nameOnly": true } : true,
+            true
          // ).filter(({ 'name': collName }) => collName.match(systemFilter)).toSorted(sortNameAsc); // mongosh only
          ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
          let collFetchTasks = collNames.map(({ 'name': collName }) => {
@@ -320,11 +322,10 @@
          database.views = db.getSiblingDB(dbName).getCollectionInfos({
                "type": "view",
                "name": new RegExp(collFilter)
-            }, true, true
+            },
+            (typeof process !== 'undefined') ? { "nameOnly": true } : true,
+            true
          ).sort(sortBy('view'));
-         // ).map(({ name, 'options': { viewOn } }) => {
-         //    return { "name": name, "viewOn": viewOn }
-         // }).sort(sortBy('view'));
          dbPath.ncollections += database.ncollections;
          dbPath.nindexes += database.nindexes;
          dbPath.dataSize += database.dataSize;
