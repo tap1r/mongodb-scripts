@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.10.8"
+ *  Version: "0.11.0"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -129,7 +129,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.10.8" };
+   let __script = { "name": "dbstats.js", "version": "0.11.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -288,49 +288,92 @@
       let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/;
       let dbPath = new MetaStats();
       dbPath.init();
-      let dbNames = (typeof process !== 'undefined')
-                  ? getDBNames(dbFilter).toSorted(sortAsc) // mongosh optimised
-                  : getDBNames(dbFilter).sort(sortAsc);    // legacy shell method
-      let dbFetchTasks = dbNames.map(async dbName => {
-         let database = new MetaStats($stats(dbName));
-         let collNames = (typeof process !== 'undefined')
-                       ? db.getSiblingDB(dbName).getCollectionInfos({ // mongosh optimised
-                              "type": /^(collection|timeseries)$/,
-                              "name": collFilter
-                           },
-                           { "nameOnly": true }, true
-                         ).filter(({ 'name': collName }) => collName.match(systemFilter)).toSorted(sortNameAsc)
-                       : db.getSiblingDB(dbName).getCollectionInfos({ // legacy shell method
-                              "type": /^(collection|timeseries)$/,
-                              "name": collFilter
-                           },
-                           true, true
-                         ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
-         let collFetchTasks = collNames.map(async({ 'name': collName }) => {
-            let collection = await new MetaStats($collStats(dbName, collName));
-            collection.indexes.sort(sortBy('index'));
-            // database.freeStorageSize += collection.freeStorageSize;
-            // database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
-            delete collection.databases;
-            delete collection.collections;
-            delete collection.views;
-            delete collection.ncollections;
-            delete collection.instance;
-            delete collection.hostname;
-            delete collection.proc;
-            delete collection.dbPath;
+      delete dbPath.name;
+      delete dbPath.collections;
+      delete dbPath.views;
+      delete dbPath.indexes;
+      delete dbPath.compressor;
 
-            return collection;
-         });
-         database.collections = await Promise.all(collFetchTasks);
-         database.collections.sort(sortBy('collection'));
-         database.views = db.getSiblingDB(dbName).getCollectionInfos({
-               "type": "view",
-               "name": collFilter
-            },
-            (typeof process !== 'undefined') ? { "nameOnly": true } : true,
-            true
-         ).sort(sortBy('view'));
+      let dbNames = (shellVer() >= 2.0 && typeof process !== 'undefined') // toSorted only in mongosh v2+
+         ? getDBNames(dbFilter).toSorted(sortAsc) // mongosh optimised
+         : getDBNames(dbFilter).sort(sortAsc);    // legacy shell method
+      console.log('\nDiscovered', dbNames.length, 'readable databases');
+      // let dbFetchTasks = dbNames.map(async dbName => {
+      //    let database = new MetaStats($stats(dbName));
+      //    let collNames = (shellVer() >= 2.0 && typeof process !== 'undefined')
+      //                  ? db.getSiblingDB(dbName).getCollectionInfos({ // mongosh optimised
+      //                         "type": /^(collection|timeseries)$/,
+      //                         "name": collFilter
+      //                      },
+      //                      { "nameOnly": true }, true
+      //                    ).filter(({ 'name': collName }) => collName.match(systemFilter)).toSorted(sortNameAsc)
+      //                  : db.getSiblingDB(dbName).getCollectionInfos({ // legacy shell method
+      //                         "type": /^(collection|timeseries)$/,
+      //                         "name": collFilter
+      //                      },
+      //                      true, true
+      //                    ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
+      //    let collFetchTasks = collNames.map(async({ 'name': collName }) => {
+      //       let collection = await new MetaStats($collStats(dbName, collName));
+      //       console.log('Sorting indexes');
+      //       collection.indexes.sort(sortBy('index'));
+      //       console.log('...done sorting');
+      //       // database.freeStorageSize += collection.freeStorageSize;
+      //       // database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
+      //       delete collection.databases;
+      //       delete collection.collections;
+      //       delete collection.views;
+      //       delete collection.ncollections;
+      //       delete collection.instance;
+      //       delete collection.hostname;
+      //       delete collection.proc;
+      //       delete collection.dbPath;
+
+      //       return collection;
+      //    });
+      //    database.collections = await Promise.all(collFetchTasks);
+      //    console.log('Sorting collections');
+      //    database.collections.sort(sortBy('collection'));
+      //    console.log('Sorting views');
+      //    console.log('...done sorting');
+      //    database.views = db.getSiblingDB(dbName).getCollectionInfos({
+      //          "type": "view",
+      //          "name": collFilter
+      //       },
+      //       (typeof process !== 'undefined') ? { "nameOnly": true } : true,
+      //       true
+      //    ).sort(sortBy('view'));
+      //    console.log('...done sorting');
+      //    dbPath.ncollections += database.ncollections;
+      //    dbPath.nindexes += database.nindexes;
+      //    dbPath.dataSize += database.dataSize;
+      //    dbPath.storageSize += database.storageSize;
+      //    dbPath.freeStorageSize += database.freeStorageSize;
+      //    dbPath.objects += database.objects;
+      //    dbPath.orphans += database.orphans;
+      //    dbPath.totalIndexSize += database.totalIndexSize;
+      //    dbPath.totalIndexBytesReusable += database.totalIndexBytesReusable;
+      //    delete database.databases;
+      //    delete database.instance;
+      //    delete database.hostname;
+      //    delete database.proc;
+      //    delete database.dbPath;
+
+      //    return database;
+      // });
+      // dbPath.databases = await Promise.all(dbFetchTasks);
+      //
+      dbPath.databases = dbNames.map(dbName => {
+      // let dbFetchTasks = dbNames.map(async dbName => {
+         // console.log('Fetching dbstats');
+         //
+         let database = new MetaStats($stats(dbName));
+         delete database.databases;
+         delete database.instance;
+         delete database.hostname;
+         delete database.proc;
+         delete database.dbPath;
+         //
          dbPath.ncollections += database.ncollections;
          dbPath.nindexes += database.nindexes;
          dbPath.dataSize += database.dataSize;
@@ -340,21 +383,103 @@
          dbPath.orphans += database.orphans;
          dbPath.totalIndexSize += database.totalIndexSize;
          dbPath.totalIndexBytesReusable += database.totalIndexBytesReusable;
-         delete database.databases;
-         delete database.instance;
-         delete database.hostname;
-         delete database.proc;
-         delete database.dbPath;
+         //
+         // console.log('...dbstats done');
 
          return database;
       });
-      dbPath.databases = await Promise.all(dbFetchTasks);
+      // dbPath.databases = await Promise.all(dbFetchTasks);
+      //
+      // console.log('Fetched db level stats');
+      // console.log('Discovered', dbPath.ncollections, 'readable collections');
+      // console.log('Discovered', dbPath.nindexes, 'readable indexes');
+      //
+      let collNamesTasks = dbPath.databases.map(async database => {
+         // console.log('Fetching collections list');
+         database.collections = (shellVer() >= 2.0 && typeof process !== 'undefined')
+            ? db.getSiblingDB(database.name).getCollectionInfos({ // mongosh optimised
+                  "type": /^(collection|timeseries)$/,
+                  "name": collFilter
+               },
+               { "nameOnly": true }, true
+               ).filter(({ 'name': collName }) => collName.match(systemFilter)).toSorted(sortNameAsc)
+            : db.getSiblingDB(database.name).getCollectionInfos({ // legacy shell method
+                  "type": /^(collection|timeseries)$/,
+                  "name": collFilter
+               },
+               true, true
+               ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
+         // console.log('Discovered', database.collections.length, 'readable collections');
+         // console.log('Fetching views list');
+         database.views = db.getSiblingDB(database.name).getCollectionInfos({
+               "type": "view",
+               "name": collFilter
+            },
+            (typeof process !== 'undefined') ? { "nameOnly": true } : true,
+            true
+         ).sort(sortBy('view'));
+         //
+         dbPath.ncollections += database.ncollections;
+         dbPath.nindexes += database.nindexes;
+         dbPath.dataSize += database.dataSize;
+         dbPath.storageSize += database.storageSize;
+         dbPath.freeStorageSize += database.freeStorageSize;
+         dbPath.objects += database.objects;
+         dbPath.orphans += database.orphans;
+         dbPath.totalIndexSize += database.totalIndexSize;
+         dbPath.totalIndexBytesReusable += database.totalIndexBytesReusable;
+         //
+         // console.log('Discovered', database.views.length, 'readable views');
+
+         return database;
+      });
+      dbPath.databases = await Promise.all(collNamesTasks);
+      // console.log('Fetched collection names retrieval');
+      //
+      let collFetchTasks = dbPath.databases.map(async database => {
+         let collFetchTasks = database.collections.map(async({ 'name': collName }) => {
+            // console.log('Fetch collStats');
+            let collection = await new MetaStats($collStats(database.name, collName));
+            delete collection.databases;
+            delete collection.collections;
+            delete collection.views;
+            delete collection.ncollections;
+            delete collection.instance;
+            delete collection.hostname;
+            delete collection.proc;
+            delete collection.dbPath;
+
+            // console.log('...collStats done');
+            // console.log('Sorting indexes');
+            collection.indexes.sort(sortBy('index'));
+            // console.log('...index sorting done');
+            // database.freeStorageSize += collection.freeStorageSize;
+            // database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
+
+            return collection;
+         });
+         database.collections = await Promise.all(collFetchTasks);
+         // console.log('Sorting collections');
+         database.collections.sort(sortBy('collection'));
+         // console.log('...collection sorting done');
+         // console.log('Sorting views');
+         database.views = db.getSiblingDB(database.name).getCollectionInfos({
+               "type": "view",
+               "name": collFilter
+            },
+            (typeof process !== 'undefined') ? { "nameOnly": true } : true,
+            true
+         ).sort(sortBy('view'));
+         //
+         // console.log('...view sorting done');
+
+         return database;
+      });
+      dbPath.databases = await Promise.all(collFetchTasks);
+      //
+      // console.log('Sorting databases');
       dbPath.databases.sort(sortBy('db'));
-      delete dbPath.name;
-      delete dbPath.collections;
-      delete dbPath.views;
-      delete dbPath.indexes;
-      delete dbPath.compressor;
+      // console.log('...done db sorting');
 
       return dbPath;
    }
