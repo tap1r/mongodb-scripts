@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.11.3"
+ *  Version: "0.11.4"
  *  Description: mongo/mongosh shell helper library
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -8,7 +8,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.11.3"
+      "version": "0.11.4"
 });
 
 /*
@@ -140,7 +140,7 @@ class AutoFactor {
       }
       return this.number;
    }
-   get metrics() { // array indexed by scale
+   get metrics() { // array indexed by scale factor
       return [
          { "unit":      "bytes", "symbol":   "B", "factor": 1,                 "precision": 0, "pctPoint": 2 },
          { "unit":  "kibibytes", "symbol": "KiB", "factor": 1024,              "precision": 2, "pctPoint": 1 },
@@ -228,18 +228,6 @@ function $rand() {
       Random.setRandomSeed();
       return Random.rand(); // SecureRandom() method
    */
-   /*
-      let pipeline = [
-         { "$collStats": {} },
-         { "$project": { "random": { "$rand": {} } } }
-      ],
-      options = {
-         "cursor": { "batchSize": 1 },
-         "readConcern": { "level": "local" },
-         "comment": "$rand number generator"
-      };
-      return db.getSiblingDB('admin').getCollection('any').aggregate(pipeline, options).toArray()[0].random;
-   */
 }
 
 function $ceil(num) {
@@ -325,14 +313,14 @@ function getAllNonSystemNamespaces() { // TBA
          "type": /^(?:collection|timeseries)$/,
          "name": /(?:^(?!(system\..+|replset\..+)$).+)/
       },
-      true,
+      (typeof process !== 'undefined') ? { "nameOnly": true } : true,
       true
    ];
    let listViewOpts = [{
          "type": "view",
          "name": /(?:^(?!system\..+$).+)/
       },
-      true,
+      (typeof process !== 'undefined') ? { "nameOnly": true } : true,
       true
    ];
    // return dbs = db.adminCommand(...listDbOpts).databases.map(dbName => dbName.name);
@@ -1333,7 +1321,7 @@ function $collStats(dbName = db.getName(), collName = '') {
     */
    let namespace = db.getSiblingDB(dbName).getCollection(collName);
    let options = {
-         "allowDiskUse": false,
+         "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
          "comment": `run by ${__lib.name} sharding compatible $collStats wrapper`
