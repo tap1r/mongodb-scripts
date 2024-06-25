@@ -1,6 +1,6 @@
 /*
  *  Name: "oidGenerator.js"
- *  Version: "0.2.3"
+ *  Version: "0.2.4"
  *  Description: Aggregation based OID generator (requires v5.0+)
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -36,7 +36,7 @@ let options = {
       { "$set": {
          "_epoch": {
             "$reduce": {
-               "input": { "$range": [0, { "$ceil": { "$log": [{ "$add": ["$_epoch", 1] }, 16] } }]}, // scale
+               "input": { "$range": [0, { "$ceil": { "$log": [{ "$add": ["$_epoch", 1] }, 16] } }] }, // scale
                "initialValue": {
                   "quotient": { "$floor": { "$divide": ["$_epoch", 16] } },
                   "remainder": { "$mod": ["$_epoch", 16] },
@@ -93,7 +93,7 @@ let options = {
       { "$set": {
          "_counter": {
             "$reduce": {
-               "input": { "$range": [0, { "$ceil": { "$log": [{ "$add": ["$_counter", 1] }, 16] } }]}, // scale
+               "input": { "$range": [0, { "$ceil": { "$log": [{ "$add": ["$_counter", 1] }, 16] } }] }, // scale
                "initialValue": {
                   "quotient": { "$floor": { "$divide": ["$_counter", 16] } },
                   "remainder": { "$mod": ["$_counter", 16] },
