@@ -4,6 +4,7 @@ A collection of useful MongoDB related scripts and command tips.
 
 ## Table of Contents
 
+* [DISCLAIMER](DISCLAIMER.md)
 * [Aggregation tips](Aggregation%20tips.md)
 * [Atomic backups using _fsyncLock()_](fsyncLock.md)
 * [BI Connector reproductions](BI%20Connector%20reproductions.md)
