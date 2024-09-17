@@ -1,7 +1,8 @@
 /*
  *  Name: "oidGenerator.js"
- *  Version: "0.2.4"
+ *  Version: "0.2.5"
  *  Description: Aggregation based OID generator (requires v5.0+)
+ *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
