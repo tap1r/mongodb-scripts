@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.4.5"
+# Version: "0.4.6"
 # Description: Atlas/SRV cluster name/connection validator
+# Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 #
 # Usage: "bash srvatlas.sh <atlas-cluster-name>"
