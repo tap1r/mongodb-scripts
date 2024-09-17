@@ -136,68 +136,13 @@
    namespace.aggregate(pipeline, options).forEach(printjson);
 })();
 
-(() => { // connections counter script v1
-   let readPref = 'primary';
-   db.getMongo().setReadPref(readPref);
-   let filter = { "$all": true, "connectionId": { "$gt": 0 } },
-      reducer = (accumulator, connection) => {
-         group = (typeof connection.shard === 'undefined') ? connection.host : connection.shard;
-         accumulator[group] = (accumulator[group] || 0) + 1;
-         ++accumulator['TOTAL_CONNECTION_COUNT'];
-         if (connection['active'] === true)
-            ++accumulator['TOTAL_ACTIVE_CONNECTION_COUNT']
-         else
-            ++accumulator['TOTAL_IDLE_CONNECTION_COUNT']
-
-         return accumulator;
-      },
-      initial = { 'TOTAL_CONNECTION_COUNT': 0, 'TOTAL_ACTIVE_CONNECTION_COUNT': 0, 'TOTAL_IDLE_CONNECTION_COUNT': 0 };
-
-   db.currentOp(filter).inprog.reduce(reducer, initial);
-})();
-
-(() => { // connections counter script new
-   let readPref = 'primary';
-   db.getMongo().setReadPref(readPref);
-   let filter = { "$all": true, "connectionId": { "$gt": 0 } },
-      reducer = (accumulator, connection) => {
-         group = (typeof connection.shard === 'undefined') ? connection.host : connection.shard;
-         accumulator[group] = (accumulator[group] || 0) + 1;
-         ++accumulator['TOTAL_CONNECTION_COUNT'];
-         if (connection['active'] === true)
-            ++accumulator['TOTAL_ACTIVE_CONNECTION_COUNT']
-         else
-            ++accumulator['TOTAL_IDLE_CONNECTION_COUNT']
-
-         return accumulator;
-      },
-      initial = { 'TOTAL_CONNECTION_COUNT': 0, 'TOTAL_ACTIVE_CONNECTION_COUNT': 0, 'TOTAL_IDLE_CONNECTION_COUNT': 0 };
-
-   db.currentOp(filter).inprog.reduce(reducer, initial);
-})();
-
-(() => { // count by client app metadata on mongos
-   let options = {
-         "cursor": { "batchSize": 0 },
-         "comment": "$currentOp command to count mongos connections by client metadata"
-      },
-      currentOpFilter = [
-         { "$currentOp": { "allUsers": true, "localOps": true, "idleConnections": true } },
-         { "$match": { "connectionId": { "$gt": 0 } } },
-         { "$group": { "_id": "$appName", "count": { "$sum": 1 } } },
-         { "$project": { "_id": 0, "Client metadata": "$_id", "Total": "$count" } }
-      ];
-
-   db.getSiblingDB('admin').aggregate(currentOpFilter, options).forEach(printjson);
-})();
-
 (() => { // Validate namespace concurrently (sync script)
    db.getMongo().getDBNames().filter(dbs => dbs.match(/^(?!(admin|config|local)$)/)).map(dbName =>
       db.getSiblingDB(dbName).getCollectionNames().filter(collections => collections.match(/^(?!(system\.))/)).map(collName =>
          printjson(db.getCollection(collName).validate())));
 })();
 
-(async() => {  // Validate namespace concurrently (async script)
+(async() => { // Validate namespace concurrently (async script)
    db.getMongo().getDBNames().filter(dbs => dbs.match(/^(?!(admin|config|local)$)/)).map(dbName =>
       db.getSiblingDB(dbName).getCollectionNames().filter(collections => collections.match(/^(?!(system\.))/)).map(async collName => {
          print('\nDB:', dbName, 'Collection:', collName);
@@ -210,7 +155,7 @@
 
 (() => { // op monitoring script
    db.getSiblingDB('admin').aggregate([
-      { "$currentOp": { } },
+      { "$currentOp": {} },
       { "$match": {
          "active": true,
          "op": "command",
@@ -253,14 +198,14 @@ exports = function() { // Sample trigger to update a materialised view
       return collection.aggregate(pipeline).toArray()
          .then(result => {
             if (result.length > 0) {
-               console.log(`Merged with result: ${result}`);
+               console.log('Merged with result:', result);
                return result.length;
             } else {
-               console.log(`Successfully merged`);
+               console.log('Successfully merged');
                return true;
             }
          })
-         .catch(err => console.error(`$merge failed: ${err}`));
+         .catch(err => console.error('$merge failed:', err));
    } else {
       throw Error('This user is not allowed to execute the system function');
    }
@@ -292,13 +237,14 @@ exports = function() { // Sample trigger to update a materialised view
          "readConcern": { "level": "local" },
          "comment": "reproduction for javascript BSON types 13 & 15"
       },
-      pipeline = [{
-         "$project": {
+      pipeline = [
+         { "$project": {
             "_id": 0,
             "name": 1,
             "type": { "$type": "$js" },
             "js": 1
-      } }];
+         } }
+      ];
 
    db.getMongo().setReadPref('primary');
 
@@ -340,14 +286,6 @@ exports = function() { // Sample trigger to update a materialised view
 })();
 
 // currentOp usage examples
-
-db.adminCommand({ "currentOp": true, "active": true }).inprog.forEach(op => {
-   if (typeof op.progress !== 'undefined') printjson({ "message": op.msg })
-});
-
-db.adminCommand({ "currentOp": true, "active": true, "progress": true }).inprog.forEach(op =>
-   printjson({ "message": op.msg })
-);
 
 (() => { // template
    let dbName = 'database';
@@ -428,19 +366,6 @@ db.runCommand({ "connectionStatus": 1, "showPrivileges": true });
 })();
 
 // change stream monitoring script 
-
-let currentOp = {
-   "currentOp": true,
-   "$all": true,
-   "$expr": {
-      "$filter": {
-         "input": "$cursor.originatingCommand.pipeline",
-         "as": "pipeline",
-         "cond": { "$eq": [{ "$getField": { "$literal": "$$pipeline.$changeStream" } }, true] }
-} } };
-db.adminCommand(currentOp).inprog.forEach(op => printjson({ "Application": op.appName, "Source": op.client, "User": op.runBy }));
-
-db.getSiblingDB('local').getCollection('oplog.rs').aggregate([{ "$match": {} }]).forEach(printjson);
 
 (() => {
    let dbName = 'database', collName = 'collection';
@@ -688,43 +613,6 @@ db.getSiblingDB('local').getCollection('oplog.rs').aggregate([{ "$match": {} }])
       let since = (accesses.ops < 1) ? 'never since startup' : accesses.since;
       console.log(`Index ${name} last accessed ${since}`);
    }
-})();
-
-// connection count per client
-
-(() => {
-   db.getSiblingDB('admin').aggregate([
-      { "$currentOp": {
-         "allUsers": true,
-         "localOps": false, // set true for mongos
-         "idleConnections": true
-      } },
-      { "$match": {
-         "client": { "$exists": true },
-         "$nor": [
-            { "command.ismaster": 1 },
-            { "command.hello": true }
-         ]
-      } },
-      { "$group": {
-         "_id": {
-            "user": "$effectiveUsers.user",
-            "client": { "$first": { "$split": ["$client", ":"] } },
-            "appName": "$appName",
-            "active": "$active"
-         },
-         "count": { "$count": {} }
-      } },
-      { "$sort": { "_id": 1 } },
-      { "$project": {
-         "_id": 0,
-         "user": "$_id.user",
-         "client": "$_id.client",
-         "appName": "$_id.appName",
-         "active": "$_id.active",
-         "count": 1
-      } }
-   ]);
 })();
 
 // filter out fields
