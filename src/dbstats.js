@@ -150,7 +150,7 @@
    let __comment = `#### Running script ${__script.name} v${__script.version}`;
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
-   // console.log(`\n\n\x1b[33m${__comment}\x1b[0m`);
+   console.log(`\n\n\x1b[33m${__comment}\x1b[0m`);
    if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n\x1b[31m[WARN] Possibly incompatible legacy shell version detected: ${version()}\x1b[0m`);
    if (shellVer() < 1.0 && typeof process !== 'undefined') console.log(`\n\x1b[31m[WARN] Possible incompatible non-GA shell version detected: ${version()}\x1b[0m`);
    if (serverVer() < 4.2) console.log(`\n\x1b[31m[ERROR] Unsupported mongod/s version detected: ${db.version()}\x1b[0m`);
@@ -299,8 +299,8 @@
       let dbNames = (shellVer() >= 2.0 && typeof process !== 'undefined')
          ? getDBNames(dbFilter).toSorted(sortAsc) // mongosh v2 optimised
          : getDBNames(dbFilter).sort(sortAsc);    // legacy shell(s) method
-      // console.log('\n');
-      // console.log('Discovered', dbNames.length, 'distinct databases');
+      console.log('\n');
+      console.log('Discovered', dbNames.length, 'distinct databases');
       // let dbFetchTasks = dbNames.map(async dbName => {
       dbPath.databases = dbNames.map(dbName => {
       // let dbFetchTasks = dbNames.map(async dbName => {
@@ -324,8 +324,8 @@
       });
       // dbPath.databases = await Promise.all(dbFetchTasks);
       //
-      // console.log('Discovered', dbPath.ncollections, 'distinct namespaces');
-      // console.log('Discovered', dbPath.nindexes, 'distinct indexes');
+      console.log('Discovered', dbPath.ncollections, 'distinct namespaces');
+      console.log('Discovered', dbPath.nindexes, 'distinct indexes');
       //
       let collNamesTasks = dbPath.databases.map(async database => {
          database.collections = (shellVer() >= 2.0 && typeof process !== 'undefined')
