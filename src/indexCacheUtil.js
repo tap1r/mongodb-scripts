@@ -1,9 +1,11 @@
 /*
  *  Name: "indexCacheUtil.js"
- *  Version: "0.1.0"
+ *  Version: "0.1.1"
  *  Description: topology discovery with directed command execution
- *  Notes: mongosh only, support for async required to parallelise and access the topology with auth
+ *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+ *
+ *  Notes: mongosh only, support for async required to parallelise and access the topology with auth
  */
 
 // Usage: "mongosh [<connection options>] [--quiet] [-f|--file] indexCacheUtil.js"
