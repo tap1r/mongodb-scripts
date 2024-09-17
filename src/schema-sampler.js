@@ -1,7 +1,8 @@
 /*
  *  Name: "schema-sampler.js"
- *  Version: "0.2.10"
+ *  Version: "0.2.11"
  *  Description: generate schema with simulated mongosqld sampling commands
+ *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
@@ -21,9 +22,9 @@ let userOptions = {
    /*
     *
     */
-   let __script = { "name": "schema-sampler.js", "version": "0.2.10" };
+   let __script = { "name": "schema-sampler.js", "version": "0.2.11" };
    print(`\n#### Running script ${__script.name} v${__script.version}\n`);
-   
+
    function main({ sampleSize = 1, dbs = [], readPreference = 'secondaryPreferred' }) {
       /*
        *  main
