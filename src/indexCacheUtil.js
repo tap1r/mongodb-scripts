@@ -1,11 +1,11 @@
 /*
  *  Name: "indexCacheUtil.js"
- *  Version: "0.1.1"
- *  Description: topology discovery with directed command execution
+ *  Version: "0.1.2"
+ *  Description: index cache util
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
- *  Notes: mongosh only, support for async required to parallelise and access the topology with auth
+ *  Notes: mongosh only
  */
 
 // Usage: "mongosh [<connection options>] [--quiet] [-f|--file] indexCacheUtil.js"
@@ -102,7 +102,7 @@
       let cachedPagesBytes = db.serverStatus().wiredTiger.cache['bytes belonging to page images in the cache'];
       let namespaces = await getAllNonSystemNamespaces();
       let nslist = await Promise.all(namespaces).catch(error => {
-         console.log(`Listing one of the namespaces failed: ${error}`);
+         console.log('Listing one of the namespaces failed:', error);
       });
       await Promise.allSettled(nslist.flat().map(getIndexCacheStats)).then(results => {
          results.forEach(({ status, value }) => {
@@ -110,7 +110,7 @@
                sizeInMemory += value.sizeInMemory;
                totalIndexPages += value.totalIndexPages;
             } else if (status == 'rejected') {
-               console.error(`rejected: ${value}`);
+               console.error('rejected:', value);
             }
          });
          console.log('\n');
