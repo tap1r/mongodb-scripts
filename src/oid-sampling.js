@@ -1,7 +1,8 @@
 /*
  *  Name: "oid-sampler.js"
- *  Version = "0.1.0"
+ *  Version = "0.1.1"
  *  Description: OID sampler
+ *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
