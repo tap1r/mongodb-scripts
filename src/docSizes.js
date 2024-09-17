@@ -1,7 +1,8 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.24"
+ *  Version: "0.1.25"
  *  Description: sample document size distribution
+ *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
@@ -21,7 +22,7 @@ let options = {
    /*
     *  main
     */
-   let __script = { "name": "docSizes.js", "version": "0.1.24" };
+   let __script = { "name": "docSizes.js", "version": "0.1.25" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
    // connection preferences
    if (typeof readPref === 'undefined')
