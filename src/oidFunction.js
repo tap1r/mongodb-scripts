@@ -1,7 +1,8 @@
 /*
  *  Name: "oidFunction.js"
- *  Version: "0.1.1"
+ *  Version: "0.1.2"
  *  Description: aggregation based OID "view function" reproduction (requires v5.0+)
+ *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
