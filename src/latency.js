@@ -1,7 +1,8 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.3.0"
+ *  Version: "0.3.1"
  *  Description: driver and network latency telemetry PoC
+ *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
@@ -11,7 +12,7 @@
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.3.0" };
+   let __script = { "name": "latency.js", "version": "0.3.1" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    let slowms = 100,
