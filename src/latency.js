@@ -1,19 +1,17 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.2.9"
+ *  Version: "0.3.0"
  *  Description: driver and network latency telemetry PoC
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet latency.js"
 
-console.clear();
-
 (() => {
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.2.9" };
+   let __script = { "name": "latency.js", "version": "0.3.0" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    let slowms = 100,
@@ -26,7 +24,7 @@ console.clear();
       slowms = 200;
    }
    let pipeline = [
-         { "$currentOp": { } },
+         { "$currentOp": {} },
          { "$limit": 1 },
          { "$project": {
             "_id": 0,
@@ -87,7 +85,7 @@ console.clear();
          "style": "unit",
          "unit": "millisecond",
          "unitDisplay": "short"
-      }).format(duration);
+      }).format(duration)
    }
 
    spacing = 1;
