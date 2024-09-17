@@ -1,7 +1,8 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.19"
+ *  Version: "0.6.20"
  *  Description: pseudorandom data generator, with some fuzzing capability
+ *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
@@ -13,7 +14,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.19" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.20" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
