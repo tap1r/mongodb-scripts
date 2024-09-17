@@ -1,14 +1,15 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.11.4"
+ *  Version: "0.11.5"
  *  Description: mongo/mongosh shell helper library
+ *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.11.4"
+      "version": "0.11.5"
 });
 
 /*
