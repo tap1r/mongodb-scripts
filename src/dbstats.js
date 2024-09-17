@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.1"
+ *  Version: "0.11.2"
  *  Description: DB storage stats uber script
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
@@ -85,7 +85,7 @@
 /*
  *  Examples of using filters with namespace regex:
  *
- *    mongosh --quiet --eval "let options = { filter: { db: 'database' } };" -f dbstats.js
+ *    mongosh --quiet --eval "let options = { filter: { db: '^database$' } };" -f dbstats.js
  *    mongosh --quiet --eval "let options = { filter: { collection: '^c.+' } };" -f dbstats.js
  *    mongosh --quiet --eval "let options = { filter: { db: /(^(?!(d.+)).+)/i, collection: /collection/i } };" -f dbstats.js
  *
@@ -96,7 +96,7 @@
  * 
  *  Examples of using formatting:
  *
- *    mongosh --quiet --eval "let options = { output: { format: 'table' } };" -f dbstats.js
+ *    mongosh --quiet --eval "let options = { output: { format: 'tabular' } };" -f dbstats.js
  *    mongosh --quiet --eval "let options = { output: { format: 'json' } };" -f dbstats.js
  */
 
@@ -129,7 +129,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.11.1" };
+   let __script = { "name": "dbstats.js", "version": "0.11.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -150,7 +150,7 @@
    let __comment = `#### Running script ${__script.name} v${__script.version}`;
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
-   console.log(`\n\n\x1b[33m${__comment}\x1b[0m`);
+   // console.log(`\n\n\x1b[33m${__comment}\x1b[0m`);
    if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n\x1b[31m[WARN] Possibly incompatible legacy shell version detected: ${version()}\x1b[0m`);
    if (shellVer() < 1.0 && typeof process !== 'undefined') console.log(`\n\x1b[31m[WARN] Possible incompatible non-GA shell version detected: ${version()}\x1b[0m`);
    if (serverVer() < 4.2) console.log(`\n\x1b[31m[ERROR] Unsupported mongod/s version detected: ${db.version()}\x1b[0m`);
@@ -159,7 +159,7 @@
     *  User defined parameters
     */
 
-   let optionDefaults = {
+   let optionsDefaults = {
       "filter": {
          "db": new RegExp(/^.+/),
          "collection": new RegExp(/^.+/)
@@ -220,7 +220,7 @@
          "objects": 0
       },
       "output": {
-         "format": "table", // ['table'|'nsTable'|'json'|'html']
+         "format": "tabular", // ['tabular'|'nsTable'|'json'|'html']
          "topology": "summary", // ['summary'|'expanded'] // TBA
          "colour": true, // [true|false] // TBA
          "verbosity": "full" // ['full'|'summary'|'summaryIdx'|'compactOnly'] // TBA
@@ -231,12 +231,12 @@
          "sharded": 'summary' // ['summary'|'expanded']
       }
    };
-   typeof options === 'undefined' && (options = optionDefaults);
-   let filterOptions = { ...optionDefaults.filter, ...options.filter };
-   let sortOptions = { ...optionDefaults.sort, ...options.sort };
-   let outputOptions = { ...optionDefaults.output, ...options.output };
-   let limitOptions = { ...optionDefaults.limit, ...options.limit };
-   let topologyOptions = { ...optionDefaults.topology, ...options.topology };
+   typeof options === 'undefined' && (options = optionsDefaults);
+   let filterOptions = { ...optionsDefaults.filter, ...options.filter };
+   let sortOptions = { ...optionsDefaults.sort, ...options.sort };
+   let outputOptions = { ...optionsDefaults.output, ...options.output };
+   let limitOptions = { ...optionsDefaults.limit, ...options.limit };
+   let topologyOptions = { ...optionsDefaults.topology, ...options.topology };
 
    /*
     *  Global defaults
@@ -257,22 +257,24 @@
       /*
        *  main
        */
-      let { 'format': formatOutput = 'table' } = outputOptions;
+      let { 'format': formatOutput = 'tabular' } = outputOptions;
 
       slaveOk(readPref);
       let dbStats = await getStats();
 
       switch (formatOutput) {
          case 'json':
-            jsonOut(dbStats);
-            break;
+            // jsonOut(dbStats);
+            return dbStats;
+            // dbStats
+            // break;
          case 'html':
             htmlOut(dbStats);
             break;
          case 'nsTable':
             nsTableOut(dbStats);
             break;
-         default: // table
+         default: // tabular
             tableOut(dbStats);
       }
 
@@ -297,8 +299,8 @@
       let dbNames = (shellVer() >= 2.0 && typeof process !== 'undefined')
          ? getDBNames(dbFilter).toSorted(sortAsc) // mongosh v2 optimised
          : getDBNames(dbFilter).sort(sortAsc);    // legacy shell(s) method
-      console.log('\n');
-      console.log('Discovered', dbNames.length, 'distinct databases');
+      // console.log('\n');
+      // console.log('Discovered', dbNames.length, 'distinct databases');
       // let dbFetchTasks = dbNames.map(async dbName => {
       dbPath.databases = dbNames.map(dbName => {
       // let dbFetchTasks = dbNames.map(async dbName => {
@@ -322,8 +324,8 @@
       });
       // dbPath.databases = await Promise.all(dbFetchTasks);
       //
-      console.log('Discovered', dbPath.ncollections, 'distinct namespaces');
-      console.log('Discovered', dbPath.nindexes, 'distinct indexes');
+      // console.log('Discovered', dbPath.ncollections, 'distinct namespaces');
+      // console.log('Discovered', dbPath.nindexes, 'distinct indexes');
       //
       let collNamesTasks = dbPath.databases.map(async database => {
          database.collections = (shellVer() >= 2.0 && typeof process !== 'undefined')
@@ -843,7 +845,8 @@
       return;
    }
 
-   await main();
-})();
+   dbStats = await main();
+   // return dbStats;
+})(dbStats = {});
 
 // EOF
