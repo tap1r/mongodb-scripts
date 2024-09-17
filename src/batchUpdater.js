@@ -1,13 +1,14 @@
 /*
  *  Name: "batchUpdater.js"
- *  Version: "0.1.3"
+ *  Version: "0.1.4"
  *  Description: batch updater with ranged based pagination
+ *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
 // Usage: "mongosh [connection options] --quiet batchUpdater.js"
 
-const __script = { "name": "batchUpdater.js", "version": "0.1.3" };
+const __script = { "name": "batchUpdater.js", "version": "0.1.4" };
 
 // user defined variables
 let dbName = 'database',
