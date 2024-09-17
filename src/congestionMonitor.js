@@ -1,19 +1,20 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.1.0"
+    *  Version: "0.1.1"
     *  Description: "monitors mongod congestion vitals"
     *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  TODOs:
-    *  - align EQ colour codes with metric thresholds
+    *  - 
     */
 
    // Usage: "mongosh [connection options] --quiet [-f|--file] congestionMonitor.js"
 
    let vitals = {};
    let rendering = true;
+   let pollingInterval = 100;
 
    async function congestionMonitor() {
       /*
@@ -277,21 +278,29 @@
          //    }
          // v8.0 see db.serverStats().queues.execution
          get wtReadTicketsUtil() {
+            let { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
+            return +((out / totalTickets) * 100).toFixed(2);
+         },
+         get wtReadTicketsAvail() {
             let { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
             return +((available / totalTickets) * 100).toFixed(2);
          },
          get wtWriteTicketsUtil() {
+            let { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
+            return +((out / totalTickets) * 100).toFixed(2);
+         },
+         get wtWriteTicketsAvail() {
             let { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
             return +((available / totalTickets) * 100).toFixed(2);
          },
          get wtReadTicketsStatus() {
-            return (this.wtReadTicketsUtil > 80) ? 'low'
-                 : (this.wtReadTicketsUtil < 25) ? 'high'
+            return (this.wtReadTicketsUtil < 20) ? 'low'
+                 : (this.wtReadTicketsUtil > 75) ? 'high'
                  : 'medium';
          },
          get wtWriteTicketsStatus() {
-            return (this.wtWriteTicketsUtil > 80) ? 'low'
-                 : (this.wtWriteTicketsUtil < 25) ? 'high'
+            return (this.wtWriteTicketsUtil < 20) ? 'low'
+                 : (this.wtWriteTicketsUtil > 75) ? 'high'
                  : 'medium';
          },
          get activeShardMigrations() {
@@ -322,8 +331,8 @@
    }
 
    class EQ {
-      constructor({ size = 1, row = 0, column = 0, label = '', metric = '', status = '', interval = 100 } = {}) {
-         this.size = size;
+      constructor({ width = 25, row = 0, column = 0, label = '', metric = '', status = '', scale = '', unit = '', interval = 100 } = {}) {
+         this.width = width;
          this.row = row;
          this.column = column;
          this.markers = {
@@ -334,10 +343,12 @@
          };
          this.label = label;
          // this.offset = column + label.length + 1;
-         this.barOffset = 19;
+         this.barOffset = 20;
          this.offset = column + this.barOffset;
          this.metric = metric;
          this.status = status;
+         this.scale = scale;
+         this.unit = unit;
          this.interval = interval;
       }
 
@@ -345,20 +356,20 @@
          let cursor = 0;
          do { // draw the progressing bar
             // fetch stats
-            let { [this.metric]: metric = 0, [this.status]: status = '' } = vitals;
-            cursor = Math.floor((metric * this.size) / 100);
+            let { [this.metric]: metric = 0, [this.status]: status = '', [this.scale]: scale = 100 } = vitals;
+            cursor = Math.floor(metric * (this.width / scale));
             // re-render the empty bar always
             readline.cursorTo(process.stdout, this.column, this.row);
-            process.stdout.write(this.label.padEnd(this.barOffset, ' ') + this.markers.bg.repeat(this.size));
+            process.stdout.write(this.label.padEnd(this.barOffset, ' ') + this.markers.bg.repeat(this.width));
             // re-render the eq bar
-            cursor = (cursor > this.size) ? this.size : cursor; // cap bar length
+            cursor = (cursor > this.width) ? this.width : cursor; // cap bar length
             for (let i = 0; i < cursor; ++i) {
                readline.cursorTo(process.stdout, this.offset + i, this.row);
                process.stdout.write(this.markers[status]); // coordinate marker colour with status
             }
             // re-render the metric value
-            readline.cursorTo(process.stdout, this.size + this.offset + 2, this.row);
-            process.stdout.write('\x1b[0K' + metric + '%'); // erase to the end of the line
+            readline.cursorTo(process.stdout, this.width + this.offset + 2, this.row);
+            process.stdout.write('\x1b[0K' + metric + this.unit); // erase to the end of the line
             //
             sleep(this.interval);
          } while (rendering);
@@ -368,13 +379,13 @@
    async function main() {
       console.clear();
       process.stdout.write('\x1b[?25l'); // disable cursor
-      let cacheUtil = new EQ({ "size": 30, "row": 1, "column": 3, "label": "cache%", "metric": "cacheUtil", "status": "cacheStatus", "interval": 50 });
-      let dirtyUtil = new EQ({ "size": 30, "row": 3, "column": 3, "label": "dirty%", "metric": "dirtyUtil", "status": "dirtyStatus", "interval": 50 });
-      let dirtyUpdatesUtil = new EQ({ "size": 30, "row": 5, "column": 3, "label": "dirtyUpdates%", "metric": "dirtyUpdatesUtil", "status": "dirtyUpdatesStatus", "interval": 50 });
-      let checkpointStress = new EQ({ "size": 30, "row": 7, "column": 3, "label": "checkpointStress", "metric": "checkpointRuntimeRatio", "status": "checkpointStatus", "interval": 500 });
-      let wtReadTicketsUtil = new EQ({ "size": 30, "row": 9, "column": 3, "label": "wtReadTickets%", "metric": "wtReadTicketsUtil", "status": "wtReadTicketsStatus", "interval": 50 });
-      let wtWriteTicketsUtil = new EQ({ "size": 30, "row": 11, "column": 3, "label": "wtWriteTickets%", "metric": "wtWriteTicketsUtil", "status": "wtWriteTicketsStatus", "interval": 50 });
-      // let heapFragmentation = new EQ({ "size": 30, "row": 13, "column": 3, "label": "heapFragmentation%", "metric": "memoryFragmentationRatio", "status": "memoryFragmentationStatus", "interval": 50 });
+      let cacheUtil = new EQ({ "width": 30, "row": 1, "column": 3, "label": "cacheFill", "metric": "cacheUtil", "status": "cacheStatus", "scale": "evictionTrigger", "unit": "%" });
+      let dirtyUtil = new EQ({ "width": 30, "row": 3, "column": 3, "label": "dirtyFill", "metric": "dirtyUtil", "status": "dirtyStatus", "scale": "evictionDirtyTrigger", "unit": "%" });
+      let dirtyUpdatesUtil = new EQ({ "width": 30, "row": 5, "column": 3, "label": "dirtyUpdatesFill", "metric": "dirtyUpdatesUtil", "status": "dirtyUpdatesStatus", "scale": "evictionUpdatesTrigger", "unit": "%" });
+      let checkpointStress = new EQ({ "width": 30, "row": 7, "column": 3, "label": "checkpointStress", "metric": "checkpointRuntimeRatio", "status": "checkpointStatus", "interval": 500, "unit": "%" });
+      let wtReadTicketsUtil = new EQ({ "width": 30, "row": 9, "column": 3, "label": "wtReadTicketsUtil", "metric": "wtReadTicketsUtil", "status": "wtReadTicketsStatus", "unit": "%" });
+      let wtWriteTicketsUtil = new EQ({ "width": 30, "row": 11, "column": 3, "label": "wtWriteTicketsUtil", "metric": "wtWriteTicketsUtil", "status": "wtWriteTicketsStatus", "unit": "%" });
+      // let heapFragmentation = new EQ({ "width": 30, "row": 13, "column": 3, "label": "heapFragmentation%", "metric": "memoryFragmentationRatio", "status": "memoryFragmentationStatus", "interval": 50 });
       // console.log(util.inspect(congestionMetrics, { "colors": true, "getters": "get", "depth": Infinity, "compact": Infinity, "breakLength": 80, "numericSeparator": true }));
       // await Promise.allSettled([
       Promise.allSettled([
@@ -387,13 +398,12 @@
          // heapFragmentation.render()
       ]).then(() => process.stdout.write('\x1b[?25h')); // re-enable cursor
       //
-      // for (let n = 0; n <= 1000; ++n) {
       while (true) {
          // fetching the stats
          vitals = await congestionMonitor();
-         sleep(200);
+         sleep(pollingInterval);
       }
-      rendering = false;
+      // rendering = false;
    }
 
    await main().finally(console.log);
