@@ -33,7 +33,7 @@ let options = {
       throw `\x1b[31m[ERROR] namespace "${dbName}.${collName}" does not exist\x1b[0m`;
    }
 
-   let randFilter = { "$expr": { "$gt": [n / 100, { "$rand": {} }] } };
+   let randFilter = { "$expr": { "$gt": [n/100, { "$rand": {} }] } };
    // let update = { "$set": { "x": Math.random() } };
 
    for (let i = 1; i <= rounds; ++i) {
