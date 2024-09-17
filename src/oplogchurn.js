@@ -1,7 +1,8 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.3"
+ *  Version: "0.5.4"
  *  Description: measure oplog churn rate script
+ *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
@@ -18,7 +19,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.5.3" };
+   let __script = { "name": "oplogchurn.js", "version": "0.5.4" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
