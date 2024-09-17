@@ -1,8 +1,8 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.1.1"
-    *  Description: "monitors mongod congestion vitals"
+    *  Version: "0.1.2"
+    *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
@@ -343,7 +343,7 @@
          };
          this.label = label;
          // this.offset = column + label.length + 1;
-         this.barOffset = 20;
+         this.barOffset = 17;
          this.offset = column + this.barOffset;
          this.metric = metric;
          this.status = status;
@@ -368,7 +368,7 @@
                process.stdout.write(this.markers[status]); // coordinate marker colour with status
             }
             // re-render the metric value
-            readline.cursorTo(process.stdout, this.width + this.offset + 2, this.row);
+            readline.cursorTo(process.stdout, this.width + this.offset + 1, this.row);
             process.stdout.write('\x1b[0K' + metric + this.unit); // erase to the end of the line
             //
             sleep(this.interval);
@@ -383,10 +383,8 @@
       let dirtyUtil = new EQ({ "width": 30, "row": 3, "column": 3, "label": "dirtyFill", "metric": "dirtyUtil", "status": "dirtyStatus", "scale": "evictionDirtyTrigger", "unit": "%" });
       let dirtyUpdatesUtil = new EQ({ "width": 30, "row": 5, "column": 3, "label": "dirtyUpdatesFill", "metric": "dirtyUpdatesUtil", "status": "dirtyUpdatesStatus", "scale": "evictionUpdatesTrigger", "unit": "%" });
       let checkpointStress = new EQ({ "width": 30, "row": 7, "column": 3, "label": "checkpointStress", "metric": "checkpointRuntimeRatio", "status": "checkpointStatus", "interval": 500, "unit": "%" });
-      let wtReadTicketsUtil = new EQ({ "width": 30, "row": 9, "column": 3, "label": "wtReadTicketsUtil", "metric": "wtReadTicketsUtil", "status": "wtReadTicketsStatus", "unit": "%" });
-      let wtWriteTicketsUtil = new EQ({ "width": 30, "row": 11, "column": 3, "label": "wtWriteTicketsUtil", "metric": "wtWriteTicketsUtil", "status": "wtWriteTicketsStatus", "unit": "%" });
-      // let heapFragmentation = new EQ({ "width": 30, "row": 13, "column": 3, "label": "heapFragmentation%", "metric": "memoryFragmentationRatio", "status": "memoryFragmentationStatus", "interval": 50 });
-      // console.log(util.inspect(congestionMetrics, { "colors": true, "getters": "get", "depth": Infinity, "compact": Infinity, "breakLength": 80, "numericSeparator": true }));
+      let wtReadTicketsUtil = new EQ({ "width": 30, "row": 9, "column": 3, "label": "readTicketsUtil", "metric": "wtReadTicketsUtil", "status": "wtReadTicketsStatus", "unit": "%" });
+      let wtWriteTicketsUtil = new EQ({ "width": 30, "row": 11, "column": 3, "label": "writeTicketsUtil", "metric": "wtWriteTicketsUtil", "status": "wtWriteTicketsStatus", "unit": "%" });
       // await Promise.allSettled([
       Promise.allSettled([
          cacheUtil.render(),
@@ -394,9 +392,9 @@
          dirtyUpdatesUtil.render(),
          checkpointStress.render(),
          wtReadTicketsUtil.render(),
-         wtWriteTicketsUtil.render(),
-         // heapFragmentation.render()
-      ]).then(() => process.stdout.write('\x1b[?25h')); // re-enable cursor
+         wtWriteTicketsUtil.render()
+      // ]).then(() => process.stdout.write('\x1b[?25h')); // re-enable cursor
+      ]);
       //
       while (true) {
          // fetching the stats
@@ -406,5 +404,6 @@
       // rendering = false;
    }
 
-   await main().finally(console.log);
+   await main().finally(process.stdout.write('\x1b[?25h')); // re-enable cursor
+   // await main().finally(console.log);
 })();
