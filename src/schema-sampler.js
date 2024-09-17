@@ -60,45 +60,43 @@ let userOptions = {
             "type": "collection",
             "name": /(?:^(?!system\..+$).+)/
          },
-         true,
-         true
+         true, true
       ];
       let listViewOpts = [{
             "type": "view",
             "name": /(?:^(?!system\..+$).+)/
          },
-         true,
-         true
+         true, true
       ];
       let dbs = db.adminCommand(...listDbOpts).databases.map(dbName => dbName.name);
       return dbs.map(dbName => ({
-            "db": dbName,
-            "collections": db.getSiblingDB(dbName)
-                             .getCollectionInfos(...listColOpts)
-                             .map(({ 'name': collName }) => ({
-                                 "name":        collName,
-                                 "documents":   db.getSiblingDB(dbName)
-                                                  .getCollection(collName)
-                                                  .stats().count,
-                                 "indexes":     db.getSiblingDB(dbName)
-                                                  .getCollection(collName)
-                                                  .getIndexes(),
-                                 "$sample":     db.getSiblingDB(dbName)
-                                                  .getCollection(collName)
-                                                  .aggregate(collectionPipeline, options)
-                                                  .toArray()
-            })),
-            "views": db.getSiblingDB(dbName)
-                       .getCollectionInfos(...listViewOpts)
-                       .map(({ 'name': viewName, 'options': viewOptions }) => ({
-                           "name":     viewName,
-                           "options":  viewOptions,
-                           "$sample":  db.getSiblingDB(dbName)
-                                         .getCollection(viewName)
-                                         .aggregate(viewPipeline, options)
-                                         .toArray()
-            }))
-      }))
+         "db": dbName,
+         "collections": db.getSiblingDB(dbName)
+                          .getCollectionInfos(...listColOpts)
+                          .map(({ 'name': collName }) => ({
+                              "name":      collName,
+                              "documents": db.getSiblingDB(dbName)
+                                             .getCollection(collName)
+                                             .stats().count,
+                              "indexes":   db.getSiblingDB(dbName)
+                                             .getCollection(collName)
+                                             .getIndexes(),
+                              "$sample":   db.getSiblingDB(dbName)
+                                             .getCollection(collName)
+                                             .aggregate(collectionPipeline, options)
+                                             .toArray()
+         })),
+         "views": db.getSiblingDB(dbName)
+                    .getCollectionInfos(...listViewOpts)
+                    .map(({ 'name': viewName, 'options': viewOptions }) => ({
+                        "name":     viewName,
+                        "options":  viewOptions,
+                        "$sample":  db.getSiblingDB(dbName)
+                                      .getCollection(viewName)
+                                      .aggregate(viewPipeline, options)
+                                      .toArray()
+         }))
+      }));
    }
 
    function genReport(schema) {
