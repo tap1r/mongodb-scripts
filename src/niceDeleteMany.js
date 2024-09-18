@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.1.1"
+    *  Version: "0.1.2"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,18 +16,20 @@
     *  - add serverStatus() caching decorator, calculate moving averages
     *  - add progress counters with estimated time remaining
     *  - add congestion meter for admission control
-    *  - add throttling meter for admission control
     */
 
-   // Usage: "mongosh [connection options] --quiet [--eval "let options = {...};"] [-f|--file] niceDeleteMany.js"
+   // Syntax: "mongosh [connection options] --quiet [--eval 'let dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>;'] [-f|--file] niceDeleteMany.js"
+
+   // Example: mongosh --host "replset/localhost" --eval 'let dbName = "database", collName = "collection", filter = { "qty": { "$lte": 100 } }, safeguard = true;' niceDeleteMany.js
 
    /*
-    * start user defined options
+    *  Start user defined option defaults
     */
-   let dbName = 'database', collName = 'collection';
-   let filter = {}; // example: { "qty": { "$lte": 1000 } }
-   let hint = {}; // define a hint if it helps
-   let collation = {
+   typeof dbName === 'undefined' && (dbName = '');
+   typeof collName === 'undefined' && (collName = '');
+   typeof filter === 'undefined' && (filter = {});
+   typeof hint === 'undefined' && (hint = {});
+   typeof collation === 'undefined' && (collation = {
       // "locale": <string>,
       // "caseLevel": <boolean>,
       // "caseFirst": <string>,
@@ -36,13 +38,13 @@
       // "alternate": <string>,
       // "maxVariable": <string>,
       // "backwards": <boolean>
-   };
-   let safeguard = true; // simulates deletes only (via aborted transactions), set false to remove safeguard
+   });
+   typeof safeguard === 'undefined' && (safeguard = true); // simulates deletes only (via aborted transactions), set false to remove safeguard
    /*
-    * end user defined options
+    *  End user defined options
     */
 
-   let __script = { "name": "niceDeleteMany.js", "version": "0.1.1" };
+   let __script = { "name": "niceDeleteMany.js", "version": "0.1.2" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -536,8 +538,8 @@
       for await (let thread of threads) {
          /*
           *  Wrap method() in an async fn to ensure we get a promise.
-          *  Then expose such promise, so it's possible to later reference and
-          *  remove it from the executing pool.
+          *  Then expose such promise, so it's possible to later reference
+          *  and remove it from the executing pool.
           */
          let msg = `\n\n\tScheduling batch ${thread.bucketId} with ${thread.bucketsRemaining} buckets remaining queued:\n`;
          msg = banner + msg;
@@ -582,8 +584,8 @@
       console.log(banner);
       let deletionList = getIds(filter, bucketSizeLimit, sessionOpts);
       let { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
-      if (initialEmptyBatch) {
-         console.log('\tno matching documents found to match the filter, double check the namespace and filter');
+      if (initialEmptyBatch === true) {
+         console.log('\tNo matching documents found to match the filter, double-check the namespace and filter');
       } else { // first batch
          let msg = `\nForking ${initialBatch.bucketsTotal} batches of ${initialBatch.bucketSizeLimit} documents with concurrency execution of ${concurrency} to delete ${initialBatch.IDsTotal} documents`;
          banner += msg;
@@ -599,13 +601,10 @@
       console.log(`\nValidating deletion results ...please wait.\n`);
       let finalCount = countIds(filter);
       if (safeguard) {
-         console.log('Simulation safeguard is enabled, no deletions were actually performed.');
-         console.log('...but since you asked, the final query count is', finalCount, 'compared to the initial', (initialEmptyBatch) ? 0 : initialBatch.IDsTotal);
-      } else if (finalCount === 0) {
-         console.log('No matching documents found, deletion succeeded!');
-      } else { // found some residual results, outside writes, stale reads etc...
-         console.log('Found total:', finalCount, 'documents remaining to be deleted, please consider running the script again.');
+         console.log('Simulation safeguard is enabled, no deletions were actually performed, but since you asked:\n');
       }
+      console.log('\tInitial document count matching filter: ', (initialEmptyBatch === true) ? 0 : initialBatch.IDsTotal);
+      console.log('\tResidual document count matching filter:', finalCount);
       console.log('\nDone!');
    }
 
