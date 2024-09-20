@@ -25,7 +25,7 @@
     *  - add backoff expiry timer
     */
 
-   // Syntax: "mongosh [connection options] --quiet [--eval 'let dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>;'] [-f|--file] niceDeleteMany.js"
+   // Syntax: mongosh [connection options] --quiet [--eval 'let dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>;'] [-f|--file] niceDeleteMany.js
 
    /*
     *  dbName: <string>      // (required) database name
@@ -39,7 +39,7 @@
    // Example: mongosh --host "replset/localhost" --eval 'let dbName = "database", collName = "collection", filter = { "qty": { "$lte": 100 } }, safeguard = true;' niceDeleteMany.js
 
    /*
-    *  Start user defined option defaults
+    *  Start user defined options defaults
     */
    typeof dbName !== 'string' && (dbName = '');
    typeof collName !== 'string' && (collName = '');
@@ -56,13 +56,12 @@
    let vitals = {};
 
    async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
-      // ID curation using blocking aggregation stage operator
+      // _id curation (employs blocking aggregation operators)
       let session = db.getMongo().startSession(sessionOpts);
       let namespace = session.getDatabase(dbName).getCollection(collName);
       let buckets = Math.pow(2, 31) - 1, // max 32bit Int
          aggOpts = {
             "allowDiskUse": true,
-            // "readConcern": readConcern,
             "collation": collation,
             "hint": hint,
             "comment": "Bucketing IDs via niceDeleteMany.js",
