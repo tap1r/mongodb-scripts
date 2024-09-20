@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.1.2"
+    *  Version: "0.1.3"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,8 +13,7 @@
    // Usage: "mongosh [connection options] --quiet [-f|--file] congestionMonitor.js"
 
    let vitals = {};
-   let rendering = true;
-   let pollingInterval = 100;
+   let pollingIntervalMS = 100;
 
    async function congestionMonitor() {
       /*
@@ -331,18 +330,17 @@
    }
 
    class EQ {
-      constructor({ width = 25, row = 0, column = 0, label = '', metric = '', status = '', scale = '', unit = '', interval = 100 } = {}) {
+      constructor({ width = 30, row = 0, column = 0, label = '', metric = '', status = '', scale = '', unit = '', interval = 100 } = {}) {
          this.width = width;
          this.row = row;
          this.column = column;
          this.markers = {
-            "bg": "\u2591",
-            "low": "\x1b[92m\u2593\x1b[0m",
-            "medium": "\x1b[93m\u2593\x1b[0m",
-            "high": "\x1b[91m\u2593\x1b[0m"
+            "bg": "\u2591", // light grey
+            "low": "\x1b[92m\u2593\x1b[0m", // green
+            "medium": "\x1b[93m\u2593\x1b[0m", // yellow
+            "high": "\x1b[91m\u2593\x1b[0m" // red
          };
          this.label = label;
-         // this.offset = column + label.length + 1;
          this.barOffset = 17;
          this.offset = column + this.barOffset;
          this.metric = metric;
@@ -352,16 +350,16 @@
          this.interval = interval;
       }
 
-      async render() {
+      async draw() {
          let cursor = 0;
-         do { // draw the progressing bar
-            // fetch stats
+         while (true) { // draw the EQ bar
+            // take current stats values from the parent monitoring thread
             let { [this.metric]: metric = 0, [this.status]: status = '', [this.scale]: scale = 100 } = vitals;
             cursor = Math.floor(metric * (this.width / scale));
-            // re-render the empty bar always
+            // always re-render the empty bar background
             readline.cursorTo(process.stdout, this.column, this.row);
             process.stdout.write(this.label.padEnd(this.barOffset, ' ') + this.markers.bg.repeat(this.width));
-            // re-render the eq bar
+            // re-render the bar elements to the current metric value
             cursor = (cursor > this.width) ? this.width : cursor; // cap bar length
             for (let i = 0; i < cursor; ++i) {
                readline.cursorTo(process.stdout, this.offset + i, this.row);
@@ -370,40 +368,38 @@
             // re-render the metric value
             readline.cursorTo(process.stdout, this.width + this.offset + 1, this.row);
             process.stdout.write('\x1b[0K' + metric + this.unit); // erase to the end of the line
-            //
+            // sleep on the rendering interval per EQ (decoupled from the stats update interval)
             sleep(this.interval);
-         } while (rendering);
+         }
       }
    }
 
    async function main() {
+      // instantiate EQ objects
+      let cacheUtil = new EQ({ "row": 1, "column": 3, "label": "cacheFill", "metric": "cacheUtil", "status": "cacheStatus", "scale": "evictionTrigger", "unit": "%" });
+      let dirtyUtil = new EQ({ "row": 3, "column": 3, "label": "dirtyFill", "metric": "dirtyUtil", "status": "dirtyStatus", "scale": "evictionDirtyTrigger", "unit": "%" });
+      let dirtyUpdatesUtil = new EQ({ "row": 5, "column": 3, "label": "dirtyUpdatesFill", "metric": "dirtyUpdatesUtil", "status": "dirtyUpdatesStatus", "scale": "evictionUpdatesTrigger", "unit": "%" });
+      let checkpointStress = new EQ({ "row": 7, "column": 3, "label": "checkpointStress", "metric": "checkpointRuntimeRatio", "status": "checkpointStatus", "interval": 500, "unit": "%" });
+      let wtReadTicketsUtil = new EQ({ "row": 9, "column": 3, "label": "readTicketsUtil", "metric": "wtReadTicketsUtil", "status": "wtReadTicketsStatus", "unit": "%" });
+      let wtWriteTicketsUtil = new EQ({ "row": 11, "column": 3, "label": "writeTicketsUtil", "metric": "wtWriteTicketsUtil", "status": "wtWriteTicketsStatus", "unit": "%" });
+      // setup the initial console state
       console.clear();
-      process.stdout.write('\x1b[?25l'); // disable cursor
-      let cacheUtil = new EQ({ "width": 30, "row": 1, "column": 3, "label": "cacheFill", "metric": "cacheUtil", "status": "cacheStatus", "scale": "evictionTrigger", "unit": "%" });
-      let dirtyUtil = new EQ({ "width": 30, "row": 3, "column": 3, "label": "dirtyFill", "metric": "dirtyUtil", "status": "dirtyStatus", "scale": "evictionDirtyTrigger", "unit": "%" });
-      let dirtyUpdatesUtil = new EQ({ "width": 30, "row": 5, "column": 3, "label": "dirtyUpdatesFill", "metric": "dirtyUpdatesUtil", "status": "dirtyUpdatesStatus", "scale": "evictionUpdatesTrigger", "unit": "%" });
-      let checkpointStress = new EQ({ "width": 30, "row": 7, "column": 3, "label": "checkpointStress", "metric": "checkpointRuntimeRatio", "status": "checkpointStatus", "interval": 500, "unit": "%" });
-      let wtReadTicketsUtil = new EQ({ "width": 30, "row": 9, "column": 3, "label": "readTicketsUtil", "metric": "wtReadTicketsUtil", "status": "wtReadTicketsStatus", "unit": "%" });
-      let wtWriteTicketsUtil = new EQ({ "width": 30, "row": 11, "column": 3, "label": "writeTicketsUtil", "metric": "wtWriteTicketsUtil", "status": "wtWriteTicketsStatus", "unit": "%" });
-      // await Promise.allSettled([
-      Promise.allSettled([
-         cacheUtil.render(),
-         dirtyUtil.render(),
-         dirtyUpdatesUtil.render(),
-         checkpointStress.render(),
-         wtReadTicketsUtil.render(),
-         wtWriteTicketsUtil.render()
-      // ]).then(() => process.stdout.write('\x1b[?25h')); // re-enable cursor
+      process.stdout.write('\x1b[?25l'); // disable the console cursor
+      // begin rendering EQ bars
+      Promise.allSettled([ // do not await to background thread
+         cacheUtil.draw(),
+         dirtyUtil.draw(),
+         dirtyUpdatesUtil.draw(),
+         checkpointStress.draw(),
+         wtReadTicketsUtil.draw(),
+         wtWriteTicketsUtil.draw()
       ]);
-      //
-      while (true) {
-         // fetching the stats
+
+      while (true) { // refresh stats
          vitals = await congestionMonitor();
-         sleep(pollingInterval);
+         sleep(pollingIntervalMS);
       }
-      // rendering = false;
    }
 
-   await main().finally(process.stdout.write('\x1b[?25h')); // re-enable cursor
-   // await main().finally(console.log);
+   await main().finally(process.stdout.write('\x1b[?25h')); // re-enable the console cursor
 })();
