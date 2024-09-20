@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.1.2"
+    *  Version: "0.1.3"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,40 +11,47 @@
     *  - Good for matching up to 2,147,483,647,000 documents
     *
     *  TODOs:
+    *  - re-add naïve timers for mongos/sharding support
     *  - add execution profiler/timers
-    *  - add admission controls
-    *  - add serverStatus() caching decorator, calculate moving averages
+    *  - add serverStatus() caching decorator
+    *    - calculate smoothed decay/moving average metrics
+    *    - debouce serverStatus() requests to fixed intervals
     *  - add progress counters with estimated time remaining
     *  - add congestion meter for admission control
+    *  - investigate non-blocking mode curation techniques
+    *  - add more granular/progressive admission control based on dirtyFill
+    *  - add repl-lag metric for admission control
+    *  - fix secondary reads for curation
+    *  - add backoff expiry timer
     */
 
    // Syntax: "mongosh [connection options] --quiet [--eval 'let dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>;'] [-f|--file] niceDeleteMany.js"
+
+   /*
+    *  dbName: <string>      // (required) database name
+    *  collName: <string>    // (required) collection name
+    *  filter: <document>    // (optional) query filter
+    *  hint: <document>      // (optional) query hint
+    *  collation: <document> // (optional) query collation
+    *  safeguard: <bool>     // (optional) simulates deletes only (via aborted transactions), set false to remove safeguard
+    */
 
    // Example: mongosh --host "replset/localhost" --eval 'let dbName = "database", collName = "collection", filter = { "qty": { "$lte": 100 } }, safeguard = true;' niceDeleteMany.js
 
    /*
     *  Start user defined option defaults
     */
-   typeof dbName === 'undefined' && (dbName = '');
-   typeof collName === 'undefined' && (collName = '');
-   typeof filter === 'undefined' && (filter = {});
-   typeof hint === 'undefined' && (hint = {});
-   typeof collation === 'undefined' && (collation = {
-      // "locale": <string>,
-      // "caseLevel": <boolean>,
-      // "caseFirst": <string>,
-      // "strength": <int>,
-      // "numericOrdering": <boolean>,
-      // "alternate": <string>,
-      // "maxVariable": <string>,
-      // "backwards": <boolean>
-   });
-   typeof safeguard === 'undefined' && (safeguard = true); // simulates deletes only (via aborted transactions), set false to remove safeguard
+   typeof dbName !== 'string' && (dbName = '');
+   typeof collName !== 'string' && (collName = '');
+   typeof filter !== 'object' && (filter = {});
+   typeof hint !== 'object' && (hint = {});
+   typeof collation !== 'object' && (collation = {});
+   typeof safeguard !== 'boolean' && (safeguard = true);
    /*
     *  End user defined options
     */
 
-   let __script = { "name": "niceDeleteMany.js", "version": "0.1.2" };
+   let __script = { "name": "niceDeleteMany.js", "version": "0.1.3" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -52,7 +59,15 @@
       // ID curation using blocking aggregation stage operator
       let session = db.getMongo().startSession(sessionOpts);
       let namespace = session.getDatabase(dbName).getCollection(collName);
-      let buckets = Math.pow(2, 31) - 1, // max 32bit Int,
+      let buckets = Math.pow(2, 31) - 1, // max 32bit Int
+         aggOpts = {
+            "allowDiskUse": true,
+            // "readConcern": readConcern,
+            "collation": collation,
+            "hint": hint,
+            "comment": "Bucketing IDs via niceDeleteMany.js",
+            "let": { "bucketSizeLimit": bucketSizeLimit }
+         },
          pipeline = [
             { "$match": filter },
             { "$setWindowFields": {
@@ -90,15 +105,8 @@
                "IDsTotal": 1, // total number of IDs
                "IDs": 1 // IDs in the current bucket
             } }
-         ],
-         aggOpts = {
-            "allowDiskUse": true,
-            // "readConcern": readConcern,
-            "collation": collation,
-            "hint": hint,
-            "comment": "Bucketing IDs via niceDeleteMany.js",
-            "let": { "bucketSizeLimit": bucketSizeLimit }
-         };
+         ];
+
       yield* namespace.aggregate(pipeline, aggOpts);
    }
 
@@ -509,9 +517,9 @@
       } = vitals;
       let sleepIntervalMS = 'wait';
 
-      // heuristics based on this write workload
+      // heuristics based on this write workload pattern
       if (cacheStatus == 'high' || dirtyStatus == 'high' || dirtyUpdatesStatus == 'high') {
-         // app threads evicting, we should not contribute to cache pressure
+         // WT app threads evicting, we should not contribute to excess cache pressure
          sleepIntervalMS = 'wait';
       } else if (dirtyStatus == 'medium' || dirtyUpdatesStatus == 'medium') {
          // moderate write cache pressure, we can pause slightly
@@ -520,7 +528,7 @@
          // tickets highly contended, we should mitigate storage pressure
          sleepIntervalMS = Math.floor(200 + Math.random() * 250);
       } else {
-         // no cache pressure, we can open the throttle
+         // no cache pressure, we can open up the throttle
          sleepIntervalMS = 0;
       }
 
@@ -586,14 +594,15 @@
       let { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
       if (initialEmptyBatch === true) {
          console.log('\tNo matching documents found to match the filter, double-check the namespace and filter');
-      } else { // first batch
+      } else {
+         // initial batch
          let msg = `\nForking ${initialBatch.bucketsTotal} batches of ${initialBatch.bucketSizeLimit} documents with concurrency execution of ${concurrency} to delete ${initialBatch.IDsTotal} documents`;
          banner += msg;
          console.log(msg);
          for await (let [bucketId, deletedCount] of asyncThreadPool(deleteManyTask, [initialBatch], concurrency, sessionOpts)) {
             console.log('\t\t...batch', bucketId, 'deleted', deletedCount, 'documents');
          }
-         // update admissionControl metrics after initial load spike from the first batch
+         // remaining batches
          for await (let [bucketId, deletedCount] of asyncThreadPool(deleteManyTask, deletionList, concurrency, sessionOpts)) {
             console.log('\t\t...batch', bucketId, 'deleted', deletedCount, 'documents');
          }
