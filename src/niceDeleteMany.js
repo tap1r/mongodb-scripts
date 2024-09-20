@@ -549,7 +549,7 @@
           *  Then expose such promise, so it's possible to later reference
           *  and remove it from the executing pool.
           */
-         let msg = `\n\n\tScheduling batch ${thread.bucketId} with ${thread.bucketsRemaining} buckets remaining queued:\n`;
+         let msg = `\n\n\tScheduling batch ${thread.bucketId} with ${thread.bucketsRemaining} buckets queued remaining:\n`;
          msg = banner + msg;
          console.clear();
          console.log(msg);
@@ -584,7 +584,7 @@
          "writeConcern": writeConcern
       };
       banner = `\n\x1b[33m${banner}\x1b[0m`;
-      banner += `\n\nCurating deletion Ids from namespace '${dbName}.${collName}' with filter ${JSON.stringify(filter)} ...please wait.\n`;
+      banner += `\n\nCurating deletion Ids from namespace '${dbName}.${collName}' with filter ${JSON.stringify(filter)} ...please wait\n`;
       if (safeguard) {
          banner += '\nWarning: Safeguard is enabled, simulating deletes only.\n';
       }
