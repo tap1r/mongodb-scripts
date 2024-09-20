@@ -518,6 +518,7 @@
       let sleepIntervalMS = 'wait';
 
       // heuristics based on this write workload pattern
+      // add mongos detection here
       if (cacheStatus == 'high' || dirtyStatus == 'high' || dirtyUpdatesStatus == 'high') {
          // WT app threads evicting, we should not contribute to excess cache pressure
          sleepIntervalMS = 'wait';
@@ -586,7 +587,7 @@
       banner = `\n\x1b[33m${banner}\x1b[0m`;
       banner += `\n\nCurating deletion Ids from namespace '${dbName}.${collName}' with filter ${JSON.stringify(filter)} ...please wait\n`;
       if (safeguard) {
-         banner += '\nWarning: Safeguard is enabled, simulating deletes only.\n';
+         banner += '\nWarning: Safeguard is enabled, simulating deletes only\n';
       }
       console.clear();
       console.log(banner);
@@ -607,7 +608,7 @@
             console.log('\t\t...batch', bucketId, 'deleted', deletedCount, 'documents');
          }
       }
-      console.log(`\nValidating deletion results ...please wait.\n`);
+      console.log(`\nValidating deletion results ...please wait\n`);
       let finalCount = countIds(filter);
       if (safeguard) {
          console.log('Simulation safeguard is enabled, no deletions were actually performed, but since you asked:\n');
