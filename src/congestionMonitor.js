@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.1.3"
+    *  Version: "0.1.4"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -10,7 +10,7 @@
     *  - 
     */
 
-   // Usage: "mongosh [connection options] --quiet [-f|--file] congestionMonitor.js"
+   // Usage: mongosh [connection options] --quiet [-f|--file] congestionMonitor.js
 
    let vitals = {};
    let pollingIntervalMS = 100;
@@ -216,6 +216,26 @@
          get evictionsTriggered() {
             return (this.cacheEvictions || this.dirtyCacheEvictions || this.dirtyUpdatesCacheEvictions);
          },
+         get cacheHitRatio() {
+            let hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
+            let missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
+            return +(100 * (hitBytes - missBytes) / hitBytes).toFixed(2);
+         },
+         get cacheHitStatus() {
+            return (this.cacheHitRatio < 20) ? 'high'
+                 : (this.cacheHitRatio > 75) ? 'low'
+                 : 'medium';
+         },
+         get cacheMissRatio() {
+            let hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
+            let missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
+            return +(100 * (1 - (hitBytes - missBytes) / hitBytes)).toFixed(2);
+         },
+         get cacheMissStatus() {
+            return (this.cacheMissRatio < 20) ? 'low'
+                 : (this.cacheMissRatio > 75) ? 'high'
+                 : 'medium';
+         },
          get memSizeBytes() {
             // return (this?.hostInfo?.system?.memSizeMB ?? 1024) * 1024 * 1024;
             return (this?.hostInfo?.system?.memLimitMB ?? 1024) * 1024 * 1024;
@@ -382,6 +402,8 @@
       let checkpointStress = new EQ({ "row": 7, "column": 3, "label": "checkpointStress", "metric": "checkpointRuntimeRatio", "status": "checkpointStatus", "interval": 500, "unit": "%" });
       let wtReadTicketsUtil = new EQ({ "row": 9, "column": 3, "label": "readTicketsUtil", "metric": "wtReadTicketsUtil", "status": "wtReadTicketsStatus", "unit": "%" });
       let wtWriteTicketsUtil = new EQ({ "row": 11, "column": 3, "label": "writeTicketsUtil", "metric": "wtWriteTicketsUtil", "status": "wtWriteTicketsStatus", "unit": "%" });
+      // let cacheHitRatio = new EQ({ "row": 13, "column": 3, "label": "cacheHitRatio", "metric": "cacheHitRatio", "status": "cacheHitStatus", "unit": "%" });
+      // let cacheMissRatio = new EQ({ "row": 15, "column": 3, "label": "cacheMissRatio", "metric": "cacheMissRatio", "status": "cacheMissStatus", "unit": "%" });
       // setup the initial console state
       console.clear();
       process.stdout.write('\x1b[?25l'); // disable the console cursor
@@ -392,7 +414,9 @@
          dirtyUpdatesUtil.draw(),
          checkpointStress.draw(),
          wtReadTicketsUtil.draw(),
-         wtWriteTicketsUtil.draw()
+         wtWriteTicketsUtil.draw(),
+         // cacheHitRatio.draw(),
+         // cacheMissRatio.draw(),
       ]);
 
       while (true) { // refresh stats
