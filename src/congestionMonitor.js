@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.1.5"
+    *  Version: "0.1.6"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -388,6 +388,9 @@
             // re-render the metric value
             readline.cursorTo(process.stdout, this.width + this.offset + 1, this.row);
             process.stdout.write('\x1b[0K' + metric + this.unit); // erase to the end of the line
+            // re-render the table border
+            readline.cursorTo(process.stdout, this.width + this.offset + 7, this.row);
+            process.stdout.write('┃');
             // sleep on the rendering interval per EQ (decoupled from the stats update interval)
             sleep(this.interval);
          }
@@ -395,8 +398,15 @@
    }
 
    async function main() {
-      // instantiate EQ objects
       let metrics = [
+         // {  // EQ attributes
+         //    "name": "<string>",   // EQ label
+         //    "metric": "<string>", // monitor metric
+         //    "status": "<string>", // metric status
+         //    "scale": "<string>",  // metric scale
+         //    "unit": "<string>",   // metric unit
+         //    "interval": <int>     // refresh interval in milliseconds
+         // },
          { "name": "readTicketsUtil", "metric": "wtReadTicketsUtil", "status": "wtReadTicketsStatus", "unit": "%" },
          { "name": "writeTicketsUtil", "metric": "wtWriteTicketsUtil", "status": "wtWriteTicketsStatus", "unit": "%" },
          { "name": "cacheFill", "metric": "cacheUtil", "status": "cacheStatus", "scale": "evictionTrigger", "unit": "%" },
@@ -411,7 +421,15 @@
          metric.eq = new EQ(metric);
       });
       // setup the initial console state
+      let tableWidth = 54;
+      let tableTitle = 'Real-time congestion monitor';
+      let titleSpacing = (tableWidth - tableTitle.length)/2;
       console.clear();
+      console.log('┏' + '━'.repeat(titleSpacing - 1) + '┫' + tableTitle + '┣' + '━'.repeat(titleSpacing - 1) + '┓');
+      metrics.forEach(() => {
+         console.log('┃'+ ' '.repeat(tableWidth) + '┃'); 
+      });
+      console.log('┗'+ '━'.repeat(tableWidth) + '┛');
       process.stdout.write('\x1b[?25l'); // disable the console cursor
       Promise.allSettled([ // do not await to background thread
          // begin rendering EQ bars
