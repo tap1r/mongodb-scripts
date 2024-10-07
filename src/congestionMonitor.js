@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.1.6"
+    *  Version: "0.2.0"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -103,6 +103,17 @@
          return hostInfo;
       }
 
+      function rsStatus() {
+         let rsStatus = {};
+         try {
+            rsStatus = rs.status();
+         } catch(error) {
+            // console.debug(`\x1b[31m[WARN] insufficient rights to execute rs.status()\n${error}\x1b[0m`);
+         }
+
+         return rsStatus;
+      }
+
       return {
          // # WT eviction defaults (https://kb.corp.mongodb.com/article/000019073)
          // evictionThreadsMin,
@@ -115,6 +126,7 @@
          // evictionUpdatesTarget,  // eviction in worker threads when the cache contains at least this many bytes of updates
          // evictionUpdatesTrigger, // application threads to perform eviction when the cache contains at least this many bytes of updates
          "hostInfo": hostInfo(),
+         "rsStatus": rsStatus(),
          "wiredTigerEngineRuntimeConfig": db.adminCommand({ "getParameter": 1, "wiredTigerEngineRuntimeConfig": 1 }).wiredTigerEngineRuntimeConfig,
          "storageEngineConcurrentReadTransactions": db.adminCommand({ "getParameter": 1, "wiredTigerConcurrentReadTransactions": 1 }).wiredTigerConcurrentReadTransactions,
          // db.adminCommand({ "getParameter": 1, "storageEngineConcurrentReadTransactions": 1 })
@@ -181,7 +193,7 @@
             return this.serverStatus.wiredTiger.cache['bytes currently in the cache'];
          },
          get cacheUtil() {
-            return +((this.cachedBytes / this.cacheSizeBytes) * 100).toFixed(2);
+            return Number.parseFloat(((this.cachedBytes / this.cacheSizeBytes) * 100).toFixed(2));
          },
          get cacheStatus() {
             return (this.cacheUtil < this.evictionTarget) ? 'low'
@@ -189,7 +201,7 @@
                  : 'medium';
          },
          get dirtyUtil() {
-            return +((this.dirtyBytes / this.cacheSizeBytes) * 100).toFixed(2);
+            return Number.parseFloat(((this.dirtyBytes / this.cacheSizeBytes) * 100).toFixed(2));
          },
          get dirtyStatus() {
             return (this.dirtyUtil < this.evictionDirtyTarget) ? 'low'
@@ -197,7 +209,7 @@
                  : 'medium';
          },
          get dirtyUpdatesUtil() {
-            return +((this.updatesDirtyBytes / this.cacheSizeBytes) * 100).toFixed(2);
+            return Number.parseFloat(((this.updatesDirtyBytes / this.cacheSizeBytes) * 100).toFixed(2));
          },
          get dirtyUpdatesStatus() {
             return (this.dirtyUpdatesUtil < this.evictionUpdatesTarget) ? 'low'
@@ -219,7 +231,7 @@
          get cacheHitRatio() {
             let hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
             let missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
-            return +(100 * (hitBytes - missBytes) / hitBytes).toFixed(2);
+            return Number.parseFloat((100 * (hitBytes - missBytes) / hitBytes).toFixed(2));
          },
          get cacheHitStatus() {
             return (this.cacheHitRatio < 20) ? 'high'
@@ -229,7 +241,7 @@
          get cacheMissRatio() {
             let hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
             let missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
-            return +(100 * (1 - (hitBytes - missBytes) / hitBytes)).toFixed(2);
+            return Number.parseFloat((100 * (1 - (hitBytes - missBytes) / hitBytes)).toFixed(2));
          },
          get cacheMissStatus() {
             return (this.cacheMissRatio < 20) ? 'low'
@@ -253,7 +265,7 @@
             return +(this.serverStatus?.tcmalloc?.generic?.heap_size ?? (this.memSizeBytes / 64));
          },
          get heapUtil() {
-            return +(100 * (this.currentAllocatedBytes / this.heapSize)).toFixed(2);
+            return Number.parseFloat((100 * (this.currentAllocatedBytes / this.heapSize)).toFixed(2));
          },
          get pageheapFreeBytes() {
             // assume zero fragmentation if we cannot measure pageheap_free_bytes
@@ -263,7 +275,7 @@
             return +(this.serverStatus?.tcmalloc?.tcmalloc?.total_free_bytes ?? 0);
          },
          get memoryFragmentationRatio() {
-            return +((this.pageheapFreeBytes / this.memSizeBytes) * 100).toFixed(2);
+            return Number.parseFloat(((this.pageheapFreeBytes / this.memSizeBytes) * 100).toFixed(2));
          },
          get memoryFragmentationStatus() {
             // mimicing the (bad) t2 derived metric for now
@@ -298,19 +310,19 @@
          // v8.0 see db.serverStats().queues.execution
          get wtReadTicketsUtil() {
             let { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
-            return +((out / totalTickets) * 100).toFixed(2);
+            return Number.parseFloat(((out / totalTickets) * 100).toFixed(2));
          },
          get wtReadTicketsAvail() {
             let { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
-            return +((available / totalTickets) * 100).toFixed(2);
+            return Number.parseFloat(((available / totalTickets) * 100).toFixed(2));
          },
          get wtWriteTicketsUtil() {
             let { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
-            return +((out / totalTickets) * 100).toFixed(2);
+            return Number.parseFloat(((out / totalTickets) * 100).toFixed(2));
          },
          get wtWriteTicketsAvail() {
             let { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
-            return +((available / totalTickets) * 100).toFixed(2);
+            return Number.parseFloat(((available / totalTickets) * 100).toFixed(2));
          },
          get wtReadTicketsStatus() {
             return (this.wtReadTicketsUtil < 20) ? 'low'
@@ -339,12 +351,42 @@
             return (this.serverStatus.wiredTiger.transaction['transaction checkpoint most recent time (msecs)'] > 60000);
          },
          get checkpointRuntimeRatio() {
-            return +(((this.serverStatus.wiredTiger.transaction?.['transaction checkpoint most recent time (msecs)'] ?? this.serverStatus.wiredTiger.checkpoint?.['most recent time (msecs)']) / this.checkpointIntervalMS) * 100).toFixed(2);
+            return Number.parseFloat((((this.serverStatus.wiredTiger.transaction?.['transaction checkpoint most recent time (msecs)'] ?? this.serverStatus.wiredTiger.checkpoint?.['most recent time (msecs)']) / this.checkpointIntervalMS) * 100).toFixed(2));
          },
          get checkpointStatus() {
             return (this.checkpointRuntimeRatio < 50) ? 'low'
                  : (this.checkpointRuntimeRatio > 100) ? 'high'
                  : 'medium';
+         },
+         get activeReplLag() {
+            let opTimers = this.rsStatus.members.map(({ name, stateStr, health, optime, optimeDate, lastHeartbeat }) => {
+               return {
+                  "name": name,
+                  "stateStr": stateStr,
+                  "health": health,
+                  "optime": optime,
+                  "optimeDate": optimeDate,
+                  "lastHeartbeat": lastHeartbeat
+               };
+            // }).filter(node => {
+            }).filter(({ health, stateStr }) => {
+               // return (node.health && (node.stateStr == 'PRIMARY' || node.stateStr == 'SECONDARY'));
+               return (health && (stateStr == 'PRIMARY' || stateStr == 'SECONDARY'));
+            }).map(({ optimeDate }) => {
+               return optimeDate;
+            });
+            return +((Math.max(...opTimers) - Math.min(...opTimers))/1000).toFixed(0);
+         },
+         get replLagStatus() {
+            return (this.activeReplLag < this.heartbeatIntervalMillis / 1000) ? 'low'
+                 : (this.activeReplLag > 90) ? 'high' // maxStalenessSeconds
+                 : 'medium';
+         },
+         get replLagScale() {
+            return 30;
+         },
+         get heartbeatIntervalMillis() {
+            return this.rsStatus.heartbeatIntervalMillis;
          }
       };
    }
@@ -412,7 +454,8 @@
          { "name": "cacheFill", "metric": "cacheUtil", "status": "cacheStatus", "scale": "evictionTrigger", "unit": "%" },
          { "name": "dirtyFill", "metric": "dirtyUtil", "status": "dirtyStatus", "scale": "evictionDirtyTrigger", "unit": "%" },
          { "name": "dirtyUpdatesFill", "metric": "dirtyUpdatesUtil", "status": "dirtyUpdatesStatus", "scale": "evictionUpdatesTrigger", "unit": "%" },
-         { "name": "checkpointStress", "metric": "checkpointRuntimeRatio", "status": "checkpointStatus", "interval": 500, "unit": "%" }
+         { "name": "checkpointStress", "metric": "checkpointRuntimeRatio", "status": "checkpointStatus", "unit": "%", "interval": 250 },
+         { "name": "activeReplLag", "metric": "activeReplLag", "status": "replLagStatus", "scale": "replLagScale", "unit": "s", "interval": 500 }
       ];
       // instantiate EQ objects
       metrics.forEach((metric, _) => {
