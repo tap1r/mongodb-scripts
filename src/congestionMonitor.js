@@ -1,9 +1,9 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.1.4"
+    *  Version: "0.1.5"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
-    *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
+    *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  TODOs:
@@ -350,7 +350,7 @@
    }
 
    class EQ {
-      constructor({ width = 30, row = 0, column = 0, label = '', metric = '', status = '', scale = '', unit = '', interval = 100 } = {}) {
+      constructor({ width = 30, row = 0, column = 0, name = '', metric = '', status = '', scale = '', unit = '', interval = 100 } = {}) {
          this.width = width;
          this.row = row;
          this.column = column;
@@ -360,7 +360,7 @@
             "medium": "\x1b[93m\u2593\x1b[0m", // yellow
             "high": "\x1b[91m\u2593\x1b[0m" // red
          };
-         this.label = label;
+         this.name = name;
          this.barOffset = 17;
          this.offset = column + this.barOffset;
          this.metric = metric;
@@ -378,7 +378,7 @@
             cursor = Math.floor(metric * (this.width / scale));
             // always re-render the empty bar background
             readline.cursorTo(process.stdout, this.column, this.row);
-            process.stdout.write(this.label.padEnd(this.barOffset, ' ') + this.markers.bg.repeat(this.width));
+            process.stdout.write(this.name.padEnd(this.barOffset, ' ') + this.markers.bg.repeat(this.width));
             // re-render the bar elements to the current metric value
             cursor = (cursor > this.width) ? this.width : cursor; // cap bar length
             for (let i = 0; i < cursor; ++i) {
@@ -396,27 +396,26 @@
 
    async function main() {
       // instantiate EQ objects
-      let cacheUtil = new EQ({ "row": 1, "column": 3, "label": "cacheFill", "metric": "cacheUtil", "status": "cacheStatus", "scale": "evictionTrigger", "unit": "%" });
-      let dirtyUtil = new EQ({ "row": 3, "column": 3, "label": "dirtyFill", "metric": "dirtyUtil", "status": "dirtyStatus", "scale": "evictionDirtyTrigger", "unit": "%" });
-      let dirtyUpdatesUtil = new EQ({ "row": 5, "column": 3, "label": "dirtyUpdatesFill", "metric": "dirtyUpdatesUtil", "status": "dirtyUpdatesStatus", "scale": "evictionUpdatesTrigger", "unit": "%" });
-      let checkpointStress = new EQ({ "row": 7, "column": 3, "label": "checkpointStress", "metric": "checkpointRuntimeRatio", "status": "checkpointStatus", "interval": 500, "unit": "%" });
-      let wtReadTicketsUtil = new EQ({ "row": 9, "column": 3, "label": "readTicketsUtil", "metric": "wtReadTicketsUtil", "status": "wtReadTicketsStatus", "unit": "%" });
-      let wtWriteTicketsUtil = new EQ({ "row": 11, "column": 3, "label": "writeTicketsUtil", "metric": "wtWriteTicketsUtil", "status": "wtWriteTicketsStatus", "unit": "%" });
-      // let cacheHitRatio = new EQ({ "row": 13, "column": 3, "label": "cacheHitRatio", "metric": "cacheHitRatio", "status": "cacheHitStatus", "unit": "%" });
-      // let cacheMissRatio = new EQ({ "row": 15, "column": 3, "label": "cacheMissRatio", "metric": "cacheMissRatio", "status": "cacheMissStatus", "unit": "%" });
+      let metrics = [
+         { "name": "readTicketsUtil", "metric": "wtReadTicketsUtil", "status": "wtReadTicketsStatus", "unit": "%" },
+         { "name": "writeTicketsUtil", "metric": "wtWriteTicketsUtil", "status": "wtWriteTicketsStatus", "unit": "%" },
+         { "name": "cacheFill", "metric": "cacheUtil", "status": "cacheStatus", "scale": "evictionTrigger", "unit": "%" },
+         { "name": "dirtyFill", "metric": "dirtyUtil", "status": "dirtyStatus", "scale": "evictionDirtyTrigger", "unit": "%" },
+         { "name": "dirtyUpdatesFill", "metric": "dirtyUpdatesUtil", "status": "dirtyUpdatesStatus", "scale": "evictionUpdatesTrigger", "unit": "%" },
+         { "name": "checkpointStress", "metric": "checkpointRuntimeRatio", "status": "checkpointStatus", "interval": 500, "unit": "%" }
+      ];
+      // instantiate EQ objects
+      metrics.forEach((metric, _) => {
+         metric.row = _ + 1;
+         metric.column = 1;
+         metric.eq = new EQ(metric);
+      });
       // setup the initial console state
       console.clear();
       process.stdout.write('\x1b[?25l'); // disable the console cursor
-      // begin rendering EQ bars
       Promise.allSettled([ // do not await to background thread
-         cacheUtil.draw(),
-         dirtyUtil.draw(),
-         dirtyUpdatesUtil.draw(),
-         checkpointStress.draw(),
-         wtReadTicketsUtil.draw(),
-         wtWriteTicketsUtil.draw(),
-         // cacheHitRatio.draw(),
-         // cacheMissRatio.draw(),
+         // begin rendering EQ bars
+         metrics.forEach(({ eq }) => eq.draw())
       ]);
 
       while (true) { // refresh stats
