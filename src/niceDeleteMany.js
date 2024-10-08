@@ -1,9 +1,9 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.1.3"
+    *  Version: "0.1.4"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
-    *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
+    *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Notes:
@@ -23,6 +23,7 @@
     *  - add repl-lag metric for admission control
     *  - fix secondary reads for curation
     *  - add backoff expiry timer
+    *  - add better sharding support
     */
 
    // Syntax: mongosh [connection options] --quiet [--eval 'let dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>;'] [-f|--file] niceDeleteMany.js
@@ -51,7 +52,7 @@
     *  End user defined options
     */
 
-   let __script = { "name": "niceDeleteMany.js", "version": "0.1.3" };
+   let __script = { "name": "niceDeleteMany.js", "version": "0.1.4" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -272,8 +273,19 @@
          return hostInfo;
       }
 
+      function rsStatus() {
+         let rsStatus = {};
+         try {
+            rsStatus = rs.status();
+         } catch(error) {
+            // console.debug(`\x1b[31m[WARN] insufficient rights to execute rs.status()\n${error}\x1b[0m`);
+         }
+
+         return rsStatus;
+      }
+
       return {
-         // # WT eviction defaults (https://kb.corp.mongodb.com/article/000019073)
+         // WT eviction defaults (https://kb.corp.mongodb.com/article/000019073)
          // evictionThreadsMin,
          // evictionThreadsMax,
          // evictionCheckpointTarget,
@@ -284,6 +296,7 @@
          // evictionUpdatesTarget,  // eviction in worker threads when the cache contains at least this many bytes of updates
          // evictionUpdatesTrigger, // application threads to perform eviction when the cache contains at least this many bytes of updates
          "hostInfo": hostInfo(),
+         "rsStatus": rsStatus(),
          "wiredTigerEngineRuntimeConfig": db.adminCommand({ "getParameter": 1, "wiredTigerEngineRuntimeConfig": 1 }).wiredTigerEngineRuntimeConfig,
          "storageEngineConcurrentReadTransactions": db.adminCommand({ "getParameter": 1, "wiredTigerConcurrentReadTransactions": 1 }).wiredTigerConcurrentReadTransactions,
          // db.adminCommand({ "getParameter": 1, "storageEngineConcurrentReadTransactions": 1 })
@@ -350,7 +363,7 @@
             return this.serverStatus.wiredTiger.cache['bytes currently in the cache'];
          },
          get cacheUtil() {
-            return +((this.cachedBytes / this.cacheSizeBytes) * 100).toFixed(2);
+            return Number.parseFloat(((this.cachedBytes / this.cacheSizeBytes) * 100).toFixed(2));
          },
          get cacheStatus() {
             return (this.cacheUtil < this.evictionTarget) ? 'low'
@@ -358,7 +371,7 @@
                  : 'medium';
          },
          get dirtyUtil() {
-            return +((this.dirtyBytes / this.cacheSizeBytes) * 100).toFixed(2);
+            return Number.parseFloat(((this.dirtyBytes / this.cacheSizeBytes) * 100).toFixed(2));
          },
          get dirtyStatus() {
             return (this.dirtyUtil < this.evictionDirtyTarget) ? 'low'
@@ -366,7 +379,7 @@
                  : 'medium';
          },
          get dirtyUpdatesUtil() {
-            return +((this.updatesDirtyBytes / this.cacheSizeBytes) * 100).toFixed(2);
+            return Number.parseFloat(((this.updatesDirtyBytes / this.cacheSizeBytes) * 100).toFixed(2));
          },
          get dirtyUpdatesStatus() {
             return (this.dirtyUpdatesUtil < this.evictionUpdatesTarget) ? 'low'
@@ -385,12 +398,33 @@
          get evictionsTriggered() {
             return (this.cacheEvictions || this.dirtyCacheEvictions || this.dirtyUpdatesCacheEvictions);
          },
+         get cacheHitRatio() {
+            let hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
+            let missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
+            return Number.parseFloat((100 * (hitBytes - missBytes) / hitBytes).toFixed(2));
+         },
+         get cacheHitStatus() {
+            return (this.cacheHitRatio < 20) ? 'high'
+                 : (this.cacheHitRatio > 75) ? 'low'
+                 : 'medium';
+         },
+         get cacheMissRatio() {
+            let hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
+            let missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
+            return Number.parseFloat((100 * (1 - (hitBytes - missBytes) / hitBytes)).toFixed(2));
+         },
+         get cacheMissStatus() {
+            return (this.cacheMissRatio < 20) ? 'low'
+                 : (this.cacheMissRatio > 75) ? 'high'
+                 : 'medium';
+         },
          get memSizeBytes() {
             // return (this?.hostInfo?.system?.memSizeMB ?? 1024) * 1024 * 1024;
             return (this?.hostInfo?.system?.memLimitMB ?? 1024) * 1024 * 1024;
          },
          get numCores() {
-            return this?.hostInfo?.system?.numCores ?? 4; // else max 4 is probably a good default aligning with concurrency limits
+            // else max 4 is probably a good default aligning with concurrency limits
+            return this?.hostInfo?.system?.numCores ?? 4;
          },
          get memResidentBytes() {
             return (this.serverStatus.mem?.resident ?? 0) * 1024 * 1024;
@@ -402,7 +436,7 @@
             return +(this.serverStatus?.tcmalloc?.generic?.heap_size ?? (this.memSizeBytes / 64));
          },
          get heapUtil() {
-            return +(100 * (this.currentAllocatedBytes / this.heapSize)).toFixed(2);
+            return Number.parseFloat((100 * (this.currentAllocatedBytes / this.heapSize)).toFixed(2));
          },
          get pageheapFreeBytes() {
             // assume zero fragmentation if we cannot measure pageheap_free_bytes
@@ -412,11 +446,11 @@
             return +(this.serverStatus?.tcmalloc?.tcmalloc?.total_free_bytes ?? 0);
          },
          get memoryFragmentationRatio() {
-            return +((this.pageheapFreeBytes / this.memSizeBytes) * 100).toFixed(2);
+            return Number.parseFloat(((this.pageheapFreeBytes / this.memSizeBytes) * 100).toFixed(2));
          },
          get memoryFragmentationStatus() {
             // mimicing the (bad) t2 derived metric for now
-            return (this.memoryFragmentationRatio < 10) ? 'low' // 25 is more realistic
+            return (this.memoryFragmentationRatio < 10) ? 'low'  // 25 is more realistic
                  : (this.memoryFragmentationRatio > 30) ? 'high' // 50 is more realistic
                  : 'medium';
          },
@@ -447,19 +481,19 @@
          // v8.0 see db.serverStats().queues.execution
          get wtReadTicketsUtil() {
             let { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
-            return +((out / totalTickets) * 100).toFixed(2);
+            return Number.parseFloat(((out / totalTickets) * 100).toFixed(2));
          },
          get wtReadTicketsAvail() {
             let { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
-            return +((available / totalTickets) * 100).toFixed(2);
+            return Number.parseFloat(((available / totalTickets) * 100).toFixed(2));
          },
          get wtWriteTicketsUtil() {
             let { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
-            return +((out / totalTickets) * 100).toFixed(2);
+            return Number.parseFloat(((out / totalTickets) * 100).toFixed(2));
          },
          get wtWriteTicketsAvail() {
             let { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
-            return +((available / totalTickets) * 100).toFixed(2);
+            return Number.parseFloat(((available / totalTickets) * 100).toFixed(2));
          },
          get wtReadTicketsStatus() {
             return (this.wtReadTicketsUtil < 20) ? 'low'
@@ -488,12 +522,39 @@
             return (this.serverStatus.wiredTiger.transaction['transaction checkpoint most recent time (msecs)'] > 60000);
          },
          get checkpointRuntimeRatio() {
-            return +(((this.serverStatus.wiredTiger.transaction?.['transaction checkpoint most recent time (msecs)'] ?? this.serverStatus.wiredTiger.checkpoint?.['most recent time (msecs)']) / this.checkpointIntervalMS) * 100).toFixed(2);
+            return Number.parseFloat((((this.serverStatus.wiredTiger.transaction?.['transaction checkpoint most recent time (msecs)'] ?? this.serverStatus.wiredTiger.checkpoint?.['most recent time (msecs)']) / this.checkpointIntervalMS) * 100).toFixed(2));
          },
          get checkpointStatus() {
             return (this.checkpointRuntimeRatio < 50) ? 'low'
                  : (this.checkpointRuntimeRatio > 100) ? 'high'
                  : 'medium';
+         },
+         get activeReplLag() { // calculate the highest repl-lag from healthy members
+            let opTimers = this.rsStatus.members.map(({
+               stateStr,
+               health,
+               optimeDate
+            } = {}) => {
+               return {
+                  "stateStr": stateStr,
+                  "health": health,
+                  "optimeDate": optimeDate
+               };
+            }).filter(({ health, stateStr }) => {
+               return (health && (stateStr === 'PRIMARY' || stateStr === 'SECONDARY'));
+            }).map(({ optimeDate }) => optimeDate);
+            return +((Math.max(...opTimers) - Math.min(...opTimers)) / 1000).toFixed(0);
+         },
+         get replLagStatus() {
+            return (this.activeReplLag < this.heartbeatIntervalMillis / 1000) ? 'low'
+                 : (this.activeReplLag > 90) ? 'high' // maxStalenessSeconds
+                 : 'medium';
+         },
+         get replLagScale() {
+            return 30;
+         },
+         get heartbeatIntervalMillis() {
+            return this.rsStatus.heartbeatIntervalMillis;
          }
       };
    }
