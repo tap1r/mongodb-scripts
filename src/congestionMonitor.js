@@ -1,13 +1,14 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.0"
+    *  Version: "0.2.1"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  TODOs:
-    *  - 
+    *  - Add sharding support
+    *  - Add v8 Execution Control metrics
     */
 
    // Usage: mongosh [connection options] --quiet [-f|--file] congestionMonitor.js
@@ -115,7 +116,7 @@
       }
 
       return {
-         // # WT eviction defaults (https://kb.corp.mongodb.com/article/000019073)
+         // WT eviction defaults (https://kb.corp.mongodb.com/article/000019073)
          // evictionThreadsMin,
          // evictionThreadsMax,
          // evictionCheckpointTarget,
@@ -253,7 +254,8 @@
             return (this?.hostInfo?.system?.memLimitMB ?? 1024) * 1024 * 1024;
          },
          get numCores() {
-            return this?.hostInfo?.system?.numCores ?? 4; // else max 4 is probably a good default aligning with concurrency limits
+            // else max 4 is probably a good default aligning with concurrency limits
+            return this?.hostInfo?.system?.numCores ?? 4;
          },
          get memResidentBytes() {
             return (this.serverStatus.mem?.resident ?? 0) * 1024 * 1024;
@@ -279,7 +281,7 @@
          },
          get memoryFragmentationStatus() {
             // mimicing the (bad) t2 derived metric for now
-            return (this.memoryFragmentationRatio < 10) ? 'low' // 25 is more realistic
+            return (this.memoryFragmentationRatio < 10) ? 'low'  // 25 is more realistic
                  : (this.memoryFragmentationRatio > 30) ? 'high' // 50 is more realistic
                  : 'medium';
          },
@@ -358,24 +360,21 @@
                  : (this.checkpointRuntimeRatio > 100) ? 'high'
                  : 'medium';
          },
-         get activeReplLag() {
-            let opTimers = this.rsStatus.members.map(({ name, stateStr, health, optime, optimeDate, lastHeartbeat }) => {
+         get activeReplLag() { // calculate the highest repl-lag from healthy members
+            let opTimers = this.rsStatus.members.map(({
+               stateStr,
+               health,
+               optimeDate
+            } = {}) => {
                return {
-                  "name": name,
                   "stateStr": stateStr,
                   "health": health,
-                  "optime": optime,
-                  "optimeDate": optimeDate,
-                  "lastHeartbeat": lastHeartbeat
+                  "optimeDate": optimeDate
                };
-            // }).filter(node => {
             }).filter(({ health, stateStr }) => {
-               // return (node.health && (node.stateStr == 'PRIMARY' || node.stateStr == 'SECONDARY'));
-               return (health && (stateStr == 'PRIMARY' || stateStr == 'SECONDARY'));
-            }).map(({ optimeDate }) => {
-               return optimeDate;
-            });
-            return +((Math.max(...opTimers) - Math.min(...opTimers))/1000).toFixed(0);
+               return (health && (stateStr === 'PRIMARY' || stateStr === 'SECONDARY'));
+            }).map(({ optimeDate }) => optimeDate);
+            return +((Math.max(...opTimers) - Math.min(...opTimers)) / 1000).toFixed(0);
          },
          get replLagStatus() {
             return (this.activeReplLag < this.heartbeatIntervalMillis / 1000) ? 'low'
@@ -392,15 +391,25 @@
    }
 
    class EQ {
-      constructor({ width = 30, row = 0, column = 0, name = '', metric = '', status = '', scale = '', unit = '', interval = 100 } = {}) {
+      constructor({
+         width = 30,
+         row = 0,
+         column = 0,
+         name = '',
+         metric = '',
+         status = '',
+         scale = '',
+         unit = '',
+         interval = 100
+      } = {}) {
          this.width = width;
          this.row = row;
          this.column = column;
          this.markers = {
-            "bg": "\u2591", // light grey
-            "low": "\x1b[92m\u2593\x1b[0m", // green
+            "bg": "\u2591",                    // light grey
+            "low": "\x1b[92m\u2593\x1b[0m",    // green
             "medium": "\x1b[93m\u2593\x1b[0m", // yellow
-            "high": "\x1b[91m\u2593\x1b[0m" // red
+            "high": "\x1b[91m\u2593\x1b[0m"    // red
          };
          this.name = name;
          this.barOffset = 17;
@@ -458,15 +467,15 @@
          { "name": "activeReplLag", "metric": "activeReplLag", "status": "replLagStatus", "scale": "replLagScale", "unit": "s", "interval": 500 }
       ];
       // instantiate EQ objects
-      metrics.forEach((metric, _) => {
-         metric.row = _ + 1;
+      metrics.forEach((metric, _idx) => {
+         metric.row = _idx + 1;
          metric.column = 1;
          metric.eq = new EQ(metric);
       });
       // setup the initial console state
       let tableWidth = 54;
       let tableTitle = 'Real-time congestion monitor';
-      let titleSpacing = (tableWidth - tableTitle.length)/2;
+      let titleSpacing = (tableWidth - tableTitle.length) / 2;
       console.clear();
       console.log('┏' + '━'.repeat(titleSpacing - 1) + '┫' + tableTitle + '┣' + '━'.repeat(titleSpacing - 1) + '┓');
       metrics.forEach(() => {
@@ -474,10 +483,10 @@
       });
       console.log('┗'+ '━'.repeat(tableWidth) + '┛');
       process.stdout.write('\x1b[?25l'); // disable the console cursor
-      Promise.allSettled([ // do not await to background thread
+      Promise.allSettled( // do not await to background thread
          // begin rendering EQ bars
-         metrics.forEach(({ eq }) => eq.draw())
-      ]);
+         metrics.map(({ eq }) => eq.draw())
+      ).finally(console.error);
 
       while (true) { // refresh stats
          vitals = await congestionMonitor();
