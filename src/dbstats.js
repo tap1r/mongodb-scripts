@@ -1,12 +1,12 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.3"
- *  Description: DB storage stats uber script
- *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
+ *  Version: "0.11.4"
+ *  Description: "DB storage stats uber script"
+ *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "[mongo|mongosh] [connection options] --quiet [--eval "let options = {...};"] [-f|--file] dbstats.js"
+// Usage: [mongo|mongosh] [connection options] --quiet [--eval 'let options = {...};'] [-f|--file] dbstats.js
 
 /*
  *  options = {
@@ -86,19 +86,19 @@
 /*
  *  Examples of using filters with namespace regex:
  *
- *    mongosh --quiet --eval "let options = { filter: { db: '^database$' } };" -f dbstats.js
- *    mongosh --quiet --eval "let options = { filter: { collection: '^c.+' } };" -f dbstats.js
- *    mongosh --quiet --eval "let options = { filter: { db: /(^(?!(d.+)).+)/i, collection: /collection/i } };" -f dbstats.js
+ *    mongosh --quiet --eval 'let options = { filter: { db: "^database$" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'let options = { filter: { collection: "^c.+" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'let options = { filter: { db: /(^(?!(d.+)).+)/i, collection: /collection/i } };' -f dbstats.js
  *
  *  Examples of using sorting:
  *
- *    mongosh --quiet --eval "let options = { sort: { collection: { dataSize: -1 }, index: { idxStorageSize: -1 } } };" -f dbstats.js
- *    mongosh --quiet --eval "let options = { sort: { collection: { freeStorageSize: -1 }, index: { idxFreeStorageSize: -1 } } };" -f dbstats.js
+ *    mongosh --quiet --eval 'let options = { sort: { collection: { dataSize: -1 }, index: { idxStorageSize: -1 } } };' -f dbstats.js
+ *    mongosh --quiet --eval 'let options = { sort: { collection: { freeStorageSize: -1 }, index: { idxFreeStorageSize: -1 } } };' -f dbstats.js
  * 
  *  Examples of using formatting:
  *
- *    mongosh --quiet --eval "let options = { output: { format: 'tabular' } };" -f dbstats.js
- *    mongosh --quiet --eval "let options = { output: { format: 'json' } };" -f dbstats.js
+ *    mongosh --quiet --eval 'let options = { output: { format: "tabular" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'let options = { output: { format: "json" } };' -f dbstats.js
  */
 
 (() => {
@@ -130,7 +130,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.11.3" };
+   let __script = { "name": "dbstats.js", "version": "0.11.4" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -243,7 +243,7 @@
     *  Global defaults
     */
 
-   // scaler unit B, KiB, MiB, GiB, TiB, PiB
+   // scalar unit B, KiB, MiB, GiB, TiB, PiB
    let scaled = new AutoFactor();
 
    // formatting preferences
@@ -693,7 +693,6 @@
       /*
        *  Pretty format unit
        */
-      // return `${+(metric / scale.factor).toFixed(2)} ${scale.unit}`;
       return scaled.format(metric);
    }
 
@@ -701,14 +700,14 @@
       /*
        *  Pretty format percentage
        */
-      return `${+((numerator / denominator) * 100).toFixed(1)}%`;
+      return `${Number.parseFloat(((numerator / denominator) * 100).toFixed(1))}%`;
    }
 
    function formatRatio(metric) {
       /*
        *  Pretty format ratio
        */
-      return `${+metric.toFixed(2)}:1`;
+      return `${Number.parseFloat(metric.toFixed(2))}:1`;
    }
 
    function printCollHeader(collTotal = 0) {
