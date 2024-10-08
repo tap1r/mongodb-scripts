@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.11.5"
+ *  Version: "0.11.6"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.11.5"
+      "version": "0.11.6"
 });
 
 /*
@@ -1492,8 +1492,15 @@ function $collStats(dbName = db.getName(), collName = '') {
                                  "freeStorageSize": { "$sum": [{ "$arrayElemAt": ["$$value.file bytes available for reuse", -1] }, "$$this.file bytes available for reuse"] }
                         }]] },
                         "else": {
-                           "$concatArrays": ["$$value", ["$$this"]]
-         } } } } } } },
+                           "$concatArrays": [
+                              "$$value",
+                              [{
+                                 "name": "$$this.name",
+                                 "storageSize": "$$this.file size in bytes",
+                                 "freeStorageSize": "$$this.file bytes available for reuse"
+                        }]] }
+            } } } }
+         } },
          { "$unset": [
             "_id",
             "file allocation unit size",
@@ -1503,7 +1510,8 @@ function $collStats(dbName = db.getName(), collName = '') {
             "indexes.uri",
             "indexes bytes available for reuse",
             "indexes size in bytes",
-            "uri"
+            "uri",
+            "wiredTiger"
          ] }
       ];
 
