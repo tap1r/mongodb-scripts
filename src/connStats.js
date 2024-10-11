@@ -1,11 +1,20 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.1.0"
+    *  Version: "0.1.1"
     *  Description: "report detailed connection pooling statistics"
-    *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
+    *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     */
+
+   /*
+    *  Notes:
+    *  - requires "inprog" privileges to capture all connections
+    *  - statistics are per host as determined by connection read preferences
+    */
+
+   // Usage: "mongosh [connection options] --quiet connStats.js"
+
    let aggOpts = {
          "comment": "connStats.js v0.1.0"
       },
