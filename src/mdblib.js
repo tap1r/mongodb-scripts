@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.11.6"
+ *  Version: "0.11.7"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.11.6"
+      "version": "0.11.7"
 });
 
 /*
@@ -256,8 +256,14 @@ function isSharded() {
    /*
     *  Determine if current host is a mongos
     */
+   let sharded;
+   try {
+      sharded = db.adminCommand({ "listShards": 1 }).shards;
+   } catch(error) {
+      sharded = false;
+   }
    let proc = (serverStatus().ok) ? serverStatus().process
-            : (db.adminCommand({ "listShards": 1 }).shards) ? 'mongos'
+            : (sharded) ? 'mongos'
             : 'unknown';
    return proc == 'mongos';
 }
@@ -376,7 +382,7 @@ function fCV(ver) { // updated for shared tier compatibility
    }
 
    let featureVer = ver => {
-      return (serverStatus().process == 'mongod' && cmd != 'incompatible' )
+      return (serverStatus().ok &&serverStatus().process == 'mongod' && cmd != 'incompatible' )
            ? +db.adminCommand({
                "getParameter": 1,
                "featureCompatibilityVersion": 1
@@ -462,24 +468,24 @@ function serverCmdLineOpts() {
       // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.serverCmdLineOpts()\n${error}\x1b[0m`);
    }
 
-   if (typeof serverCmdLineOpts.parsed.storage === 'undefined') {
+   if (typeof serverCmdLineOpts.parsed !== 'undefined' && typeof serverCmdLineOpts.parsed.storage === 'undefined') {
       serverCmdLineOpts = { "parsed": { "storage": { "dbPath": "undefined" } } };
    }
    return serverCmdLineOpts;
 }
 
-function isAtlasPlatform(type) {
+function isAtlasPlatform(type = null) { // atlas behaviour has changed again, use with caution
    /*
     *  Evaluate Atlas deployment platform type
     */
-   let { 'msg': helloMsg } = hello();
-   let { atlasVersion } = serverStatus();
-   return (typeof type === 'undefined' && typeof helloMsg === 'undefined' && typeof atlasVersion === 'undefined') ? 'dedicatedShardedCluster'
-        : (type == 'dedicatedShardedCluster' && typeof helloMsg === 'undefined' && typeof atlasVersion === 'undefined') ? true
-        : (typeof type === 'undefined' && helloMsg == 'isdbgrid' && typeof atlasVersion !== 'undefined') ? 'serverless'
-        : (type == 'serverless' && helloMsg == 'isdbgrid' && typeof atlasVersion !== 'undefined') ? true
-        : (typeof type === 'undefined' && helloMsg != 'isdbgrid' && typeof atlasVersion !== 'undefined') ? 'sharedTier||dedicatedReplicaSet'
-        : (type == 'sharedTier||dedicatedReplicaSet' && helloMsg != 'isdbgrid' && typeof atlasVersion !== 'undefined') ? true
+   let { 'msg': helloMsg = false } = hello();
+   let { atlasVersion = false } = serverStatus();
+   return (type === null && !helloMsg && !atlasVersion) ? 'dedicatedShardedCluster'
+        : (type === 'dedicatedShardedCluster' && !helloMsg && !atlasVersion) ? true
+        : (type === null && helloMsg === 'isdbgrid' && atlasVersion) ? 'serverless'
+        : (type === 'serverless' && helloMsg === 'isdbgrid' && atlasVersion) ? true
+        : (type === null && helloMsg !== 'isdbgrid' && atlasVersion) ? 'sharedTier||dedicatedReplicaSet'
+        : (type === 'sharedTier||dedicatedReplicaSet' && helloMsg !== 'isdbgrid' && atlasVersion) ? true
         : false;
 }
 
@@ -550,11 +556,19 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
                       : 'primaryPreferred'
    };
 
-   return db.adminCommand({
-      "serverStatus": true,
-      ...{ ...serverStatusOptionsDefaults, ...serverStatusOptions },
-      options
-   });
+   let serverStatusResults = {};
+   try {
+      serverStatusResults = db.adminCommand({
+         "serverStatus": true,
+         ...{ ...serverStatusOptionsDefaults, ...serverStatusOptions },
+         options
+      });
+   } catch(error) {
+      serverStatusResults.ok = 0;
+      // serverStatusResults.process = 'unknown';
+   }
+
+   return serverStatusResults;
 }
 
 if (typeof db.prototype.isMaster === 'undefined') {
