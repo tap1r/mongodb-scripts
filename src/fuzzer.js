@@ -1,12 +1,12 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.20"
- *  Description: pseudorandom data generator, with some fuzzing capability
- *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
+ *  Version: "0.6.21"
+ *  Description: "pseudorandom data generator, with some fuzzing capability"
+ *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "[mongo|mongosh] [connection options] --quiet fuzzer.js"
+// Usage: [mongo|mongosh] [connection options] --quiet fuzzer.js
 
 (async() => {
    /*
@@ -14,7 +14,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.20" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.21" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -42,16 +42,16 @@
     *  User defined parameters
     */
 
-   let dbName = 'database',           // database name
-      collName = 'collection',        // collection name
-      totalDocs = $getRandExp(3.5),   // number of documents to generate per namespace
-      dropNamespace = false,          // drop collection prior to generating data
-      compressor = 'best',            // collection compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
-      idxCompressor = compressor,     // index compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best'] (defaults to collection)
-      // compressionOptions = -1,     // [-1|0|1|2|3|4|5|6|7|8|9] compression level
-      idioma = 'en',                  // ['en'|'es'|'de'|'fr'|'zh']
+   let dbName = 'database',         // database name
+      collName = 'collection',      // collection name
+      totalDocs = $getRandExp(3.5), // number of documents to generate per namespace
+      dropNamespace = false,        // drop collection prior to generating data
+      compressor = 'best',          // collection compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
+      idxCompressor = compressor,   // index compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best'] (defaults to collection)
+      // compressionOptions = -1,   // [-1|0|1|2|3|4|5|6|7|8|9] compression level
+      idioma = 'en',                // ['en'|'es'|'de'|'fr'|'zh']
       collation = { /* collation options */
-         "locale": "simple",          // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
+         "locale": "simple",        // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
          // caseLevel: <boolean>,
          // caseFirst: <string>,
          // strength: <int>,
@@ -65,36 +65,36 @@
          "j": false
       };
    let indexPrefs = { /* build index preferences */
-         "build": true,              // [true|false]
-         "order": "post",            // ["pre"|"post"] collection population
+         "build": true,   // [true|false]
+         "order": "post", // ["pre"|"post"] collection population
          "commitQuorum": (writeConcern.w == 0) ? 1 : writeConcern.w
       },
-      timeSeries = false,            // build timeseries collection type
+      timeSeries = false, // build timeseries collection type
       tsOptions = {
          "timeField": "timestamp",
          "metaField": "data",
          "granularity": "hours"
       },
-      capped = false,                // build capped collection type
+      capped = false, // build capped collection type
       cappedOptions = {
          "size": Math.pow(2, 27),
          "max": Math.pow(2, 27) / Math.pow(2, 12)
       },
       expireAfterSeconds = 0,        // TTL and time series options
       fuzzer = { /* preferences */
-         "id": "ts",                 // ["ts"|"oid"] - timeseries OID | client generated OID
-         "range": 365.2422,          // date range in days
-         "offset": -300,             // date offset in days from now() (negative = past, positive = future)
-         "interval": 7,              // date interval in days
-         "distribution": "uniform",  // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
+         "id": "ts",                // ["ts"|"oid"] - timeseries OID | client generated OID
+         "range": 365.2422,         // date range in days
+         "offset": -300,            // date offset in days from now() (negative = past, positive = future)
+         "interval": 7,             // date interval in days
+         "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
          // "polymorphic": { /* experimental */
             // "enabled": false,
-            // "varyTypes": false,     // fuzz BSON types
-            // "nests": 0,             // nested subdocs
-            // "entropy": 100,         // 0-100%
-            // "cardinality": 1,       // ratio:1
-            // "sparsity": 0,          // 0-100%
-            // "weighting": 50         // 0-100%
+            // "varyTypes": false,    // fuzz BSON types
+            // "nests": 0,            // nested subdocs
+            // "entropy": 100,        // 0-100%
+            // "cardinality": 1,      // ratio:1
+            // "sparsity": 0,         // 0-100%
+            // "weighting": 50        // 0-100%
          // },
          "schemas": [],
          "ratios": [7, 2, 1]
@@ -107,8 +107,8 @@
          },
          "unique": false,
          "numInitialChunksPerShard": 1,
-         // "collation": collation,    // inherit from collection options
-         // "timeseries": tsOptions,   // not required after initial collection creation
+         // "collation": collation,  // inherit from collection options
+         // "timeseries": tsOptions, // not required after initial collection creation
          "reShard": true
       };
    let indexes = [ /* index definitions */
@@ -137,7 +137,7 @@
          // "expireAfterSeconds": expireAfterSeconds,
          // "hidden": hidden,
          "collation": collation,
-         // "storageEngine": { "wiredTiger": { "configString": `block_compressor=${idxCompressor}` } }
+         "storageEngine": { "wiredTiger": { "configString": `block_compressor=${idxCompressor}` } }
       },
       specialIndexes = [ /* index types unsupported by collations */
          { "location.coordinates": "2d" },
@@ -152,7 +152,7 @@
          // "expireAfterSeconds": expireAfterSeconds,
          // "hidden": hidden,
          "collation": { "locale": "simple" },
-         // "storageEngine": { "wiredTiger": { "configString": `block_compressor=${idxCompressor}` } },
+         "storageEngine": { "wiredTiger": { "configString": `block_compressor=${idxCompressor}` } },
          "default_language": idioma
       };
 
@@ -624,6 +624,36 @@
       return console.log(msg);
    }
 
+   function parseCompressor(compressor = '', msg = '') {
+      switch(compressor.toLowerCase()) {
+         case 'best':
+            compressor = fCV(4.2) ? 'zstd' : 'zlib';
+            break;
+         case 'none':
+            compressor = 'none';
+            break;
+         case 'snappy':
+            compressor = 'snappy';
+            break;
+         case 'zlib':
+            compressor = 'zlib';
+            break;
+         case 'zstd':
+            if (fCV(4.2))
+               compressor = 'zstd';
+            else {
+               compressor = 'zlib';
+               msg = '("zstd" requires mongod fCV 4.2)';
+            }
+            break;
+         default:
+            msg = `("${compressor}" not recognised)`;
+            compressor = 'snappy';
+      }
+
+      return [compressor, msg];
+   }
+
    function createNS(
          dbName = false, collName = false,
          compressor = 'best', expireAfterSeconds = 0,
@@ -647,31 +677,7 @@
       if (db.getSiblingDB(dbName).getCollection(collName).exists()) {
          console.log(`\nNamespace "${dbName}.${collName}" exists`);
       } else {
-         switch(compressor.toLowerCase()) {
-            case 'best':
-               compressor = fCV(4.2) ? 'zstd' : 'zlib';
-               break;
-            case 'none':
-               compressor = 'none';
-               break;
-            case 'snappy':
-               compressor = 'snappy';
-               break;
-            case 'zlib':
-               compressor = 'zlib';
-               break;
-            case 'zstd':
-               if (fCV(4.2))
-                  compressor = 'zstd';
-               else {
-                  compressor = 'zlib';
-                  msg = '("zstd" requires mongod fCV 4.2)';
-               }
-               break;
-            default:
-               msg = `("${compressor}" not recognised)`;
-               compressor = 'snappy';
-         }
+         [compressor, msg] = parseCompressor(compressor, msg);
          console.log(`Creating namespace "${dbName}.${collName}"`);
          console.log(`\twith block compressor:\t"${compressor}" ${msg}`);
          console.log(`\twith collation locale:\t"${collation.locale}"`);
