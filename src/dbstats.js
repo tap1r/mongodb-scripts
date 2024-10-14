@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.4"
+ *  Version: "0.11.5"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -130,7 +130,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.11.4" };
+   let __script = { "name": "dbstats.js", "version": "0.11.5" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -288,7 +288,8 @@
        */
       let { 'db': dbFilter, 'collection': collFilter } = filterOptions;
       collFilter = new RegExp(collFilter);
-      let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/;
+      // let systemFilter = /(?:^(?!(system\..+|replset\..+)&&(system\.profile|system\.sessions|system\.views)$).+)/;
+      let systemFilter = /.+/;
       let dbPath = new MetaStats();
       dbPath.init();
       delete dbPath.name;
@@ -304,7 +305,6 @@
       console.log('Discovered', dbNames.length, 'distinct databases');
       // let dbFetchTasks = dbNames.map(async dbName => {
       dbPath.databases = dbNames.map(dbName => {
-      // let dbFetchTasks = dbNames.map(async dbName => {
          let database = new MetaStats($stats(dbName));
          delete database.databases;
          delete database.instance;
@@ -358,16 +358,6 @@
                (typeof process !== 'undefined') ? { "nameOnly": true } : true,
                true
               ).sort(sortBy('view'));
-         //
-         dbPath.ncollections += database.ncollections;
-         dbPath.nindexes += database.nindexes;
-         dbPath.dataSize += database.dataSize;
-         dbPath.storageSize += database.storageSize;
-         dbPath.freeStorageSize += database.freeStorageSize;
-         dbPath.objects += database.objects;
-         dbPath.orphans += database.orphans;
-         dbPath.totalIndexSize += database.totalIndexSize;
-         dbPath.totalIndexBytesReusable += database.totalIndexBytesReusable;
 
          return database;
       });
@@ -386,8 +376,6 @@
             delete collection.dbPath;
 
             collection.indexes.sort(sortBy('index'));
-            // database.freeStorageSize += collection.freeStorageSize;
-            // database.totalIndexBytesReusable += collection.totalIndexBytesReusable;
 
             return collection;
          });
