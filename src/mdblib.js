@@ -1,15 +1,17 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.11.7"
+ *  Version: "0.11.8"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
+// update prototype settings
+
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.11.7"
+      "version": "0.11.8"
 });
 
 /*
@@ -275,7 +277,7 @@ function getDBNames(dbFilter = /^.+/) {
    let command = {
       "listDatabases": 1,
       "nameOnly": true,
-      "authorizedDatabases": (!(isAtlasPlatform('serverless') || isAtlasPlatform('sharedTier||dedicatedReplicaSet')))
+      "authorizedDatabases": (!(isAtlasPlatform('serverless') || isAtlasPlatform('sharedTier')))
                            ? true
                            : false
    };
@@ -287,11 +289,11 @@ function getDBNames(dbFilter = /^.+/) {
    let filterOptions = 'i';
    let filterRegex = new RegExp(dbFilter, filterOptions);
    let filter = { "name": filterRegex };
-   let restrictedNamespaces = (isAtlasPlatform('serverless')) ? ['admin', 'local']
-                            : (isAtlasPlatform('sharedTier||dedicatedReplicaSet')) ? ['admin', 'local']
+   let restrictedNamespaces = (isAtlasPlatform('serverless')) ? ['admin', 'config', 'local']
+                            : (isAtlasPlatform('sharedTier')) ? ['admin', 'config', 'local']
                             : [];
    let comment = `list databases with ${__lib.name} v${__lib.version}`;
-   if (!(isAtlasPlatform('serverless') || isAtlasPlatform('sharedTier||dedicatedReplicaSet'))) {
+   if (!(isAtlasPlatform('serverless') || isAtlasPlatform('sharedTier'))) {
       // ignoring filter on unsupported platforms
       command.filter = filter;
    }
@@ -436,7 +438,6 @@ function hostInfo() {
    /*
     *  Forward compatibility with db.hostInfo()
     */
-   // isAtlasPlatform('serverless'||'sharedTier||dedicatedReplicaSet'||'dedicatedShardedCluster');
    let hostInfo = {};
    try {
       hostInfo = db.hostInfo();
@@ -474,18 +475,30 @@ function serverCmdLineOpts() {
    return serverCmdLineOpts;
 }
 
-function isAtlasPlatform(type = null) { // atlas behaviour has changed again, use with caution
+function isAtlasPlatform(type = null) {
    /*
     *  Evaluate Atlas deployment platform type
     */
    let { 'msg': helloMsg = false } = hello();
+   let isMongos = (helloMsg == 'isdbgrid') ? true : false;
+   let { hostname = false } = hostInfo().system;
    let { atlasVersion = false } = serverStatus();
-   return (type === null && !helloMsg && !atlasVersion) ? 'dedicatedShardedCluster'
-        : (type === 'dedicatedShardedCluster' && !helloMsg && !atlasVersion) ? true
-        : (type === null && helloMsg === 'isdbgrid' && atlasVersion) ? 'serverless'
-        : (type === 'serverless' && helloMsg === 'isdbgrid' && atlasVersion) ? true
-        : (type === null && helloMsg !== 'isdbgrid' && atlasVersion) ? 'sharedTier||dedicatedReplicaSet'
-        : (type === 'sharedTier||dedicatedReplicaSet' && helloMsg !== 'isdbgrid' && atlasVersion) ? true
+   let isSharedTier = false;
+   try {
+      isSharedTier = (db.hostInfo().ok != 1);
+   } catch(e) {
+      isSharedTier = (e.codeName == 'AtlasError') ? true : false;
+   }
+   let atlasDomain = new RegExp(/\.mongodb\.net$/);
+   let isAtlas = (atlasVersion || atlasDomain.test(hostname)) ? true : false;
+   return (type === null && isMongos && isAtlas && hostname != 'serverless') ? 'dedicatedShardedCluster'
+        : (type == 'dedicatedShardedCluster' && isMongos && isAtlas && hostname != 'serverless') ? true
+        : (type === null && !isMongos && isAtlas && isSharedTier) ? 'sharedTier'
+        : (type == 'sharedTier' && !isMongos && isAtlas && isSharedTier) ? true
+        : (type === null && !isMongos && isAtlas) ? 'dedicatedReplicaSet'
+        : (type == 'dedicatedReplicaSet' && !isMongos && isAtlas) ? true
+        : (type === null && hostname == 'serverless') ? 'serverless'
+        : (type == 'serverless' && hostname == 'serverless') ? true
         : false;
 }
 
@@ -549,6 +562,100 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
       "watchdog": false,
       "wiredTiger": false,
       "writeBacksQueued": false
+
+      // add new exclusions below:
+      // connections: { current: 11, available: 489, totalCreated: Long('47') },
+      // extra_info: { note: 'fields vary by platform', page_faults: 0 },
+      // network: {
+      //   bytesIn: Long('565891'),
+      //   bytesOut: Long('965657'),
+      //   numRequests: Long('769')
+      // },
+      // opcounters: {
+      //   insert: Long('0'),
+      //   query: Long('53'),
+      //   update: Long('0'),
+      //   delete: Long('0'),
+      //   getmore: Long('50'),
+      //   command: Long('659'),
+      //   deprecated: { query: Long('0'), getmore: Long('0') }
+      // },
+      // opcountersRepl: {
+      //   insert: 0,
+      //   query: 0,
+      //   update: 0,
+      //   delete: 0,
+      //   getmore: 0,
+      //   command: 0,
+      //   deprecated: { query: 0, getmore: 0 }
+      // },
+      // repl: {
+      //   topologyVersion: {
+      //     processId: ObjectId('670c9d2b293b61cef4ff830e'),
+      //     counter: Long('9')
+      //   },
+      //   hosts: [
+      //     'ac-8ke2pot-shard-00-00.nepjt4y.mongodb.net:27017',
+      //     'ac-8ke2pot-shard-00-01.nepjt4y.mongodb.net:27017',
+      //     'ac-8ke2pot-shard-00-02.nepjt4y.mongodb.net:27017'
+      //   ],
+      //   setName: 'atlas-3nfau7-shard-0',
+      //   setVersion: 253,
+      //   isWritablePrimary: true,
+      //   secondary: false,
+      //   primary: 'ac-8ke2pot-shard-00-01.nepjt4y.mongodb.net:27017',
+      //   tags: {
+      //     availabilityZone: 'apse2-az1',
+      //     provider: 'AWS',
+      //     region: 'AP_SOUTHEAST_2',
+      //     workloadType: 'OPERATIONAL',
+      //     diskState: 'READY',
+      //     nodeType: 'ELECTABLE'
+      //   },
+      //   me: 'ac-8ke2pot-shard-00-01.nepjt4y.mongodb.net:27017',
+      //   electionId: ObjectId('7fffffff00000000000001d9'),
+      //   lastWrite: {
+      //     opTime: { ts: Timestamp({ t: 1728906279, i: 19 }), t: Long('473') },
+      //     lastWriteDate: ISODate('2024-10-14T11:44:39.000Z'),
+      //     majorityOpTime: { ts: Timestamp({ t: 1728906279, i: 18 }), t: Long('473') },
+      //     majorityWriteDate: ISODate('2024-10-14T11:44:39.000Z')
+      //   },
+      //   primaryOnlyServices: {
+      //     TenantMigrationDonorService: { state: 'running', numInstances: 0 },
+      //     TenantMigrationRecipientService: { state: 'running', numInstances: 0 }
+      //   },
+      //   rbid: 40,
+      //   userWriteBlockMode: 1
+      // },
+      // storageEngine: {
+      //   name: 'wiredTiger',
+      //   supportsCommittedReads: true,
+      //   oldestRequiredTimestampForCrashRecovery: Timestamp({ t: 1728906265, i: 335 }),
+      //   supportsPendingDrops: true,
+      //   dropPendingIdents: Long('267'),
+      //   supportsSnapshotReadConcern: true,
+      //   readOnly: false,
+      //   persistent: true,
+      //   backupCursorOpen: false
+      // },
+      // mem: {
+      //   bits: 64,
+      //   resident: 0,
+      //   virtual: 0,
+      //   supported: true,
+      //   mapped: 0,
+      //   mappedWithJournal: 0
+      // },
+      // metrics: {
+      //   aggStageCounters: {
+      //     search: Long('0'),
+      //     searchBeta: Long('0'),
+      //     searchMeta: Long('0'),
+      //     vectorSearch: Long('0')
+      //   },
+      //   operatorCounters: { match: { text: Long('0'), regex: Long('0') } },
+      //   atlas: { connectionPool: { totalCreated: Long('19943') } }
+      // },
    };
    let options = {
       "readPreference": (typeof readPref !== 'undefined') ? readPref
@@ -565,7 +672,6 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
       });
    } catch(error) {
       serverStatusResults.ok = 0;
-      // serverStatusResults.process = 'unknown';
    }
 
    return serverStatusResults;
