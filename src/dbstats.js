@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.5"
+ *  Version: "0.11.6"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -130,7 +130,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.11.5" };
+   let __script = { "name": "dbstats.js", "version": "0.11.6" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -288,8 +288,9 @@
        */
       let { 'db': dbFilter, 'collection': collFilter } = filterOptions;
       collFilter = new RegExp(collFilter);
+      let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/; // required for less privileged users
       // let systemFilter = /(?:^(?!(system\..+|replset\..+)&&(system\.profile|system\.sessions|system\.views)$).+)/;
-      let systemFilter = /.+/;
+      // let systemFilter = /.+/;
       let dbPath = new MetaStats();
       dbPath.init();
       delete dbPath.name;
