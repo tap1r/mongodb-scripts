@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.11.8"
+ *  Version: "0.11.9"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,7 +11,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.11.8"
+      "version": "0.11.9"
 });
 
 /*
@@ -199,7 +199,9 @@ class MetaStats {
                     : hello().me;
       this.hostname = hostInfo().system.hostname;
       this.proc = (serverStatus().ok) ? serverStatus().process : 'unknown';
-      this.dbPath = (this.proc == 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
+      this.dbPath = (isAtlasPlatform('serverless')) ? 'serverless'
+                  : (isAtlasPlatform('sharedTier')) ? 'sharedTier'
+                  : (this.proc == 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
                   : (this.proc == 'mongos') ? 'sharded'
                   : 'unknown';
       this.shards = (this.proc == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : [];
