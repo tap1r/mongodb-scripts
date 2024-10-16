@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.6"
+ *  Version: "0.11.7"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -130,7 +130,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.11.6" };
+   let __script = { "name": "dbstats.js", "version": "0.11.7" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -296,6 +296,7 @@
       delete dbPath.name;
       delete dbPath.collections;
       delete dbPath.views;
+      delete dbPath.unauthorized;
       delete dbPath.indexes;
       delete dbPath.compressor;
 
@@ -325,17 +326,18 @@
          return database;
       });
       // dbPath.databases = await Promise.all(dbFetchTasks);
-      //
+
       console.log('Discovered', dbPath.ncollections, 'distinct namespaces');
       console.log('Discovered', dbPath.nindexes, 'distinct indexes');
-      //
+
       let collNamesTasks = dbPath.databases.map(async database => {
          database.collections = (shellVer() >= 2.0 && typeof process !== 'undefined')
             ? db.getSiblingDB(database.name).getCollectionInfos({ // mongosh v2 optimised
                   "type": /^(collection|timeseries)$/,
                   "name": collFilter
                },
-               { "nameOnly": true }, true
+               { "nameOnly": true },
+               true
               ).filter(({ 'name': collName }) => collName.match(systemFilter)).toSorted(sortNameAsc)
             : db.getSiblingDB(database.name).getCollectionInfos({ // legacy shell(s) method
                   "type": /^(collection|timeseries)$/,
@@ -344,21 +346,38 @@
                (typeof process !== 'undefined') ? { "nameOnly": true } : true,
                true
               ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
-         //
          database.views = (shellVer() >= 2.0 && typeof process !== 'undefined')
             ? db.getSiblingDB(database.name).getCollectionInfos({ // mongosh v2 optimised
                   "type": "view",
                   "name": collFilter
                },
-               { "nameOnly": true }, true
-              ).toSorted(sortBy('view'))
+               { "nameOnly": true },
+               true
+              // ).toSorted(sortBy('view'))
+              ).filter(({ 'name': viewName }) => viewName.match(systemFilter)).toSorted(sortBy('view'))
             : db.getSiblingDB(database.name).getCollectionInfos({ // legacy shell(s) method
                   "type": "view",
                   "name": collFilter
                },
                (typeof process !== 'undefined') ? { "nameOnly": true } : true,
                true
-              ).sort(sortBy('view'));
+              // ).sort(sortBy('view'));
+            ).filter(({ 'name': viewName }) => viewName.match(systemFilter)).sort(sortBy('view'));
+         // database.authorized = (shellVer() >= 2.0 && typeof process !== 'undefined')
+         //    ? db.getSiblingDB(database.name).getCollectionInfos({ // mongosh v2 optimised
+         //          "type": /^(collection|timeseries|view)$/,
+         //          "name": collFilter
+         //       },
+         //       { "nameOnly": true },
+         //       true
+         //      ).toSorted(sortBy('view'))
+         //    : db.getSiblingDB(database.name).getCollectionInfos({ // legacy shell(s) method
+         //          "type": /^(collection|timeseries|view)$/,
+         //          "name": collFilter
+         //       },
+         //       (typeof process !== 'undefined') ? { "nameOnly": true } : true,
+         //       true
+         //      ).sort(sortBy('view'));
 
          return database;
       });
@@ -375,7 +394,6 @@
             delete collection.hostname;
             delete collection.proc;
             delete collection.dbPath;
-
             collection.indexes.sort(sortBy('index'));
 
             return collection;
