@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.1.1"
+    *  Version: "0.1.2"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,12 +11,15 @@
     *  Notes:
     *  - requires "inprog" privileges to capture all connections
     *  - statistics are per host as determined by connection read preferences
+    *
+    *  TODO:
+    *  - incorporate db.runCommand({ "whatsmyuri": 1}).you;
     */
 
    // Usage: "mongosh [connection options] --quiet connStats.js"
 
    let aggOpts = {
-         "comment": "connStats.js v0.1.0"
+         "comment": "connStats.js v0.1.2"
       },
       pipeline = [
          { "$currentOp": {
