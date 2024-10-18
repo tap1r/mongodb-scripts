@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.11.9"
+ *  Version: "0.11.10"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,7 +11,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.11.9"
+      "version": "0.11.10"
 });
 
 /*
@@ -164,7 +164,8 @@ class MetaStats {
          name = '', dataSize = 0, storageSize = 4096, freeStorageSize = 0,
          objects = 0, orphans = 0, compressor = 'none', indexes = [], nindexes = -1,
          indexSize = 4096, totalIndexSize = 4096, totalIndexBytesReusable = 0,
-         collections = 0, ncollections = 0, internalPageSize = 4096
+         collections = [], ncollections = 0, namespaces = 0, nviews = 0,
+         views = [], databases = [], internalPageSize = 4096
       } = {}) {
       /*
        *  https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
@@ -181,10 +182,12 @@ class MetaStats {
       this.objects = objects;
       this.orphans = orphans;
       this.compressor = compressor;
-      this.collections = []; // usurp dbStats counter for collections list
-      this.databases = [];
-      this.views = [];
+      this.databases = databases;
+      this.collections = collections; // usurp dbStats counter for collections list
+      this.views = views;
       this.ncollections = (collections == 0) ? ncollections : collections; // merge collStats and dbStats n/collections counters
+      this.nviews = nviews;
+      this.namespaces = namespaces;
       this.indexes = indexes; // usurp dbStats counter for indexes list
       this.nindexes = (nindexes == -1) ? +indexes : nindexes; // merge collStats and dbStats n/indexes counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
@@ -198,7 +201,10 @@ class MetaStats {
                     : (isSharded()) ? 'sharded'
                     : hello().me;
       this.hostname = hostInfo().system.hostname;
-      this.proc = (serverStatus().ok) ? serverStatus().process : 'unknown';
+      this.proc = (serverStatus().ok) ? serverStatus().process
+                : (hello().msg == 'isdbgrid') ? 'mongos'
+                : (typeof hello().setName !== 'undefined') ? 'mongod'
+                : 'unknown';
       this.dbPath = (isAtlasPlatform('serverless')) ? 'serverless'
                   : (isAtlasPlatform('sharedTier')) ? 'sharedTier'
                   : (this.proc == 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
@@ -342,6 +348,8 @@ function getAllNonSystemCollections() { // TBA
    /*
     *  getAllNonSystemCollections
     */
+   // let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/; // required for less privileged users
+   // let systemFilter = /(?:^(?!(system\..+|replset\..+)&&(system\.profile|system\.sessions|system\.views)$).+)/;
    return null;
 }
 
@@ -469,11 +477,9 @@ function serverCmdLineOpts() {
       serverCmdLineOpts = db.serverCmdLineOpts();
    } catch(error) {
       // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.serverCmdLineOpts()\n${error}\x1b[0m`);
+      serverCmdLineOpts = { "parsed": { "storage": { "dbPath": "unknown" } } };
    }
 
-   if (typeof serverCmdLineOpts.parsed !== 'undefined' && typeof serverCmdLineOpts.parsed.storage === 'undefined') {
-      serverCmdLineOpts = { "parsed": { "storage": { "dbPath": "undefined" } } };
-   }
    return serverCmdLineOpts;
 }
 
@@ -534,6 +540,7 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
       "latchAnalysis": false,
       "locks": false,
       "logicalSessionRecordCache": false,
+      "mem": false,
       "metrics": false,
       "mirroredReads": false,
       "network": false,
@@ -564,100 +571,6 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
       "watchdog": false,
       "wiredTiger": false,
       "writeBacksQueued": false
-
-      // add new exclusions below:
-      // connections: { current: 11, available: 489, totalCreated: Long('47') },
-      // extra_info: { note: 'fields vary by platform', page_faults: 0 },
-      // network: {
-      //   bytesIn: Long('565891'),
-      //   bytesOut: Long('965657'),
-      //   numRequests: Long('769')
-      // },
-      // opcounters: {
-      //   insert: Long('0'),
-      //   query: Long('53'),
-      //   update: Long('0'),
-      //   delete: Long('0'),
-      //   getmore: Long('50'),
-      //   command: Long('659'),
-      //   deprecated: { query: Long('0'), getmore: Long('0') }
-      // },
-      // opcountersRepl: {
-      //   insert: 0,
-      //   query: 0,
-      //   update: 0,
-      //   delete: 0,
-      //   getmore: 0,
-      //   command: 0,
-      //   deprecated: { query: 0, getmore: 0 }
-      // },
-      // repl: {
-      //   topologyVersion: {
-      //     processId: ObjectId('670c9d2b293b61cef4ff830e'),
-      //     counter: Long('9')
-      //   },
-      //   hosts: [
-      //     'ac-8ke2pot-shard-00-00.nepjt4y.mongodb.net:27017',
-      //     'ac-8ke2pot-shard-00-01.nepjt4y.mongodb.net:27017',
-      //     'ac-8ke2pot-shard-00-02.nepjt4y.mongodb.net:27017'
-      //   ],
-      //   setName: 'atlas-3nfau7-shard-0',
-      //   setVersion: 253,
-      //   isWritablePrimary: true,
-      //   secondary: false,
-      //   primary: 'ac-8ke2pot-shard-00-01.nepjt4y.mongodb.net:27017',
-      //   tags: {
-      //     availabilityZone: 'apse2-az1',
-      //     provider: 'AWS',
-      //     region: 'AP_SOUTHEAST_2',
-      //     workloadType: 'OPERATIONAL',
-      //     diskState: 'READY',
-      //     nodeType: 'ELECTABLE'
-      //   },
-      //   me: 'ac-8ke2pot-shard-00-01.nepjt4y.mongodb.net:27017',
-      //   electionId: ObjectId('7fffffff00000000000001d9'),
-      //   lastWrite: {
-      //     opTime: { ts: Timestamp({ t: 1728906279, i: 19 }), t: Long('473') },
-      //     lastWriteDate: ISODate('2024-10-14T11:44:39.000Z'),
-      //     majorityOpTime: { ts: Timestamp({ t: 1728906279, i: 18 }), t: Long('473') },
-      //     majorityWriteDate: ISODate('2024-10-14T11:44:39.000Z')
-      //   },
-      //   primaryOnlyServices: {
-      //     TenantMigrationDonorService: { state: 'running', numInstances: 0 },
-      //     TenantMigrationRecipientService: { state: 'running', numInstances: 0 }
-      //   },
-      //   rbid: 40,
-      //   userWriteBlockMode: 1
-      // },
-      // storageEngine: {
-      //   name: 'wiredTiger',
-      //   supportsCommittedReads: true,
-      //   oldestRequiredTimestampForCrashRecovery: Timestamp({ t: 1728906265, i: 335 }),
-      //   supportsPendingDrops: true,
-      //   dropPendingIdents: Long('267'),
-      //   supportsSnapshotReadConcern: true,
-      //   readOnly: false,
-      //   persistent: true,
-      //   backupCursorOpen: false
-      // },
-      // mem: {
-      //   bits: 64,
-      //   resident: 0,
-      //   virtual: 0,
-      //   supported: true,
-      //   mapped: 0,
-      //   mappedWithJournal: 0
-      // },
-      // metrics: {
-      //   aggStageCounters: {
-      //     search: Long('0'),
-      //     searchBeta: Long('0'),
-      //     searchMeta: Long('0'),
-      //     vectorSearch: Long('0')
-      //   },
-      //   operatorCounters: { match: { text: Long('0'), regex: Long('0') } },
-      //   atlas: { connectionPool: { totalCreated: Long('19943') } }
-      // },
    };
    let options = {
       "readPreference": (typeof readPref !== 'undefined') ? readPref
@@ -1399,33 +1312,44 @@ function $stats(dbName = db.getName()) {
     */
    let stats = db.getSiblingDB(dbName).stats( // max precision due to SERVER-69036
       // MONGOSH-1108 (mongosh v1.2.0) & SERVER-62277 (mongod v5.0.6)
-      (serverVer(5.0) && (shellVer() >= 5.0 || (typeof process !== 'undefined' && shellVer() >= 1.2))) ? { "freeStorage": 1, "scale": 1 } : 1
+      (serverVer(5.0) && (shellVer() >= 5.0 || (typeof process !== 'undefined' && shellVer() >= 1.2)))
+      ? { "freeStorage": 1, "scale": 1 } : 1
    );
    stats.name = dbName;
-   if (stats.hasOwnProperty('raw')) { // detect sharded namespaces schema
-      stats.collections = 0;
-      stats.views = 0;
+   delete stats.db;
+   if (stats.hasOwnProperty('raw')) { // detect sharded db.stats()
+      stats.collections = [];
+      stats.views = [];
+      stats.namespaces = [];
+      stats.indexes = [];
+      stats.nindexes = stats.indexes;
       stats.freeStorageSize = 0;
       stats.indexFreeStorageSize = 0;
       for (let shard in stats.raw) {
          if (stats.raw.hasOwnProperty(shard)) {
-            stats.collections += +stats.raw[shard].collections;
-            stats.views += +stats.raw[shard].views;
+            stats.collections.push(+stats.raw[shard].collections);
+            stats.views.push(+stats.raw[shard].views);
+            stats.indexes.push(+stats.raw[shard].indexes);
+            stats.namespaces.push(+stats.raw[shard].collections + +stats.raw[shard].views);
             stats.freeStorageSize += (typeof stats.raw[shard].freeStorageSize === 'undefined') ? 0 : +stats.raw[shard].freeStorageSize;
             stats.indexFreeStorageSize += (typeof stats.raw[shard].indexFreeStorageSize === 'undefined') ? 0 : +stats.raw[shard].indexFreeStorageSize;
          }
       }
+   } else { // detect unsharded db.stats()
+      stats.collections = +stats.collections;
+      stats.indexes = +stats.indexes;
+      stats.views = +stats.views;
+      stats.nviews = stats.views;
+      stats.namespaces = 0;
+      stats.namespaces = stats.collections + stats.views;
    }
-   stats.collections = +stats.collections;
-   stats.views = +stats.views;
-   stats.indexes = +stats.indexes;
-   stats.namespaces = +stats.collections + +stats.views;
+
    stats.objects = +stats.objects;
    stats.dataSize = +stats.dataSize;
    stats.storageSize = +stats.storageSize;
    stats.indexSize = +stats.indexSize;
    stats.indexFreeStorageSize = (typeof stats.indexFreeStorageSize === 'undefined') ? 0 : +stats.indexFreeStorageSize;
-   stats.totalIndexBytesReusable = stats.indexFreeStorageSize;
+   stats.totalIndexBytesReusable = +stats.indexFreeStorageSize;
    stats.scaleFactor = +stats.scaleFactor;
    delete stats.fileSize;
    delete stats.totalSize;
@@ -1635,9 +1559,37 @@ function $collStats(dbName = db.getName(), collName = '') {
             "uri",
             "wiredTiger"
          ] }
-      ];
+      ],
+      results;
 
-   return namespace.aggregate(pipeline, options).toArray()[0];
+   try {
+      results = namespace.aggregate(pipeline, options).toArray()[0];
+   } catch(error) {
+      if (error.codeName == 'Unauthorized') {
+         // console.log('Unauthorized');
+         results = {
+            "name": `${collName} (unauthorized)`,
+            "nodes": 0,
+            "shards": [],
+            "dataSize": 0,
+            "objects": 0,
+            "avgObjSize": 0,
+            "orphans": 0,
+            "storageSize": 0,
+            "freeStorageSize": 0,
+            "compressor": "",
+            "internalPageSize": 0,
+            "dataPageSize": 0,
+            "nindexes": 0,
+            "indexes": [],
+            "totalIndexSize": 0,
+            "totalIndexBytesReusable": 0
+         };
+      }
+   }
+
+   return results;
+   // return namespace.aggregate(pipeline, options).toArray()[0];
 }
 
 // EOF
