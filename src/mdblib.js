@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.11.10"
+ *  Version: "0.11.11"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -164,7 +164,7 @@ class MetaStats {
          name = '', dataSize = 0, storageSize = 4096, freeStorageSize = 0,
          objects = 0, orphans = 0, compressor = 'none', indexes = [], nindexes = -1,
          indexSize = 4096, totalIndexSize = 4096, totalIndexBytesReusable = 0,
-         collections = [], ncollections = 0, namespaces = 0, nviews = 0,
+         collections = [], ncollections = [], namespaces = [], nviews = [],
          views = [], databases = [], internalPageSize = 4096
       } = {}) {
       /*
@@ -210,7 +210,7 @@ class MetaStats {
                   : (this.proc == 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
                   : (this.proc == 'mongos') ? 'sharded'
                   : 'unknown';
-      this.shards = (this.proc == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : [];
+      this.shards = (this.proc == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards.map(({ _id }) => _id) : [];
    }
    get compression() {
       // return this.dataSize / (this.storageSize - this.freeStorageSize - this.overhead);
