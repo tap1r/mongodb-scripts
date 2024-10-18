@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.7"
+ *  Version: "0.11.8"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -130,7 +130,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.11.7" };
+   let __script = { "name": "dbstats.js", "version": "0.11.8" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -162,8 +162,8 @@
 
    let optionsDefaults = {
       "filter": {
-         "db": new RegExp(/^.+/),
-         "collection": new RegExp(/^.+/)
+         "db": new RegExp(/.+/),
+         "collection": new RegExp(/.+/)
       },
       "sort": {
          "db": {
@@ -288,15 +288,12 @@
        */
       let { 'db': dbFilter, 'collection': collFilter } = filterOptions;
       collFilter = new RegExp(collFilter);
-      let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/; // required for less privileged users
-      // let systemFilter = /(?:^(?!(system\..+|replset\..+)&&(system\.profile|system\.sessions|system\.views)$).+)/;
-      // let systemFilter = /.+/;
+      let systemFilter = /.+/;
       let dbPath = new MetaStats();
       dbPath.init();
       delete dbPath.name;
       delete dbPath.collections;
       delete dbPath.views;
-      delete dbPath.unauthorized;
       delete dbPath.indexes;
       delete dbPath.compressor;
 
@@ -314,7 +311,11 @@
          delete database.proc;
          delete database.dbPath;
          dbPath.ncollections += database.ncollections;
-         dbPath.nindexes += database.nindexes;
+         dbPath.nviews += database.nviews;
+         dbPath.namespaces += database.namespaces;
+         // convert to array concat for sharding
+         // dbPath.indexes += database.indexes;
+         dbPath.nindexes += database.indexes;
          dbPath.dataSize += database.dataSize;
          dbPath.storageSize += database.storageSize;
          dbPath.freeStorageSize += database.freeStorageSize;
@@ -353,43 +354,30 @@
                },
                { "nameOnly": true },
                true
-              // ).toSorted(sortBy('view'))
-              ).filter(({ 'name': viewName }) => viewName.match(systemFilter)).toSorted(sortBy('view'))
+              ).toSorted(sortBy('view'))
+              // ).filter(({ 'name': viewName }) => viewName.match(systemFilter)).toSorted(sortBy('view'))
             : db.getSiblingDB(database.name).getCollectionInfos({ // legacy shell(s) method
                   "type": "view",
                   "name": collFilter
                },
                (typeof process !== 'undefined') ? { "nameOnly": true } : true,
                true
-              // ).sort(sortBy('view'));
-            ).filter(({ 'name': viewName }) => viewName.match(systemFilter)).sort(sortBy('view'));
-         // database.authorized = (shellVer() >= 2.0 && typeof process !== 'undefined')
-         //    ? db.getSiblingDB(database.name).getCollectionInfos({ // mongosh v2 optimised
-         //          "type": /^(collection|timeseries|view)$/,
-         //          "name": collFilter
-         //       },
-         //       { "nameOnly": true },
-         //       true
-         //      ).toSorted(sortBy('view'))
-         //    : db.getSiblingDB(database.name).getCollectionInfos({ // legacy shell(s) method
-         //          "type": /^(collection|timeseries|view)$/,
-         //          "name": collFilter
-         //       },
-         //       (typeof process !== 'undefined') ? { "nameOnly": true } : true,
-         //       true
-         //      ).sort(sortBy('view'));
+              ).sort(sortBy('view'));
+              // ).filter(({ 'name': viewName }) => viewName.match(systemFilter)).sort(sortBy('view'));
 
          return database;
       });
       dbPath.databases = await Promise.all(collNamesTasks);
 
-      let collFetchTasks = dbPath.databases.map(async database => {
+      let dbFetchTasks = dbPath.databases.map(async database => {
          let collFetchTasks = database.collections.map(async({ 'name': collName }) => {
             let collection = await new MetaStats($collStats(database.name, collName));
             delete collection.databases;
             delete collection.collections;
             delete collection.views;
             delete collection.ncollections;
+            delete collection.nviews;
+            delete collection.namespaces;
             delete collection.instance;
             delete collection.hostname;
             delete collection.proc;
@@ -406,12 +394,12 @@
             },
             (typeof process !== 'undefined') ? { "nameOnly": true } : true,
             true
-         ).sort(sortBy('view'));
+         ).sort(sortBy('view')); // add toSorted optimisation here
 
          return database;
       });
-      dbPath.databases = await Promise.all(collFetchTasks);
-      dbPath.databases.sort(sortBy('db'));
+      dbPath.databases = await Promise.all(dbFetchTasks);
+      dbPath.databases.sort(sortBy('db')); // add toSorted optimisation here
 
       return dbPath;
    }
@@ -722,7 +710,7 @@
        *  Print collection table header
        */
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
-      console.log(`\x1b[1;32mCollections (visible):\x1b[0m${' '.repeat(1)}${collTotal}`);
+      console.log(`\x1b[1;32mCollections:\x1b[0m${' '.repeat(1)}${collTotal}`);
 
       return;
    }
@@ -733,7 +721,7 @@
        */
       console.log('\n');
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
-      console.log(`\x1b[1;32m${`Namespaces (visible):\x1b[0m${' '.repeat(1)}${nsTotal}`.padEnd(rowHeader + 4)}\x1b[0m \x1b[1;32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks | reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Compaction'.padStart(columnWidth - 1)}\x1b[0m`);
+      console.log(`\x1b[1;32m${`Namespaces:\x1b[0m${' '.repeat(1)}${nsTotal}`.padEnd(rowHeader + 4)}\x1b[0m \x1b[1;32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks | reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Compaction'.padStart(columnWidth - 1)}\x1b[0m`);
 
       return;
    }
@@ -746,7 +734,7 @@
       let collWidth = rowHeader - 3;
       let compaction = (name == 'oplog.rs' && compactionHelper('collection', storageSize, freeStorageSize)) ? 'wait'
                      : compactionHelper('collection', storageSize, freeStorageSize) ? 'compact'
-                     : '-';
+                     : '--  ';
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       if (name.length > 45) name = `${name.substring(0, collWidth)}~`;
       console.log(`└\x1b[36m${(' ' + name).padEnd(rowHeader - 1)}\x1b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${compaction.padStart(columnWidth - 2)}\x1b[0m`);
@@ -762,7 +750,7 @@
       let collWidth = rowHeader - 3;
       let compaction = (namespace == 'local.oplog.rs' && compactionHelper('collection', storageSize, freeStorageSize)) ? 'wait'
                      : compactionHelper('collection', storageSize, freeStorageSize) ? 'compact'
-                     : '-';
+                     : '--  ';
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       if (namespace.length > 45) namespace = `${namespace.substring(0, collWidth)}~`;
       console.log(`└\x1b[36m${(' ' + namespace).padEnd(rowHeader - 1)}\x1b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${compaction.padStart(columnWidth - 2)}\x1b[0m`);
@@ -775,7 +763,7 @@
        *  Print view table header
        */
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
-      console.log(`\x1b[1;32mViews (visible):\x1b[0m${' '.repeat(7)}${viewTotal}`);
+      console.log(`\x1b[1;32mViews:\x1b[0m ${viewTotal}`);
 
       return;
    }
@@ -797,7 +785,7 @@
       let indexWidth = rowHeader + columnWidth * 2;
       let compaction = (name == '_id_' && compactionHelper('index', storageSize, freeStorageSize)) ? 'compact()'
                      : compactionHelper('index', storageSize, freeStorageSize) ? 'rebuild'
-                     : '';
+                     : '--  ';
       console.log(`  \x1b[33m${'━'.repeat(termWidth - 2)}\x1b[0m`);
       if (name.length > 64) name = `${name.substring(0, indexWidth)}~`;
       console.log(`   \x1b[31m${name.padEnd(indexWidth)}\x1b[0m ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${''.toString().padStart(columnWidth)} \x1b[36m${compaction.padStart(columnWidth - 2)}\x1b[0m`);
@@ -817,32 +805,35 @@
    }
 
    function printDb({
-         dataSize, compression, storageSize, freeStorageSize, objects, ncollections, nindexes, totalIndexSize, totalIndexBytesReusable
+         dataSize, compression, storageSize, freeStorageSize, objects, namespaces, nindexes, totalIndexSize, totalIndexBytesReusable
       } = {}) {
       /*
        *  Print DB level rollup stats
        */
+      let dbCompaction = compactionHelper('collection', storageSize, freeStorageSize) ? 'compact' : '--  ';
+      let dbIdxCompaction = compactionHelper('index', totalIndexSize, totalIndexBytesReusable) ? 'rebuild' : '--  ';
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
-      console.log(`\x1b[1;32m${`Namespaces subtotal:\x1b[0m   ${ncollections}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize).padStart(columnWidth) + ' |' + `${formatPct(freeStorageSize, storageSize)}`.padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} ${''.padStart(columnWidth - 2)}`);
-      console.log(`\x1b[1;32m${`Indexes subtotal:\x1b[0m      ${nindexes}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${`${formatUnit(totalIndexBytesReusable).padStart(columnWidth)} |${`${formatPct(totalIndexBytesReusable, totalIndexSize)}`.padStart(6)}`.padStart(columnWidth + 8)}`);
+      console.log(`\x1b[1;32m${`Namespaces subtotal:\x1b[0m ${JSON.stringify(namespaces)}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize).padStart(columnWidth) + ' |' + `${formatPct(freeStorageSize, storageSize)}`.padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${dbCompaction.padStart(columnWidth - 2)}\x1b[0m`);
+      console.log(`\x1b[1;32m${`Indexes subtotal:\x1b[0m    ${JSON.stringify(nindexes)}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${`${formatUnit(totalIndexBytesReusable).padStart(columnWidth)} |${`${formatPct(totalIndexBytesReusable, totalIndexSize)}`.padStart(6)}`.padStart(columnWidth + 8)} ${''.toString().padStart(columnWidth)} \x1b[36m${dbIdxCompaction.padStart(columnWidth - 2)}\x1b[0m`);
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
 
       return;
    }
 
    function printDbPath({
-         dbPath, proc, hostname, compression, dataSize, storageSize, freeStorageSize, objects, ncollections, nindexes, totalIndexSize, totalIndexBytesReusable
+         dbPath, proc, hostname, compression, dataSize, storageSize, freeStorageSize, objects, namespaces, nindexes, totalIndexSize, totalIndexBytesReusable
       } = {}) {
       /*
        *  Print total dbPath rollup stats
        */
-      let compaction = compactionHelper('dbPath', storageSize + totalIndexSize, freeStorageSize + totalIndexBytesReusable) ? 'resync' : '';
+      let dbPathCompaction = compactionHelper('dbPath', storageSize, freeStorageSize) ? 'resync' : '--  ';
+      let dbPathIdxCompaction = compactionHelper('index', totalIndexSize, totalIndexBytesReusable) ? 'rebuild' : '--  ';
       console.log('\n');
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[1;32m${'dbPath totals'.padEnd(rowHeader)} ${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks | reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Compaction'.padStart(columnWidth - 1)}\x1b[0m`);
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
-      console.log(`\x1b[1;32m${`All namespaces:\x1b[0m        ${ncollections}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${compaction.padStart(columnWidth - 2)}\x1b[0m`);
-      console.log(`\x1b[1;32m${`All indexes:\x1b[0m           ${nindexes}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ' |' + (formatPct(totalIndexBytesReusable, totalIndexSize)).padStart(6)).padStart(columnWidth + 8)}`);
+      console.log(`\x1b[1;32m${`All namespaces:\x1b[0m ${JSON.stringify(namespaces)}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${dbPathCompaction.padStart(columnWidth - 2)}\x1b[0m`);
+      console.log(`\x1b[1;32m${`All indexes:\x1b[0m    ${JSON.stringify(nindexes)}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ' |' + (formatPct(totalIndexBytesReusable, totalIndexSize)).padStart(6)).padStart(columnWidth + 8)} ${''.padStart(columnWidth)} \x1b[36m${dbPathIdxCompaction.padStart(columnWidth - 2)}\x1b[0m`);
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[1;32mHost:\x1b[0m \x1b[36m${hostname}\x1b[0m   \x1b[1;32mType:\x1b[0m \x1b[36m${proc}\x1b[0m   \x1b[1;32mVersion:\x1b[0m \x1b[36m${db.version()}\x1b[0m   \x1b[1;32mdbPath:\x1b[0m \x1b[36m${dbPath}\x1b[0m`);
       // console.log(`\x1b[1;32mShards:\x1b[0m ${shards}`);
