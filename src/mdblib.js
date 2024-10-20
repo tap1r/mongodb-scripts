@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.11.12"
+ *  Version: "0.11.13"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -653,10 +653,10 @@ const dec128MinVal = -10 * Math.pow(2, 110);
 const dec128MaxVal = 10 * Math.pow(2, 110) - 1;
 
 function compactionHelper(type = 'collection', storageSize = 4096, freeStorageSize = 0) {
-   let compactCollectionThreshold = 0.2,  // 20% reusable collection bytes
-      compactIndexThreshold = 0.5,        // 50% reusable index bytes
-      minSizeBytes = 2097152,             // 2MB as WT ignores anything smaller
-      syncThreshold = 0.5;                // 50% total dbPath reusable bytes
+   let compactCollectionThreshold = 0.2, // 20% reusable collection bytes
+      compactIndexThreshold = 0.5,       // 50% reusable index bytes
+      minSizeBytes = 2097152,            // 2MB as WT ignores anything smaller (revise to 1MB for v8?)
+      syncThreshold = 0.5;               // 50% total dbPath reusable bytes
 
    let sizeThreshold = storageSize > minSizeBytes,
       freeThreshold = freeStorageSize / storageSize;
@@ -1313,7 +1313,7 @@ function $stats(dbName = db.getName()) {
    let stats = db.getSiblingDB(dbName).stats( // max precision due to SERVER-69036
       // MONGOSH-1108 (mongosh v1.2.0) & SERVER-62277 (mongod v5.0.6)
       (serverVer(5.0) && (shellVer() >= 5.0 || (typeof process !== 'undefined' && shellVer() >= 1.2)))
-      ? { "freeStorage": 1, "scale": 1 } : 1
+         ? { "freeStorage": 1, "scale": 1 } : 1
    );
    stats.name = dbName;
    delete stats.db;
@@ -1565,7 +1565,6 @@ function $collStats(dbName = db.getName(), collName = '') {
       results = namespace.aggregate(pipeline, options).toArray()[0];
    } catch(error) {
       if (error.codeName == 'Unauthorized') {
-         // console.log('Unauthorized');
          results = {
             "name": `${collName} (unauthorized)`,
             "nodes": 0,
@@ -1588,7 +1587,6 @@ function $collStats(dbName = db.getName(), collName = '') {
    }
 
    return results;
-   // return namespace.aggregate(pipeline, options).toArray()[0];
 }
 
 // EOF
