@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.9"
+ *  Version: "0.11.10"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -109,7 +109,7 @@
    try {
       db.adminCommand({ "features": 1 });
    } catch(error) { // MongoServerError: command features requires authentication
-      print('[ERR] MongoServerError: features command requires authentication');
+      print('\x1b[31m[ERR] MongoServerError: features command requires authentication\x1b[0m');
    }
    let monitorRoles = ['clusterMonitor'],
       adminRoles = ['atlasAdmin', 'clusterAdmin', 'backup', 'root', '__system'],
@@ -119,8 +119,8 @@
       users = authenticatedUserRoles.filter(({ role, db }) => adminRoles.includes(role) && db == 'admin'),
       monitors = authenticatedUserRoles.filter(({ role, db }) => monitorRoles.includes(role) && db == 'admin');
    if (!(!(!!authenticatedUsers.length) || !!users.length || !!monitors.length && !!authz.length)) {
-      print(`[WARN] The connecting user's authz privileges may be inadequate to report all namespaces statistics`);
-      print(`[WARN] consider inheriting the built-in roles for 'clusterMonitor@admin' and 'readAnyDatabase@admin' at a minimum`);
+      print(`\x1b[31m[WARN] The connecting user's authz privileges may be inadequate to report all namespaces statistics\x1b[0m`);
+      print(`\x1b[31m[WARN] consider inheriting the built-in roles for 'clusterMonitor@admin' and 'readAnyDatabase@admin' at a minimum\x1b[0m`);
    }
 })();
 
@@ -130,7 +130,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.11.9" };
+   let __script = { "name": "dbstats.js", "version": "0.11.10" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -291,7 +291,7 @@
       let systemFilter = /.+/;
       let dbPath = new MetaStats();
       dbPath.init();
-      if (dbPath.shards.length !== 0) {
+      if (dbPath.shards.length > 0) {
          let paddedArray = [...Array(dbPath.shards.length)].map(() => 0);
          dbPath.ncollections = paddedArray;
          dbPath.nviews = paddedArray;
@@ -307,8 +307,8 @@
       let dbNames = (shellVer() >= 2.0 && typeof process !== 'undefined')
          ? getDBNames(dbFilter).toSorted(sortAsc) // mongosh v2 optimised
          : getDBNames(dbFilter).sort(sortAsc);    // legacy shell(s) method
-      console.log('\n');
-      if (dbPath.shards.length !== 0) {
+      console.log('');
+      if (dbPath.shards.length > 0) {
          console.log('Discovered', dbPath.shards.length, 'shards');
       }
       console.log('Discovered', dbNames.length, 'distinct databases');
@@ -321,7 +321,7 @@
          delete database.proc;
          delete database.dbPath;
          database.shards = dbPath.shards;
-         if (dbPath.shards.length !== 0) {
+         if (dbPath.shards.length > 0) {
             dbPath.ncollections = dbPath.ncollections.reduce((result, current, _idx) => {
                   result.push(current + database.ncollections[_idx]);
                   return result;
@@ -357,8 +357,10 @@
       });
       // dbPath.databases = await Promise.all(dbFetchTasks);
 
-      console.log('Discovered', dbPath.namespaces, 'distinct namespaces');
-      console.log('Discovered', dbPath.nindexes, 'distinct indexes');
+      console.log('Discovered', JSON.stringify(dbPath.namespaces), 'distinct namespaces',
+         (dbPath.shards.length > 0) ? `on shards ${JSON.stringify(dbPath.shards)}` : '');
+      console.log('Discovered', JSON.stringify(dbPath.nindexes), 'distinct indexes',
+         (dbPath.shards.length > 0) ? `on shards ${JSON.stringify(dbPath.shards)}` : '');
 
       let collNamesTasks = dbPath.databases.map(async database => {
          database.collections = (shellVer() >= 2.0 && typeof process !== 'undefined')
@@ -485,7 +487,7 @@
       /*
        *  JSON out
        */
-      console.log('\n');
+      console.log('');
       printjson(dbStats);
 
       return;
@@ -748,7 +750,7 @@
       /*
        *  Print namespace table header
        */
-      console.log('\n');
+      console.log('');
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[1;32m${`Namespaces:\x1b[0m${' '.repeat(1)}${nsTotal}`.padEnd(rowHeader + 4)}\x1b[0m \x1b[1;32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks | reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Compaction'.padStart(columnWidth - 1)}\x1b[0m`);
 
@@ -826,7 +828,7 @@
       /*
        *  Print DB table header
        */
-      console.log('\n');
+      console.log('');
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[1;32m${`Database:\x1b[0m \x1b[36m${name}`.padEnd(rowHeader + 9)}\x1b[0m \x1b[1;32m${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks | reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Compaction'.padStart(columnWidth - 1)}\x1b[0m`);
 
@@ -844,7 +846,7 @@
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[1;32m${`Namespaces subtotal:\x1b[0m ${JSON.stringify(namespaces)}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize).padStart(columnWidth) + ' |' + `${formatPct(freeStorageSize, storageSize)}`.padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${dbCompaction.padStart(columnWidth - 2)}\x1b[0m`);
       console.log(`\x1b[1;32m${`Indexes subtotal:\x1b[0m    ${JSON.stringify(nindexes)}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${`${formatUnit(totalIndexBytesReusable).padStart(columnWidth)} |${`${formatPct(totalIndexBytesReusable, totalIndexSize)}`.padStart(6)}`.padStart(columnWidth + 8)} ${''.toString().padStart(columnWidth)} \x1b[36m${dbIdxCompaction.padStart(columnWidth - 2)}\x1b[0m`);
-      if (shards.length !== 0) {
+      if (shards.length > 0) {
          console.log(`\x1b[1;32mShards:\x1b[0m ${JSON.stringify(shards)}`);
       }
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
@@ -860,7 +862,7 @@
        */
       let dbPathCompaction = compactionHelper('dbPath', storageSize, freeStorageSize) ? 'resync' : '--  ';
       let dbPathIdxCompaction = compactionHelper('index', totalIndexSize, totalIndexBytesReusable) ? 'rebuild' : '--  ';
-      console.log('\n');
+      console.log('');
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[1;32m${'dbPath totals'.padEnd(rowHeader)} ${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks | reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Compaction'.padStart(columnWidth - 1)}\x1b[0m`);
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
@@ -868,11 +870,11 @@
       console.log(`\x1b[1;32m${`All indexes:\x1b[0m    ${JSON.stringify(nindexes)}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ' |' + (formatPct(totalIndexBytesReusable, totalIndexSize)).padStart(6)).padStart(columnWidth + 8)} ${''.padStart(columnWidth)} \x1b[36m${dbPathIdxCompaction.padStart(columnWidth - 2)}\x1b[0m`);
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[1;32mHost:\x1b[0m \x1b[36m${hostname}\x1b[0m   \x1b[1;32mType:\x1b[0m \x1b[36m${proc}\x1b[0m   \x1b[1;32mVersion:\x1b[0m \x1b[36m${db.version()}\x1b[0m   \x1b[1;32mdbPath:\x1b[0m \x1b[36m${dbPath}\x1b[0m`);
-      if (shards.length !== 0) {
+      if (shards.length > 0) {
          console.log(`\x1b[1;32mShards:\x1b[0m ${JSON.stringify(shards)}`);
       }
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
-      console.log('\n');
+      console.log('');
 
       return;
    }
