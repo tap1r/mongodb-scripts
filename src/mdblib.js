@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.11.11"
+ *  Version: "0.11.12"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -164,7 +164,7 @@ class MetaStats {
          name = '', dataSize = 0, storageSize = 4096, freeStorageSize = 0,
          objects = 0, orphans = 0, compressor = 'none', indexes = [], nindexes = -1,
          indexSize = 4096, totalIndexSize = 4096, totalIndexBytesReusable = 0,
-         collections = [], ncollections = [], namespaces = [], nviews = [],
+         collections = [], ncollections = 0, namespaces = 0, nviews = 0,
          views = [], databases = [], internalPageSize = 4096
       } = {}) {
       /*
@@ -1340,7 +1340,6 @@ function $stats(dbName = db.getName()) {
       stats.indexes = +stats.indexes;
       stats.views = +stats.views;
       stats.nviews = stats.views;
-      stats.namespaces = 0;
       stats.namespaces = stats.collections + stats.views;
    }
 
