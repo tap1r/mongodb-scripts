@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.10"
+ *  Version: "0.11.11"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -109,7 +109,9 @@
    try {
       db.adminCommand({ "features": 1 });
    } catch(error) { // MongoServerError: command features requires authentication
-      print('\x1b[31m[ERR] MongoServerError: features command requires authentication\x1b[0m');
+      if (error.codeName == 'Unauthorized') {
+         print('\x1b[31m[ERR] MongoServerError: Unauthorized user requires authentication\x1b[0m');
+      }
    }
    let monitorRoles = ['clusterMonitor'],
       adminRoles = ['atlasAdmin', 'clusterAdmin', 'backup', 'root', '__system'],
@@ -130,7 +132,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.11.10" };
+   let __script = { "name": "dbstats.js", "version": "0.11.11" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
