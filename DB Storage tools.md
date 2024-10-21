@@ -12,6 +12,7 @@ The [dbstats.js](src/dbstats.js) script (and [mdblib.js](src/mdblib.js) dependen
 * Free blocks (reclaimable/reusable space)
 * Compression statistics
 * Index storage and reusable space
+* Sharded namespace/index statistics
 * Compaction heuristics
 
 ### Installing _dbstats.js_
