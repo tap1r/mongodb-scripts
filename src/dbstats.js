@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.11"
+ *  Version: "0.11.12"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -108,7 +108,7 @@
     */
    try {
       db.adminCommand({ "features": 1 });
-   } catch(error) { // MongoServerError: command features requires authentication
+   } catch(error) {
       if (error.codeName == 'Unauthorized') {
          print('\x1b[31m[ERR] MongoServerError: Unauthorized user requires authentication\x1b[0m');
       }
@@ -132,7 +132,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.11.11" };
+   let __script = { "name": "dbstats.js", "version": "0.11.12" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -303,16 +303,15 @@
       delete dbPath.name;
       delete dbPath.collections;
       delete dbPath.views;
-      // delete dbPath.indexes;
       delete dbPath.compressor;
 
       let dbNames = (shellVer() >= 2.0 && typeof process !== 'undefined')
          ? getDBNames(dbFilter).toSorted(sortAsc) // mongosh v2 optimised
          : getDBNames(dbFilter).sort(sortAsc);    // legacy shell(s) method
       console.log('');
-      if (dbPath.shards.length > 0) {
-         console.log('Discovered', dbPath.shards.length, 'shards');
-      }
+      // if (dbPath.shards.length > 0) {
+      //    console.log('Discovered', dbPath.shards.length, 'shards:', JSON.stringify(dbPath.shards, null, 3));
+      // }
       console.log('Discovered', dbNames.length, 'distinct databases');
       // let dbFetchTasks = dbNames.map(async dbName => {
       dbPath.databases = dbNames.map(dbName => {
@@ -336,7 +335,7 @@
                   result.push(current + database.namespaces[_idx]);
                   return result;
                }, []);
-               dbPath.indexes = dbPath.indexes.reduce((result, current, _idx) => {
+            dbPath.indexes = dbPath.indexes.reduce((result, current, _idx) => {
                   result.push(current + database.indexes[_idx]);
                   return result;
                }, []);
@@ -346,7 +345,7 @@
             dbPath.namespaces += database.namespaces;
             dbPath.indexes += database.indexes;
          }
-         dbPath.nindexes = database.indexes;
+         dbPath.nindexes = dbPath.indexes;
          dbPath.dataSize += database.dataSize;
          dbPath.storageSize += database.storageSize;
          dbPath.freeStorageSize += database.freeStorageSize;
@@ -359,10 +358,27 @@
       });
       // dbPath.databases = await Promise.all(dbFetchTasks);
 
-      console.log('Discovered', JSON.stringify(dbPath.namespaces), 'distinct namespaces',
-         (dbPath.shards.length > 0) ? `on shards ${JSON.stringify(dbPath.shards)}` : '');
-      console.log('Discovered', JSON.stringify(dbPath.nindexes), 'distinct indexes',
-         (dbPath.shards.length > 0) ? `on shards ${JSON.stringify(dbPath.shards)}` : '');
+      if (dbPath.shards.length > 0) {
+         console.log(
+            'Discovered distributed namespaces:',
+            JSON.stringify(
+               dbPath.shards.map((shard, _i) => {
+                  return { [shard]: dbPath.namespaces[_i] }
+               }), null, 3
+            ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ')
+         );
+         console.log(
+            'Discovered distributed indexes:',
+            JSON.stringify(
+               dbPath.shards.map((shard, _i) => {
+                  return { [shard]: dbPath.nindexes[_i] }
+               }), null, 3
+            ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ')
+         );
+      } else {
+         console.log('Discovered', dbPath.namespaces, 'distinct namespaces');
+         console.log('Discovered', dbPath.nindexes, 'distinct indexes');
+      }
 
       let collNamesTasks = dbPath.databases.map(async database => {
          database.collections = (shellVer() >= 2.0 && typeof process !== 'undefined')
