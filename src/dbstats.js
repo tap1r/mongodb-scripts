@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.12"
+ *  Version: "0.11.13"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -132,7 +132,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.11.12" };
+   let __script = { "name": "dbstats.js", "version": "0.11.13" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -309,10 +309,11 @@
          ? getDBNames(dbFilter).toSorted(sortAsc) // mongosh v2 optimised
          : getDBNames(dbFilter).sort(sortAsc);    // legacy shell(s) method
       console.log('');
+      // add debug clause
       // if (dbPath.shards.length > 0) {
       //    console.log('Discovered', dbPath.shards.length, 'shards:', JSON.stringify(dbPath.shards, null, 3));
       // }
-      console.log('Discovered', dbNames.length, 'distinct databases');
+      // console.log('Discovered', dbNames.length, 'distinct databases');
       // let dbFetchTasks = dbNames.map(async dbName => {
       dbPath.databases = dbNames.map(dbName => {
          let database = new MetaStats($stats(dbName));
@@ -339,13 +340,14 @@
                   result.push(current + database.indexes[_idx]);
                   return result;
                }, []);
+            dbPath.nindexes = dbPath.indexes;
          } else {
             dbPath.ncollections += database.ncollections;
             dbPath.nviews += database.nviews;
             dbPath.namespaces += database.namespaces;
             dbPath.indexes += database.indexes;
+            dbPath.nindexes = +dbPath.indexes;
          }
-         dbPath.nindexes = dbPath.indexes;
          dbPath.dataSize += database.dataSize;
          dbPath.storageSize += database.storageSize;
          dbPath.freeStorageSize += database.freeStorageSize;
@@ -358,27 +360,28 @@
       });
       // dbPath.databases = await Promise.all(dbFetchTasks);
 
-      if (dbPath.shards.length > 0) {
-         console.log(
-            'Discovered distributed namespaces:',
-            JSON.stringify(
-               dbPath.shards.map((shard, _i) => {
-                  return { [shard]: dbPath.namespaces[_i] }
-               }), null, 3
-            ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ')
-         );
-         console.log(
-            'Discovered distributed indexes:',
-            JSON.stringify(
-               dbPath.shards.map((shard, _i) => {
-                  return { [shard]: dbPath.nindexes[_i] }
-               }), null, 3
-            ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ')
-         );
-      } else {
-         console.log('Discovered', dbPath.namespaces, 'distinct namespaces');
-         console.log('Discovered', dbPath.nindexes, 'distinct indexes');
-      }
+      // add debug clause
+      // if (dbPath.shards.length > 0) {
+      //    console.log(
+      //       'Discovered distributed namespaces:',
+      //       JSON.stringify(
+      //          dbPath.shards.map((shard, _i) => {
+      //             return { [shard]: dbPath.namespaces[_i] }
+      //          }), null, 3
+      //       ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ')
+      //    );
+      //    console.log(
+      //       'Discovered distributed indexes:',
+      //       JSON.stringify(
+      //          dbPath.shards.map((shard, _i) => {
+      //             return { [shard]: dbPath.nindexes[_i] }
+      //          }), null, 3
+      //       ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ')
+      //    );
+      // } else {
+      //    console.log('Discovered', dbPath.namespaces, 'distinct namespaces');
+      //    console.log('Discovered', dbPath.nindexes, 'distinct indexes');
+      // }
 
       let collNamesTasks = dbPath.databases.map(async database => {
          database.collections = (shellVer() >= 2.0 && typeof process !== 'undefined')
@@ -862,10 +865,24 @@
       let dbCompaction = compactionHelper('collection', storageSize, freeStorageSize) ? 'compact' : '--  ';
       let dbIdxCompaction = compactionHelper('index', totalIndexSize, totalIndexBytesReusable) ? 'rebuild' : '--  ';
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
-      console.log(`\x1b[1;32m${`Namespaces subtotal:\x1b[0m ${JSON.stringify(namespaces)}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize).padStart(columnWidth) + ' |' + `${formatPct(freeStorageSize, storageSize)}`.padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${dbCompaction.padStart(columnWidth - 2)}\x1b[0m`);
-      console.log(`\x1b[1;32m${`Indexes subtotal:\x1b[0m    ${JSON.stringify(nindexes)}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${`${formatUnit(totalIndexBytesReusable).padStart(columnWidth)} |${`${formatPct(totalIndexBytesReusable, totalIndexSize)}`.padStart(6)}`.padStart(columnWidth + 8)} ${''.toString().padStart(columnWidth)} \x1b[36m${dbIdxCompaction.padStart(columnWidth - 2)}\x1b[0m`);
       if (shards.length > 0) {
-         console.log(`\x1b[1;32mShards:\x1b[0m ${JSON.stringify(shards)}`);
+         console.log(`\x1b[1;32m${`Namespaces subtotal:\x1b[0m`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize).padStart(columnWidth) + ' |' + `${formatPct(freeStorageSize, storageSize)}`.padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${dbCompaction.padStart(columnWidth - 2)}\x1b[0m`);
+         namespaces = JSON.stringify(
+            shards.map((shard, _i) => {
+               return { [shard]: namespaces[_i] }
+            }), null, 3
+         ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ');
+         console.log(namespaces);
+         console.log(`\x1b[1;32m${`Indexes subtotal:\x1b[0m`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${`${formatUnit(totalIndexBytesReusable).padStart(columnWidth)} |${`${formatPct(totalIndexBytesReusable, totalIndexSize)}`.padStart(6)}`.padStart(columnWidth + 8)} ${''.toString().padStart(columnWidth)} \x1b[36m${dbIdxCompaction.padStart(columnWidth - 2)}\x1b[0m`);
+         nindexes = JSON.stringify(
+            shards.map((shard, _i) => {
+               return { [shard]: nindexes[_i] }
+            }), null, 3
+         ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ');
+         console.log(nindexes);
+      } else {
+         console.log(`\x1b[1;32m${`Namespaces subtotal:\x1b[0m ${JSON.stringify(namespaces)}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize).padStart(columnWidth) + ' |' + `${formatPct(freeStorageSize, storageSize)}`.padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${dbCompaction.padStart(columnWidth - 2)}\x1b[0m`);
+         console.log(`\x1b[1;32m${`Indexes subtotal:\x1b[0m    ${JSON.stringify(nindexes)}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${`${formatUnit(totalIndexBytesReusable).padStart(columnWidth)} |${`${formatPct(totalIndexBytesReusable, totalIndexSize)}`.padStart(6)}`.padStart(columnWidth + 8)} ${''.toString().padStart(columnWidth)} \x1b[36m${dbIdxCompaction.padStart(columnWidth - 2)}\x1b[0m`);
       }
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
 
@@ -884,8 +901,25 @@
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[1;32m${'dbPath totals'.padEnd(rowHeader)} ${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks | reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Compaction'.padStart(columnWidth - 1)}\x1b[0m`);
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
-      console.log(`\x1b[1;32m${`All namespaces:\x1b[0m ${JSON.stringify(namespaces)}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${dbPathCompaction.padStart(columnWidth - 2)}\x1b[0m`);
-      console.log(`\x1b[1;32m${`All indexes:\x1b[0m    ${JSON.stringify(nindexes)}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ' |' + (formatPct(totalIndexBytesReusable, totalIndexSize)).padStart(6)).padStart(columnWidth + 8)} ${''.padStart(columnWidth)} \x1b[36m${dbPathIdxCompaction.padStart(columnWidth - 2)}\x1b[0m`);
+      if (shards.length > 0) {
+         console.log(`\x1b[1;32m${`All namespaces:\x1b[0m`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${dbPathCompaction.padStart(columnWidth - 2)}\x1b[0m`);
+         namespaces = JSON.stringify(
+            shards.map((shard, _i) => {
+               return { [shard]: namespaces[_i] }
+            }), null, 3
+         ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ');
+         console.log(namespaces);
+         console.log(`\x1b[1;32m${`All indexes:\x1b[0m`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ' |' + (formatPct(totalIndexBytesReusable, totalIndexSize)).padStart(6)).padStart(columnWidth + 8)} ${''.padStart(columnWidth)} \x1b[36m${dbPathIdxCompaction.padStart(columnWidth - 2)}\x1b[0m`);
+         nindexes = JSON.stringify(
+            shards.map((shard, _i) => {
+               return { [shard]: nindexes[_i] }
+            }), null, 3
+         ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ');
+         console.log(nindexes);
+      } else {
+         console.log(`\x1b[1;32m${`All namespaces:\x1b[0m ${JSON.stringify(namespaces)}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${dbPathCompaction.padStart(columnWidth - 2)}\x1b[0m`);
+         console.log(`\x1b[1;32m${`All indexes:\x1b[0m    ${JSON.stringify(nindexes)}`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ' |' + (formatPct(totalIndexBytesReusable, totalIndexSize)).padStart(6)).padStart(columnWidth + 8)} ${''.padStart(columnWidth)} \x1b[36m${dbPathIdxCompaction.padStart(columnWidth - 2)}\x1b[0m`);
+      }
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[1;32mHost:\x1b[0m \x1b[36m${hostname}\x1b[0m   \x1b[1;32mType:\x1b[0m \x1b[36m${proc}\x1b[0m   \x1b[1;32mVersion:\x1b[0m \x1b[36m${db.version()}\x1b[0m   \x1b[1;32mdbPath:\x1b[0m \x1b[36m${dbPath}\x1b[0m`);
       if (shards.length > 0) {
