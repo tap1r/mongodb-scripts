@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.13"
+ *  Version: "0.11.14"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -132,7 +132,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.11.13" };
+   let __script = { "name": "dbstats.js", "version": "0.11.14" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -303,6 +303,8 @@
       delete dbPath.name;
       delete dbPath.collections;
       delete dbPath.views;
+      // delete dbPath.indexes;
+      // delete dbPath.nindexes;
       delete dbPath.compressor;
 
       let dbNames = (shellVer() >= 2.0 && typeof process !== 'undefined')
@@ -345,8 +347,8 @@
             dbPath.ncollections += database.ncollections;
             dbPath.nviews += database.nviews;
             dbPath.namespaces += database.namespaces;
-            dbPath.indexes += database.indexes;
-            dbPath.nindexes = +dbPath.indexes;
+            // dbPath.indexes += +database.indexes;
+            dbPath.nindexes += +database.indexes;
          }
          dbPath.dataSize += database.dataSize;
          dbPath.storageSize += database.storageSize;
