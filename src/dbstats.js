@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.14"
+ *  Version: "0.11.15"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -132,7 +132,7 @@
  */
 
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.11.14" };
+   let __script = { "name": "dbstats.js", "version": "0.11.15" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -370,7 +370,7 @@
       //          dbPath.shards.map((shard, _i) => {
       //             return { [shard]: dbPath.namespaces[_i] }
       //          }), null, 3
-      //       ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ')
+      //       ).replace(/(?<![\[])(?:\n\s+)/g, ' '); // legacy shell doesn't support this
       //    );
       //    console.log(
       //       'Discovered distributed indexes:',
@@ -378,7 +378,7 @@
       //          dbPath.shards.map((shard, _i) => {
       //             return { [shard]: dbPath.nindexes[_i] }
       //          }), null, 3
-      //       ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ')
+      //       ).replace(/(?<![\[])(?:\n\s+)/g, ' '); // legacy shell doesn't support this
       //    );
       // } else {
       //    console.log('Discovered', dbPath.namespaces, 'distinct namespaces');
@@ -436,24 +436,38 @@
             delete collection.hostname;
             delete collection.proc;
             delete collection.dbPath;
-            collection.indexes.sort(sortBy('index'));
+            // collection.indexes.sort(sortBy('index')); // add toSorted optimisation here
+            collection.indexes = (shellVer() >= 2.0 && typeof process !== 'undefined')
+               ? collection.indexes.toSorted(sortBy('index')) // mongosh v2 optimised
+               : collection.indexes.sort(sortBy('index'));    // legacy shell(s) method
 
             return collection;
          });
          database.collections = await Promise.all(collFetchTasks);
-         database.collections.sort(sortBy('collection'));
+         // database.collections.sort(sortBy('collection')); // add toSorted optimisation here
+         database.collections = (shellVer() >= 2.0 && typeof process !== 'undefined')
+            ? database.collections.toSorted(sortBy('collection')) // mongosh v2 optimised
+            : database.collections.sort(sortBy('collection'));    // legacy shell(s) method
          database.views = db.getSiblingDB(database.name).getCollectionInfos({
                "type": "view",
                "name": collFilter
             },
             (typeof process !== 'undefined') ? { "nameOnly": true } : true,
             true
-         ).sort(sortBy('view')); // add toSorted optimisation here
+         ); // .sort(sortBy('view')); // add toSorted optimisation here
+         database.views = (shellVer() >= 2.0 && typeof process !== 'undefined')
+            ? database.views.toSorted(sortBy('view')) // mongosh v2 optimised
+            : database.views.sort(sortBy('view'));    // legacy shell(s) method
+         dbPath.databases = (shellVer() >= 2.0 && typeof process !== 'undefined')
+            ? dbPath.databases.toSorted(sortBy('db')) // mongosh v2 optimised
+            : dbPath.databases.sort(sortBy('db'));    // legacy shell(s) method
 
          return database;
       });
       dbPath.databases = await Promise.all(dbFetchTasks);
-      dbPath.databases.sort(sortBy('db')); // add toSorted optimisation here
+      dbPath.databases = (shellVer() >= 2.0 && typeof process !== 'undefined')
+         ? dbPath.databases.toSorted(sortBy('db')) // mongosh v2 optimised
+         : dbPath.databases.sort(sortBy('db'));    // legacy shell(s) method
 
       return dbPath;
    }
@@ -873,14 +887,16 @@
             shards.map((shard, _i) => {
                return { [shard]: namespaces[_i] }
             }), null, 3
-         ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ');
+         // ).replace(/(?<![\[])(?:\n\s+)/g, ' '); // legacy shell doesn't support this
+         ).replace(/(?:\n\s+)|(?:\n)/g, ' ');
          console.log(namespaces);
          console.log(`\x1b[1;32m${`Indexes subtotal:\x1b[0m`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${`${formatUnit(totalIndexBytesReusable).padStart(columnWidth)} |${`${formatPct(totalIndexBytesReusable, totalIndexSize)}`.padStart(6)}`.padStart(columnWidth + 8)} ${''.toString().padStart(columnWidth)} \x1b[36m${dbIdxCompaction.padStart(columnWidth - 2)}\x1b[0m`);
          nindexes = JSON.stringify(
             shards.map((shard, _i) => {
                return { [shard]: nindexes[_i] }
             }), null, 3
-         ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ');
+         // ).replace(/(?<![\[])(?:\n\s+)/g, ' '); // legacy shell doesn't support this
+         ).replace(/(?:\n\s+)|(?:\n)/g, ' ');
          console.log(nindexes);
       } else {
          console.log(`\x1b[1;32m${`Namespaces subtotal:\x1b[0m ${JSON.stringify(namespaces)}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize).padStart(columnWidth) + ' |' + `${formatPct(freeStorageSize, storageSize)}`.padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${dbCompaction.padStart(columnWidth - 2)}\x1b[0m`);
@@ -909,14 +925,16 @@
             shards.map((shard, _i) => {
                return { [shard]: namespaces[_i] }
             }), null, 3
-         ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ');
+         // ).replace(/(?<![\[])(?:\n\s+)/g, ' '); // legacy shell doesn't support this
+         ).replace(/(?:\n\s+)|(?:\n)/g, ' ');
          console.log(namespaces);
          console.log(`\x1b[1;32m${`All indexes:\x1b[0m`.padEnd(rowHeader + 5)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ' |' + (formatPct(totalIndexBytesReusable, totalIndexSize)).padStart(6)).padStart(columnWidth + 8)} ${''.padStart(columnWidth)} \x1b[36m${dbPathIdxCompaction.padStart(columnWidth - 2)}\x1b[0m`);
          nindexes = JSON.stringify(
             shards.map((shard, _i) => {
                return { [shard]: nindexes[_i] }
             }), null, 3
-         ).replace(/(?<![\[,])(?:\n\s+)/gm, ' ');
+         // ).replace(/(?<![\[])(?:\n\s+)/g, ' '); // legacy shell doesn't support this
+         ).replace(/(?:\n\s+)|(?:\n)/g, ' ');
          console.log(nindexes);
       } else {
          console.log(`\x1b[1;32m${`All namespaces:\x1b[0m ${JSON.stringify(namespaces)}`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${dbPathCompaction.padStart(columnWidth - 2)}\x1b[0m`);
