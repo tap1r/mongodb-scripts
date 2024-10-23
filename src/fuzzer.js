@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.22"
+ *  Version: "0.6.23"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.22" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.23" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -710,15 +710,18 @@
             console.log(`\twith TTL options:\t"${expireAfterSeconds}"`);
          }
 
-         try { db.getSiblingDB(dbName).createCollection(collName, options) }
-         catch(e) { console.log(`\nNamespace creation failed: ${e}`) }
+         try {
+            db.getSiblingDB(dbName).createCollection(collName, options);
+         } catch(e) {
+            console.log(`\nNamespace creation failed: ${e}`);
+         }
 
          if (sharding && isSharded() && db.getSiblingDB(dbName).getCollection(collName).exists()) {
             console.log(`\nSharding namespace with options: ${tojson(shardedOptions)}`);
             let numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments({});
             console.log(`with initial chunks: ${numInitialChunks}`);
             try {
-               // fCV(6.0) || (sh.enableSharding(dbName).ok);
+               (serverVer() < 6.0) && (sh.enableSharding(dbName).ok);
                sh.shardCollection(
                   `${dbName}.${collName}`,
                   shardedOptions.key,
