@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.23"
+ *  Version: "0.6.24"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.23" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.24" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -46,8 +46,9 @@
       collName = 'collection',      // collection name
       totalDocs = $getRandExp(3.5), // number of documents to generate per namespace
       dropNamespace = false,        // drop collection prior to generating data
-      compressor = 'best',          // collection compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
-      idxCompressor = 'best',       // index compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
+      dropIndexes = true,           // recreate indexes to update creation options
+      compressor = 'best',          // collection block compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
+      idxCompressor = 'default',    // index prefix compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
       // compressionOptions = -1,   // [-1|0|1|2|3|4|5|6|7|8|9] compression level
       idioma = 'en',                // ['en'|'es'|'de'|'fr'|'zh']
       collation = { /* collation options */
@@ -136,8 +137,7 @@
          // "sparse": true,
          // "expireAfterSeconds": expireAfterSeconds,
          // "hidden": hidden,
-         "collation": collation,
-         "storageEngine": { "wiredTiger": { "configString": `block_compressor=${parseCompressor(idxCompressor)[0]}` } }
+         "collation": collation
       },
       specialIndexes = [ /* index types unsupported by collations */
          { "location.coordinates": "2d" },
@@ -152,9 +152,12 @@
          // "expireAfterSeconds": expireAfterSeconds,
          // "hidden": hidden,
          "collation": { "locale": "simple" },
-         "storageEngine": { "wiredTiger": { "configString": `block_compressor=${parseCompressor(idxCompressor)[0]}` } },
          "default_language": idioma
       };
+      if (idxCompressor != 'default') {
+         indexOptions.storageEngine = { "wiredTiger": { "configString": `block_compressor=${parseCompressor(idxCompressor)[0]}` } };
+         specialIndexOptions.storageEngine = { "wiredTiger": { "configString": `block_compressor=${parseCompressor(idxCompressor)[0]}` } };
+      }
 
    /*
     *  Global defaults
@@ -732,14 +735,14 @@
                      // "timeseries": {}
                   }
                );
-               // console.log(`Sharded namespace`);
-               sh.enableBalancing(`${dbName}.${collName}`);
                // console.log(`enable balancing`);
-               // fCV(7.0) || sh.enableAutoSplit(`${dbName}.${collName}`);
+               sh.enableBalancing(`${dbName}.${collName}`);
+               (serverVer() < 6.0) && (sh.enableAutoSplit());
                sh.startBalancer();
-               // console.log(`started balancer`);
             }
-            catch(e) { console.log(`Sharding namespace failed: ${e}`) }
+            catch(e) {
+               console.log('Sharding namespace failed:', e);
+            }
          }
       }
 
@@ -747,9 +750,13 @@
    }
 
    function buildIndexes() {
+      if (dropIndexes) {
+         console.log('\nDropping all existing indexes:');
+         namespace.dropIndexes();
+      }
       if (indexPrefs.build) {
          if (indexes.length > 0) {
-            console.log(`\nBuilding index${(indexes.length == 1) ? '' : 'es'} with collation locale "${collation.locale}" with commit quorum "${(fCV(4.4) && (isReplSet() || isSharded())) ? indexPrefs.commitQuorum : 'disabled'}":`);
+            console.log(`\nBuilding index${(indexes.length === 1) ? '' : 'es'} with collation locale "${collation.locale}" with commit quorum "${(fCV(4.4) && (isReplSet() || isSharded())) ? indexPrefs.commitQuorum : 'disabled'}":`);
             indexes.forEach(index => console.log(`\tkey: ${tojson(index)}`));
             let indexing = () => {
                let options = (fCV(4.4) && (isReplSet() || isSharded()))
