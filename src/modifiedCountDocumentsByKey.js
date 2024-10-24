@@ -1,6 +1,6 @@
 /*
  *  Name: "modifiedCountDocumentsByKey.js"
- *  Version: "0.1.0"
+ *  Version: "0.1.1"
  *  Description: "overloaded countDocuments mongosh helper"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,9 +13,9 @@ Object.getPrototypeOf(db.getSiblingDB('$').getCollection('_')).countDocuments = 
     */
    let _prototype = () => db.getSiblingDB('$').getCollection('_'); // collection's prototype
    let fn = 'countDocuments'; // overloaded method's name
-   let _fn = `_${fn}`;        // wrapped shadow method's name
+   let _fn = '_' + fn;        // wrapped shadow method's name
    if (_prototype()[fn].name !== 'modifiedCountDocumentsByKey') {
-      // copy to shadowed method from prototype if it doesn't already exist
+      // copy to shadowed method from the prototype if it doesn't already exist
       Object.getPrototypeOf(_prototype())[_fn] = _prototype()[fn];
    }
    // https://www.mongodb.com/docs/manual/reference/method/db.collection.countDocuments/#syntax
@@ -23,22 +23,22 @@ Object.getPrototypeOf(db.getSiblingDB('$').getCollection('_')).countDocuments = 
       // substitute an empty filter with the optimised key scan method
       query = (Object.keys(query).length) ? query : { "_id": { "$gte": MinKey } };
 
-      // pass the modified query to shadow method
+      // pass the modified query to the shadow method
       return this[_fn](query, options, dbOptions);
    }
-   // existing shell decorators are not preserved with overloading
+   // beware as existing shell decorators are not preserved with overloading
    return modifiedCountDocumentsByKey;
 })();
 
 (() => { // verification
    let _prototype = db.getSiblingDB('$').getCollection('_');
-   console.log(assert(typeof _prototype._countDocuments === 'function', '_countDocuments is not a function'));
-   console.log(assert(_prototype.countDocuments.name === 'modifiedCountDocumentsByKey', 'countDocuments is not overloaded by modifiedCountDocumentsByKey'));
+   console.log(assert(typeof _prototype._countDocuments === 'function', '_countDocuments is not a function, overloading failed.'));
+   console.log(assert(_prototype.countDocuments.name === 'modifiedCountDocumentsByKey', 'countDocuments is not overloaded by modifiedCountDocumentsByKey, overloading failed.'));
 })();
 
 (() => { // performance validation
    let namespace = db.getSiblingDB('database').getCollection('collection');
-   console.log('pre-warming keys into cache');
+   console.log('Pre-warming keys into cache from "database.collection".');
    namespace.countDocuments({ "_id": { "$gte": MinKey } });
 
    // time the expected key scan performance of the original method
