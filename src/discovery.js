@@ -1,8 +1,8 @@
 /*
  *  Name: "discovery.js"
- *  Version: "0.1.1"
- *  Description: topology discovery with directed command execution
- *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
+ *  Version: "0.1.2"
+ *  Description: "topology discovery with directed command execution"
+ *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
  *  Notes: mongosh only, support for async required to parallelise and access the topology with auth
@@ -23,9 +23,9 @@
          let hosts = [];
          try {
             hosts = rs.status().members.map(({ name, health, stateStr }) =>
-               new Object({ 'name': name, 'health': health, 'role': stateStr })
-            ).filter(node =>
-               node.health == 1 && node.role != 'ARBITER'
+               new Object({ 'host': name, 'health': health, 'role': stateStr })
+            ).filter(({ health, role }) =>
+               health == 1 && role != 'ARBITER'
             );
          }
          catch(e) {
@@ -49,8 +49,13 @@
          return shards;
       }
 
-      async function fetchHostStats(host) {
-         let directURI = `mongodb://${username}:${password}@${host.name}/?directConnection=true&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
+      async function fetchHostStats({ 'host': hostname }) {
+         let directURI;
+         if (username == null) {
+            directURI = `mongodb://${hostname}/?directConnection=true&tls=${tls}&compressors=${compressors}&readPreference=${readPreference}`;
+         } else {
+            directURI = `mongodb://${username}:${password}@${hostname}/?directConnection=true&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
+         }
          let node = connect(directURI);
          // let db = context;
          // console.log(getDBNames());
@@ -62,22 +67,25 @@
          return node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases;
       }
 
-      async function fetchAllShards(shards) {
-         shards.forEach(shard => console.log(`\nID: ${shard._id} with: ${shard.host}`));
-         shards.forEach(shard => {
-            console.log(`\nConnecting to: ${shard._id}`);
-            let { setName, seedList } = shard.host.match(/(?<setName>\w+)\/(?<seedList>.+)/).groups;
-            // let [, setName, seedList] = shard.host.match(/(\w+)\/(.+)/);
+      function discoverShardedHosts(shards) {
+         shards.forEach(({ _id, host }) => console.log(`\nID: ${_id} with: ${host}`));
+         let hosts = shards.map(({ host }) => {
+            // console.log(`\nConnecting to: ${_id}`);
+            let { setName, seedList } = host.match(/(?<setName>\w+)\/(?<seedList>.+)/).groups;
+            return seedList.split(',');
          });
-         // let promises = shards.map(shard => fetchHostStats(shard));
-         let promises = shards.map(fetchReplHosts);
+         hosts = hosts.flat();
+         hosts = hosts.map((name) =>
+            new Object({ 'host': name, 'health': '', 'role': '' })
+         );
+         // let promises = shards.map(fetchShardHosts(setName, seedList));
 
-         return await Promise.all(promises);
+         // return await Promise.all(promises);
          // return await Promise.allSettled(promises);
+         return hosts;
       }
 
       async function fetchAllStats(hosts) {
-         // let promises = hosts.map(host => fetchHostStats(host));
          let promises = hosts.map(fetchHostStats);
 
          return await Promise.all(promises);
@@ -85,26 +93,27 @@
       }
 
       let {
-         'credentials': {
-            username = '',
-            password = '',
-            'source': authSource = 'admin',
-            'mechanism': authMech = 'DEFAULT'
-         },
+         username = null,
+         password = null,
+         'source': authSource = 'admin',
+         'mechanism': authMech = 'DEFAULT'
+      } = db.getMongo().__serviceProvider.mongoClient.options?.credentials ?? {};
+      let {
          compressors = ['none'],
          tls = false
       } = db.getMongo().__serviceProvider.mongoClient.options;
       let readPreference = 'secondaryPreferred';
-      let shards, shardStats;
-      if (this.proc == 'mongos') {
+      let hosts, shards, shardStats;
+      if (db.hello().msg == 'isdbgrid') { // is mongos process
          shards = discoverShards();
-         shardStats = fetchAllShards(shards);
+         hosts = discoverShardedHosts(shards);
+      } else {
+         hosts = discoverHosts();
       }
-      let hosts = discoverHosts();
+      console.log(hosts);
       let allHostStats = fetchAllStats(hosts);
 
       console.log(allHostStats);
-      // console.log(shardStats);
 
       return;
    }
