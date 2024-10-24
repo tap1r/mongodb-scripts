@@ -1,6 +1,6 @@
 /*
  *  Name: "discovery.js"
- *  Version: "0.1.3"
+ *  Version: "0.1.4"
  *  Description: "topology discovery with directed command execution"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -62,24 +62,24 @@
          // console.log('listCollections:', node.getSiblingDB('database').runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true }, { "readPreference": readPreference }).cursor.firstBatch);
          // console.log('collStats:', node.getSiblingDB('database').getCollection('collection').aggregate({ "$collStats": { "storageStats": { "scale": 1 } } }).toArray()[0].ns);
 
-         let me = node.hello().me;
-         let stats = node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases;
+         let me = async() => node.hello().me;
+         let stats = async() => node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases;
          let results = {
-            'process': me,
-            'stats': stats
+            'process': await me(),
+            'stats': await stats()
          };
          return results;
       }
 
       function discoverShardedHosts(shards) {
-         shards.forEach(({ _id, host }) => console.log(`\nID: ${_id} with: ${host}`));
+         // shards.forEach(({ _id, host }) => console.log(`\nID: ${_id} with: ${host}`));
          let hosts = shards.map(({ host }) => {
             // console.log(`\nConnecting to: ${_id}`);
             let { setName, seedList } = host.match(/(?<setName>\w+)\/(?<seedList>.+)/).groups;
             return seedList.split(',');
          });
          hosts = hosts.flat();
-         hosts = hosts.map((name) =>
+         hosts = hosts.map(name =>
             new Object({ 'host': name, 'health': '', 'role': '' })
          );
          // let promises = shards.map(fetchShardHosts(setName, seedList));
@@ -114,8 +114,8 @@
       } else {
          hosts = discoverHosts();
       }
-      console.log(hosts);
-      let allHostStats = await fetchAllStats(hosts);
+      // console.log(hosts);
+      let allHostStats = fetchAllStats(hosts);
 
       console.log(allHostStats);
 
