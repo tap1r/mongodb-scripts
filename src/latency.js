@@ -1,8 +1,8 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.3.2"
+ *  Version: "0.3.3"
  *  Description: "Driver and network latency telemetry PoC"
- *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
+ *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
@@ -12,8 +12,8 @@
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.3.2" };
-   console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
+   let __script = { "name": "latency.js", "version": "0.3.3" };
+   console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m`);
 
    let slowms = 100,
       filter = `Synthetic slow operation at ${performance.now()}`;
@@ -42,9 +42,20 @@
          "readConcern": { "level": "local" }
       },
       rtt, t0, t1, t2, t3, totalTime, timestamp,
-      report, tableWidth, spacing, hostLength, timeLength,
-      hostname = db.hostInfo()?.system?.hostname ?? 'unknown',
-      proc = db.serverStatus().process;
+      report, tableWidth, spacing, hostLength,
+      timeLength, hostname, procType;
+      try {
+         hostname = db.hostInfo()?.system?.hostname ?? 'unknown';
+      } catch(error) {
+         console.log('\x1b[31m[WARN] failed to aquire the hostname:\x1b[0m', error);
+         hostname = 'unknown';
+      }
+      try {
+         procType = db.serverStatus()?.process ?? 'unknown';
+      } catch(error) {
+         console.log('\x1b[31m[WARN] failed to aquire the process type:\x1b[0m', error);
+         procType = 'unknown';
+      }
 
    try {
       t0 = process.hrtime();
@@ -81,7 +92,7 @@
    function fomatted(duration) {
       return Intl.NumberFormat('en', {
          "minimumIntegerDigits": 1,
-         "minimumFractionDigits": 2,
+         "minimumFractionDigits": 0,
          "maximumFractionDigits": 2,
          "style": "unit",
          "unit": "millisecond",
@@ -97,7 +108,7 @@
    \x1b[1mInternal metrics\x1b[0m
    \x1b[33m${'━'.repeat(tableWidth)}\x1b[0m
    \x1b[32m${'Target host:'}\x1b[0m${hostname.padStart(tableWidth - 12)}
-   \x1b[32m${'Process type:'}\x1b[0m${proc.padStart(tableWidth - 13)}
+   \x1b[32m${'Process type:'}\x1b[0m${procType.padStart(tableWidth - 13)}
    \x1b[32m${'Timestamp:'}\x1b[0m${timestamp.padStart(tableWidth - 10)}
    \x1b[32m${'Delay factor (slowms):'}\x1b[0m${fomatted(slowms).padStart(tableWidth - 22)}
    \x1b[32m${'Total measurement time:'}\x1b[0m${fomatted(totalTime).padStart(tableWidth - 23)}
