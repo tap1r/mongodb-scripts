@@ -1,6 +1,6 @@
 /*
  *  Name: "modifiedCountDocumentsByKey.js"
- *  Version: "0.1.1"
+ *  Version: "0.1.2"
  *  Description: "overloaded countDocuments mongosh helper"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -54,6 +54,6 @@ Object.getPrototypeOf(db.getSiblingDB('$').getCollection('_')).countDocuments = 
    let rtt1 = Math.round(t1[0] * 1000 + t1[1] / 1000000);
    let rtt2 = Math.round(t3[0] * 1000 + t3[1] / 1000000);
 
-   console.log('Original count yeilds', countShadow, 'in', rtt1, 'ms');
-   console.log('Overloaded count yeilds', countOverload, 'in', rtt2, 'ms');
+   console.log('Original count yields', countShadow, 'in', rtt1, 'ms');
+   console.log('Overloaded count yields', countOverload, 'in', rtt2, 'ms');
 })();
