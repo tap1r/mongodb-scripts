@@ -1,12 +1,12 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.25"
- *  Description: sample document size distribution
- *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
+ *  Version: "0.1.26"
+ *  Description: "sample document size distribution"
+ *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "mongosh [connection options] --quiet docSizes.js"
+// Usage: mongosh [connection options] --quiet docSizes.js
 
 /*
  *  User defined parameters
@@ -18,11 +18,11 @@ let options = {
    // "sampleSize": 1000 // parameter to $sample
 };
 
-(({ dbName, collName, sampleSize = 1000 }) => {
+(({ dbName, collName, sampleSize = 1000 } = options) => {
    /*
     *  main
     */
-   let __script = { "name": "docSizes.js", "version": "0.1.25" };
+   let __script = { "name": "docSizes.js", "version": "0.1.26" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
    // connection preferences
    if (typeof readPref === 'undefined')
@@ -32,7 +32,7 @@ let options = {
       if (db.getSiblingDB(dbName).getCollectionInfos({ "name": collName }, true)[0]?.name != collName)
          throw 'namespace does not exist';
    } catch(e) {
-      console.error(`${dbName}.${collName} ${e}`);
+      console.error(`${dbName}.${collName}`, e);
    }
 
    /*
@@ -98,7 +98,7 @@ let options = {
    let buckets = range(1, maxBsonObjectSize + 1, internalPageSize),
       pages = range(1, maxBsonObjectSize + 1, dataPageSize);
 
-   // measure document and page distribution
+   // measure document and page size distribution
    let pipeline = [
       { "$sample": { "size": sampleSize } },
       { "$facet": {
@@ -143,14 +143,14 @@ let options = {
          "CollectionTotals": {
             "hostname": hostname,
             "dbPath": dbPath,
-            "URI": (db.serverStatus().process == 'mongos') ? 'sharded' : dhandle,
+            "URI": (db.hello().msg == 'isdbgrid') ? 'sharded' : dhandle,
             "namespace": `${dbName}.${collName}`,
             "dataSize": dataSize,
             "storageSize": storageSize,
             "metadataSize": metadataSize,
             "freeBlocks": blocksFree,
             "utilisedBytes": storageSize - blocksFree - metadataSize,
-            "utilisedPercentage": +((100 * (storageSize - blocksFree - metadataSize) / (storageSize - metadataSize)).toFixed(2)), // + '%',
+            "utilisedPercentage": +((100 * (storageSize - blocksFree - metadataSize) / (storageSize - metadataSize)).toFixed(2)),
             "compressor": compressor,
             "compressionRatio": ratio,
             "documentCount": documentCount,
@@ -160,6 +160,6 @@ let options = {
    ];
 
    namespace.aggregate(pipeline, aggOptions).forEach(printjson);
-})(options);
+})();
 
 // EOF
