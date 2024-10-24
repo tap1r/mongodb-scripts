@@ -1,6 +1,6 @@
 /*
  *  Name: "discovery.js"
- *  Version: "0.1.2"
+ *  Version: "0.1.3"
  *  Description: "topology discovery with directed command execution"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -43,7 +43,6 @@
          }
          catch(e) {
             console.log('Lack the ability to discover shards:', e);
-            // shards = [''];
          }
 
          return shards;
@@ -57,14 +56,19 @@
             directURI = `mongodb://${username}:${password}@${hostname}/?directConnection=true&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
          }
          let node = connect(directURI);
-         // let db = context;
          // console.log(getDBNames());
          // console.log('listDatabases:', node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases);
          // console.log('dbstats:', node.getSiblingDB('admin').stats());
          // console.log('listCollections:', node.getSiblingDB('database').runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true }, { "readPreference": readPreference }).cursor.firstBatch);
          // console.log('collStats:', node.getSiblingDB('database').getCollection('collection').aggregate({ "$collStats": { "storageStats": { "scale": 1 } } }).toArray()[0].ns);
 
-         return node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases;
+         let me = node.hello().me;
+         let stats = node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases;
+         let results = {
+            'process': me,
+            'stats': stats
+         };
+         return results;
       }
 
       function discoverShardedHosts(shards) {
@@ -88,7 +92,7 @@
       async function fetchAllStats(hosts) {
          let promises = hosts.map(fetchHostStats);
 
-         return await Promise.all(promises);
+         return Promise.all(promises);
          // return await Promise.allSettled(promises);
       }
 
@@ -103,7 +107,7 @@
          tls = false
       } = db.getMongo().__serviceProvider.mongoClient.options;
       let readPreference = 'secondaryPreferred';
-      let hosts, shards, shardStats;
+      let hosts, shards;
       if (db.hello().msg == 'isdbgrid') { // is mongos process
          shards = discoverShards();
          hosts = discoverShardedHosts(shards);
@@ -111,7 +115,7 @@
          hosts = discoverHosts();
       }
       console.log(hosts);
-      let allHostStats = fetchAllStats(hosts);
+      let allHostStats = await fetchAllStats(hosts);
 
       console.log(allHostStats);
 
