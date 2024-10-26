@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.1.4"
+    *  Version: "0.1.5"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -52,7 +52,7 @@
     *  End user defined options
     */
 
-   let __script = { "name": "niceDeleteMany.js", "version": "0.1.4" };
+   let __script = { "name": "niceDeleteMany.js", "version": "0.1.5" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -65,6 +65,7 @@
             "allowDiskUse": true,
             "collation": collation,
             "hint": hint,
+            "maxTimeMS": 0, // required to overide potential v8 defaultMaxTimeMS cluster settings
             "comment": "Bucketing IDs via niceDeleteMany.js",
             "let": { "bucketSizeLimit": bucketSizeLimit }
          },
@@ -629,12 +630,15 @@
       let numCores = vitals.numCores;
       let concurrency = (numCores > 4) ? numCores : 4; // see https://www.mongodb.com/docs/manual/reference/parameters/#mongodb-parameter-param.wiredTigerConcurrentWriteTransactions
       let bucketSizeLimit = 100; // aligns with SPM-2227
-      let readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // monotonic writes
+      let readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // support monotonic writes
       let readPreference = {
          "mode": "nearest", // offload the bucket generation to a less busy node
          "tags": [ // Atlas friendly defaults
+            { "workloadType": "READ_ONLY", "diskState": "READY" },
+            { "workloadType": "ANALYTICS", "diskState": "READY" },
             { "workloadType": "OPERATIONAL", "diskState": "READY" },
-            {}
+            { "diskState": "READY" },
+            { }
          ]
       };
       let sessionOpts = {
