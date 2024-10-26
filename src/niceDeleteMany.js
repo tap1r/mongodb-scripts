@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.1.5"
+    *  Version: "0.1.6"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -52,7 +52,7 @@
     *  End user defined options
     */
 
-   let __script = { "name": "niceDeleteMany.js", "version": "0.1.5" };
+   let __script = { "name": "niceDeleteMany.js", "version": "0.1.6" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -634,8 +634,8 @@
       let readPreference = {
          "mode": "nearest", // offload the bucket generation to a less busy node
          "tags": [ // Atlas friendly defaults
-            { "workloadType": "READ_ONLY", "diskState": "READY" },
-            { "workloadType": "ANALYTICS", "diskState": "READY" },
+            { "nodeType": "READ_ONLY", "diskState": "READY" },
+            { "nodeType": "ANALYTICS", "diskState": "READY" },
             { "workloadType": "OPERATIONAL", "diskState": "READY" },
             { "diskState": "READY" },
             { }
