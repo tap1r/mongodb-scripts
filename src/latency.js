@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.3.4"
+ *  Version: "0.3.5"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -12,7 +12,7 @@
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.3.4" };
+   let __script = { "name": "latency.js", "version": "0.3.5" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m`);
 
    let slowms = 100,
@@ -44,7 +44,8 @@
       },
       rtt, t0, t1, t2, t3, totalTime, timestamp,
       report, tableWidth, spacing = 1, hostLength,
-      timeLength, hostname = 'unknown', procType;
+      timeLength, hostname = 'unknown', procType,
+      ping;
 
    try {
       hostname = db.hello().me;
@@ -62,7 +63,7 @@
          region = '-'
       } = {}
    }] = rs.conf().members.filter(
-      ({ host, arbiterOnly, hidden, horizons: { PUBLIC } = {} }) => {
+      ({ host, arbiterOnly, hidden, horizons: { PUBLIC } = {} } = {}) => {
          return (host == hostname || PUBLIC == hostname) && !arbiterOnly && !hidden;
    });
 
@@ -73,16 +74,16 @@
       procType = 'unknown';
    }
 
+   t0 = process.hrtime();
    try {
-      t0 = process.hrtime();
       db.getSiblingDB('admin').aggregate(pipeline, options).toArray();
-      t1 = process.hrtime(t0);
    } catch(error) {
       console.log('Synthetic slow query failed');
       throw error;
    }
+   t1 = process.hrtime(t0);
 
-   let { 'attr': { durationMillis }
+   let { 'attr': { durationMillis } = {}
       } = db.adminCommand(
          { "getLog": "global" }
       ).log.map(
@@ -91,15 +92,15 @@
          log => log?.attr?.command?.comment == filter
       )[0];
 
+   t2 = process.hrtime();
    try {
-      t2 = process.hrtime();
-      let { ok } = db.adminCommand({ "ping": 1 });
-      t3 = process.hrtime(t2);
-      if (!ok) throw new Error();
+      ping = db.adminCommand({ "ping": 1 })?.ok ?? false;
    } catch(error) {
       console.error('SDAM ping failed');
       throw error;
    }
+   t3 = process.hrtime(t2);
+   if (!ping) throw new Error();
 
    timestamp = new Date().toISOString();
    totalTime = t1[0] * 1000 + (t1[1] / 1000000.0);
@@ -120,27 +121,27 @@
    timeLength = 'Timestamp:'.length + spacing + timestamp.length;
    tableWidth = Math.max(hostLength, timeLength);
    report = `\n` +
-      `\x1b[1mInternal metrics\x1b[0m` + `\n` +
-      `\x1b[33m${'━'.repeat(tableWidth)}\x1b[0m` + `\n` +
-      `\x1b[32m${'Host:'}\x1b[0m${hostname.padStart(tableWidth - 'Host:'.length)}` + `\n` +
-      `\x1b[32m${'Process type:'}\x1b[0m${procType.padStart(tableWidth - 'Process type:'.length)}` + `\n` +
-      `\x1b[32m${'Cloud provider:'}\x1b[0m${provider.padStart(tableWidth - 'Cloud provider:'.length)}` + `\n` +
-      `\x1b[32m${'Cloud region:'}\x1b[0m${region.padStart(tableWidth - 'Cloud region:'.length)}` + `\n` +
-      `\x1b[32m${'Availability zone:'}\x1b[0m${availabilityZone.padStart(tableWidth - 'Availability zone:'.length)}` + `\n` +
-      `\x1b[32m${'Disk state:'}\x1b[0m${diskState.padStart(tableWidth - 'Disk state:'.length)}` + `\n` +
-      `\x1b[32m${'Workload type:'}\x1b[0m${workloadType.padStart(tableWidth - 'Workload type:'.length)}` + `\n` +
-      `\x1b[32m${'Node type:'}\x1b[0m${nodeType.padStart(tableWidth - 'Node type:'.length)}` + `\n` +
-      `\x1b[32m${'Timestamp:'}\x1b[0m${timestamp.padStart(tableWidth - 'Timestamp:'.length)}` + `\n` +
-      `\x1b[32m${'Delay factor (slowms):'}\x1b[0m${fomatted(slowms).padStart(tableWidth - 'Delay factor (slowms):'.length)}` + `\n` +
-      `\x1b[32m${'Total measurement time:'}\x1b[0m${fomatted(totalTime).padStart(tableWidth - 'Total measurement time:'.length)}` + `\n` +
-      `\x1b[33m${'═'.repeat(tableWidth)}\x1b[0m` + `\n` +
+      `\x1b[1mInternal metrics\x1b[0m\n` +
+      `\x1b[33m${'━'.repeat(tableWidth)}\x1b[0m\n` +
+      `\x1b[32m${'Host:'}\x1b[0m${hostname.padStart(tableWidth - 'Host:'.length)}\n` +
+      `\x1b[32m${'Process type:'}\x1b[0m${procType.padStart(tableWidth - 'Process type:'.length)}\n` +
+      `\x1b[32m${'Cloud provider:'}\x1b[0m${provider.padStart(tableWidth - 'Cloud provider:'.length)}\n` +
+      `\x1b[32m${'Cloud region:'}\x1b[0m${region.padStart(tableWidth - 'Cloud region:'.length)}\n` +
+      `\x1b[32m${'Availability zone:'}\x1b[0m${availabilityZone.padStart(tableWidth - 'Availability zone:'.length)}\n` +
+      `\x1b[32m${'Disk state:'}\x1b[0m${diskState.padStart(tableWidth - 'Disk state:'.length)}\n` +
+      `\x1b[32m${'Workload type:'}\x1b[0m${workloadType.padStart(tableWidth - 'Workload type:'.length)}\n` +
+      `\x1b[32m${'Node type:'}\x1b[0m${nodeType.padStart(tableWidth - 'Node type:'.length)}\n` +
+      `\x1b[32m${'Timestamp:'}\x1b[0m${timestamp.padStart(tableWidth - 'Timestamp:'.length)}\n` +
+      `\x1b[32m${'Delay factor (slowms):'}\x1b[0m${fomatted(slowms).padStart(tableWidth - 'Delay factor (slowms):'.length)}\n` +
+      `\x1b[32m${'Total measurement time:'}\x1b[0m${fomatted(totalTime).padStart(tableWidth - 'Total measurement time:'.length)}\n` +
+      `\x1b[33m${'═'.repeat(tableWidth)}\x1b[0m\n` +
       `\n` +
-      `\x1b[1mLatency breakdown\x1b[0m` + `\n` +
-      `\x1b[33m${'━'.repeat(tableWidth)}\x1b[0m` + `\n` +
-      `\x1b[32m${'Server execution time:'}\x1b[0m${fomatted(durationMillis - slowms).padStart(tableWidth - 'Server execution time:'.length)}` + `\n` +
-      `\x1b[32m${'Network latency (RTT):'}\x1b[0m${fomatted(rtt).padStart(tableWidth - 'Network latency (RTT):'.length)}` + `\n` +
-      `\x1b[32m${'Driver execution time:'}\x1b[0m${fomatted(totalTime - durationMillis - rtt).padStart(tableWidth - 'Driver execution time:'.length)}` + `\n` +
-      `\x1b[33m${'═'.repeat(tableWidth)}\x1b[0m` + `\n`;
+      `\x1b[1mLatency breakdown\x1b[0m\n` +
+      `\x1b[33m${'━'.repeat(tableWidth)}\x1b[0m\n` +
+      `\x1b[32m${'Server execution time:'}\x1b[0m${fomatted(durationMillis - slowms).padStart(tableWidth - 'Server execution time:'.length)}\n` +
+      `\x1b[32m${'Network latency (RTT):'}\x1b[0m${fomatted(rtt).padStart(tableWidth - 'Network latency (RTT):'.length)}\n` +
+      `\x1b[32m${'Driver execution time:'}\x1b[0m${fomatted(totalTime - durationMillis - rtt).padStart(tableWidth - 'Driver execution time:'.length)}\n` +
+      `\x1b[33m${'═'.repeat(tableWidth)}\x1b[0m\n`;
    console.log(report);
 })();
 
