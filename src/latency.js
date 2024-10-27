@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.3.5"
+ *  Version: "0.3.6"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -12,7 +12,7 @@
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.3.5" };
+   let __script = { "name": "latency.js", "version": "0.3.6" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m`);
 
    let slowms = 100,
@@ -30,7 +30,7 @@
          { "$project": {
             "_id": 0,
             "slowms": {
-               // deprecated operator in v8, likely to be replaced with a $sleep operator in the future
+               // deprecated operator in v8, likely to be replaced with a future $sleep operator
                "$function": {
                   "body": `function(ms) { sleep(ms) }`,
                   "args": [slowms],
@@ -74,14 +74,15 @@
       procType = 'unknown';
    }
 
-   t0 = process.hrtime();
    try {
+      t0 = process.hrtime();
       db.getSiblingDB('admin').aggregate(pipeline, options).toArray();
    } catch(error) {
       console.log('Synthetic slow query failed');
       throw error;
+   } finally {
+      t1 = process.hrtime(t0);
    }
-   t1 = process.hrtime(t0);
 
    let { 'attr': { durationMillis } = {}
       } = db.adminCommand(
@@ -92,15 +93,16 @@
          log => log?.attr?.command?.comment == filter
       )[0];
 
-   t2 = process.hrtime();
    try {
+      t2 = process.hrtime();
       ping = db.adminCommand({ "ping": 1 })?.ok ?? false;
    } catch(error) {
       console.error('SDAM ping failed');
       throw error;
+   } finally {
+      t3 = process.hrtime(t2);
+      if (!ping) throw new Error();
    }
-   t3 = process.hrtime(t2);
-   if (!ping) throw new Error();
 
    timestamp = new Date().toISOString();
    totalTime = t1[0] * 1000 + (t1[1] / 1000000.0);
