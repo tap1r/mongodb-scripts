@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.1.2"
+    *  Version: "0.1.3"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,10 +16,10 @@
     *  - incorporate db.runCommand({ "whatsmyuri": 1}).you;
     */
 
-   // Usage: "mongosh [connection options] --quiet connStats.js"
+   // Usage: mongosh [connection options] --quiet connStats.js
 
    let aggOpts = {
-         "comment": "connStats.js v0.1.2"
+         "comment": "connStats.js v0.1.3"
       },
       pipeline = [
          { "$currentOp": {
@@ -224,6 +224,7 @@
       ],
       results;
 
-   results = db.getSiblingDB('admin').aggregate(pipeline, aggOpts).toArray();
-   console.log(results);
+   // results = db.getSiblingDB('admin').aggregate(pipeline, aggOpts).toArray();
+   // console.log(results);
+   db.getSiblingDB('admin').aggregate(pipeline, aggOpts).forEach(console.log);
 })();
