@@ -23,7 +23,7 @@
    console.log(banner);
 
    let servers = () => db.getMongo().__serviceProvider.mongoClient.topology.s.description.servers;
-   let src = db.runCommand({ "whatsmyuri": 1}).you.match(/^(?<src>.+)\:(?:\d+)$/).groups.src;
+   let src = db.runCommand({ "whatsmyuri": 1 }).you.match(/^(?<src>.+)\:(?:\d+)$/).groups.src;
    let latency = (rtt) => // rtt in ms to 1 decimal place
       Intl.NumberFormat('en', {
          "minimumIntegerDigits": 1,
