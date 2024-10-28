@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.3.6"
+ *  Version: "0.3.7"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -12,11 +12,30 @@
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.3.6" };
+   let __script = { "name": "latency.js", "version": "0.3.7" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m`);
 
-   let slowms = 100,
-      filter = `Synthetic slow operation at ${performance.now()}`;
+   let fomatted = duration =>
+      Intl.NumberFormat('en', {
+         "minimumIntegerDigits": 1,
+         "minimumFractionDigits": 1,
+         "maximumFractionDigits": 1,
+         "style": "unit",
+         "unit": "millisecond",
+         "unitDisplay": "short"
+      }).format(duration);
+
+   let rtt, t0, t1, t2, t3, totalTime, timestamp,
+   report, tableWidth, spacing = 1, hostLength,
+   timeLength, ping;
+
+   let filter = `Synthetic slow operation at ${performance.now()}`;
+   let options = {
+      "comment": filter,
+      "cursor": { "batchSize": 1 },
+      "readConcern": { "level": "local" }
+   };
+   let slowms = 100;
    try {
       slowms = db.getSiblingDB('admin').getProfilingStatus().slowms;
    } catch(error) {
@@ -25,28 +44,20 @@
       slowms = 200;
    }
    let pipeline = [
-         { "$currentOp": {} },
-         { "$limit": 1 },
-         { "$project": {
-            "_id": 0,
-            "slowms": {
-               // deprecated operator in v8, likely to be replaced with a future $sleep operator
-               "$function": {
-                  "body": `function(ms) { sleep(ms) }`,
-                  "args": [slowms],
-                  "lang": "js"
-         } } } }
-      ],
-      options = {
-         "comment": filter,
-         "cursor": { "batchSize": 1 },
-         "readConcern": { "level": "local" }
-      },
-      rtt, t0, t1, t2, t3, totalTime, timestamp,
-      report, tableWidth, spacing = 1, hostLength,
-      timeLength, hostname = 'unknown', procType,
-      ping;
+      { "$currentOp": {} },
+      { "$limit": 1 },
+      { "$project": {
+         "_id": 0,
+         "slowms": {
+            // deprecated operator in v8, likely to be replaced with a future $sleep operator
+            "$function": {
+               "body": `function(ms) { sleep(ms) }`,
+               "args": [slowms],
+               "lang": "js"
+      } } } }
+   ];
 
+   let hostname = 'unknown';
    try {
       hostname = db.hello().me;
    } catch(error) {
@@ -62,16 +73,16 @@
          provider = '-',
          region = '-'
       } = {}
-   }] = rs.conf().members.filter(
-      ({ host, arbiterOnly, hidden, horizons: { PUBLIC } = {} } = {}) => {
+   } = {}] = rs.conf().members.filter(
+      ({ host, arbiterOnly, hidden, 'horizons': { PUBLIC } = {} } = {}) => {
          return (host == hostname || PUBLIC == hostname) && !arbiterOnly && !hidden;
    });
 
+   let procType = 'unknown';
    try {
       procType = db.serverStatus()?.process ?? 'unknown';
    } catch(error) {
       console.log('\x1b[31m[WARN] failed to aquire the process type:\x1b[0m', error);
-      procType = 'unknown';
    }
 
    try {
@@ -107,18 +118,6 @@
    timestamp = new Date().toISOString();
    totalTime = t1[0] * 1000 + (t1[1] / 1000000.0);
    rtt = t3[0] * 1000 + (t3[1] / 1000000.0);
-
-   function fomatted(duration) {
-      return Intl.NumberFormat('en', {
-         "minimumIntegerDigits": 1,
-         "minimumFractionDigits": 1,
-         "maximumFractionDigits": 1,
-         "style": "unit",
-         "unit": "millisecond",
-         "unitDisplay": "short"
-      }).format(duration);
-   }
-
    hostLength = 'Host:'.length + spacing + hostname.length;
    timeLength = 'Timestamp:'.length + spacing + timestamp.length;
    tableWidth = Math.max(hostLength, timeLength);
