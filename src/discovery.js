@@ -1,6 +1,6 @@
 /*
  *  Name: "discovery.js"
- *  Version: "0.1.6"
+ *  Version: "0.1.7"
  *  Description: "topology discovery with directed command execution"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,10 +25,10 @@
        */
       let hosts = [];
       try {
-         hosts = rs.status().members.map(({ name, health, stateStr } = {}) =>
-            new Object({ 'host': name, 'health': health, 'role': stateStr })
-         ).filter(({ health, role }) =>
-            health == 1 && role != 'ARBITER'
+         hosts = rs.status().members.filter(({ health, role }) =>
+            health == 1 && role !== 'ARBITER'
+         ).map(({ name, stateStr } = {}) =>
+            new Object({ 'host': name, 'role': stateStr })
          );
       }
       catch(e) {
@@ -94,7 +94,11 @@
          console.log('Lack the ability to discover shards:', e);
       }
 
-      return shards;
+      return shards.filter(({ state } = {}) =>
+            state === 1
+         ).map(({ _id, host } = {}) =>
+            new Object({ 'name': _id, 'host': host })
+         );
    }
 
    async function fetchHostStats({ 'host': hostname } = {}) {
