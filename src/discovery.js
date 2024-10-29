@@ -1,34 +1,30 @@
-/*
- *  Name: "discovery.js"
- *  Version: "0.1.7"
- *  Description: "topology discovery with directed command execution"
- *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
- *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
- *
- *  Notes:
- *  - mongosh only
- *  - support for async required to parallelise and access the topology with auth
- *  TBA:
- *  - contextualise mdblib.js
- */
-
-// Usage: mongosh [connection options] --quiet -f discovery.js
-
 (async() => {
    /*
+    *  Name: "discovery.js"
+    *  Version: "0.1.8"
+    *  Description: "topology discovery with directed command execution"
+    *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
+    *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
+    *  Notes:
+    *  - mongosh only
+    *  - support for async required to parallelise and access the topology with auth
+    *  TBA:
+    *  - add plugable cmd executors
     */
+
+   // Usage: mongosh [connection options] --quiet -f discovery.js
 
    function discoverRSHosts() {
       /*
-       *
+       *  returns an array of healthy, non-hidden data bearing replica set members
        */
       let hosts = [];
       try {
-         hosts = rs.status().members.filter(({ health, role }) =>
-            health == 1 && role !== 'ARBITER'
-         ).map(({ name, stateStr } = {}) =>
-            new Object({ 'host': name, 'role': stateStr })
+         hosts = rs.status().members.filter(
+            ({ health, role }) => health == 1 && role !== 'ARBITER'
+         ).map(
+            ({ name, stateStr }) => new Object({ 'host': name, 'role': stateStr })
          );
       }
       catch(e) {
@@ -41,7 +37,7 @@
 
    function discoverMongos() {
       /*
-       *
+       *  returns an array of available mongos instances attached to the sharded cluster
        */
       let mongos = [];
       let namespace = db.getSiblingDB('config').getCollection('mongos');
@@ -58,20 +54,19 @@
          } } },
          { "$project": {
             "_id": 0,
-            "host": "$_id"
+            "host": {
+               "$cond": [
+                  { "$setEquals": ["$advisoryHostFQDNs", []] },
+                  "$_id",
+                  { "$concat": [
+                     { "$first": "$advisoryHostFQDNs" },
+                     ":",
+                     { "$arrayElemAt": [{ "$split": ["$_id", ":"] }, 1] }
+                  ] }
+               ]
+            }
          } }
       ];
-      // [
-      //    {
-      //       _id: 'M-Q37M74FXLF:27017',
-      //       created: ISODate('2024-10-20T22:59:48.082Z'),
-      //       mongoVersion: '8.0.3',
-      //       ping: ISODate('2024-10-28T04:43:54.493Z'),
-      //       up: Long('2303'),
-      //       waiting: true,
-      //       advisoryHostFQDNs: [ 'm-q37m74fxlf.lan' ]
-      //    }
-      // ]
       try {
          mongos = namespace.aggregate(pipeline, options).toArray();
       }
@@ -84,7 +79,7 @@
 
    function discoverShards() {
       /*
-       *
+       *  returns an array of available shards
        */
       let shards = [];
       try {
@@ -142,16 +137,7 @@
       /*
        *
        */
-      let {
-         username = null,
-         password = null,
-         'source': authSource = 'admin',
-         'mechanism': authMech = 'DEFAULT'
-      } = db.getMongo().__serviceProvider.mongoClient.options?.credentials ?? {};
-      let {
-         compressors = ['none'],
-         tls = false
-      } = db.getMongo().__serviceProvider.mongoClient.options;
+      let [username, password, authSource, authMech, compressors, tls] = mongoOptions();
       let readPreference = 'secondaryPreferred';
       let directURI;
       if (username == null) {
@@ -172,16 +158,7 @@
       /*
        *
        */
-      let {
-         username = null,
-         password = null,
-         'source': authSource = 'admin',
-         'mechanism': authMech = 'DEFAULT'
-      } = db.getMongo().__serviceProvider.mongoClient.options?.credentials ?? {};
-      let {
-         compressors = ['none'],
-         tls = false
-      } = db.getMongo().__serviceProvider.mongoClient.options;
+      let [username, password, authSource, authMech, compressors, tls] = mongoOptions();
       let readPreference = 'primaryPreferred';
       let { setName, seedList } = shardString.match(/^(?<setName>\w+)\/(?<seedList>.+)$/).groups;
       let shardURI;
@@ -205,9 +182,9 @@
        *
        */
       let hosts = shards.map(({ host }) => {
-         let { seedList } = host.match(/^(?:\w+)\/(?<seedList>.+)$/).groups;
+         let { setName, seedList } = host.match(/^(?<setName>\w+)\/(?<seedList>.+)$/).groups;
          return seedList.split(',').map(name =>
-            new Object({ 'host': name, 'health': '', 'role': '' })
+            new Object({ 'name': setName, 'host': name })
          );
       }).flat();
       // let promises = shards.map(fetchShardHosts(setName, seedList));
@@ -250,16 +227,52 @@
       /*
        *  is mongos process
        */
-      return db.hello().msg == 'isdbgrid';
+      return db.hello().msg === 'isdbgrid';
+   }
+
+   function isLoadBalanced() {
+      /*
+       *  is load balanced topology
+       */
+      return false;
+   }
+
+   function isStandalone() {
+      /*
+       *  is standalone topology
+       */
+      return false;
+   }
+
+   function mongoOptions() {
+      /*
+       *  returns MongoClient() options to construct new connections
+       */
+      let {
+         username = null,
+         password = null,
+         'source': authSource = 'admin',
+         'mechanism': authMech = 'DEFAULT'
+      } = db.getMongo().__serviceProvider.mongoClient.options?.credentials ?? {};
+      let {
+         compressors = ['none'],
+         tls = false
+      } = db.getMongo().__serviceProvider.mongoClient.options;
+
+      return [username, password, authSource, authMech, compressors, tls];
    }
 
    async function main() {
       /*
+       *  Discover topolgy type:
+       *  - mongos
+       *  - shards
+       *  - replset
        *
+       *  TBA:
+       *  - standalone host
+       *  - LoadBalanced
        */
-
-      // load('mdblib.js');
-      // ['ReplSet', 'Sharded', 'LoadBalanced', 'Standalone']
 
       let mongos, shards, hosts, allMongosStats, allShardStats, allHostStats;
 
