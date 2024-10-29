@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.8"
+    *  Version: "0.1.9"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -160,7 +160,7 @@
        */
       let [username, password, authSource, authMech, compressors, tls] = mongoOptions();
       let readPreference = 'primaryPreferred';
-      let { setName, seedList } = shardString.match(/^(?<setName>\w+)\/(?<seedList>.+)$/).groups;
+      let { setName, seedList } = shardString.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
       let shardURI;
       if (username == null) {
          shardURI = `mongodb://${seedList}/?replicaSet=${setName}&tls=${tls}&compressors=${compressors}&readPreference=${readPreference}`;
@@ -182,7 +182,7 @@
        *
        */
       let hosts = shards.map(({ host }) => {
-         let { setName, seedList } = host.match(/^(?<setName>\w+)\/(?<seedList>.+)$/).groups;
+         let { setName, seedList } = host.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
          return seedList.split(',').map(name =>
             new Object({ 'name': setName, 'host': name })
          );
