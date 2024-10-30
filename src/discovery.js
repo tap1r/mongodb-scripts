@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.11"
+    *  Version: "0.1.12"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -29,7 +29,9 @@
       }
       catch(e) {
          console.log('Lack the rights to discover hidden nodes:', e);
-         hosts = db.hello().hosts;
+         hosts = db.hello().hosts.map(
+            (name) => new Object({ "host": name, "role": "" })
+         );
       }
 
       return hosts;
@@ -98,11 +100,13 @@
 
    function discoverCSRSshard() {
       /*
-       *  returns an array of available shards
+       *  returns an array with the CSRS 'config' shard
        */
       let csrs = [];
       try {
-         csrs = db.getSiblingDB('admin').getCollection('system.version').find({ "_id": "shardIdentity" }).toArray();
+         csrs = db.getSiblingDB('admin').getCollection('system.version').find(
+               { "_id": "shardIdentity" }
+            ).toArray();
       }
       catch(e) {
          console.log('Lack the ability to discover shards:', e);
@@ -111,6 +115,10 @@
       return csrs.map(({ shardName, configsvrConnectionString } = {}) =>
             new Object({ "name": shardName, "host": configsvrConnectionString })
          );
+   }
+
+   async function me(node) {
+      return await node.hello().me;
    }
 
    async function stats(client, options) {
@@ -145,13 +153,11 @@
       // console.log('listCollections:', node.getSiblingDB('database').runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true }, { "readPreference": readPreference }).cursor.firstBatch);
       // console.log('collStats:', node.getSiblingDB('database').getCollection('collection').aggregate({ "$collStats": { "storageStats": { "scale": 1 } } }).toArray()[0].ns);
 
-      let me = async() => node.hello().me;
-      let results = {
-         'process': await me(),
+      return {
+         'process': await me(node),
          'stats': await stats(node, { 'readPreference': readPreference })
          // 'stats': await cmdFn(node, { 'readPreference': readPreference })
       };
-      return results;
    }
 
    async function fetchMongosStats({ 'host': hostname } = {}) {
@@ -178,7 +184,7 @@
       let stats = async() => node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases;
       let results = {
          'process': hostname,
-         'stats': await stats()
+         'stats': await stats(node, { 'readPreference': readPreference })
       };
 
       return results;
@@ -205,13 +211,10 @@
          return null;
       }
 
-      let me = async() => shard.hello().me;
-      let stats = async() => shard.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases;
-      let results = {
-         'process': await me(),
-         'stats': await stats()
+      return {
+         'process': await me(shard),
+         'stats': await stats(shard, { 'readPreference': readPreference })
       };
-      return results;
    }
 
    function discoverShardedHosts(shards = []) {
