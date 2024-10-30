@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.12"
+    *  Version: "0.1.13"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -21,16 +21,18 @@
        */
       let hosts = [];
       try {
+         // attempt to grab the replica set config to discover hidden nodes
          hosts = rs.status().members.filter(
-            ({ health, role }) => health == 1 && role !== 'ARBITER'
+            ({ health, 'stateStr': role }) => health == 1 && role !== 'ARBITER'
          ).map(
-            ({ name, stateStr }) => new Object({ "host": name, "role": stateStr })
+            ({ name, 'stateStr': role }) => new Object({ "host": name, "role": role })
          );
       }
       catch(e) {
-         console.log('Lack the rights to discover hidden nodes:', e);
-         hosts = db.hello().hosts.map(
-            (name) => new Object({ "host": name, "role": "" })
+         // else we can just grab the list of discoverable nodes
+         let { 'hosts': actives = [], passives = [] } = db.hello();
+         hosts = actives.concat(passives).map(
+            name => new Object({ "host": name })
          );
       }
 
@@ -122,6 +124,12 @@
    }
 
    async function stats(client, options) {
+      // console.log(getDBNames());
+      // console.log('listDatabases:', node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases);
+      // console.log('dbstats:', node.getSiblingDB('admin').stats());
+      // console.log('listCollections:', node.getSiblingDB('database').runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true }, { "readPreference": readPreference }).cursor.firstBatch);
+      // console.log('collStats:', node.getSiblingDB('database').getCollection('collection').aggregate({ "$collStats": { "storageStats": { "scale": 1 } } }).toArray()[0].ns);
+
       return await client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": options.readPreference }).databases;
    }
 
@@ -146,12 +154,6 @@
          console.log('Could not connect to host:', hostname, e);
          return null;
       }
-
-      // console.log(getDBNames());
-      // console.log('listDatabases:', node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases);
-      // console.log('dbstats:', node.getSiblingDB('admin').stats());
-      // console.log('listCollections:', node.getSiblingDB('database').runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true }, { "readPreference": readPreference }).cursor.firstBatch);
-      // console.log('collStats:', node.getSiblingDB('database').getCollection('collection').aggregate({ "$collStats": { "storageStats": { "scale": 1 } } }).toArray()[0].ns);
 
       return {
          'process': await me(node),
