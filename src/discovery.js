@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.10"
+    *  Version: "0.1.11"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -113,16 +113,12 @@
          );
    }
 
-   // async function stats(client, options) {
-   //    return await client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": options.readPreference }).databases;
-   // }
-
-   function stats(client, options) {
-      return client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": options.readPreference }).databases;
+   async function stats(client, options) {
+      return await client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": options.readPreference }).databases;
    }
 
    // async function fetchHostStats({ 'host': hostname } = {}, cmdFn) {
-   function fetchHostStats({ 'host': hostname } = {}) {
+   async function fetchHostStats({ 'host': hostname } = {}) {
       /*
        *
        */
@@ -149,19 +145,16 @@
       // console.log('listCollections:', node.getSiblingDB('database').runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true }, { "readPreference": readPreference }).cursor.firstBatch);
       // console.log('collStats:', node.getSiblingDB('database').getCollection('collection').aggregate({ "$collStats": { "storageStats": { "scale": 1 } } }).toArray()[0].ns);
 
-      // let me = async() => node.hello().me;
-      let me = () => node.hello().me;
+      let me = async() => node.hello().me;
       let results = {
-         // 'process': await me(),
-         'process': me(),
-         // 'stats': await stats(node, { 'readPreference': readPreference })
-         'stats': stats(node, { 'readPreference': readPreference })
+         'process': await me(),
+         'stats': await stats(node, { 'readPreference': readPreference })
          // 'stats': await cmdFn(node, { 'readPreference': readPreference })
       };
       return results;
    }
 
-   function fetchMongosStats({ 'host': hostname } = {}) {
+   async function fetchMongosStats({ 'host': hostname } = {}) {
       /*
        *
        */
@@ -182,18 +175,16 @@
          return null;
       }
 
-      // let stats = async() => node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases;
-      let stats = () => node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases;
+      let stats = async() => node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases;
       let results = {
          'process': hostname,
-         // 'stats': await stats()
-         'stats': stats()
+         'stats': await stats()
       };
 
       return results;
    }
 
-   function fetchShardStats({ 'host': shardString } = {}) {
+   async function fetchShardStats({ 'host': shardString } = {}) {
       /*
        *
        */
@@ -214,15 +205,11 @@
          return null;
       }
 
-      // let me = async() => shard.hello().me;
-      let me = () => shard.hello().me;
-      // let stats = async() => shard.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases;
-      let stats = () => shard.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases;
+      let me = async() => shard.hello().me;
+      let stats = async() => shard.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases;
       let results = {
-         // 'process': await me(),
-         'process': me(),
-         // 'stats': await stats()
-         'stats': stats()
+         'process': await me(),
+         'stats': await stats()
       };
       return results;
    }
