@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.24"
+ *  Version: "0.6.25"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.24" };
+   let __script = { "name": "fuzzer.js", "version": "0.6.25" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -49,7 +49,7 @@
       dropIndexes = true,           // recreate indexes to update creation options
       compressor = 'best',          // collection block compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
       idxCompressor = 'default',    // index prefix compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
-      // compressionOptions = -1,   // [-1|0|1|2|3|4|5|6|7|8|9] compression level
+      // compressionOptions = -1,   // [-1|0|1|2|3|4|5|6|7|8] compression level
       idioma = 'en',                // ['en'|'es'|'de'|'fr'|'zh']
       collation = { /* collation options */
          "locale": "simple",        // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
@@ -224,7 +224,7 @@
       }
 
       // redistribute chunks if required
-      if (isSharded() && (shardedOptions.reShard == true) && fCV(5.0)) {
+      if (isSharded() && (shardedOptions.reShard) && fCV(5.0)) {
          let resharding = async() => {
             let numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
             await db.adminCommand({
@@ -317,7 +317,7 @@
          }
          console.log(`\nResharding complete.`);
       }
-      else if (isSharded() && (shardedOptions.reShard == true) && !fCV(5.0)) {
+      else if (isSharded() && (shardedOptions.reShard) && !fCV(5.0)) {
          console.log('\x1b[31m[WARN] \x1b[33mreshardCollection() \x1b[31mrequires v5.0+\x1b[0m');
       }
 
@@ -716,7 +716,7 @@
          try {
             db.getSiblingDB(dbName).createCollection(collName, options);
          } catch(e) {
-            console.log(`\nNamespace creation failed: ${e}`);
+            console.log('\nNamespace creation failed:', e);
          }
 
          if (sharding && isSharded() && db.getSiblingDB(dbName).getCollection(collName).exists()) {
