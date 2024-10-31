@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.1.3"
+    *  Version: "0.1.4"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,6 +14,7 @@
     *
     *  TODO:
     *  - incorporate db.runCommand({ "whatsmyuri": 1}).you;
+    *  - add support for DRIVERS-3027 when complete
     */
 
    // Usage: mongosh [connection options] --quiet connStats.js
@@ -221,8 +222,8 @@
             "_id": 0,
             "connections": 0
          } }
-      ],
-      results;
+      ];
+      // results;
 
    // results = db.getSiblingDB('admin').aggregate(pipeline, aggOpts).toArray();
    // console.log(results);
