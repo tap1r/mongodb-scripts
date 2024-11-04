@@ -1,16 +1,20 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.15"
+    *  Version: "0.1.16"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Notes:
     *  - mongosh only
+    *  - plugable cmd execution
     *  - support for async required to parallelise and access the topology with auth
+    *
     *  TBA:
-    *  - add plugable cmd executors
+    *  - add CSRS support
+    *  - add standalone host discovery
+    *  - add LoadBalanced topology type
     */
 
    // Usage: mongosh [connection options] [--quiet] [-f|--file] discovery.js
@@ -123,23 +127,15 @@
    }
 
    async function me(node) {
+      /*
+       *  returns a node's self-identity
+       */
       return await node.hello().me;
    }
 
-   async function stats(client, options) {
-      // console.log(getDBNames());
-      // console.log('listDatabases:', node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases);
-      // console.log('dbstats:', node.getSiblingDB('admin').stats());
-      // console.log('listCollections:', node.getSiblingDB('database').runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true }, { "readPreference": readPreference }).cursor.firstBatch);
-      // console.log('collStats:', node.getSiblingDB('database').getCollection('collection').aggregate({ "$collStats": { "storageStats": { "scale": 1 } } }).toArray()[0].ns);
-
-      return await client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": options.readPreference }).databases;
-   }
-
-   // async function fetchHostStats({ 'host': hostname } = {}, cmdFn) {
-   async function fetchHostStats({ 'host': hostname } = {}) {
+   async function fetchHostStats({ 'host': hostname } = {}, cmdFn = async() => {}) {
       /*
-       *
+       *  execute a command on a mongod
        */
       let [username, password, authSource, authMech, compressors, tls] = mongoOptions();
       let readPreference = 'secondaryPreferred';
@@ -157,14 +153,13 @@
 
       return {
          "process": await me(node),
-         "stats": await stats(node, { 'readPreference': readPreference })
-         // 'stats': await cmdFn(node, { 'readPreference': readPreference })
+         "results": await cmdFn(node, { 'readPreference': readPreference })
       };
    }
 
-   async function fetchMongosStats({ 'host': hostname } = {}) {
+   async function fetchMongosStats({ 'host': hostname } = {}, cmdFn = async() => {}) {
       /*
-       *
+       *  execute a command on a mongos
        */
       let [username, password, authSource, authMech, compressors, tls] = mongoOptions();
       let readPreference = 'secondaryPreferred';
@@ -180,18 +175,17 @@
          return e;
       }
 
-      let stats = async() => node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases;
       let results = {
          "process": hostname,
-         "stats": await stats(node, { 'readPreference': readPreference })
+         "results": await cmdFn(node, { 'readPreference': readPreference })
       };
 
       return results;
    }
 
-   async function fetchShardStats({ 'host': shardString } = {}) {
+   async function fetchShardStats({ 'host': shardString } = {}, cmdFn = async() => {}) {
       /*
-       *
+       *  execute a command on a shard replset
        */
       let [username, password, authSource, authMech, compressors, tls] = mongoOptions();
       let readPreference = 'primaryPreferred';
@@ -211,13 +205,13 @@
 
       return {
          "process": await me(shard),
-         "stats": await stats(shard, { 'readPreference': readPreference })
+         "results": await cmdFn(shard, { 'readPreference': readPreference })
       };
    }
 
    function discoverShardedHosts(shards = []) {
       /*
-       *
+       *  returns an array of hosts across all available shards
        */
       let hosts = shards.map(({ host }) => {
          let { setName, seedList } = host.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
@@ -228,33 +222,33 @@
       return hosts.flat();
    }
 
-   async function fetchAllStats(hosts = []) {
+   async function fetchAllStats(hosts = [], cmdFn = async() => {}) {
       /*
-       *
+       *  async fetch wrapper to parallelise tasks
        */
-      let promises = () => hosts.map(fetchHostStats);
+      let promises = () => hosts.map(host => fetchHostStats(host, cmdFn));
 
       return await Promise.allSettled(promises()).then(results => {
          return results.map(({ status, value }) => (status == 'fulfilled') && value);
       });
    }
 
-   async function fetchMongosesStats(mongos = []) {
+   async function fetchMongosesStats(mongos = [], cmdFn = async() => {}) {
       /*
-       *
+       *  async fetch wrapper to parallelise tasks
        */
-      let promises = () => mongos.map(fetchMongosStats);
+      let promises = () => mongos.map(host => fetchMongosStats(host, cmdFn));
 
       return await Promise.allSettled(promises()).then(results => {
          return results.map(({ status, value }) => (status == 'fulfilled') && value);
       });
    }
 
-   async function fetchShardedStats(shards = []) {
+   async function fetchShardedStats(shards = [], cmdFn = async() => {}) {
       /*
-       *
+       *  async fetch wrapper to parallelise tasks
        */
-      let promises = () => shards.map(fetchShardStats);
+      let promises = () => shards.map(host => fetchShardStats(host, cmdFn));
 
       return await Promise.allSettled(promises()).then(results => {
          return results.map(({ status, value }) => (status == 'fulfilled') && value);
@@ -307,12 +301,24 @@
        *  - shards
        *  - replset
        *
-       *  TBA:
-       *  - standalone host
-       *  - LoadBalanced
+       *  Execute mongos/shard/host specific commands
        */
 
       let mongos, csrs, csrsHosts, shards, hosts, allMongosStats, allShardStats, allHostStats;
+
+      let mongosCmd = () => 'I am a mongos';
+      let shardCmd = () => 'I am a shard primary';
+      let hostCmd = () => 'I am a host';
+
+      async function stats(client, options) {
+         // console.log(getDBNames());
+         // console.log('listDatabases:', node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases);
+         // console.log('dbstats:', node.getSiblingDB('admin').stats());
+         // console.log('listCollections:', node.getSiblingDB('database').runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true }, { "readPreference": readPreference }).cursor.firstBatch);
+         // console.log('collStats:', node.getSiblingDB('database').getCollection('collection').aggregate({ "$collStats": { "storageStats": { "scale": 1 } } }).toArray()[0].ns);
+
+         return await client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": options.readPreference }).databases;
+      }
 
       if (isSharded()) {
          mongos = discoverMongos();
@@ -330,17 +336,17 @@
       console.log('hosts:', hosts);
 
       if (isSharded()) {
-         allMongosStats = fetchMongosesStats(mongos);
-         allShardStats = fetchShardedStats(shards);
+         allMongosStats = fetchMongosesStats(mongos, mongosCmd);
+         allShardStats = fetchShardedStats(shards, shardCmd);
       }
-      allHostStats = fetchAllStats(hosts);
+      allHostStats = fetchAllStats(hosts, hostCmd);
 
       if (isSharded()) {
-         console.log('all mongos stats:', allMongosStats);
-         console.log('all shard stats:', allShardStats);
+         console.log('all mongos cmd results:', allMongosStats);
+         console.log('all shard cmd results:', allShardStats);
       }
 
-      console.log('all host stats:', allHostStats);
+      console.log('all host cmd results:', allHostStats);
 
       return;
    }
