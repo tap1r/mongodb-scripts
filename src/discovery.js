@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.13"
+    *  Version: "0.1.14"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,16 +13,16 @@
     *  - add plugable cmd executors
     */
 
-   // Usage: mongosh [connection options] --quiet -f discovery.js
+   // Usage: mongosh [connection options] [--quiet] [-f|--file] discovery.js
 
    function discoverRSHosts() {
       /*
        *  returns an array of healthy, non-hidden data bearing replica set members
        */
-      let hosts = [];
+      let members = [];
       try {
          // attempt to grab the replica set config to discover hidden nodes
-         hosts = rs.status().members.filter(
+         members = rs.status().members.filter(
             ({ health, 'stateStr': role }) => health == 1 && role !== 'ARBITER'
          ).map(
             ({ name, 'stateStr': role }) => new Object({ "host": name, "role": role })
@@ -30,13 +30,13 @@
       }
       catch(e) {
          // else we can just grab the list of discoverable nodes
-         let { 'hosts': actives = [], passives = [] } = db.hello();
-         hosts = actives.concat(passives).map(
+         let { hosts = [], passives = [] } = db.hello();
+         members = hosts.concat(passives).map(
             name => new Object({ "host": name })
          );
       }
 
-      return hosts;
+      return members;
    }
 
    function discoverMongos() {
@@ -76,6 +76,7 @@
       }
       catch(e) {
          console.log('Lack the ability to discover mongos:', e);
+         return e;
       }
 
       return mongos;
@@ -90,7 +91,8 @@
          shards = db.adminCommand({ "listShards": 1 }).shards;
       }
       catch(e) {
-         console.log('Lack the ability to discover shards:', e);
+         console.log('Lack the ability to discover shards:');
+         return e;
       }
 
       return shards.filter(({ state } = {}) =>
@@ -111,7 +113,8 @@
             ).toArray();
       }
       catch(e) {
-         console.log('Lack the ability to discover shards:', e);
+         console.log('Lack the ability to discover shards:');
+         return e;
       }
 
       return csrs.map(({ shardName, configsvrConnectionString } = {}) =>
@@ -140,24 +143,21 @@
        */
       let [username, password, authSource, authMech, compressors, tls] = mongoOptions();
       let readPreference = 'secondaryPreferred';
-      let directURI;
-      if (username == null) {
-         directURI = `mongodb://${hostname}/?directConnection=true&tls=${tls}&compressors=${compressors}&readPreference=${readPreference}`;
-      } else {
-         directURI = `mongodb://${username}:${password}@${hostname}/?directConnection=true&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
+      let credentials, node;
+      if (username !== null) {
+         credentials = username + ':' + password + '@';
       }
-
-      let node;
-      try{
+      let directURI = `mongodb://${credentials}${hostname}/?directConnection=true&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
+      try {
          node = connect(directURI);
       } catch(e) {
-         console.log('Could not connect to host:', hostname, e);
-         return null;
+         console.log('Could not connect to host:', hostname);
+         return e;
       }
 
       return {
-         'process': await me(node),
-         'stats': await stats(node, { 'readPreference': readPreference })
+         "process": await me(node),
+         "stats": await stats(node, { 'readPreference': readPreference })
          // 'stats': await cmdFn(node, { 'readPreference': readPreference })
       };
    }
@@ -179,14 +179,14 @@
       try {
          node = connect(directURI);
       } catch(e) {
-         console.log('Could not connect to host:', hostname, e);
-         return null;
+         console.log('Could not connect to host:', hostname);
+         return e;
       }
 
       let stats = async() => node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases;
       let results = {
-         'process': hostname,
-         'stats': await stats(node, { 'readPreference': readPreference })
+         "process": hostname,
+         "stats": await stats(node, { 'readPreference': readPreference })
       };
 
       return results;
@@ -209,13 +209,13 @@
       try {
          shard = connect(shardURI);
       } catch(e) {
-         console.log('Could not connect to shard:', seedList, e);
-         return null;
+         console.log('Could not connect to shard:', seedList);
+         return e;
       }
 
       return {
-         'process': await me(shard),
-         'stats': await stats(shard, { 'readPreference': readPreference })
+         "process": await me(shard),
+         "stats": await stats(shard, { 'readPreference': readPreference })
       };
    }
 
@@ -236,30 +236,33 @@
       /*
        *
        */
-      let promises = hosts.map(fetchHostStats);
+      let promises = () => hosts.map(fetchHostStats);
 
-      return Promise.all(promises);
-      // return await Promise.allSettled(promises);
+      return await Promise.allSettled(promises()).then(results => {
+         return results.map(({ status, value }) => (status == 'fulfilled') && value);
+      });
    }
 
    async function fetchMongosesStats(mongos = []) {
       /*
        *
        */
-      let promises = mongos.map(fetchMongosStats);
+      let promises = () => mongos.map(fetchMongosStats);
 
-      return Promise.all(promises);
-      // return await Promise.allSettled(promises);
+      return await Promise.allSettled(promises()).then(results => {
+         return results.map(({ status, value }) => (status == 'fulfilled') && value);
+      });
    }
 
    async function fetchShardedStats(shards = []) {
       /*
        *
        */
-      let promises = shards.map(fetchShardStats);
+      let promises = () => shards.map(fetchShardStats);
 
-      return Promise.all(promises);
-      // return await Promise.allSettled(promises);
+      return await Promise.allSettled(promises()).then(results => {
+         return results.map(({ status, value }) => (status == 'fulfilled') && value);
+      });
    }
 
    function isSharded() {
@@ -316,17 +319,17 @@
       let mongos, csrs, csrsHosts, shards, hosts, allMongosStats, allShardStats, allHostStats;
 
       if (isSharded()) {
-         mongos = discoverMongos();
+         mongos = await discoverMongos();
          console.log('mongos:', mongos);
-         csrs = discoverCSRSshard();
+         csrs = await discoverCSRSshard();
          console.log('csrs:', csrs);
-         shards = discoverShards();
+         shards = await discoverShards();
          console.log('shards:', shards);
          csrsHosts = discoverShardedHosts(csrs);
          console.log('csrsMembers:', csrsHosts);
          hosts = discoverShardedHosts(shards);
       } else {
-         hosts = discoverRSHosts();
+         hosts = await discoverRSHosts();
       }
       console.log('hosts:', hosts);
 
@@ -334,7 +337,7 @@
          allMongosStats = fetchMongosesStats(mongos);
          allShardStats = fetchShardedStats(shards);
       }
-      allHostStats = fetchAllStats(hosts);
+      allHostStats = await fetchAllStats(hosts);
 
       if (isSharded()) {
          console.log('all mongos stats:', allMongosStats);
