@@ -26,7 +26,7 @@
     *  - add better sharding support
     */
 
-   // Syntax: mongosh [connection options] --quiet [--eval 'let dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>;'] [-f|--file] niceDeleteMany.js
+   // Syntax: mongosh [connection options] [--quiet] [--eval 'let dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>;'] [-f|--file] niceDeleteMany.js
 
    /*
     *  dbName: <string>      // (required) database name
