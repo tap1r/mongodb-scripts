@@ -1,17 +1,18 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.1"
+    *  Version: "0.2.2"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  TODOs:
     *  - Add sharding support
-    *  - Add v8 Execution Control metrics
+    *  - Add v8.0 Execution Control metrics
+    *  - Add support for bytes_dirty_intl & bytes_dirty_leaf when they become available
     */
 
-   // Usage: mongosh [connection options] --quiet [-f|--file] congestionMonitor.js
+   // Usage: mongosh [connection options] [--quiet] [-f|--file] congestionMonitor.js
 
    let vitals = {};
    let pollingIntervalMS = 100;
@@ -91,6 +92,13 @@
             "serverStatus": true,
             ...{ ...serverStatusOptionsDefaults, ...serverStatusOptions }
          });
+      }
+
+      function isSharded() {
+         /*
+          *  is mongos process
+          */
+         return db.hello().msg === 'isdbgrid';
       }
 
       function hostInfo() {
@@ -391,6 +399,9 @@
    }
 
    class EQ {
+      /*
+       *  EQ class
+       */
       constructor({
          width = 30,
          row = 0,
@@ -422,8 +433,11 @@
       }
 
       async draw() {
+         /*
+          *  render the EQ bar
+          */
          let cursor = 0;
-         while (true) { // draw the EQ bar
+         while (true) {
             // take current stats values from the parent monitoring thread
             let { [this.metric]: metric = 0, [this.status]: status = '', [this.scale]: scale = 100 } = vitals;
             cursor = Math.floor(metric * (this.width / scale));
@@ -449,6 +463,9 @@
    }
 
    async function main() {
+      /*
+       *  main
+       */
       let metrics = [
          // {  // EQ attributes
          //    "name": "<string>",   // EQ label
@@ -457,7 +474,7 @@
          //    "scale": "<string>",  // metric scale
          //    "unit": "<string>",   // metric unit
          //    "interval": <int>     // refresh interval in milliseconds
-         // },
+         // }
          { "name": "readTicketsUtil", "metric": "wtReadTicketsUtil", "status": "wtReadTicketsStatus", "unit": "%" },
          { "name": "writeTicketsUtil", "metric": "wtWriteTicketsUtil", "status": "wtWriteTicketsStatus", "unit": "%" },
          { "name": "cacheFill", "metric": "cacheUtil", "status": "cacheStatus", "scale": "evictionTrigger", "unit": "%" },
@@ -465,6 +482,8 @@
          { "name": "dirtyUpdatesFill", "metric": "dirtyUpdatesUtil", "status": "dirtyUpdatesStatus", "scale": "evictionUpdatesTrigger", "unit": "%" },
          { "name": "checkpointStress", "metric": "checkpointRuntimeRatio", "status": "checkpointStatus", "unit": "%", "interval": 250 },
          { "name": "activeReplLag", "metric": "activeReplLag", "status": "replLagStatus", "scale": "replLagScale", "unit": "s", "interval": 500 }
+         // bytes_dirty_intl
+         // bytes_dirty_leaf
       ];
       // instantiate EQ objects
       metrics.forEach((metric, _idx) => {
