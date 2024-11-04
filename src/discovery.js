@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.16"
+    *  Version: "0.1.17"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -133,7 +133,7 @@
       return await node.hello().me;
    }
 
-   async function fetchHostStats({ 'host': hostname } = {}, cmdFn = async() => {}) {
+   async function execHostCmd({ 'host': hostname } = {}, cmdFn = async() => {}) {
       /*
        *  execute a command on a mongod
        */
@@ -157,7 +157,7 @@
       };
    }
 
-   async function fetchMongosStats({ 'host': hostname } = {}, cmdFn = async() => {}) {
+   async function execMongosCmd({ 'host': hostname } = {}, cmdFn = async() => {}) {
       /*
        *  execute a command on a mongos
        */
@@ -183,7 +183,7 @@
       return results;
    }
 
-   async function fetchShardStats({ 'host': shardString } = {}, cmdFn = async() => {}) {
+   async function execShardCmd({ 'host': shardString } = {}, cmdFn = async() => {}) {
       /*
        *  execute a command on a shard replset
        */
@@ -222,33 +222,33 @@
       return hosts.flat();
    }
 
-   async function fetchAllStats(hosts = [], cmdFn = async() => {}) {
+   async function execAllHostsCmd(hosts = [], cmdFn = async() => {}) {
       /*
-       *  async fetch wrapper to parallelise tasks
+       *  async exec wrapper to parallelise tasks
        */
-      let promises = () => hosts.map(host => fetchHostStats(host, cmdFn));
+      let promises = () => hosts.map(host => execHostCmd(host, cmdFn));
 
       return await Promise.allSettled(promises()).then(results => {
          return results.map(({ status, value }) => (status == 'fulfilled') && value);
       });
    }
 
-   async function fetchMongosesStats(mongos = [], cmdFn = async() => {}) {
+   async function execAllMongosesCmd(mongos = [], cmdFn = async() => {}) {
       /*
-       *  async fetch wrapper to parallelise tasks
+       *  async exec wrapper to parallelise tasks
        */
-      let promises = () => mongos.map(host => fetchMongosStats(host, cmdFn));
+      let promises = () => mongos.map(host => execMongosCmd(host, cmdFn));
 
       return await Promise.allSettled(promises()).then(results => {
          return results.map(({ status, value }) => (status == 'fulfilled') && value);
       });
    }
 
-   async function fetchShardedStats(shards = [], cmdFn = async() => {}) {
+   async function execAllShardsCmd(shards = [], cmdFn = async() => {}) {
       /*
-       *  async fetch wrapper to parallelise tasks
+       *  async exec wrapper to parallelise tasks
        */
-      let promises = () => shards.map(host => fetchShardStats(host, cmdFn));
+      let promises = () => shards.map(host => execShardCmd(host, cmdFn));
 
       return await Promise.allSettled(promises()).then(results => {
          return results.map(({ status, value }) => (status == 'fulfilled') && value);
@@ -336,10 +336,10 @@
       console.log('hosts:', hosts);
 
       if (isSharded()) {
-         allMongosStats = fetchMongosesStats(mongos, mongosCmd);
-         allShardStats = fetchShardedStats(shards, shardCmd);
+         allMongosStats = execAllMongosesCmd(mongos, mongosCmd);
+         allShardStats = execAllShardsCmd(shards, shardCmd);
       }
-      allHostStats = fetchAllStats(hosts, hostCmd);
+      allHostStats = execAllHostsCmd(hosts, hostCmd);
 
       if (isSharded()) {
          console.log('all mongos cmd results:', allMongosStats);
