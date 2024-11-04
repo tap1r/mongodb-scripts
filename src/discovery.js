@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.14"
+    *  Version: "0.1.15"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -91,7 +91,7 @@
          shards = db.adminCommand({ "listShards": 1 }).shards;
       }
       catch(e) {
-         console.log('Lack the ability to discover shards:');
+         console.log('Lack the ability to discover shards');
          return e;
       }
 
@@ -168,14 +168,11 @@
        */
       let [username, password, authSource, authMech, compressors, tls] = mongoOptions();
       let readPreference = 'secondaryPreferred';
-      let directURI;
-      if (username == null) {
-         directURI = `mongodb://${hostname}/?tls=${tls}&compressors=${compressors}`;
-      } else {
-         directURI = `mongodb://${username}:${password}@${hostname}/?tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}`;
+      let credentials, node;
+      if (username !== null) {
+         credentials = username + ':' + password + '@';
       }
-
-      let node;
+      let directURI = `mongodb://${credentials}${hostname}/?directConnection=true&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
       try {
          node = connect(directURI);
       } catch(e) {
@@ -199,13 +196,12 @@
       let [username, password, authSource, authMech, compressors, tls] = mongoOptions();
       let readPreference = 'primaryPreferred';
       let { setName, seedList } = shardString.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
-      let shardURI;
-      if (username == null) {
-         shardURI = `mongodb://${seedList}/?replicaSet=${setName}&tls=${tls}&compressors=${compressors}&readPreference=${readPreference}`;
-      } else {
-         shardURI = `mongodb://${username}:${password}@${seedList}/?replicaSet=${setName}&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
+      let credentials, shard;
+      if (username !== null) {
+         credentials = username + ':' + password + '@';
       }
-      let shard;
+      let shardURI = `mongodb://${credentials}${seedList}/?replicaSet=${setName}&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
+
       try {
          shard = connect(shardURI);
       } catch(e) {
@@ -319,17 +315,17 @@
       let mongos, csrs, csrsHosts, shards, hosts, allMongosStats, allShardStats, allHostStats;
 
       if (isSharded()) {
-         mongos = await discoverMongos();
+         mongos = discoverMongos();
          console.log('mongos:', mongos);
-         csrs = await discoverCSRSshard();
+         csrs = discoverCSRSshard();
          console.log('csrs:', csrs);
-         shards = await discoverShards();
+         shards = discoverShards();
          console.log('shards:', shards);
          csrsHosts = discoverShardedHosts(csrs);
          console.log('csrsMembers:', csrsHosts);
          hosts = discoverShardedHosts(shards);
       } else {
-         hosts = await discoverRSHosts();
+         hosts = discoverRSHosts();
       }
       console.log('hosts:', hosts);
 
@@ -337,7 +333,7 @@
          allMongosStats = fetchMongosesStats(mongos);
          allShardStats = fetchShardedStats(shards);
       }
-      allHostStats = await fetchAllStats(hosts);
+      allHostStats = fetchAllStats(hosts);
 
       if (isSharded()) {
          console.log('all mongos stats:', allMongosStats);
