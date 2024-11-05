@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.19"
+    *  Version: "0.1.20"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -127,6 +127,18 @@
          );
    }
 
+   function discoverShardedHosts(shards = []) {
+      /*
+       *  returns an array of hosts across all available shards
+       */
+      return shards.map(({ host }) => {
+         let { setName, seedList } = host.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
+         return seedList.split(',').map(name =>
+            new Object({ "name": setName, "host": name })
+         );
+      }).flat();
+   }
+
    async function me(node) {
       /*
        *  returns a node's self-identity
@@ -154,7 +166,7 @@
 
       return {
          "process": await me(node),
-         "results": await cmdFn(node, { 'readPreference': readPreference })
+         "results": await cmdFn(node, { "readPreference": readPreference })
       };
    }
 
@@ -178,7 +190,7 @@
 
       let results = {
          "process": hostname,
-         "results": await cmdFn(node, { 'readPreference': readPreference })
+         "results": await cmdFn(node, { "readPreference": readPreference })
       };
 
       return results;
@@ -206,20 +218,8 @@
 
       return {
          "process": await me(shard),
-         "results": await cmdFn(shard, { 'readPreference': readPreference })
+         "results": await cmdFn(shard, { "readPreference": readPreference })
       };
-   }
-
-   function discoverShardedHosts(shards = []) {
-      /*
-       *  returns an array of hosts across all available shards
-       */
-      return shards.map(({ host }) => {
-         let { setName, seedList } = host.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
-         return seedList.split(',').map(name =>
-            new Object({ "name": setName, "host": name })
-         );
-      }).flat();
    }
 
    async function execAllHostsCmd(hosts = [], cmdFn = async() => {}) {
@@ -309,12 +309,18 @@
          csrsResults, allShardResults,
          allHostResults;
 
+      // async function stats(client, options) {
+      //    return client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, options).databases;
+      // }
+
       let mongosCmd = async() => 'I am a mongos';
       let shardCmd = async() => 'I am a shard primary';
       let csrsCmd = async() => 'I am the CSRS primary';
       let csrsHostCmd = async() => 'I am a CSRS member host';
-      let hostCmd = async() => 'I am a host';
+      let hostCmd = async() => 'I am a member host';
+      // let hostCmd = async(client, options) => await stats(client, options);
 
+      // discover topology
       if (isSharded()) {
          mongos = discoverMongos();
          console.log('mongos:', mongos);
@@ -330,6 +336,7 @@
       }
       console.log('hosts:', hosts);
 
+      // execute commands
       if (isSharded()) {
          allMongosResults = execAllMongosesCmd(mongos, mongosCmd);
          allCSRSResults = execAllShardsCmd(csrs, csrsCmd);
@@ -339,13 +346,13 @@
       }
       allHostResults = execAllHostsCmd(hosts, hostCmd);
 
+      // return command results
       if (isSharded()) {
          console.log('all mongos cmd results:', allMongosResults);
          console.log('csrs shard cmd results:', allCSRSResults);
          console.log('csrs hosts cmd results:', csrsResults);
          console.log('all shards cmd results:', allShardResults);
       }
-
       console.log('all hosts cmd results:', allHostResults);
 
       return;
