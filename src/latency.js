@@ -1,18 +1,20 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.3.7"
+ *  Version: "0.3.8"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: mongosh [connection options] --quiet latency.js
+// Usage: mongosh [connection options] [--quiet] [-f|--file] latency.js
+
+// Example: mongosh --host "replset/localhost" --quiet latency.js
 
 (() => {
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.3.7" };
+   let __script = { "name": "latency.js", "version": "0.3.8" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m`);
 
    let fomatted = duration =>
