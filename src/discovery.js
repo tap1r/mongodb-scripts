@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.17"
+    *  Version: "0.1.18"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -12,12 +12,17 @@
     *  - support for async required to parallelise and access the topology with auth
     *
     *  TBA:
-    *  - add CSRS support
     *  - add standalone host discovery
     *  - add LoadBalanced topology type
     */
 
    // Usage: mongosh [connection options] [--quiet] [-f|--file] discovery.js
+
+   // Example: mongosh --host "replset/localhost" discovery.js
+
+   // async function stats(client, options) {
+   //    return await client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": options.readPreference }).databases;
+   // }
 
    function discoverRSHosts() {
       /*
@@ -27,12 +32,11 @@
       try {
          // attempt to grab the replica set config to discover hidden nodes
          members = rs.status().members.filter(
-            ({ health, 'stateStr': role }) => health == 1 && role !== 'ARBITER'
+            ({ health, 'stateStr': role }) => health === 1 && role !== 'ARBITER'
          ).map(
             ({ name, 'stateStr': role }) => new Object({ "host": name, "role": role })
          );
-      }
-      catch(e) {
+      } catch(e) {
          // else we can just grab the list of discoverable nodes
          let { hosts = [], passives = [] } = db.hello();
          members = hosts.concat(passives).map(
@@ -77,8 +81,7 @@
       ];
       try {
          mongos = namespace.aggregate(pipeline, options).toArray();
-      }
-      catch(e) {
+      } catch(e) {
          console.log('Lack the ability to discover mongos:', e);
          return e;
       }
@@ -93,8 +96,7 @@
       let shards = [];
       try {
          shards = db.adminCommand({ "listShards": 1 }).shards;
-      }
-      catch(e) {
+      } catch(e) {
          console.log('Lack the ability to discover shards');
          return e;
       }
@@ -115,9 +117,8 @@
          csrs = db.getSiblingDB('admin').getCollection('system.version').find(
                { "_id": "shardIdentity" }
             ).toArray();
-      }
-      catch(e) {
-         console.log('Lack the ability to discover shards:');
+      } catch(e) {
+         console.log('Lack the ability to discover the CSRS:');
          return e;
       }
 
@@ -213,13 +214,12 @@
       /*
        *  returns an array of hosts across all available shards
        */
-      let hosts = shards.map(({ host }) => {
+      return shards.map(({ host }) => {
          let { setName, seedList } = host.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
          return seedList.split(',').map(name =>
             new Object({ "name": setName, "host": name })
          );
-      });
-      return hosts.flat();
+      }).flat();
    }
 
    async function execAllHostsCmd(hosts = [], cmdFn = async() => {}) {
@@ -306,19 +306,10 @@
 
       let mongos, csrs, csrsHosts, shards, hosts, allMongosStats, allShardStats, allHostStats;
 
-      let mongosCmd = () => 'I am a mongos';
-      let shardCmd = () => 'I am a shard primary';
-      let hostCmd = () => 'I am a host';
-
-      async function stats(client, options) {
-         // console.log(getDBNames());
-         // console.log('listDatabases:', node.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": readPreference }).databases);
-         // console.log('dbstats:', node.getSiblingDB('admin').stats());
-         // console.log('listCollections:', node.getSiblingDB('database').runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true }, { "readPreference": readPreference }).cursor.firstBatch);
-         // console.log('collStats:', node.getSiblingDB('database').getCollection('collection').aggregate({ "$collStats": { "storageStats": { "scale": 1 } } }).toArray()[0].ns);
-
-         return await client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": options.readPreference }).databases;
-      }
+      let mongosCmd = async() => 'I am a mongos';
+      let shardCmd = async() => 'I am a shard primary';
+      let csrsCmd = async() => 'I am a CSRS primary';
+      let hostCmd = async() => 'I am a host';
 
       if (isSharded()) {
          mongos = discoverMongos();
@@ -337,12 +328,14 @@
 
       if (isSharded()) {
          allMongosStats = execAllMongosesCmd(mongos, mongosCmd);
+         allCSRSStats = execAllShardsCmd(csrs, csrsCmd);
          allShardStats = execAllShardsCmd(shards, shardCmd);
       }
       allHostStats = execAllHostsCmd(hosts, hostCmd);
 
       if (isSharded()) {
          console.log('all mongos cmd results:', allMongosStats);
+         console.log('csrs cmd results:', allCSRSStats);
          console.log('all shard cmd results:', allShardStats);
       }
 
