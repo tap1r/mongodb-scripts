@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.20"
+    *  Version: "0.1.21"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -21,7 +21,7 @@
    // Example: mongosh --host "replset/localhost" discovery.js
 
    // async function stats(client, options) {
-   //    return await client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, { "readPreference": options.readPreference }).databases;
+   //    return client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, options).databases;
    // }
 
    function discoverRSHosts() {
@@ -309,16 +309,11 @@
          csrsResults, allShardResults,
          allHostResults;
 
-      // async function stats(client, options) {
-      //    return client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, options).databases;
-      // }
-
-      let mongosCmd = async() => 'I am a mongos';
-      let shardCmd = async() => 'I am a shard primary';
-      let csrsCmd = async() => 'I am the CSRS primary';
-      let csrsHostCmd = async() => 'I am a CSRS member host';
-      let hostCmd = async() => 'I am a member host';
-      // let hostCmd = async(client, options) => await stats(client, options);
+      let mongosCmd = async(client, options) => 'I am a mongos, ' + await me(client);
+      let shardCmd = async(client, options) => 'I am a shard primary, ' + await me(client);
+      let csrsCmd = async(client, options) => 'I am the CSRS primary, ' + await me(client);
+      let csrsHostCmd = async(client, options) => 'I am a CSRS member host, ' + await me(client);
+      let hostCmd = async(client, options) => 'I am a member host, ' + await me(client);
 
       // discover topology
       if (isSharded()) {
