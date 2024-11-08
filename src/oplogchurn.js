@@ -1,8 +1,8 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.4"
- *  Description: measure oplog churn rate script
- *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
+ *  Version: "0.5.5"
+ *  Description: "measure current oplog churn rate"
+ *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
@@ -19,7 +19,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.5.4" };
+   let __script = { "name": "oplogchurn.js", "version": "0.5.5" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -100,7 +100,7 @@
                "_bsonDataSize": { "$sum": { "$bsonSize": "$$ROOT" } },
                "_documentCount": { "$sum": 1 }
          } });
-         ({ '_bsonDataSize': opSize, '_documentCount': docs } = oplog.aggregate(pipeline, options).toArray()[0]);
+         ([{ '_bsonDataSize': opSize, '_documentCount': docs }] = oplog.aggregate(pipeline, options).toArray());
       } else {
          console.log('\n\x1b[31mWarning: Using the legacy client side calculation technique\x1b[0m');
          oplog.aggregate(pipeline, options).forEach(op => {
@@ -109,7 +109,7 @@
          });
       }
 
-      // Get host info
+      // Get host info & oplog stats
       let { 'system': { hostname } } = hostInfo(),
          { 'parsed': { 'storage': { dbPath } } } = db.serverCmdLineOpts(),
          // Get oplog collection stats
@@ -149,7 +149,7 @@
 
    if (!isReplSet()) {
       console.log('\n');
-      console.log(`\t\x1b[31mHost is not a replica set member....exiting!\x1b[0m`);
+      console.log('\t\x1b[31mHost is not a replica set member....exiting!\x1b[0m');
       console.log('\n');
    } else main();
 })();
