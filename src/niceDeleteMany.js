@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.1.6"
+    *  Version: "0.1.7"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,6 +24,7 @@
     *  - fix secondary reads for curation
     *  - add backoff expiry timer
     *  - add better sharding support
+    *  - revise lowPriorityAdmissionBypassThreshold for backward compatibility
     */
 
    // Syntax: mongosh [connection options] [--quiet] [--eval 'let dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>;'] [-f|--file] niceDeleteMany.js
@@ -52,7 +53,7 @@
     *  End user defined options
     */
 
-   let __script = { "name": "niceDeleteMany.js", "version": "0.1.6" };
+   let __script = { "name": "niceDeleteMany.js", "version": "0.1.7" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -302,7 +303,7 @@
          "storageEngineConcurrentReadTransactions": db.adminCommand({ "getParameter": 1, "wiredTigerConcurrentReadTransactions": 1 }).wiredTigerConcurrentReadTransactions,
          // db.adminCommand({ "getParameter": 1, "storageEngineConcurrentReadTransactions": 1 })
          "storageEngineConcurrentWriteTransactions": db.adminCommand({ "getParameter": 1, "wiredTigerConcurrentWriteTransactions": 1 }).wiredTigerConcurrentWriteTransactions,
-         "lowPriorityAdmissionBypassThreshold": db.adminCommand({ "getParameter": 1, "lowPriorityAdmissionBypassThreshold": 1 }).lowPriorityAdmissionBypassThreshold,
+         // "lowPriorityAdmissionBypassThreshold": db.adminCommand({ "getParameter": 1, "lowPriorityAdmissionBypassThreshold": 1 }).lowPriorityAdmissionBypassThreshold,
          // https://www.mongodb.com/docs/manual/reference/command/serverStatus/#mongodb-serverstatus-serverstatus.wiredTiger.concurrentTransactions
          "serverStatus": await serverStatus({ // minimal server status metrics to reduce server cost
             "activeIndexBuilds": true,
