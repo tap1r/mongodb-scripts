@@ -1,8 +1,8 @@
 (() => {
    /*
     *  Name: "oidFunction.js"
-    *  Version: "0.1.3"
-    *  Description: "aggregation based OID "view function" reproduction (requires v5.0+)"
+    *  Version: "0.1.4"
+    *  Description: "aggregation based OID 'view function' reproduction (requires v5.0+)"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     */
@@ -12,10 +12,8 @@
    let namespace = db.getSiblingDB(dbName);
    let view = namespace.getCollection(oidView);
    let nonceGenerator = namespace.getCollection(nonceName);
-
    let nonce = (+((+db.adminCommand({ "features": 1 }).oidMachine).toString() + (+db.serverStatus().pid).toString())).toString(16).substring(0, 10);
 
-   // nonceGenerator.drop();
    nonceGenerator.updateOne(
       { "_id": 1 },
       { "$set": { "nonce": nonce } },
@@ -92,7 +90,7 @@
                         "default": "$$epoch"
       } } } } } } },
       // 5-byte machine nonce
-      { "$lookup": { "from": "_nonceGenerator", "pipeline": [], "as": "_nonce" } },
+      { "$lookup": { "from": "_nonceGenerator", "pipeline": [{ "$match": { "_id": 1 } }], "as": "_nonce" } },
       { "$set": { "_nonce": { "$first": "$_nonce.nonce" } } },
       // { "$set": { "_nonce": nonce } }, // optionally directly set the nonce
       // 3-byte randomly initialised 'counter'
