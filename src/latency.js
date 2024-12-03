@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.3.8"
+ *  Version: "0.3.9"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.3.8" };
+   let __script = { "name": "latency.js", "version": "0.3.9" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m`);
 
    let fomatted = duration =>
@@ -97,14 +97,13 @@
       t1 = process.hrtime(t0);
    }
 
-   let { 'attr': { durationMillis } = {}
-      } = db.adminCommand(
+   let [{ 'attr': { durationMillis } = {} }] = db.adminCommand(
          { "getLog": "global" }
       ).log.map(
          EJSON.parse
       ).filter(
          log => log?.attr?.command?.comment == filter
-      )[0];
+      );
 
    try {
       t2 = process.hrtime();
