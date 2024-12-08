@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.3.9"
+ *  Version: "0.3.10"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.3.9" };
+   let __script = { "name": "latency.js", "version": "0.3.10" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m`);
 
    let fomatted = duration =>
@@ -27,9 +27,9 @@
          "unitDisplay": "short"
       }).format(duration);
 
-   let rtt, t0, t1, t2, t3, totalTime, timestamp,
-   report, tableWidth, spacing = 1, hostLength,
-   timeLength, ping;
+   let rtt, t0, t1, t2, t3, totalTime,
+      timestamp, report, tableWidth, spacing = 1,
+      hostLength, timeLength, ping;
 
    let filter = `Synthetic slow operation at ${performance.now()}`;
    let options = {
@@ -97,7 +97,7 @@
       t1 = process.hrtime(t0);
    }
 
-   let [{ 'attr': { durationMillis } = {} }] = db.adminCommand(
+   let [{ 'attr': { durationMillis = 0 } = {} } = {}] = db.adminCommand(
          { "getLog": "global" }
       ).log.map(
          EJSON.parse
@@ -122,6 +122,8 @@
    hostLength = 'Host:'.length + spacing + hostname.length;
    timeLength = 'Timestamp:'.length + spacing + timestamp.length;
    tableWidth = Math.max(hostLength, timeLength);
+   serverTime = durationMillis - slowms,
+   driverTime = totalTime - durationMillis - rtt,
    report = `\n` +
       `\x1b[1mInternal metrics\x1b[0m\n` +
       `\x1b[33m${'━'.repeat(tableWidth)}\x1b[0m\n` +
@@ -140,9 +142,9 @@
       `\n` +
       `\x1b[1mLatency breakdown\x1b[0m\n` +
       `\x1b[33m${'━'.repeat(tableWidth)}\x1b[0m\n` +
-      `\x1b[32m${'Server execution time:'}\x1b[0m${fomatted(durationMillis - slowms).padStart(tableWidth - 'Server execution time:'.length)}\n` +
+      `\x1b[32m${'Server execution time:'}\x1b[0m${fomatted(serverTime).padStart(tableWidth - 'Server execution time:'.length)}\n` +
       `\x1b[32m${'Network latency (RTT):'}\x1b[0m${fomatted(rtt).padStart(tableWidth - 'Network latency (RTT):'.length)}\n` +
-      `\x1b[32m${'Driver execution time:'}\x1b[0m${fomatted(totalTime - durationMillis - rtt).padStart(tableWidth - 'Driver execution time:'.length)}\n` +
+      `\x1b[32m${'Driver execution time:'}\x1b[0m${fomatted(driverTime).padStart(tableWidth - 'Driver execution time:'.length)}\n` +
       `\x1b[33m${'═'.repeat(tableWidth)}\x1b[0m\n`;
    console.log(report);
 })();
