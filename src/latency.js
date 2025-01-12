@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.3.10"
+ *  Version: "0.3.11"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
    /*
     *  main
     */
-   let __script = { "name": "latency.js", "version": "0.3.10" };
+   let __script = { "name": "latency.js", "version": "0.3.11" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m`);
 
    let fomatted = duration =>
@@ -66,16 +66,16 @@
       console.log('\x1b[31m[WARN] failed to aquire the hostname:\x1b[0m', error);
    }
 
-   let [{
-      'tags': {
+   let [
+      { 'tags': {
          workloadType = '-',
          availabilityZone = '-',
          diskState = '-',
          nodeType = '-',
          provider = '-',
          region = '-'
-      } = {}
-   } = {}] = rs.conf().members.filter(
+      } = {} } = {}
+   ] = rs.conf().members.filter(
       ({ host, arbiterOnly, hidden, 'horizons': { PUBLIC } = {} } = {}) => {
          return (host == hostname || PUBLIC == hostname) && !arbiterOnly && !hidden;
    });
@@ -98,12 +98,12 @@
    }
 
    let [{ 'attr': { durationMillis = 0 } = {} } = {}] = db.adminCommand(
-         { "getLog": "global" }
-      ).log.map(
-         EJSON.parse
-      ).filter(
-         log => log?.attr?.command?.comment == filter
-      );
+      { "getLog": "global" }
+   ).log.map(
+      EJSON.parse
+   ).filter(
+      log => log?.attr?.command?.comment == filter
+   );
 
    try {
       t2 = process.hrtime();
@@ -122,8 +122,8 @@
    hostLength = 'Host:'.length + spacing + hostname.length;
    timeLength = 'Timestamp:'.length + spacing + timestamp.length;
    tableWidth = Math.max(hostLength, timeLength);
-   serverTime = durationMillis - slowms,
-   driverTime = totalTime - durationMillis - rtt,
+   serverTime = durationMillis - slowms;
+   driverTime = totalTime - durationMillis - rtt;
    report = `\n` +
       `\x1b[1mInternal metrics\x1b[0m\n` +
       `\x1b[33m${'━'.repeat(tableWidth)}\x1b[0m\n` +
