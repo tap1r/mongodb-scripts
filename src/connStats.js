@@ -20,7 +20,7 @@
    // Usage: mongosh [connection options] --quiet connStats.js
 
    let aggOpts = {
-         "comment": "connStats.js v0.1.3"
+         "comment": "connStats.js v0.1.4"
       },
       pipeline = [
          { "$currentOp": {
@@ -229,3 +229,5 @@
    // console.log(results);
    db.getSiblingDB('admin').aggregate(pipeline, aggOpts).forEach(console.log);
 })();
+
+// EOF
