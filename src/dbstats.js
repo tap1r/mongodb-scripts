@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.15"
+ *  Version: "0.11.16"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -61,13 +61,13 @@
  *           compaction: <1|0|-1> // TBA
  *        }
  *     },
- *     "limit": { // TBA
- *        "dataSize": <int>,
- *        "storageSize": <int>,
- *        "freeStorageSize": <int>,
- *        "reuse": <int>,
- *        "compression": <int>,
- *        "objects": <int>
+ *     limit: { // TBA
+ *        dataSize: <int>,
+ *        storageSize: <int>,
+ *        freeStorageSize: <int>,
+ *        reuse: <int>,
+ *        compression: <int>,
+ *        objects: <int>
  *     },
  *     output: {
  *        format: <'table'|'nsTable'|'json'|'html'>,
@@ -131,8 +131,9 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
+// (async(db, options, dbstats = {}) => {
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.11.15" };
+   let __script = { "name": "dbstats.js", "version": "0.11.16" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -230,16 +231,16 @@
       },
       "topology": { // TBA
          "discover": true, // [true|false]
-         "replica": 'summary', // ['summary'|'expanded']
-         "sharded": 'summary' // ['summary'|'expanded']
+         "replica": "summary", // ['summary'|'expanded']
+         "sharded": "summary" // ['summary'|'expanded']
       }
    };
    typeof options === 'undefined' && (options = optionsDefaults);
    let filterOptions = { ...optionsDefaults.filter, ...options.filter };
    let sortOptions = { ...optionsDefaults.sort, ...options.sort };
    let outputOptions = { ...optionsDefaults.output, ...options.output };
-   let limitOptions = { ...optionsDefaults.limit, ...options.limit };
-   let topologyOptions = { ...optionsDefaults.topology, ...options.topology };
+   // let limitOptions = { ...optionsDefaults.limit, ...options.limit };
+   // let topologyOptions = { ...optionsDefaults.topology, ...options.topology };
 
    /*
     *  Global defaults
@@ -953,6 +954,7 @@
 
    dbStats = await main();
    // return dbStats;
-})(dbStats = {});
+// })(db, options);
+})();
 
 // EOF
