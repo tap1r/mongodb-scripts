@@ -1,6 +1,6 @@
 /*
  *  Name: "modifiedCountDocumentsByKey.js"
- *  Version: "0.1.2"
+ *  Version: "0.1.3"
  *  Description: "overloaded countDocuments mongosh helper"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -26,7 +26,7 @@ Object.getPrototypeOf(db.getSiblingDB('$').getCollection('_')).countDocuments = 
       // pass the modified query to the shadow method
       return this[_fn](query, options, dbOptions);
    }
-   // beware as existing shell decorators are not preserved with overloading
+   // beware as existing mongosh decorators are not preserved with overloading
    return modifiedCountDocumentsByKey;
 })();
 
@@ -57,3 +57,5 @@ Object.getPrototypeOf(db.getSiblingDB('$').getCollection('_')).countDocuments = 
    console.log('Original count yields', countShadow, 'in', rtt1, 'ms');
    console.log('Overloaded count yields', countOverload, 'in', rtt2, 'ms');
 })();
+
+// EOF
