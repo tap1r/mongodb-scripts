@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.25"
+ *  Version: "0.6.26"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,12 +14,12 @@
     *  Save libs to the $MDBLIB or other valid search path
     */
 
-   let __script = { "name": "fuzzer.js", "version": "0.6.25" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.26" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
        */
-      let __lib = { "name": "mdblib.js", "paths": null, "path": null };
+      const __lib = { "name": "mdblib.js", "paths": null, "path": null };
       if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
          __lib.paths = [_getEnv('MDBLIB'), `${_getEnv('HOME')}/.mongodb`, '.'];
          __lib.path = `${__lib.paths.find(path => fileExists(`${path}/${__lib.name}`))}/${__lib.name}`;
@@ -42,11 +42,11 @@
     *  User defined parameters
     */
 
-   let dbName = 'database',         // database name
+   const dbName = 'database',       // database name
       collName = 'collection',      // collection name
       totalDocs = $getRandExp(3.5), // number of documents to generate per namespace
       dropNamespace = false,        // drop collection prior to generating data
-      dropIndexes = true,           // recreate indexes to update creation options
+      dropIndexes = false,          // recreate indexes to update creation options
       compressor = 'best',          // collection block compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
       idxCompressor = 'default',    // index prefix compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
       // compressionOptions = -1,   // [-1|0|1|2|3|4|5|6|7|8] compression level
@@ -65,7 +65,7 @@
          "w": (isReplSet() || isSharded()) ? "majority" : 1,
          "j": false
       };
-   let indexPrefs = { /* build index preferences */
+   const indexPrefs = { /* build index preferences */
          "build": true,   // [true|false]
          "order": "post", // ["pre"|"post"] collection population
          "commitQuorum": (writeConcern.w == 0) ? 1 : writeConcern.w
@@ -100,7 +100,7 @@
          "schemas": [],
          "ratios": [7, 2, 1]
       };
-   let sharding = true,
+   const sharding = true,
       shardedOptions = {
          "key": {
             "string": "hashed"
@@ -112,7 +112,7 @@
          // "timeseries": tsOptions, // not required after initial collection creation
          "reShard": true
       };
-   let indexes = [ /* index definitions */
+   const indexes = [ /* index definitions */
          { "date": -1 },
          { "language": 1, "schema": 1 },
          { "random": 1 },
@@ -163,11 +163,10 @@
     *  Global defaults
     */
 
-   let namespace = db.getSiblingDB(dbName).getCollection(collName),
-      sampleSize = 8, docSize = 0;
-      totalBatches = 1, residual = 0,
-      now = new Date().getTime(),
-      timestamp = $floor(now / 1000.0);
+   const namespace = db.getSiblingDB(dbName).getCollection(collName);
+   const now = new Date().getTime();
+   const timestamp = $floor(now / 1000.0);
+   let sampleSize = 8, docSize = 0, totalBatches = 1, residual = 0;
 
    fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
    sampleSize *= sampleSize;
@@ -183,12 +182,12 @@
       for (let i = 0; i < sampleSize; ++i)
          docSize += bsonsize(genDocument(fuzzer, timestamp));
 
-      let avgSize = $floor(docSize / sampleSize);
+      const avgSize = $floor(docSize / sampleSize);
       if (avgSize > bsonMax * 0.95)
          console.log(`\n[Warning] The average document size of ${avgSize} bytes approaches or exceeeds the BSON max size of ${bsonMax} bytes`);
       console.log(`\nSampling ${sampleSize} document${(sampleSize === 1) ? '' : 's'} each with BSON size averaging ${avgSize} byte${(avgSize === 1) ? '' : 's'}`);
-      let batchSize = (() => {
-         let sampledSize = $floor(bsonMax * 0.95 / avgSize);
+      const batchSize = (() => {
+         const sampledSize = $floor(bsonMax * 0.95 / avgSize);
          // return (maxWriteBatchSize < sampledSize) ? maxWriteBatchSize : sampledSize;
          return (1000 < sampledSize) ? 1000 : sampledSize;
       })();
@@ -225,8 +224,8 @@
 
       // redistribute chunks if required
       if (isSharded() && (shardedOptions.reShard) && fCV(5.0)) {
-         let resharding = async() => {
-            let numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
+         const resharding = async() => {
+            const numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
             await db.adminCommand({
                "reshardCollection": `${dbName}.${collName}`,
                // The new shard key cannot have a uniqueness constraint
@@ -238,7 +237,7 @@
                // writeConcernMajorityJournalDefault must be true
             });
          };
-         let rebalancingOps = () => {
+         const rebalancingOps = () => {
             return db.getSiblingDB('admin').aggregate([
                { "$currentOp": {} },
                { "$match": {
@@ -365,8 +364,8 @@
                $genRandHex(16)
             );
       }
-      let date = new Date(now + secondsOffset * 1000);
-      let ts = (typeof process !== 'undefined') // MONGOSH-930
+      const date = new Date(now + secondsOffset * 1000);
+      const ts = (typeof process !== 'undefined') // MONGOSH-930
              ? new Timestamp({ "t": timestamp + secondsOffset, "i": 0 })
              : new Timestamp(timestamp + secondsOffset, 0);
       schemas = new Array();
@@ -721,7 +720,7 @@
 
          if (sharding && isSharded() && db.getSiblingDB(dbName).getCollection(collName).exists()) {
             console.log(`\nSharding namespace with options: ${tojson(shardedOptions)}`);
-            let numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments({});
+            const numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments({});
             console.log(`with initial chunks: ${numInitialChunks}`);
             try {
                (serverVer() < 6.0) && (sh.enableSharding(dbName).ok);
@@ -758,15 +757,15 @@
          if (indexes.length > 0) {
             console.log(`\nBuilding index${(indexes.length === 1) ? '' : 'es'} with collation locale "${collation.locale}" with commit quorum "${(fCV(4.4) && (isReplSet() || isSharded())) ? indexPrefs.commitQuorum : 'disabled'}":`);
             indexes.forEach(index => console.log(`\tkey: ${tojson(index)}`));
-            let indexing = () => {
-               let options = (fCV(4.4) && (isReplSet() || isSharded()))
+            const indexing = () => {
+               const options = (fCV(4.4) && (isReplSet() || isSharded()))
                            ? [indexes, indexOptions, indexPrefs.commitQuorum]
                            : [indexes, indexOptions];
 
                return namespace.createIndexes(...options);
             }
-            let idxResult = indexing();
-            let idxMsg = () => {
+            const idxResult = indexing();
+            const idxMsg = () => {
                if (typeof idxResult.errmsg !== 'undefined')
                   return `Indexing operation failed: ${idxResult.errmsg}`;
                else if (typeof idxResult.note !== 'undefined') 
@@ -791,8 +790,8 @@
 
                return namespace.createIndexes(...sOptions);
             }
-            let sIdxResult = sIndexing();
-            let sidxMsg = () => {
+            const sIdxResult = sIndexing();
+            const sidxMsg = () => {
                if (typeof sIdxResult.errmsg !== 'undefined')
                   return `Special indexing operation failed: ${sIdxResult.errmsg}`;
                else if (typeof sIdxResult.note !== 'undefined')
@@ -817,10 +816,10 @@
       console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} document${(totalDocs === 1) ? '' : 's'} in ${totalBatches} batch${(totalBatches === 1) ? '' : 'es'}:`);
       for (let i = 0; i < totalBatches; ++i) {
          if (i == totalBatches - 1 && residual > 0) batchSize = residual;
-         let bulk = namespace.initializeUnorderedBulkOp();
+         const bulk = namespace.initializeUnorderedBulkOp();
          for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument(fuzzer, timestamp))
-         let result = bulk.execute(writeConcern);
-         let bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
+         const result = bulk.execute(writeConcern);
+         const bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
          console.log(`\t[Batch ${1 + i}/${totalBatches}] bulk inserted ${bInserted} document${(bInserted === 1) ? '' : 's'}`);
       }
 
