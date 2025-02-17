@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.2"
+    *  Version: "0.2.3"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,7 +25,7 @@
          /*
           *  opt-in version of db.serverStatus()
           */
-         let serverStatusOptionsDefaults = { // multiversion compatibile
+         let serverStatusOptionsDefaults = { // multiversion compatible
             "activeIndexBuilds": false,
             "asserts": false,
             "batchedDeletes": false,
@@ -495,17 +495,17 @@
       let tableWidth = 54;
       let tableTitle = 'Real-time congestion monitor';
       let titleSpacing = (tableWidth - tableTitle.length) / 2;
+      process.stdout.write('\x1b[?25l;1049h]'); // disable the console cursor and enable alternate buffer 
       console.clear();
       console.log('┏' + '━'.repeat(titleSpacing - 1) + '┫' + tableTitle + '┣' + '━'.repeat(titleSpacing - 1) + '┓');
       metrics.forEach(() => {
          console.log('┃'+ ' '.repeat(tableWidth) + '┃'); 
       });
       console.log('┗'+ '━'.repeat(tableWidth) + '┛');
-      process.stdout.write('\x1b[?25l'); // disable the console cursor
       Promise.allSettled( // do not await to background thread
          // begin rendering EQ bars
          metrics.map(({ eq }) => eq.draw())
-      ).finally(console.error);
+      ).finally(process.stdout.write('\x1b[?1049l;25h]')); // disable alternate buffer and re-enable the console cursor
 
       while (true) { // refresh stats
          vitals = await congestionMonitor();
@@ -513,5 +513,7 @@
       }
    }
 
-   await main().finally(process.stdout.write('\x1b[?25h')); // re-enable the console cursor
+   await main().finally(console.log);
 })();
+
+// EOF
