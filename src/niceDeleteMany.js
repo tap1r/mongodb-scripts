@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.1.7"
+    *  Version: "0.1.8"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -53,15 +53,15 @@
     *  End user defined options
     */
 
-   let __script = { "name": "niceDeleteMany.js", "version": "0.1.7" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.1.8" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
    async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
       // _id curation (employs blocking aggregation operators)
-      let session = db.getMongo().startSession(sessionOpts);
-      let namespace = session.getDatabase(dbName).getCollection(collName);
-      let buckets = Math.pow(2, 31) - 1, // max 32bit Int
+      const session = db.getMongo().startSession(sessionOpts);
+      const namespace = session.getDatabase(dbName).getCollection(collName);
+      const buckets = Math.pow(2, 31) - 1, // max 32bit Int
          aggOpts = {
             "allowDiskUse": true,
             "collation": collation,
@@ -114,13 +114,13 @@
 
    function countIds(filter = {}) {
       // cheaper count for validation purposes
-      let session = db.getMongo().startSession({
+      const session = db.getMongo().startSession({
          "causalConsistency": true,
          "readConcern": { "level": "local" },
          "mode": "primaryPreferred"
       });
-      let namespace = session.getDatabase(dbName).getCollection(collName);
-      let pipeline = [
+      const namespace = session.getDatabase(dbName).getCollection(collName);
+      const pipeline = [
             { "$match": filter },
             { "$group": {
                "_id": null,
@@ -143,7 +143,7 @@
    }
 
    async function deleteManyTask({ IDs, bucketId } = {}, sessionOpts = {}) {
-      let sleepIntervalMS = await admissionControl();
+      const sleepIntervalMS = await admissionControl();
       while (sleepIntervalMS == 'wait') {
          console.log('\t\t...batch', bucketId, 'is awaiting scheduling due to back pressure');
          sleep(Math.floor(500 + Math.random() * 500));
@@ -151,9 +151,9 @@
       };
       console.log('\t\t...batch', bucketId, 'pre-sleeping for', sleepIntervalMS, 'ms');
       sleep(sleepIntervalMS);
-      let session = db.getMongo().startSession(sessionOpts);
-      let namespace = session.getDatabase(dbName).getCollection(collName);
-      let txnOpts = {
+      const session = db.getMongo().startSession(sessionOpts);
+      const namespace = session.getDatabase(dbName).getCollection(collName);
+      const txnOpts = {
          // "readConcern": { "level": "local" },
          // "writeConcern": {
          //    "w": "majority",
@@ -161,10 +161,10 @@
          // },
          "comment": "Simulating deleteMany() workload via niceDeleteMany.js"
       };
-      let deleteManyFilter = { "_id": { "$in": IDs } };
-      let deleteManyOpts = { "collation": collation };
+      const deleteManyFilter = { "_id": { "$in": IDs } };
+      const deleteManyOpts = { "collation": collation };
       let deletedCount = 0;
-      let deleteMany = async() => {
+      const deleteMany = async() => {
          return await namespace.deleteMany(deleteManyFilter, deleteManyOpts).deletedCount;
       }
       if (safeguard) {
@@ -195,7 +195,7 @@
          /*
           *  opt-in version of db.serverStatus()
           */
-         let serverStatusOptionsDefaults = { // multiversion compatibile
+         const serverStatusOptionsDefaults = { // multiversion compatible
             "activeIndexBuilds": false,
             "asserts": false,
             "batchedDeletes": false,
@@ -401,8 +401,8 @@
             return (this.cacheEvictions || this.dirtyCacheEvictions || this.dirtyUpdatesCacheEvictions);
          },
          get cacheHitRatio() {
-            let hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
-            let missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
+            const hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
+            const missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
             return Number.parseFloat((100 * (hitBytes - missBytes) / hitBytes).toFixed(2));
          },
          get cacheHitStatus() {
@@ -411,8 +411,8 @@
                  : 'medium';
          },
          get cacheMissRatio() {
-            let hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
-            let missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
+            const hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
+            const missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
             return Number.parseFloat((100 * (1 - (hitBytes - missBytes) / hitBytes)).toFixed(2));
          },
          get cacheMissStatus() {
@@ -482,19 +482,19 @@
          //    }
          // v8.0 see db.serverStats().queues.execution
          get wtReadTicketsUtil() {
-            let { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
+            const { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
             return Number.parseFloat(((out / totalTickets) * 100).toFixed(2));
          },
          get wtReadTicketsAvail() {
-            let { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
+            const { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
             return Number.parseFloat(((available / totalTickets) * 100).toFixed(2));
          },
          get wtWriteTicketsUtil() {
-            let { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
+            const { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
             return Number.parseFloat(((out / totalTickets) * 100).toFixed(2));
          },
          get wtWriteTicketsAvail() {
-            let { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
+            const { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
             return Number.parseFloat(((available / totalTickets) * 100).toFixed(2));
          },
          get wtReadTicketsStatus() {
@@ -508,7 +508,7 @@
                  : 'medium';
          },
          get activeShardMigrations() {
-            let { currentMigrationsDonating, currentMigrationsReceiving } = this.serverStatus.tenantMigrations;
+            const { currentMigrationsDonating, currentMigrationsReceiving } = this.serverStatus.tenantMigrations;
             return (currentMigrationsDonating > 0 || currentMigrationsReceiving > 0);
          },
          get activeFlowControl() {
@@ -532,7 +532,7 @@
                  : 'medium';
          },
          get activeReplLag() { // calculate the highest repl-lag from healthy members
-            let opTimers = this.rsStatus.members.map(({
+            const opTimers = this.rsStatus.members.map(({
                stateStr,
                health,
                optimeDate
@@ -569,7 +569,7 @@
        */
 
       vitals = await congestionMonitor();
-      let {
+      const {
          cacheStatus,
          dirtyStatus,
          dirtyUpdatesStatus,
@@ -599,14 +599,14 @@
    }
 
    async function* asyncThreadPool(method = () => {}, threads = [], poolSize = 1, sessionOpts = {}) {
-      let executing = new Set();
+      const executing = new Set();
       async function consume() {
-         let [threadPromise, thread] = await Promise.race(executing);
+         const [threadPromise, thread] = await Promise.race(executing);
          executing.delete(threadPromise);
          return thread;
       }
 
-      for await (let thread of threads) {
+      for await (const thread of threads) {
          /*
           *  Wrap method() in an async fn to ensure we get a promise.
           *  Then expose such promise, so it's possible to later reference
@@ -616,7 +616,7 @@
          msg = banner + msg;
          console.clear();
          console.log(msg);
-         let threadPromise = (async() => method(thread, sessionOpts))().then(
+         const threadPromise = (async() => method(thread, sessionOpts))().then(
             thread => [threadPromise, thread]
          );
          executing.add(threadPromise);
@@ -628,11 +628,11 @@
 
    async function main() {
       vitals = await congestionMonitor();
-      let numCores = vitals.numCores;
-      let concurrency = (numCores > 4) ? numCores : 4; // see https://www.mongodb.com/docs/manual/reference/parameters/#mongodb-parameter-param.wiredTigerConcurrentWriteTransactions
-      let bucketSizeLimit = 100; // aligns with SPM-2227
-      let readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // support monotonic writes
-      let readPreference = {
+      const numCores = vitals.numCores;
+      const concurrency = (numCores > 4) ? numCores : 4; // see https://www.mongodb.com/docs/manual/reference/parameters/#mongodb-parameter-param.wiredTigerConcurrentWriteTransactions
+      const bucketSizeLimit = 100; // aligns with SPM-2227
+      const readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // support monotonic writes
+      const readPreference = {
          "mode": "nearest", // offload the bucket generation to a less busy node
          "tags": [ // Atlas friendly defaults
             { "nodeType": "READ_ONLY", "diskState": "READY" },
@@ -642,7 +642,7 @@
             { }
          ]
       };
-      let sessionOpts = {
+      const sessionOpts = {
          "causalConsistency": true,
          "readConcern": readConcern,
          "readPreference": readPreference,
@@ -656,8 +656,8 @@
       }
       console.clear();
       console.log(banner);
-      let deletionList = getIds(filter, bucketSizeLimit, sessionOpts);
-      let { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
+      const deletionList = getIds(filter, bucketSizeLimit, sessionOpts);
+      const { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
       if (initialEmptyBatch === true) {
          console.log('\tNo matching documents found to match the filter, double-check the namespace and filter');
       } else {
@@ -665,16 +665,16 @@
          let msg = `\nForking ${initialBatch.bucketsTotal} batches of ${initialBatch.bucketSizeLimit} documents with concurrency execution of ${concurrency} to delete ${initialBatch.IDsTotal} documents`;
          banner += msg;
          console.log(msg);
-         for await (let [bucketId, deletedCount] of asyncThreadPool(deleteManyTask, [initialBatch], concurrency, sessionOpts)) {
+         for await (const [bucketId, deletedCount] of asyncThreadPool(deleteManyTask, [initialBatch], concurrency, sessionOpts)) {
             console.log('\t\t...batch', bucketId, 'deleted', deletedCount, 'documents');
          }
          // remaining batches
-         for await (let [bucketId, deletedCount] of asyncThreadPool(deleteManyTask, deletionList, concurrency, sessionOpts)) {
+         for await (const [bucketId, deletedCount] of asyncThreadPool(deleteManyTask, deletionList, concurrency, sessionOpts)) {
             console.log('\t\t...batch', bucketId, 'deleted', deletedCount, 'documents');
          }
       }
       console.log(`\nValidating deletion results ...please wait\n`);
-      let finalCount = countIds(filter);
+      const finalCount = countIds(filter);
       if (safeguard) {
          console.log('Simulation safeguard is enabled, no deletions were actually performed, but since you asked:\n');
       }
