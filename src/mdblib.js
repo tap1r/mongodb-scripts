@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.11.13"
+ *  Version: "0.12.0"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,7 +11,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.11.10"
+      "version": "0.12.0"
 });
 
 /*
@@ -87,10 +87,10 @@ if (typeof Object.prototype.entries === 'undefined') {
    /*
     *  Add to legacy shell
     */
-   Object.entries = obj => {
-      let ownProps = Object.keys(obj),
-         i = ownProps.length,
-         entries = new Array(i); // preallocate the Array
+   Object.getPrototypeOf(Object).entries = obj => {
+      const ownProps = Object.keys(obj);
+      let i = ownProps.length;
+      let entries = new Array(i); // preallocate the Array
       while (i--)
          entries[i] = [ownProps[i], obj[ownProps[i]]];
 
@@ -272,10 +272,12 @@ function isSharded() {
    } catch(error) {
       sharded = false;
    }
-   let proc = (serverStatus().ok) ? serverStatus().process
+
+   const proc = (serverStatus().ok) ? serverStatus().process
             : (sharded) ? 'mongos'
             : 'unknown';
-   return proc == 'mongos';
+
+   return proc === 'mongos';
 }
 
 function getDBNames(dbFilter = /^.+/) {
@@ -289,18 +291,18 @@ function getDBNames(dbFilter = /^.+/) {
                            ? true
                            : false
    };
-   let options = {
+   const options = {
       "readPreference": (typeof readPref !== 'undefined') ? readPref
                       : (hello().secondary) ? 'secondaryPreferred'
                       : 'primaryPreferred'
    };
-   let filterOptions = 'i';
-   let filterRegex = new RegExp(dbFilter, filterOptions);
-   let filter = { "name": filterRegex };
-   let restrictedNamespaces = (isAtlasPlatform('serverless')) ? ['admin', 'config', 'local']
+   const filterOptions = 'i';
+   const filterRegex = new RegExp(dbFilter, filterOptions);
+   const filter = { "name": filterRegex };
+   const restrictedNamespaces = (isAtlasPlatform('serverless')) ? ['admin', 'config', 'local']
                             : (isAtlasPlatform('sharedTier')) ? ['admin', 'config', 'local']
                             : [];
-   let comment = `list databases with ${__lib.name} v${__lib.version}`;
+   const comment = `list databases with ${__lib.name} v${__lib.version}`;
    if (!(isAtlasPlatform('serverless') || isAtlasPlatform('sharedTier'))) {
       // ignoring filter on unsupported platforms
       command.filter = filter;
@@ -310,8 +312,9 @@ function getDBNames(dbFilter = /^.+/) {
       command.comment = comment;
    }
    slaveOk(options.readPreference);
-   let dbs = (shellVer() >= 2.0 && typeof process !== 'undefined') ? db.getSiblingDB('admin').runCommand(command, options)
+   const dbs = (shellVer() >= 2.0 && typeof process !== 'undefined') ? db.getSiblingDB('admin').runCommand(command, options)
            : db.getSiblingDB('admin').runCommand(command);
+
    return dbs.databases.map(({ name }) => name).filter(namespace => !restrictedNamespaces.includes(namespace));
 };
 
@@ -319,21 +322,21 @@ function getAllNonSystemNamespaces() { // TBA
    /*
     *  getAllNonSystemNamespaces
     */
-   let listDbOpts = [{
+   const listDbOpts = [{
       "listDatabases": 1,
       "filter": { "name": /(?:^(?!(admin|config|local)$).+)/ },
       "nameOnly": true,
       "authorizedDatabases": true
    }];
    // db.runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true });
-   let listColOpts = [{
+   const listColOpts = [{
          "type": /^(?:collection|timeseries)$/,
          "name": /(?:^(?!(system\..+|replset\..+)$).+)/
       },
       (typeof process !== 'undefined') ? { "nameOnly": true } : true,
       true
    ];
-   let listViewOpts = [{
+   const listViewOpts = [{
          "type": "view",
          "name": /(?:^(?!system\..+$).+)/
       },
@@ -348,8 +351,8 @@ function getAllNonSystemCollections() { // TBA
    /*
     *  getAllNonSystemCollections
     */
-   // let systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/; // required for less privileged users
-   // let systemFilter = /(?:^(?!(system\..+|replset\..+)&&(system\.profile|system\.sessions|system\.views)$).+)/;
+   // const systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/; // required for less privileged users
+   // const systemFilter = /(?:^(?!(system\..+|replset\..+)&&(system\.profile|system\.sessions|system\.views)$).+)/;
    return null;
 }
 
@@ -375,7 +378,8 @@ function serverVer(ver) {
    /*
     *  Evaluate server version
     */
-   let svrVer = () => +db.version().match(/^\d+\.\d+/);
+   const svrVer = () => +db.version().match(/^\d+\.\d+/);
+
    return (typeof ver !== 'undefined' && ver <= svrVer()) ? true
         : (typeof ver !== 'undefined' && ver >  svrVer()) ? false
         : svrVer();
@@ -385,22 +389,23 @@ function fCV(ver) { // updated for shared tier compatibility
    /*
     *  Evaluate feature compatibility version
     */
-   let cmd;
+   let cmd = {};
    try {
       cmd = db.adminCommand({ "getParameter": 1, "featureCompatibilityVersion": 1 });
    } catch(error) {
       // console.error(`\x1b[31m[WARN] cannot obtain fCV from shared tiers or sharded clusters\n${error}\x1b[0m`);
-      cmd = 'incompatible';
+      cmd.ok = 0;
    }
 
-   let featureVer = ver => {
-      return (serverStatus().ok &&serverStatus().process == 'mongod' && cmd != 'incompatible' )
+   const featureVer = ver => {
+      return (serverStatus().ok && serverStatus().process == 'mongod' && cmd.ok )
            ? +db.adminCommand({
                "getParameter": 1,
                "featureCompatibilityVersion": 1
              }).featureCompatibilityVersion.version
            : serverVer(ver);
    }
+
    return (typeof ver !== 'undefined' && ver <= featureVer()) ? true
         : (typeof ver !== 'undefined' && ver >  featureVer()) ? false
         : featureVer();
@@ -410,7 +415,8 @@ function shellVer(ver) {
    /*
     *  Evaluate shell version
     */
-   let shell = () => +version().match(/^\d+\.\d+/);
+   const shell = () => +version().match(/^\d+\.\d+/);
+
    return (typeof ver !== 'undefined' && ver <= shell()) ? true
         : (typeof ver !== 'undefined' && ver >  shell()) ? false
         : shell();
@@ -450,6 +456,7 @@ function hostInfo() {
     */
    let hostInfo = {};
    try {
+      db.hostInfo(); // required by legacy mongo to capture server exception
       hostInfo = db.hostInfo();
    } catch(error) {
       // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.hostInfo()\n${error}\x1b[0m`);
@@ -474,9 +481,14 @@ function serverCmdLineOpts() {
     */
    let serverCmdLineOpts = {};
    try {
+      db.serverCmdLineOpts(); // required by legacy mongo to capture server exception
       serverCmdLineOpts = db.serverCmdLineOpts();
    } catch(error) {
       // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.serverCmdLineOpts()\n${error}\x1b[0m`);
+      serverCmdLineOpts = { "parsed": { "storage": { "dbPath": "unknown" } } };
+   }
+
+   if (typeof serverCmdLineOpts.parsed.storage === 'undefined') {
       serverCmdLineOpts = { "parsed": { "storage": { "dbPath": "unknown" } } };
    }
 
@@ -487,18 +499,20 @@ function isAtlasPlatform(type = null) {
    /*
     *  Evaluate Atlas deployment platform type
     */
-   let { 'msg': helloMsg = false } = hello();
-   let isMongos = (helloMsg == 'isdbgrid') ? true : false;
-   let { hostname = false } = hostInfo().system;
-   let { atlasVersion = false } = serverStatus();
+   const { 'msg': helloMsg = false } = hello();
+   const isMongos = (helloMsg == 'isdbgrid') ? true : false;
+   const { hostname = false } = hostInfo().system;
+   const { atlasVersion = false } = serverStatus();
    let isSharedTier = false;
    try {
       isSharedTier = (db.hostInfo().ok != 1);
    } catch(e) {
       isSharedTier = (e.codeName == 'AtlasError') ? true : false;
    }
-   let atlasDomain = new RegExp(/\.mongodb\.net$/);
-   let isAtlas = (atlasVersion || atlasDomain.test(hostname)) ? true : false;
+
+   const atlasDomain = new RegExp(/\.mongodb\.net$/);
+   const isAtlas = (atlasVersion || atlasDomain.test(hostname)) ? true : false;
+
    return (type === null && isMongos && isAtlas && hostname != 'serverless') ? 'dedicatedShardedCluster'
         : (type == 'dedicatedShardedCluster' && isMongos && isAtlas && hostname != 'serverless') ? true
         : (type === null && !isMongos && isAtlas && isSharedTier) ? 'sharedTier'
@@ -514,7 +528,7 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
    /*
     *  opt-in version of db.serverStatus()
     */
-   let serverStatusOptionsDefaults = {
+   const serverStatusOptionsDefaults = {
       "activeIndexBuilds": false,
       "asserts": false,
       "batchedDeletes": false,
@@ -572,7 +586,7 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
       "wiredTiger": false,
       "writeBacksQueued": false
    };
-   let options = {
+   const options = {
       "readPreference": (typeof readPref !== 'undefined') ? readPref
                       : (hello().secondary) ? 'secondaryPreferred'
                       : 'primaryPreferred'
@@ -653,13 +667,12 @@ const dec128MinVal = -10 * Math.pow(2, 110);
 const dec128MaxVal = 10 * Math.pow(2, 110) - 1;
 
 function compactionHelper(type = 'collection', storageSize = 4096, freeStorageSize = 0) {
-   let compactCollectionThreshold = 0.2, // 20% reusable collection bytes
-      compactIndexThreshold = 0.5,       // 50% reusable index bytes
-      minSizeBytes = 2097152,            // 2MB as WT ignores anything smaller (revise to 1MB for v8?)
-      syncThreshold = 0.5;               // 50% total dbPath reusable bytes
-
-   let sizeThreshold = storageSize > minSizeBytes,
-      freeThreshold = freeStorageSize / storageSize;
+   const compactCollectionThreshold = 0.2; // 20% reusable collection bytes
+   const compactIndexThreshold = 0.5;      // 50% reusable index bytes
+   const minSizeBytes = 2097152;           // 2MB as WT ignores anything smaller (revise to 1MB for v8?)
+   const syncThreshold = 0.5;              // 50% total dbPath reusable bytes
+   const sizeThreshold = storageSize > minSizeBytes;
+   const freeThreshold = freeStorageSize / storageSize;
 
    return (type == 'collection' && sizeThreshold && freeThreshold > compactCollectionThreshold) ? true
         : (type == 'index'      && sizeThreshold && freeThreshold > compactIndexThreshold)      ? true
@@ -698,7 +711,7 @@ function $getRandRegex() {
    /*
     *  generate random regex
     */
-   let regexes = [
+   const regexes = [
       /[a-z]/,
       /[A-Z]/,
       /[0-9]/,
@@ -750,7 +763,7 @@ function $getRandRatioInt(ratios = [1]) {
    /*
     *  generate ratioed random integer
     */
-   let weightedIndex = [];
+   const weightedIndex = [];
    ratios.forEach((ratio, idx) => {
       for (let i = 0; i < ratio; ++i) {
          weightedIndex.push(idx);
@@ -777,7 +790,7 @@ function $genRandStr(len = 1) {
     *  generate random alpha-numeric string
     */
    let res = '';
-   let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+   const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
    for (let i = 0; i < len; ++i) {
       res += chars.charAt($floor($rand() * chars.length));
    }
@@ -789,7 +802,7 @@ function $genRandWord() { // TBA
    /*
     *  generate random word from a dictionary
     */
-   let dict = '/usr/share/dict/words'; // /path/to/dictionary
+   const dict = '/usr/share/dict/words'; // /path/to/dictionary
    let word = '';
 
    return word;
@@ -800,7 +813,7 @@ function $genRandAlpha(len = 1) {
     *  generate random alpha-character string
     */
    let res = '';
-   let chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+   const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
    for (let i = 0; i < len; ++i) {
       res += chars.charAt($getRandInt(0, chars.length));
    }
@@ -812,7 +825,7 @@ function $genRandSymbol() {
    /*
     *  generate random symbol
     */
-   let symbol = '!#%&\'()+,-;=@[]^_`{}~¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ';
+   const symbol = '!#%&\'()+,-;=@[]^_`{}~¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ';
 
    return symbol.charAt($floor($rand() * symbol.length));
 }
@@ -821,7 +834,7 @@ function $genRandCurrency() {
    /*
     *  generate random curreny symbol
     */
-   let currencies = ['$', '€', '₡', '£', '₪', '₹', '¥', '₩', '₦', '₱zł', '₲', '฿', '₴', '₫'];
+   const currencies = ['$', '€', '₡', '£', '₪', '₹', '¥', '₩', '₦', '₱zł', '₲', '฿', '₴', '₫'];
 
    return currencies[$getRandInt(0, currencies.length)];
 }
@@ -830,7 +843,7 @@ function $genArrayElements(len) {
    /*
     *  generate array of random strings
     */
-   let array = [];
+   const array = [];
    for (let i = 0; i < len; ++i) {
       array.push($genRandStr($getRandIntInc(6, 24)));
    }
@@ -842,7 +855,7 @@ function $genArrayStrings(len) {
    /*
     *  generate array of random strings
     */
-   let array = [];
+   const array = [];
    for (let i = 0; i < len; ++i) {
       array.push($genRandStr($getRandIntInc(6, 24)));
    }
@@ -854,7 +867,7 @@ function $genArrayInts(len) {
    /*
     *  generate array of random integers
     */
-   let array = [];
+   const array = [];
    for (let i = 0; i < len; ++i) {
       array.push($getRandIntInc(1, 1000));
    }
@@ -867,7 +880,7 @@ function $genRandIncPareto(min, alpha = 1.161) {
     *  min is the lowest possible value that can be returned
     *  alpha controls the "shape" of the distribution
     */
-   let u = 1.0 - $rand();
+   const u = 1.0 - $rand();
 
    return min / Math.pow(u, (1.0 / alpha));
 }
@@ -877,8 +890,8 @@ function $genRandIntIncPareto(min, max, alpha = 1.161) {
     *  min is the lowest possible value that can be returned
     *  alpha controls the "shape" of the distribution
     */
-   let k = max * (1.0 - $rand()) + min;
-   let v = Math.pow(k, alpha);
+   const k = max * (1.0 - $rand()) + min;
+   const v = Math.pow(k, alpha);
 
    return v + min;
 }
@@ -888,7 +901,7 @@ function $genNormal(mu, sigma) {
     *  mu = mean
     *  sigma = standard deviation
     */
-   let x = Math.sqrt(-2.0 * Math.log($rand())) * Math.cos(Math.PI * 2 * $rand());
+   const x = Math.sqrt(-2.0 * Math.log($rand())) * Math.cos(Math.PI * 2 * $rand());
 
    return x * sigma + mu;
 }
@@ -925,7 +938,7 @@ function $genLuhnNumber(input) {
    }
 
    // Step 3: Calculate the check digit
-   let checkDigit = (10 - (sum % 10)) % 10;
+   const checkDigit = (10 - (sum % 10)) % 10;
 
    // Step 4: Return the input with the check digit appended
    // return inputWithoutLastDigit + checkDigit;
@@ -937,7 +950,7 @@ function $genIin({ iin }) {
     *  basic fake IIN generator
     */
 
-   let countryCode = $getRandCountry()['numeric code'];
+   const countryCode = $getRandCountry()['numeric code'];
    return ((iin[$getRandIntInc(0, (iin.length - 1))]).toString() + countryCode.replace(/^0+/, '') + $getRandInt(0, Math.pow(10, 6))).toString().padEnd(8, '0').substring(0, 8);
 }
 
@@ -954,7 +967,7 @@ function $genRandCardNumber(type = 'rnd', card = '') {
     *  basic fake card generator
     */
 
-   let cards = [
+   const cards = [
       { "type": "amex", "iin": [34, 37], "digits": 15, "weight": 10 },
       { "type": "discover", "iin": [6011, ...$range(644, 649, 1), 65], "digits": 16, "weight": 5 },
       { "type": "mastercard", "iin": [...$range(51, 55, 1), ...$range(2221, 2720, 1)], "digits": 16, "weight": 25 },
@@ -969,8 +982,8 @@ function $genRandCardNumber(type = 'rnd', card = '') {
    card = cards.find(card => card.type == type);
    // Card format = BIN prefix (IIN + country code padded to 8) + PAN (pad to card length -1) + luhn check digit
 
-   let iin = $genIin(card);
-   let pan = $genPan();
+   const iin = $genIin(card);
+   const pan = $genPan();
    return $genLuhnNumber(iin + pan);
 }
 
@@ -989,7 +1002,7 @@ function $getRandCountry() {
     *  return country code
     */
 
-   let codes = [
+   const codes = [
       { "name": "Afghanistan", "alpha-2 code": "AF", "alpha-3 code": "AFG", "numeric code": "004" },
       { "name": "Albania", "alpha-2 code": "AL", "alpha-3 code": "ALB", "numeric code": "008" },
       { "name": "Antarctica", "alpha-2 code": "AQ", "alpha-3 code": "ATA", "numeric code": "010" },
@@ -1293,7 +1306,7 @@ function $bool(chance = 0.5) {
    return $rand() < chance;
 }
 
-function $benford() {
+function $benford() { // TBA
    /*
     *  Benford's law (experimental)
     */
@@ -1365,201 +1378,201 @@ function $collStats(dbName = db.getName(), collName = '') {
    /*
     *  $collStats wrapper
     */
-   let namespace = db.getSiblingDB(dbName).getCollection(collName);
-   let options = {
-         "allowDiskUse": true,
-         "cursor": { "batchSize": 0 },
-         "readConcern": { "level": "local" },
-         "comment": `run by ${__lib.name} sharding compatible $collStats wrapper`
-      },
-      pipeline = [
-         { "$collStats": { "storageStats": { "scale": 1 } } },
-         { "$set": {
-            "storageStats.wiredTiger.creationStrings": {
-               "$arrayElemAt": [{
-                  "$regexFindAll": {
-                     "input": "$storageStats.wiredTiger.creationString",
-                     "regex": /block_compressor=(\w+).+internal_page_max=(\d+).+leaf_page_max=(\d+)/
-                  } },
-                  0
-            ] },
-            "storageStats.indexStats": { "$objectToArray": "$storageStats.indexDetails" }
+   const namespace = db.getSiblingDB(dbName).getCollection(collName);
+   const options = {
+      "allowDiskUse": true,
+      "cursor": { "batchSize": 0 },
+      "readConcern": { "level": "local" },
+      "comment": `run by ${__lib.name} sharding compatible $collStats wrapper`
+   };
+   const pipeline = [
+      { "$collStats": { "storageStats": { "scale": 1 } } },
+      { "$set": {
+         "storageStats.wiredTiger.creationStrings": {
+            "$arrayElemAt": [{
+               "$regexFindAll": {
+                  "input": "$storageStats.wiredTiger.creationString",
+                  "regex": /block_compressor=(\w+).+internal_page_max=(\d+).+leaf_page_max=(\d+)/
+               } },
+               0
+         ] },
+         "storageStats.indexStats": { "$objectToArray": "$storageStats.indexDetails" }
+      } },
+      { "$set": {
+         "storageStats.wiredTiger.compressor": {
+            "$ifNull": [{ "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 0] }, "undef"]
+         },
+         "storageStats.wiredTiger.internalPageSize": {
+            "$multiply": [
+               { "$toInt": {
+                  "$ifNull": [{ "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 1] }, 4]
+               } }, 1024
+         ] },
+         "storageStats.wiredTiger.dataPageSize": {
+            "$multiply": [
+               { "$toInt": {
+                  "$ifNull": [{ "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 2] }, 32]
+               } }, 1024
+         ] },
+         "storageStats.indexes": {
+            "$map": {
+               "input": "$storageStats.indexStats",
+               "as": "indexes",
+               "in": {
+                  "$arrayToObject": [[
+                     { "k": "name", "v": "$$indexes.k" },
+                     { "k": "uri", "v": { "$ifNull": ["$$indexes.v.uri", "statistics:table:index-0-0000000000000000000"] } },
+                     { "k": "file size in bytes", "v": { "$ifNull": ["$$indexes.v.block-manager.file size in bytes", 4096] } },
+                     { "k": "file bytes available for reuse", "v": { "$ifNull": ["$$indexes.v.block-manager.file bytes available for reuse", 0] } },
+                     { "k": "file allocation unit size", "v": { "$ifNull": ["$$indexes.v.block-manager.file allocation unit size", 4096] } }
+         ]] } } },
+         "storageStats.indexDetails.file size in bytes": {
+            "$reduce": {
+               "input": "$storageStats.indexStats",
+               "initialValue": 0,
+               "in": { "$sum": ["$$value", "$$this.v.block-manager.file size in bytes"] }
          } },
-         { "$set": {
-            "storageStats.wiredTiger.compressor": {
-               "$ifNull": [{ "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 0] }, "undef"]
+         "storageStats.indexDetails.file bytes available for reuse": {
+            "$reduce": {
+               "input": "$storageStats.indexStats",
+               "initialValue": 0,
+               "in": { "$sum": ["$$value", "$$this.v.block-manager.file bytes available for reuse"] }
+         } }
+      } },
+      { "$group": {
+         "_id": null,
+         "name": { "$push": "$ns" },
+         "nodes": { "$sum": 1 },
+         "shards": { "$push": "$shard" },
+         "dataSize": { "$sum": "$storageStats.size" },
+         "objects": { "$sum": "$storageStats.count" },
+         "avgObjSize": { "$avg": "$storageStats.avgObjSize" },
+         "orphans": { "$sum": "$storageStats.numOrphanDocs" }, // Available starting in MongoDB 6.0
+         "storageSize": { "$sum": "$storageStats.storageSize" },
+         "freeStorageSize": { "$sum": "$storageStats.wiredTiger.block-manager.file bytes available for reuse" },
+         "compressor": { "$push": "$storageStats.wiredTiger.compressor" },
+         "internalPageSize": { "$push": "$storageStats.wiredTiger.internalPageSize" },
+         "dataPageSize": { "$push": "$storageStats.wiredTiger.dataPageSize" },
+         "uri": { "$push": "$storageStats.wiredTiger.uri" },
+         "file allocation unit size": { "$push": { "$ifNull": ["$storageStats.wiredTiger.block-manager.file allocation unit size", "$storageStats.wiredTiger.internalPageSize"] } },
+         "file bytes available for reuse": { "$push": { "$ifNull": ["$storageStats.wiredTiger.block-manager.file bytes available for reuse", "$storageStats.freeStorageSize"] } },
+         "file size in bytes": { "$push": { "$ifNull": ["$storageStats.wiredTiger.block-manager.file size in bytes", { "$sum": "$storageStats.storageSize" }] } },
+         "nindexes": { "$sum": "$storageStats.nindexes" },
+         "indexes": { "$push": "$storageStats.indexes" },
+         "indexes size in bytes": { "$sum": "$storageStats.indexDetails.file size in bytes" },
+         "indexes bytes available for reuse": { "$sum": "$storageStats.indexDetails.file bytes available for reuse" }
+      } },
+      { "$set": {
+         "name": { 
+            "$regexFind": {
+               "input": { "$arrayElemAt": ["$name", 0] },
+               "regex": /^[^.]+\.(.+)$/
+         } },
+         "wiredTiger": {
+            "block-manager": {
+               "file size in bytes": "$file size in bytes",
+               "file bytes available for reuse": "$file bytes available for reuse",
+               "file allocation unit size": "$file allocation unit size"
             },
-            "storageStats.wiredTiger.internalPageSize": {
-               "$multiply": [
-                  { "$toInt": {
-                     "$ifNull": [{ "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 1] }, 4]
-                  } }, 1024
-            ] },
-            "storageStats.wiredTiger.dataPageSize": {
-               "$multiply": [
-                  { "$toInt": {
-                     "$ifNull": [{ "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 2] }, 32]
-                  } }, 1024
-            ] },
-            "storageStats.indexes": {
-               "$map": {
-                  "input": "$storageStats.indexStats",
-                  "as": "indexes",
-                  "in": {
-                     "$arrayToObject": [[
-                        { "k": "name", "v": "$$indexes.k" },
-                        { "k": "uri", "v": { "$ifNull": ["$$indexes.v.uri", "statistics:table:index-0-0000000000000000000"] } },
-                        { "k": "file size in bytes", "v": { "$ifNull": ["$$indexes.v.block-manager.file size in bytes", 4096] } },
-                        { "k": "file bytes available for reuse", "v": { "$ifNull": ["$$indexes.v.block-manager.file bytes available for reuse", 0] } },
-                        { "k": "file allocation unit size", "v": { "$ifNull": ["$$indexes.v.block-manager.file allocation unit size", 4096] } }
-            ]] } } },
-            "storageStats.indexDetails.file size in bytes": {
-               "$reduce": {
-                  "input": "$storageStats.indexStats",
-                  "initialValue": 0,
-                  "in": { "$sum": ["$$value", "$$this.v.block-manager.file size in bytes"] }
-            } },
-            "storageStats.indexDetails.file bytes available for reuse": {
-               "$reduce": {
-                  "input": "$storageStats.indexStats",
-                  "initialValue": 0,
-                  "in": { "$sum": ["$$value", "$$this.v.block-manager.file bytes available for reuse"] }
-            } }
+            "compressor": "$compressor",
+            "dataPageSize": "$dataPageSize",
+            "internalPageSize": "$internalPageSize",
+            "uri": "$uri",
+            "indexes": "$indexes"
+         },
+         "totalIndexSize": "$indexes size in bytes",
+         "totalIndexBytesReusable": "$indexes bytes available for reuse"
+      } },
+      { "$set": {
+         "name": { "$arrayElemAt": ["$name.captures", 0] },
+         "dataPageSize": {
+            "$reduce": {
+               "input": "$wiredTiger.dataPageSize",
+               "initialValue": { "$arrayElemAt": ["$wiredTiger.dataPageSize", 0] },
+               "in": { "$cond": [{ "$eq": ["$$value", "$$this"] }, "$$value", "mixed"] }
          } },
-         { "$group": {
-            "_id": null,
-            "name": { "$push": "$ns" },
-            "nodes": { "$sum": 1 },
-            "shards": { "$push": "$shard" },
-            "dataSize": { "$sum": "$storageStats.size" },
-            "objects": { "$sum": "$storageStats.count" },
-            "avgObjSize": { "$avg": "$storageStats.avgObjSize" },
-            "orphans": { "$sum": "$storageStats.numOrphanDocs" }, // Available starting in MongoDB 6.0
-            "storageSize": { "$sum": "$storageStats.storageSize" },
-            "freeStorageSize": { "$sum": "$storageStats.wiredTiger.block-manager.file bytes available for reuse" },
-            "compressor": { "$push": "$storageStats.wiredTiger.compressor" },
-            "internalPageSize": { "$push": "$storageStats.wiredTiger.internalPageSize" },
-            "dataPageSize": { "$push": "$storageStats.wiredTiger.dataPageSize" },
-            "uri": { "$push": "$storageStats.wiredTiger.uri" },
-            "file allocation unit size": { "$push": { "$ifNull": ["$storageStats.wiredTiger.block-manager.file allocation unit size", "$storageStats.wiredTiger.internalPageSize"] } },
-            "file bytes available for reuse": { "$push": { "$ifNull": ["$storageStats.wiredTiger.block-manager.file bytes available for reuse", "$storageStats.freeStorageSize"] } },
-            "file size in bytes": { "$push": { "$ifNull": ["$storageStats.wiredTiger.block-manager.file size in bytes", { "$sum": "$storageStats.storageSize" }] } },
-            "nindexes": { "$sum": "$storageStats.nindexes" },
-            "indexes": { "$push": "$storageStats.indexes" },
-            "indexes size in bytes": { "$sum": "$storageStats.indexDetails.file size in bytes" },
-            "indexes bytes available for reuse": { "$sum": "$storageStats.indexDetails.file bytes available for reuse" }
+         "compressor": {
+            "$reduce": {
+               "input": "$wiredTiger.compressor",
+               "initialValue": { "$arrayElemAt": ["$wiredTiger.compressor", 0] },
+               "in": { "$cond": [{ "$eq": ["$$value", "$$this"] }, "$$value", "mixed"] }
          } },
-         { "$set": {
-            "name": { 
-               "$regexFind": {
-                  "input": { "$arrayElemAt": ["$name", 0] },
-                  "regex": /^[^.]+\.(.+)$/
-            } },
-            "wiredTiger": {
-               "block-manager": {
-                  "file size in bytes": "$file size in bytes",
-                  "file bytes available for reuse": "$file bytes available for reuse",
-                  "file allocation unit size": "$file allocation unit size"
-               },
-               "compressor": "$compressor",
-               "dataPageSize": "$dataPageSize",
-               "internalPageSize": "$internalPageSize",
-               "uri": "$uri",
-               "indexes": "$indexes"
-            },
-            "totalIndexSize": "$indexes size in bytes",
-            "totalIndexBytesReusable": "$indexes bytes available for reuse"
+         "internalPageSize": {
+            "$reduce": {
+               "input": "$wiredTiger.internalPageSize",
+               "initialValue": { "$arrayElemAt": ["$wiredTiger.internalPageSize", 0] },
+               "in": { "$cond": [{ "$eq": ["$$value", "$$this"] }, "$$value", "mixed"] }
          } },
-         { "$set": {
-            "name": { "$arrayElemAt": ["$name.captures", 0] },
-            "dataPageSize": {
-               "$reduce": {
-                  "input": "$wiredTiger.dataPageSize",
-                  "initialValue": { "$arrayElemAt": ["$wiredTiger.dataPageSize", 0] },
-                  "in": { "$cond": [{ "$eq": ["$$value", "$$this"] }, "$$value", "mixed"] }
-            } },
-            "compressor": {
-               "$reduce": {
-                  "input": "$wiredTiger.compressor",
-                  "initialValue": { "$arrayElemAt": ["$wiredTiger.compressor", 0] },
-                  "in": { "$cond": [{ "$eq": ["$$value", "$$this"] }, "$$value", "mixed"] }
-            } },
-            "internalPageSize": {
-               "$reduce": {
-                  "input": "$wiredTiger.internalPageSize",
-                  "initialValue": { "$arrayElemAt": ["$wiredTiger.internalPageSize", 0] },
-                  "in": { "$cond": [{ "$eq": ["$$value", "$$this"] }, "$$value", "mixed"] }
-            } },
-            "indexes": {
-               "$reduce": {
-                  "input": {
-                     "$reverseArray": {
-                        "$reduce": {
-                           "input": {
-                              "$reduce": {
-                                 "input": "$indexes",
-                                 "initialValue": [],
-                                 "in": { "$concatArrays": ["$$value", "$$this"] }
-                           } },
-                           "initialValue": [],
-                           "in": {
-                              "$let": {
-                                 "vars": {
-                                    "sorted": {
-                                       "$filter": {
-                                          "input": "$$value",
-                                          "as": "idx",
-                                          "cond": { "$lt": ["$$this", "$$idx"] }
-                                 } } },
-                                 "in": {
-                                    "$concatArrays": [
-                                       "$$sorted",
-                                       ["$$this"],
-                                       { "$setDifference": ["$$value", "$$sorted"] }
-                  ] } } } } } },
-                  "initialValue": [],
-                  "in": {
-                     "$cond": {
-                        "if": {
-                           "$eq": [
-                              { "$arrayElemAt": ["$$value.name", -1] },
-                              "$$this.name"
-                        ] },
-                        "then": {
-                           "$concatArrays": [
-                              { "$slice": [
-                                 "$$value",
-                                 { "$subtract": [{ "$size": "$$value" }, 1] }
-                              ] },
-                              [{
-                                 "name": "$$this.name",
-                                 "storageSize": { "$sum": [{ "$arrayElemAt": ["$$value.file size in bytes", -1] }, "$$this.file size in bytes"] },
-                                 "freeStorageSize": { "$sum": [{ "$arrayElemAt": ["$$value.file bytes available for reuse", -1] }, "$$this.file bytes available for reuse"] }
-                        }]] },
-                        "else": {
-                           "$concatArrays": [
+         "indexes": {
+            "$reduce": {
+               "input": {
+                  "$reverseArray": {
+                     "$reduce": {
+                        "input": {
+                           "$reduce": {
+                              "input": "$indexes",
+                              "initialValue": [],
+                              "in": { "$concatArrays": ["$$value", "$$this"] }
+                        } },
+                        "initialValue": [],
+                        "in": {
+                           "$let": {
+                              "vars": {
+                                 "sorted": {
+                                    "$filter": {
+                                       "input": "$$value",
+                                       "as": "idx",
+                                       "cond": { "$lt": ["$$this", "$$idx"] }
+                              } } },
+                              "in": {
+                                 "$concatArrays": [
+                                    "$$sorted",
+                                    ["$$this"],
+                                    { "$setDifference": ["$$value", "$$sorted"] }
+               ] } } } } } },
+               "initialValue": [],
+               "in": {
+                  "$cond": {
+                     "if": {
+                        "$eq": [
+                           { "$arrayElemAt": ["$$value.name", -1] },
+                           "$$this.name"
+                     ] },
+                     "then": {
+                        "$concatArrays": [
+                           { "$slice": [
                               "$$value",
-                              [{
-                                 "name": "$$this.name",
-                                 "storageSize": "$$this.file size in bytes",
-                                 "freeStorageSize": "$$this.file bytes available for reuse"
-                        }]] }
-            } } } }
-         } },
-         { "$unset": [
-            "_id",
-            "file allocation unit size",
-            "file size in bytes",
-            "file bytes available for reuse",
-            "indexes.file allocation unit size",
-            "indexes.uri",
-            "indexes bytes available for reuse",
-            "indexes size in bytes",
-            "uri",
-            "wiredTiger"
-         ] }
-      ],
-      results;
+                              { "$subtract": [{ "$size": "$$value" }, 1] }
+                           ] },
+                           [{
+                              "name": "$$this.name",
+                              "storageSize": { "$sum": [{ "$arrayElemAt": ["$$value.file size in bytes", -1] }, "$$this.file size in bytes"] },
+                              "freeStorageSize": { "$sum": [{ "$arrayElemAt": ["$$value.file bytes available for reuse", -1] }, "$$this.file bytes available for reuse"] }
+                     }]] },
+                     "else": {
+                        "$concatArrays": [
+                           "$$value",
+                           [{
+                              "name": "$$this.name",
+                              "storageSize": "$$this.file size in bytes",
+                              "freeStorageSize": "$$this.file bytes available for reuse"
+                     }]] }
+         } } } }
+      } },
+      { "$unset": [
+         "_id",
+         "file allocation unit size",
+         "file size in bytes",
+         "file bytes available for reuse",
+         "indexes.file allocation unit size",
+         "indexes.uri",
+         "indexes bytes available for reuse",
+         "indexes size in bytes",
+         "uri",
+         "wiredTiger"
+      ] }
+   ];
+   let results;
 
    try {
       results = namespace.aggregate(pipeline, options).toArray()[0];
