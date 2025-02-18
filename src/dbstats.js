@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.16"
+ *  Version: "0.11.17"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -108,16 +108,16 @@
     */
    try {
       db.adminCommand({ "features": 1 });
-   } catch(error) {
-      if (error.codeName == 'Unauthorized') {
+   } catch({ codeName }) {
+      if (codeName == 'Unauthorized') {
          print('\x1b[31m[ERR] MongoServerError: Unauthorized user requires authentication\x1b[0m');
       }
    }
-   let monitorRoles = ['clusterMonitor'],
+   const monitorRoles = ['clusterMonitor'],
       adminRoles = ['atlasAdmin', 'clusterAdmin', 'backup', 'root', '__system'],
       dbRoles = ['dbAdminAnyDatabase', 'readAnyDatabase', 'readWriteAnyDatabase'];
-   let { 'authInfo': { authenticatedUsers, authenticatedUserRoles } } = db.adminCommand({ "connectionStatus": 1 });
-   let authz = authenticatedUserRoles.filter(({ role, db }) => dbRoles.includes(role) && db == 'admin'),
+   const { 'authInfo': { authenticatedUsers, authenticatedUserRoles } } = db.adminCommand({ "connectionStatus": 1 });
+   const authz = authenticatedUserRoles.filter(({ role, db }) => dbRoles.includes(role) && db == 'admin'),
       users = authenticatedUserRoles.filter(({ role, db }) => adminRoles.includes(role) && db == 'admin'),
       monitors = authenticatedUserRoles.filter(({ role, db }) => monitorRoles.includes(role) && db == 'admin');
    if (!(!(!!authenticatedUsers.length) || !!users.length || !!monitors.length && !!authz.length)) {
@@ -133,7 +133,7 @@
 
 // (async(db, options, dbstats = {}) => {
 (async() => {
-   let __script = { "name": "dbstats.js", "version": "0.11.16" };
+   const __script = { "name": "dbstats.js", "version": "0.11.17" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -163,7 +163,7 @@
     *  User defined parameters
     */
 
-   let optionsDefaults = {
+   const optionsDefaults = {
       "filter": {
          "db": new RegExp(/.+/),
          "collection": new RegExp(/.+/)
@@ -236,18 +236,18 @@
       }
    };
    typeof options === 'undefined' && (options = optionsDefaults);
-   let filterOptions = { ...optionsDefaults.filter, ...options.filter };
-   let sortOptions = { ...optionsDefaults.sort, ...options.sort };
-   let outputOptions = { ...optionsDefaults.output, ...options.output };
-   // let limitOptions = { ...optionsDefaults.limit, ...options.limit };
-   // let topologyOptions = { ...optionsDefaults.topology, ...options.topology };
+   const filterOptions = { ...optionsDefaults.filter, ...options.filter };
+   const sortOptions = { ...optionsDefaults.sort, ...options.sort };
+   const outputOptions = { ...optionsDefaults.output, ...options.output };
+   // const limitOptions = { ...optionsDefaults.limit, ...options.limit };
+   // const topologyOptions = { ...optionsDefaults.topology, ...options.topology };
 
    /*
     *  Global defaults
     */
 
    // scalar unit B, KiB, MiB, GiB, TiB, PiB
-   let scaled = new AutoFactor();
+   const scaled = new AutoFactor();
 
    // formatting preferences
    typeof termWidth === 'undefined' && (termWidth = 137) || termWidth;
@@ -261,10 +261,10 @@
       /*
        *  main
        */
-      let { 'format': formatOutput = 'tabular' } = outputOptions;
+      const { 'format': formatOutput = 'tabular' } = outputOptions;
 
       slaveOk(readPref);
-      let dbStats = await getStats();
+      const dbStats = await getStats();
 
       switch (formatOutput) {
          case 'json':
@@ -291,7 +291,7 @@
        */
       let { 'db': dbFilter, 'collection': collFilter } = filterOptions;
       collFilter = new RegExp(collFilter);
-      let systemFilter = /.+/;
+      const systemFilter = /.+/;
       let dbPath = new MetaStats();
       dbPath.init();
       if (dbPath.shards.length > 0) {
@@ -497,7 +497,7 @@
       /*
        *  Print aggregated namespaces tabular report
        */
-      let namespaces = dbStats.databases.flatMap(database => {
+      const namespaces = dbStats.databases.flatMap(database => {
          return database.collections.reduce((collections, collection) => {
             let namespace = database.name + '.' + collection.name;
             delete collection.name;
@@ -544,8 +544,8 @@
       /*
        *  sortBy value
        */
-      let sortByType = sortOptions[type];
-      let sortKey = Object.keys(sortByType).find(key => sortByType[key] !== 0) || 'name';
+      const sortByType = sortOptions[type];
+      const sortKey = Object.keys(sortByType).find(key => sortByType[key] !== 0) || 'name';
       let sortValue = sortByType[sortKey];
       switch (sortValue) {
          case -1:
@@ -555,7 +555,7 @@
             sortValue = 'asc';
       }
 
-      let sortFns = {
+      const sortFns = {
          "sort": {
             "asc": sortAsc,
             "desc": sortDesc
@@ -816,10 +816,10 @@
        *  Print namespace level stats
        */
       compressor = (compressor == 'snappy') ? 'snpy' : compressor;
-      let collWidth = rowHeader - 3;
-      let compaction = (namespace == 'local.oplog.rs' && compactionHelper('collection', storageSize, freeStorageSize)) ? 'wait'
-                     : compactionHelper('collection', storageSize, freeStorageSize) ? 'compact'
-                     : '--  ';
+      const collWidth = rowHeader - 3;
+      const compaction = (namespace == 'local.oplog.rs' && compactionHelper('collection', storageSize, freeStorageSize)) ? 'wait'
+                       : compactionHelper('collection', storageSize, freeStorageSize) ? 'compact'
+                       : '--  ';
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       if (namespace.length > 45) namespace = `${namespace.substring(0, collWidth)}~`;
       console.log(`└\x1b[36m${(' ' + namespace).padEnd(rowHeader - 1)}\x1b[0m ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${compaction.padStart(columnWidth - 2)}\x1b[0m`);
@@ -851,8 +851,8 @@
       /*
        *  Print index level stats
        */
-      let indexWidth = rowHeader + columnWidth * 2;
-      let compaction = (name == '_id_' && compactionHelper('index', storageSize, freeStorageSize)) ? 'compact()'
+      const indexWidth = rowHeader + columnWidth * 2;
+      const compaction = (name == '_id_' && compactionHelper('index', storageSize, freeStorageSize)) ? 'compact()'
                      : compactionHelper('index', storageSize, freeStorageSize) ? 'rebuild'
                      : '--  ';
       console.log(`  \x1b[33m${'━'.repeat(termWidth - 2)}\x1b[0m`);
@@ -879,8 +879,8 @@
       /*
        *  Print DB level rollup stats
        */
-      let dbCompaction = compactionHelper('collection', storageSize, freeStorageSize) ? 'compact' : '--  ';
-      let dbIdxCompaction = compactionHelper('index', totalIndexSize, totalIndexBytesReusable) ? 'rebuild' : '--  ';
+      const dbCompaction = compactionHelper('collection', storageSize, freeStorageSize) ? 'compact' : '--  ';
+      const dbIdxCompaction = compactionHelper('index', totalIndexSize, totalIndexBytesReusable) ? 'rebuild' : '--  ';
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
       if (shards.length > 0) {
          console.log(`\x1b[1;32m${`Namespaces subtotal:\x1b[0m`.padEnd(rowHeader + 5)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize).padStart(columnWidth) + ' |' + `${formatPct(freeStorageSize, storageSize)}`.padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} \x1b[36m${dbCompaction.padStart(columnWidth - 2)}\x1b[0m`);
@@ -914,8 +914,8 @@
       /*
        *  Print total dbPath rollup stats
        */
-      let dbPathCompaction = compactionHelper('dbPath', storageSize, freeStorageSize) ? 'resync' : '--  ';
-      let dbPathIdxCompaction = compactionHelper('index', totalIndexSize, totalIndexBytesReusable) ? 'rebuild' : '--  ';
+      const dbPathCompaction = compactionHelper('dbPath', storageSize, freeStorageSize) ? 'resync' : '--  ';
+      const dbPathIdxCompaction = compactionHelper('index', totalIndexSize, totalIndexBytesReusable) ? 'rebuild' : '--  ';
       console.log('');
       console.log(`\x1b[33m${'═'.repeat(termWidth)}\x1b[0m`);
       console.log(`\x1b[1;32m${'dbPath totals'.padEnd(rowHeader)} ${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks | reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Compaction'.padStart(columnWidth - 1)}\x1b[0m`);
