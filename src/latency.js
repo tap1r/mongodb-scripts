@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.4.1"
+ *  Version: "0.4.2"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
    /*
     *  main
     */
-   const __script = { "name": "latency.js", "version": "0.4.1" };
+   const __script = { "name": "latency.js", "version": "0.4.2" };
    if (typeof console === 'undefined') {
       /*
        *  legacy mongo detected
@@ -37,12 +37,11 @@
       "cursor": { "batchSize": 1 },
       "readConcern": { "level": "local" }
    };
-   let t0, t1, t2, t3, ping;
-   let slowms = 100;
+   let t0, t1, t2, t3;
    try {
-      ({ slowms } = db.getSiblingDB('admin').getProfilingStatus());
+      var { slowms = 100 } = db.getSiblingDB('admin').getProfilingStatus();
    } catch(error) {
-      slowms = 200;
+      var slowms = 200;
       // console.log('\x1b[31m[WARN] failed to aquire the slowms threshold:\x1b[0m', error);
       console.log(`\x1b[31m[WARN] defaulting slowms to ${slowms}ms\x1b[0m`);
    }
@@ -60,13 +59,6 @@
       } } } }
    ];
 
-   // let hostname = 'unknown';
-   // try {
-   //    hostname = db.hello().me;
-   // } catch(error) {
-   //    console.log('\x1b[31m[WARN] failed to aquire the hostname:\x1b[0m', error);
-   // }
-
    const {
       'me': hostname,
       // secondary,
@@ -81,11 +73,10 @@
       } = {} } = db.hello();
 
    const role = (primary == hostname) ? 'Primary' : 'Secondary';
-   let procType;
    try {
-      ({ 'process': procType = 'unknown' } = db.serverStatus());
+      var { 'process': procType = 'unknown' } = db.serverStatus();
    } catch(error) {
-      procType = 'unknown';
+      var procType = 'unknown';
       console.log('\x1b[31m[WARN] failed to aquire the process type:\x1b[0m', error);
    }
 
@@ -112,8 +103,9 @@
 
    try {
       t2 = Date.now();
-      ({ 'ok': ping = false } = db.adminCommand({ "ping": 1 }));
+      var { 'ok': ping = 0 } = db.adminCommand({ "ping": 1 });
    } catch(error) {
+      t2 = Date.now();
       console.error('SDAM ping failed');
       throw error;
    } finally {
@@ -133,7 +125,7 @@
       `\x1b[1mInternal metrics\x1b[0m\n` +
       `\x1b[33m${'━'.repeat(tableWidth)}\x1b[0m\n` +
       `\x1b[32m${'Host:'}\x1b[0m${hostname.padStart(tableWidth - 'Host:'.length)}\n` +
-      `\x1b[32m${'Process type:'}\x1b[0m${procType.padStart(tableWidth - 'Process type:'.length)}\n` +
+      `\x1b[32m${'Process:'}\x1b[0m${procType.padStart(tableWidth - 'Process:'.length)}\n` +
       `\x1b[32m${'Role:'}\x1b[0m${role.padStart(tableWidth - 'Role:'.length)}\n` +
       `\x1b[32m${'Cloud provider:'}\x1b[0m${provider.padStart(tableWidth - 'Cloud provider:'.length)}\n` +
       `\x1b[32m${'Cloud region:'}\x1b[0m${region.padStart(tableWidth - 'Cloud region:'.length)}\n` +
