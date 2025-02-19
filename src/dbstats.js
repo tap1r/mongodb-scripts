@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.17"
+ *  Version: "0.11.18"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -114,12 +114,12 @@
       }
    }
    const monitorRoles = ['clusterMonitor'],
-      adminRoles = ['atlasAdmin', 'clusterAdmin', 'backup', 'root', '__system'],
-      dbRoles = ['dbAdminAnyDatabase', 'readAnyDatabase', 'readWriteAnyDatabase'];
+         adminRoles = ['atlasAdmin', 'clusterAdmin', 'backup', 'root', '__system'],
+         dbRoles = ['dbAdminAnyDatabase', 'readAnyDatabase', 'readWriteAnyDatabase'];
    const { 'authInfo': { authenticatedUsers, authenticatedUserRoles } } = db.adminCommand({ "connectionStatus": 1 });
    const authz = authenticatedUserRoles.filter(({ role, db }) => dbRoles.includes(role) && db == 'admin'),
-      users = authenticatedUserRoles.filter(({ role, db }) => adminRoles.includes(role) && db == 'admin'),
-      monitors = authenticatedUserRoles.filter(({ role, db }) => monitorRoles.includes(role) && db == 'admin');
+         users = authenticatedUserRoles.filter(({ role, db }) => adminRoles.includes(role) && db == 'admin'),
+         monitors = authenticatedUserRoles.filter(({ role, db }) => monitorRoles.includes(role) && db == 'admin');
    if (!(!(!!authenticatedUsers.length) || !!users.length || !!monitors.length && !!authz.length)) {
       print(`\x1b[31m[WARN] The connecting user's authz privileges may be inadequate to report all namespaces statistics\x1b[0m`);
       print(`\x1b[31m[WARN] consider inheriting the built-in roles for 'clusterMonitor@admin' and 'readAnyDatabase@admin' at a minimum\x1b[0m`);
@@ -133,7 +133,7 @@
 
 // (async(db, options, dbstats = {}) => {
 (async() => {
-   const __script = { "name": "dbstats.js", "version": "0.11.17" };
+   const __script = { "name": "dbstats.js", "version": "0.11.18" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -295,7 +295,7 @@
       let dbPath = new MetaStats();
       dbPath.init();
       if (dbPath.shards.length > 0) {
-         let paddedArray = [...Array(dbPath.shards.length)].map(() => 0);
+         const paddedArray = [...Array(dbPath.shards.length)].map(() => 0);
          dbPath.ncollections = paddedArray;
          dbPath.nviews = paddedArray;
          dbPath.namespaces = paddedArray;
@@ -308,7 +308,7 @@
       // delete dbPath.nindexes;
       delete dbPath.compressor;
 
-      let dbNames = (shellVer() >= 2.0 && typeof process !== 'undefined')
+      const dbNames = (shellVer() >= 2.0 && typeof process !== 'undefined')
          ? getDBNames(dbFilter).toSorted(sortAsc) // mongosh v2 optimised
          : getDBNames(dbFilter).sort(sortAsc);    // legacy shell(s) method
       console.log('');
@@ -317,7 +317,7 @@
       //    console.log('Discovered', dbPath.shards.length, 'shards:', JSON.stringify(dbPath.shards, null, 3));
       // }
       // console.log('Discovered', dbNames.length, 'distinct databases');
-      // let dbFetchTasks = dbNames.map(async dbName => {
+      // const dbFetchTasks = dbNames.map(async dbName => {
       dbPath.databases = dbNames.map(dbName => {
          let database = new MetaStats($stats(dbName));
          delete database.databases;
@@ -424,9 +424,9 @@
       });
       dbPath.databases = await Promise.all(collNamesTasks);
 
-      let dbFetchTasks = dbPath.databases.map(async database => {
-         let collFetchTasks = database.collections.map(async({ 'name': collName }) => {
-            let collection = await new MetaStats($collStats(database.name, collName));
+      const dbFetchTasks = dbPath.databases.map(async database => {
+         const collFetchTasks = database.collections.map(async({ 'name': collName }) => {
+            let collection = new MetaStats($collStats(database.name, collName));
             delete collection.databases;
             delete collection.collections;
             delete collection.views;
@@ -499,9 +499,9 @@
        */
       const namespaces = dbStats.databases.flatMap(database => {
          return database.collections.reduce((collections, collection) => {
-            let namespace = database.name + '.' + collection.name;
+            const namespace = database.name + '.' + collection.name;
             delete collection.name;
-            let updatedCollection = { ...{ "namespace": namespace }, ...collection, ...{ compression: 0 }
+            const updatedCollection = { ...{ "namespace": namespace }, ...collection, ...{ compression: 0 }
             // , ...{ get compression() {
             //    return this.dataSize / (this.storageSize - this.freeStorageSize);
             // } }
@@ -800,8 +800,8 @@
        *  Print collection level stats
        */
       compressor = (compressor == 'snappy') ? 'snpy' : compressor;
-      let collWidth = rowHeader - 3;
-      let compaction = (name == 'oplog.rs' && compactionHelper('collection', storageSize, freeStorageSize)) ? 'wait'
+      const collWidth = rowHeader - 3;
+      const compaction = (name == 'oplog.rs' && compactionHelper('collection', storageSize, freeStorageSize)) ? 'wait'
                      : compactionHelper('collection', storageSize, freeStorageSize) ? 'compact'
                      : '--  ';
       console.log(`\x1b[33m${'━'.repeat(termWidth)}\x1b[0m`);
