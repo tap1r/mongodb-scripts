@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.12.0"
+ *  Version: "0.12.1"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,7 +11,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.12.0"
+      "version": "0.12.1"
 });
 
 /*
@@ -102,7 +102,7 @@ if (typeof console === 'undefined') {
    /*
     *  legacy mongo detected
     */
-   (console = {});
+   var console = {};
    console.log = print;
    console.clear = () => _runMongoProgram('clear');
    console.error = tojson;
@@ -919,11 +919,11 @@ function $genLuhnNumber(input) {
     */
 
    // Step 1: Remove the last digit from the input
-   // let inputWithoutLastDigit = input.toString().slice(0, -1);
+   // const inputWithoutLastDigit = input.toString().slice(0, -1);
 
    // Step 2: Double every second digit, starting from the right
-   // let digits = inputWithoutLastDigit.split('').map(Number);
-   let digits = input.split('').map(Number),
+   // const digits = inputWithoutLastDigit.split('').map(Number);
+   const digits = input.split('').map(Number),
       sum = 0,
       shouldDouble = false;
 
