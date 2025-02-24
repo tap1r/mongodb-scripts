@@ -1,15 +1,19 @@
 (() => {
    /*
     *  Name: "aggSleepy.js"
-    *  Version: "0.1.0"
+    *  Version: "0.1.1"
     *  Description: "aggregation based '$sleepy' pipeline PoC to substitute for $function's sleep()"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     */
 
-   let dbName = '$';
-   let namespace = db.getSiblingDB(dbName);
-   let $sleepy = [
+   const __script = { "name": "aggSleepy.js", "version": "0.1.1" };
+
+   console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m\n`);
+
+   const dbName = '$';
+   const namespace = db.getSiblingDB(dbName);
+   const $sleepy = [
       { "$documents": [
          // seed the initial range to sample time meaurement performance
          { "array": { "$range": [0, "$$samples"] } }
@@ -18,7 +22,7 @@
       { "$lookup": {
          "from": "_",
          "pipeline": [
-            { "$collStats": {} }, // get realtime clock measurement
+            { "$collStats": {} }, // get realtime clock measurement per lookup
             { "$replaceRoot": { "newRoot": { "localTime": "$localTime" } } }
          ],
          "as": "_now"
@@ -80,17 +84,16 @@
                -2
          ] }
       } },
-      // comment out for sample tuning
+      // comment out to expose sample metrics
       { "$unset": ["opCounters", "initialSleepMS", "extrapolatedSleepMS"] }
    ];
-   // let aggOptions = { "let": { "samples": 10000, "sleepy": 100 } };
 
    /*
     *  Usage demonstration
     */
 
-   let filter = `Synthetic slow operation at ${performance.now()}`;
-   let pipeline = [
+   const filter = `Synthetic slow operation at ${Date.now()}`;
+   const pipeline = [
       { "$documents": [
          // sample documents for illustration purposes
          { "_id": new ObjectId(), "name": "Robert", "number": 1 },
@@ -100,7 +103,7 @@
       // insert synthetic slow operation here
       { "$unionWith": { "pipeline": $sleepy } }
    ];
-   let aggOptions = {
+   const aggOptions = {
       "comment": filter,  // required for performance validation
       "let": {
          "sleepy": 100,   // target sleep time in milliseconds
@@ -108,14 +111,16 @@
       }
    };
 
-   console.log(namespace.aggregate(pipeline, aggOptions));
+   console.log(namespace.aggregate(pipeline, aggOptions).toArray());
    // console.log(namespace.aggregate(pipeline, aggOptions).explain());
-   let [{ 'attr': { durationMillis = -1 } = {} } = {}] = db.adminCommand(
+   const [{ 'attr': { durationMillis = -1 } = {} } = {}] = db.adminCommand(
          { "getLog": "global" }
       ).log.map(
          EJSON.parse
       ).filter(
-         log => log?.attr?.command?.comment == filter
+         ({ 'attr': { 'command': { comment = '' } = {} } = {} } = {}) => {
+            return comment == filter;
+         }
       );
    console.log('logged opTime:', durationMillis);
 })();
