@@ -1,13 +1,13 @@
 (() => {
    /*
     *  Name: "aggSleepy.js"
-    *  Version: "0.1.3"
+    *  Version: "0.1.4"
     *  Description: "aggregation based '$sleepy' pipeline PoC to substitute for $function's sleep()"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     */
 
-   const __script = { "name": "aggSleepy.js", "version": "0.1.3" };
+   const __script = { "name": "aggSleepy.js", "version": "0.1.4" };
    if (typeof console === 'undefined') {
       /*
        *  legacy mongo detected
@@ -17,7 +17,7 @@
          clear: () => _runMongoProgram('clear'),
          error: arg => printjson(arg, '', true, 64),
          debug: arg => printjson(arg, '', true, 64),
-         dir: arg => printjson(arg, '', true, 64),
+         dir: arg => printjson(arg, '', true, 64)
       };
       var EJSON = { parse: JSON.parse };
    }
