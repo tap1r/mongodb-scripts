@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.4.4"
+ *  Version: "0.4.5"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
    /*
     *  main
     */
-   const __script = { "name": "latency.js", "version": "0.4.4" };
+   const __script = { "name": "latency.js", "version": "0.4.5" };
    if (typeof console === 'undefined') {
       /*
        *  legacy mongo detected
@@ -61,7 +61,6 @@
 
    const {
       'me': hostname,
-      // secondary,
       primary,
       'tags': {
          workloadType = '-',
@@ -74,7 +73,7 @@
 
    const role = (primary == hostname) ? 'Primary' : 'Secondary';
    try {
-      var { 'process': procType = 'unknown' } = db.serverStatus();
+      var { 'process': procType = 'unknown' } = db.serverStatus( /* add minimal values */);
    } catch(error) {
       var procType = 'unknown';
       console.log('\x1b[31m[WARN] failed to aquire the process type:\x1b[0m', error);
@@ -82,6 +81,7 @@
 
    try {
       t0 = Date.now();
+      // add server check for javascriptEngine
       db.getSiblingDB('admin').aggregate(pipeline, options).toArray();
    } catch(error) {
       t0 = Date.now();
