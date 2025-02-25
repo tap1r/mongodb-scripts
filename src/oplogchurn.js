@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.5"
+ *  Version: "0.5.6"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,7 +19,7 @@
     *  Save libs to the $MDBLIB or valid search path
     */
 
-   let __script = { "name": "oplogchurn.js", "version": "0.5.5" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.6" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -62,8 +62,9 @@
       /*
        *  main
        */
-      let opSize = 0, docs = 0, date = new Date(), scaled = new AutoFactor();
-      let t2 = Math.floor(date.getTime() / 1000.0), // end timestamp
+      let opSize = 0, docs = 0, date = new Date();
+      const scaled = new AutoFactor();
+      const t2 = Math.floor(date.getTime() / 1000.0), // end timestamp
          d2 = date.toISOString(), // end datetime
          t1 = Math.floor(date.setHours(date.getHours() - intervalHrs) / 1000.0), // start timestamp
          d1 = date.toISOString(), // start datetime
@@ -90,7 +91,7 @@
 
       // Measure interval statistics
       slaveOk(readPref); // not supported on shared tiers
-      let oplog = db.getSiblingDB('local').getCollection('oplog.rs');
+      const oplog = db.getSiblingDB('local').getCollection('oplog.rs');
 
       if (serverVer(4.4)) {
          // Using the v4.4+ $bsonSize aggregation operator
@@ -110,7 +111,7 @@
       }
 
       // Get host info & oplog stats
-      let { 'system': { hostname } } = hostInfo(),
+      const { 'system': { hostname } } = hostInfo(),
          { 'parsed': { 'storage': { dbPath } } } = db.serverCmdLineOpts(),
          // Get oplog collection stats
          { 'wiredTiger': {
@@ -122,11 +123,11 @@
             size,
             internalPageSize = (creationString.match(/internal_page_max=(\d+)/)[1] * 1024)
          } = oplog.stats();
-      let overhead = internalPageSize;
-      let ratio = +((size / (storageSize - blocksFree - overhead)).toFixed(2)),
+      const overhead = internalPageSize;
+      const ratio = +((size / (storageSize - blocksFree - overhead)).toFixed(2)),
          intervalDataSize = scaled.format(opSize);
-      let intervalStorageSize = scaled.format(opSize / ratio);
-      let oplogChurn = scaled.format(opSize / ratio / intervalHrs);
+      const intervalStorageSize = scaled.format(opSize / ratio);
+      const oplogChurn = scaled.format(opSize / ratio / intervalHrs);
 
       // Print results
       console.log('\n');
