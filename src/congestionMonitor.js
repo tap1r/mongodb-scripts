@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.3"
+    *  Version: "0.2.4"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -15,7 +15,7 @@
    // Usage: mongosh [connection options] [--quiet] [-f|--file] congestionMonitor.js
 
    let vitals = {};
-   let pollingIntervalMS = 100;
+   const pollingIntervalMS = 100;
 
    async function congestionMonitor() {
       /*
@@ -25,7 +25,7 @@
          /*
           *  opt-in version of db.serverStatus()
           */
-         let serverStatusOptionsDefaults = { // multiversion compatible
+         const serverStatusOptionsDefaults = { // multiversion compatible
             "activeIndexBuilds": false,
             "asserts": false,
             "batchedDeletes": false,
@@ -238,8 +238,8 @@
             return (this.cacheEvictions || this.dirtyCacheEvictions || this.dirtyUpdatesCacheEvictions);
          },
          get cacheHitRatio() {
-            let hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
-            let missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
+            const hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
+            const missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
             return Number.parseFloat((100 * (hitBytes - missBytes) / hitBytes).toFixed(2));
          },
          get cacheHitStatus() {
@@ -248,8 +248,8 @@
                  : 'medium';
          },
          get cacheMissRatio() {
-            let hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
-            let missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
+            const hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
+            const missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
             return Number.parseFloat((100 * (1 - (hitBytes - missBytes) / hitBytes)).toFixed(2));
          },
          get cacheMissStatus() {
@@ -319,19 +319,19 @@
          //    }
          // v8.0 see db.serverStats().queues.execution
          get wtReadTicketsUtil() {
-            let { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
+            const { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
             return Number.parseFloat(((out / totalTickets) * 100).toFixed(2));
          },
          get wtReadTicketsAvail() {
-            let { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
+            const { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
             return Number.parseFloat(((available / totalTickets) * 100).toFixed(2));
          },
          get wtWriteTicketsUtil() {
-            let { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
+            const { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
             return Number.parseFloat(((out / totalTickets) * 100).toFixed(2));
          },
          get wtWriteTicketsAvail() {
-            let { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
+            const { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
             return Number.parseFloat(((available / totalTickets) * 100).toFixed(2));
          },
          get wtReadTicketsStatus() {
@@ -345,7 +345,7 @@
                  : 'medium';
          },
          get activeShardMigrations() {
-            let { currentMigrationsDonating, currentMigrationsReceiving } = this.serverStatus.tenantMigrations;
+            const { currentMigrationsDonating, currentMigrationsReceiving } = this.serverStatus.tenantMigrations;
             return (currentMigrationsDonating > 0 || currentMigrationsReceiving > 0);
          },
          get activeFlowControl() {
@@ -369,7 +369,7 @@
                  : 'medium';
          },
          get activeReplLag() { // calculate the highest repl-lag from healthy members
-            let opTimers = this.rsStatus.members.map(({
+            const opTimers = this.rsStatus.members.map(({
                stateStr,
                health,
                optimeDate
@@ -439,7 +439,7 @@
          let cursor = 0;
          while (true) {
             // take current stats values from the parent monitoring thread
-            let { [this.metric]: metric = 0, [this.status]: status = '', [this.scale]: scale = 100 } = vitals;
+            const { [this.metric]: metric = 0, [this.status]: status = '', [this.scale]: scale = 100 } = vitals;
             cursor = Math.floor(metric * (this.width / scale));
             // always re-render the empty bar background
             readline.cursorTo(process.stdout, this.column, this.row);
@@ -466,7 +466,7 @@
       /*
        *  main
        */
-      let metrics = [
+      const metrics = [
          // {  // EQ attributes
          //    "name": "<string>",   // EQ label
          //    "metric": "<string>", // monitor metric
@@ -492,9 +492,9 @@
          metric.eq = new EQ(metric);
       });
       // setup the initial console state
-      let tableWidth = 54;
-      let tableTitle = 'Real-time congestion monitor';
-      let titleSpacing = (tableWidth - tableTitle.length) / 2;
+      const tableWidth = 54;
+      const tableTitle = 'Real-time congestion monitor';
+      const titleSpacing = (tableWidth - tableTitle.length) / 2;
       process.stdout.write('\x1b[?25l;1049h]'); // disable the console cursor and enable alternate buffer 
       console.clear();
       console.log('┏' + '━'.repeat(titleSpacing - 1) + '┫' + tableTitle + '┣' + '━'.repeat(titleSpacing - 1) + '┓');
