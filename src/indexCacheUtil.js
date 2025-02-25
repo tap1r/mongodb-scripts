@@ -1,6 +1,6 @@
 /*
  *  Name: "indexCacheUtil.js"
- *  Version: "0.1.3"
+ *  Version: "0.1.4"
  *  Description: "index cache util"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,7 +13,7 @@
  *  - Convert adminCommand to runCommand for directed command execution
  *  - Add cluster wide reporting
  *  - revise the scope for cache util in system namespaces
- *  - add progress meter will accumulating counters
+ *  - add progress meter while accumulating counters
  */
 
 // Usage: mongosh [<connection options>] [--quiet] [-f|--file] indexCacheUtil.js
@@ -69,7 +69,7 @@
       //      'tracked dirty bytes in the cache': 12151
       // } }
 
-      let pipeline = [
+      const pipeline = [
          { "$collStats": {
             "storageStats": {
                "scale": 1
@@ -109,12 +109,12 @@
                         "$$this.v.block-manager.file bytes available for reuse"
          ] } } } } }
       ];
-      let options = {
+      const options = {
          "cursor": { "batchSize": 1 },
          "readConcern": { "level": "local" },
          "comment": "Index cache usage query"
       };
-      let {
+      const {
          cachedPages,
          indexPages,
          freePages
@@ -130,10 +130,10 @@
        *  main
        */
       let sizeInMemory = 0, totalIndexPages = 0;
-      let cacheSize = db.serverStatus().wiredTiger.cache['maximum bytes configured'];
-      let cachedPagesBytes = db.serverStatus().wiredTiger.cache['bytes belonging to page images in the cache'];
-      let namespaces = await getAllNonSystemNamespaces();
-      let nslist = await Promise.all(namespaces).catch(error => {
+      const cacheSize = db.serverStatus().wiredTiger.cache['maximum bytes configured'];
+      const cachedPagesBytes = db.serverStatus().wiredTiger.cache['bytes belonging to page images in the cache'];
+      const namespaces = await getAllNonSystemNamespaces();
+      const nslist = await Promise.all(namespaces).catch(error => {
          console.log('Listing one of the namespaces failed:', error);
       });
       await Promise.allSettled(nslist.flat().map(getIndexCacheStats)).then(results => {
