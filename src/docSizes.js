@@ -1,6 +1,6 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.26"
+ *  Version: "0.1.27"
  *  Description: "sample document size distribution"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -12,7 +12,7 @@
  *  User defined parameters
  */
 
-let options = {
+const options = {
    "dbName": "database",
    "collName": "collection",
    // "sampleSize": 1000 // parameter to $sample
@@ -22,7 +22,7 @@ let options = {
    /*
     *  main
     */
-   let __script = { "name": "docSizes.js", "version": "0.1.26" };
+   const __script = { "name": "docSizes.js", "version": "0.1.27" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
    // connection preferences
    if (typeof readPref === 'undefined')
@@ -49,8 +49,8 @@ let options = {
    */
 
    // retrieve collection metadata
-   let namespace = db.getSiblingDB(dbName).getCollection(collName);
-   let { 'count': documentCount,
+   const namespace = db.getSiblingDB(dbName).getCollection(collName);
+   const { 'count': documentCount,
          'extras': {
             compressor,
             dataPageSize,
@@ -75,7 +75,7 @@ let options = {
             return target[name];
          } }
       );
-   let aggOptions = {
+   const aggOptions = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
@@ -87,19 +87,19 @@ let options = {
       ratio = +((dataSize / (storageSize - blocksFree - metadataSize)).toFixed(2));
 
    // Distribution buckets
-   let range = (start, stop, step) => {
+   const range = (start, stop, step) => {
       return Array.from(
          { "length": (stop - start) / (step + 1) },
          (_, idx) => start + idx * step
       );
    };
-   let { maxBsonObjectSize } = db.hello();
+   const { maxBsonObjectSize } = db.hello();
    // byte offset to reach the bucket's inclusive boundary
-   let buckets = range(1, maxBsonObjectSize + 1, internalPageSize),
+   const buckets = range(1, maxBsonObjectSize + 1, internalPageSize),
       pages = range(1, maxBsonObjectSize + 1, dataPageSize);
 
    // measure document and page size distribution
-   let pipeline = [
+   const pipeline = [
       { "$sample": { "size": sampleSize } },
       { "$facet": {
          "SampleTotals": [
