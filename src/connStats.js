@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.1.4"
+    *  Version: "0.1.5"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,8 +19,8 @@
 
    // Usage: mongosh [connection options] --quiet connStats.js
 
-   let aggOpts = {
-         "comment": "connStats.js v0.1.4"
+   const aggOpts = {
+         "comment": "connStats.js v0.1.5"
       },
       pipeline = [
          { "$currentOp": {
