@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.4.5"
+ *  Version: "0.4.6"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
    /*
     *  main
     */
-   const __script = { "name": "latency.js", "version": "0.4.5" };
+   const __script = { "name": "latency.js", "version": "0.4.6" };
    if (typeof console === 'undefined') {
       /*
        *  legacy mongo detected
@@ -73,7 +73,70 @@
 
    const role = (primary == hostname) ? 'Primary' : 'Secondary';
    try {
-      var { 'process': procType = 'unknown' } = db.serverStatus( /* add minimal values */);
+      var { 'process': procType = 'unknown' } = db.serverStatus(
+         { // multiversion compatible
+            "activeIndexBuilds": false,
+            "asserts": false,
+            "batchedDeletes": false,
+            "bucketCatalog": false,
+            "catalogStats": false,
+            "changeStreamPreImages": false,
+            "collectionCatalog": false,
+            "connections": false,
+            "defaultRWConcern": false,
+            "electionMetrics": false,
+            "encryptionAtRest": false,
+            "extra_info": false,
+            "featureCompatibilityVersion": false,
+            "flowControl": false,
+            "globalLock": false,
+            "health": false,
+            "hedgingMetrics": false,
+            "indexBuilds": false,
+            "indexBulkBuilder": false,
+            "indexStats": false,
+            "internalTransactions": false,
+            "Instance Information": false,
+            "latchAnalysis": false,
+            "locks": false,
+            "logicalSessionRecordCache": false,
+            "mem": false,
+            "metrics": false,
+            "mirroredReads": false,
+            "network": false,
+            "opLatencies": false,
+            "opReadConcernCounters": false,
+            "opWorkingTime": false,
+            "opWriteConcernCounters": false,
+            "opcounters": false,
+            "opcountersRepl": false,
+            "oplogTruncation": false,
+            "planCache": false,
+            "queryAnalyzers": false,
+            "querySettings": false,
+            "queues": false,
+            "readConcernCounters": false,
+            "readPreferenceCounters": false,
+            "repl": false,
+            "scramCache": false,
+            "security": false,
+            "service": false,
+            "sharding": false,
+            "shardingStatistics": false,
+            "shardedIndexConsistency": false,
+            "shardSplits": false,
+            "storageEngine": false,
+            "tcmalloc": false,
+            "tenantMigrations": false,
+            "trafficRecording": false,
+            "transactions": false,
+            "transportSecurity": false,
+            "twoPhaseCommitCoordinator": false,
+            "watchdog": false,
+            "wiredTiger": false,
+            "writeBacksQueued": false
+         }
+      );
    } catch(error) {
       var procType = 'unknown';
       console.log('\x1b[31m[WARN] failed to aquire the process type:\x1b[0m', error);
@@ -81,7 +144,7 @@
 
    try {
       t0 = Date.now();
-      // add server check for javascriptEngine
+      // add server check for security.javascriptEnabled startup option
       db.getSiblingDB('admin').aggregate(pipeline, options).toArray();
    } catch(error) {
       t0 = Date.now();
