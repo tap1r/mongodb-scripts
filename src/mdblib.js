@@ -1,17 +1,15 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.12.1"
+ *  Version: "0.12.2"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// update prototype settings
-
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.12.1"
+      "version": "0.12.2"
 });
 
 /*
@@ -45,11 +43,11 @@ if (typeof nonce === 'undefined') {
  *  https://github.com/tc39/proposal-object-values-entries
  */
 
-if (typeof String.prototype.padStart === 'undefined') {
+if (typeof Object.getPrototypeOf(String).padStart === 'undefined') {
    /*
     *  Add to legacy shell
     */
-   String.prototype.padStart = (targetLength, padString) => {
+   Object.getPrototypeOf(String).padStart = (targetLength, padString) => {
       targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
       padString = String(typeof padString !== 'undefined' ? padString : ' ');
       if (this.length >= targetLength)
@@ -64,11 +62,11 @@ if (typeof String.prototype.padStart === 'undefined') {
    }
 }
 
-if (typeof String.prototype.padEnd === 'undefined') {
+if (typeof Object.getPrototypeOf(String).padEnd === 'undefined') {
    /*
     *  Add to legacy shell
     */
-   String.prototype.padEnd = (targetLength, padString) => {
+   Object.getPrototypeOf(String).padEnd = (targetLength, padString) => {
       targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
       padString = String(typeof padString !== 'undefined' ? padString : ' ');
       if (this.length > targetLength)
@@ -83,7 +81,7 @@ if (typeof String.prototype.padEnd === 'undefined') {
    }
 }
 
-if (typeof Object.prototype.entries === 'undefined') {
+if (typeof Object.getPrototypeOf(Object).entries === 'undefined') {
    /*
     *  Add to legacy shell
     */
@@ -102,12 +100,13 @@ if (typeof console === 'undefined') {
    /*
     *  legacy mongo detected
     */
-   var console = {};
-   console.log = print;
-   console.clear = () => _runMongoProgram('clear');
-   console.error = tojson;
-   console.debug = tojson;
-   console.dir = tojson;
+   var console = {
+      log: print,
+      clear: () => _runMongoProgram('clear'),
+      error: tojson,
+      debug: tojson,
+      dir: tojson
+   };
 }
 
 /*
@@ -436,7 +435,7 @@ function isMaster() {
    /*
     *  Backward compatibility with db.isMaster()
     */
-   return (typeof db.prototype.hello === 'undefined')
+   return (typeof Object.getPrototypeOf(db).hello === 'undefined')
         ? db.isMaster()
         : db.hello();
 }
@@ -445,7 +444,7 @@ function hello() {
    /*
     *  Forward compatibility with db.hello()
     */
-   return (typeof db.prototype.hello !== 'function')
+   return (typeof Object.getPrototypeOf(db).hello !== 'function')
         ? db.isMaster()
         : db.hello();
 }
@@ -606,25 +605,25 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
    return serverStatusResults;
 }
 
-if (typeof db.prototype.isMaster === 'undefined') {
+if (typeof Object.getPrototypeOf(db).isMaster === 'undefined') {
    /*
     *  Backward compatibility with db.isMaster()
     */
-   db.isMaster = () => this.hello();
+   Object.getPrototypeOf(db).isMaster = () => this.hello();
 }
 
-if (typeof db.prototype.hello === 'undefined') {
+if (typeof Object.getPrototypeOf(db).hello === 'undefined') {
    /*
     *  Forward compatibility with db.hello()
     */
-   db.hello = () => this.isMaster();
+   Object.getPrototypeOf(db).hello = () => this.isMaster();
 }
 
 if (typeof bsonsize === 'undefined') {
    /*
     *  Forward compatibility with bsonsize()
     */
-   bsonsize = arg => Object.prototype.bsonsize(arg);
+   bsonsize = arg => Object.getPrototypeOf(Object).bsonsize(arg);
 }
 
 if (typeof process !== 'undefined') {
@@ -635,7 +634,7 @@ if (typeof process !== 'undefined') {
       /*
        *  Backward compatibility with UUID().base64()
        */
-      UUID.prototype.base64 = () => this.toString('base64');
+      Object.getPrototypeOf(UUID()).base64 = () => this.toString('base64');
    }
 
    if (typeof hex_md5 === 'undefined') {
@@ -923,7 +922,7 @@ function $genLuhnNumber(input) {
 
    // Step 2: Double every second digit, starting from the right
    // const digits = inputWithoutLastDigit.split('').map(Number);
-   const digits = input.split('').map(Number),
+   let digits = input.split('').map(Number),
       sum = 0,
       shouldDouble = false;
 
