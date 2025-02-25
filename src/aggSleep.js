@@ -1,15 +1,28 @@
 (() => {
    /*
     *  Name: "aggSleepy.js"
-    *  Version: "0.1.2"
+    *  Version: "0.1.3"
     *  Description: "aggregation based '$sleepy' pipeline PoC to substitute for $function's sleep()"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     */
 
-   const __script = { "name": "aggSleepy.js", "version": "0.1.2" };
+   const __script = { "name": "aggSleepy.js", "version": "0.1.3" };
+   if (typeof console === 'undefined') {
+      /*
+       *  legacy mongo detected
+       */
+      var console = {
+         log: print,
+         clear: () => _runMongoProgram('clear'),
+         error: arg => printjson(arg, '', true, 64),
+         debug: arg => printjson(arg, '', true, 64),
+         dir: arg => printjson(arg, '', true, 64),
+      };
+      var EJSON = { parse: JSON.parse };
+   }
 
-   console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m\n`);
+   console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m`);
 
    const dbName = '$';
    const namespace = db.getSiblingDB(dbName);
@@ -111,7 +124,7 @@
       }
    };
 
-   console.log(namespace.aggregate(pipeline, aggOptions).toArray());
+   console.dir(namespace.aggregate(pipeline, aggOptions).toArray());
    // console.log(namespace.aggregate(pipeline, aggOptions).explain());
    const [{ 'attr': { durationMillis = -1 } = {} } = {}] = db.adminCommand(
          { "getLog": "global" }
