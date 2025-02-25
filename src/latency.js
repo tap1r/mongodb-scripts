@@ -22,9 +22,9 @@
       var console = {
          log: print,
          clear: () => _runMongoProgram('clear'),
-         error: arg => util.inspect(arg, { "depth": null, "colors": true }),
-         debug: arg => util.inspect(arg, { "depth": null, "colors": true }),
-         dir: arg => util.inspect(arg, { "depth": null, "colors": true })
+         error: arg => printjson(arg, '', true, 64),
+         debug: arg => printjson(arg, '', true, 64),
+         dir: arg => printjson(arg, '', true, 64)
       };
       var EJSON = { parse: JSON.parse };
    }
