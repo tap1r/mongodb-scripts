@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "rtt.js"
-    *  Version: "0.2.0"
+    *  Version: "0.2.1"
     *  Description: "reports application round trip time latency"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,8 +17,8 @@
 
    // Syntax: mongosh [connection options] --quiet [-f|--file] rtt.js
 
-   let __script = { "name": "rtt.js", "version": "0.2.0" };
-   let banner = `\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`;
+   const __script = { "name": "rtt.js", "version": "0.2.1" };
+   const banner = `\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`;
    console.clear();
    console.log(banner);
 
@@ -33,13 +33,13 @@
       /*
        *  returns MongoClient() options to construct new connections
        */
-      let {
+      const {
          username = null,
          password = null,
          'source': authSource = 'admin',
          'mechanism': authMech = 'DEFAULT'
       } = db.getMongo().__serviceProvider.mongoClient.options?.credentials ?? {};
-      let {
+      const {
          compressors = ['none'],
          tls = false
       } = db.getMongo().__serviceProvider.mongoClient.options;
@@ -52,14 +52,14 @@
        *  returns an array of available mongos instances attached to the sharded cluster
        */
       let mongos = [];
-      let namespace = db.getSiblingDB('config').getCollection('mongos');
-      let options = {
+      const namespace = db.getSiblingDB('config').getCollection('mongos');
+      const options = {
          "allowDiskUse": true,
          "readConcern": { "level": "local" },
          "comment": "Discovering living mongos process"
       };
-      let offsetMS = 60000; // 1min
-      let pipeline = [
+      const offsetMS = 60000; // 1min
+      const pipeline = [
          { "$match": {
             "$expr": {
                "$gte": ["$ping", { "$subtract": ["$$NOW", offsetMS] }]
@@ -93,7 +93,7 @@
       /*
        *
        */
-      let [username, password, authSource, authMech, compressors, tls] = mongoOptions();
+      const [username, password, authSource, authMech, compressors, tls] = mongoOptions();
       let seededURI;
       if (username == null) {
          seededURI = `mongodb://${seedList.toString()}/?tls=${tls}&compressors=${compressors}`;
@@ -129,7 +129,7 @@
       db = connect(mongosSeededURI(discoverMongos()));
    }
 
-   let me = db.runCommand({ "whatsmyuri": 1 }).you.match(/^(?<src>.+)\:(?:\d+)$/).groups.src;
+   const me = db.runCommand({ "whatsmyuri": 1 }).you.match(/^(?<src>.+)\:(?:\d+)$/).groups.src;
    for ([host, { 'roundTripTime': rtt } = {}] of servers().entries()) {
       console.log(`Application latency from ${me} to ${host} = ${latency(rtt)}`);
    }
