@@ -1,13 +1,13 @@
 (() => {
    /*
     *  Name: "aggSleepy.js"
-    *  Version: "0.1.1"
+    *  Version: "0.1.2"
     *  Description: "aggregation based '$sleepy' pipeline PoC to substitute for $function's sleep()"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     */
 
-   const __script = { "name": "aggSleepy.js", "version": "0.1.1" };
+   const __script = { "name": "aggSleepy.js", "version": "0.1.2" };
 
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m\n`);
 
@@ -106,7 +106,7 @@
    const aggOptions = {
       "comment": filter,  // required for performance validation
       "let": {
-         "sleepy": 100,   // target sleep time in milliseconds
+         "sleepy": 1000,  // target sleep time in milliseconds
          "samples": 10000 // initial sample size (worth ~40-80ms)
       }
    };
