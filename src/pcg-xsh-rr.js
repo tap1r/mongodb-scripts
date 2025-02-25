@@ -1,6 +1,6 @@
 let UINT64 = function(a, b, c, d) {
    let a48, a32, a16, a00;
-   let _mask = {
+   const _mask = {
       "1": 0x0001,
       "2": 0x0003,
       "3": 0x0007,
@@ -227,9 +227,9 @@ let UINT64 = function(a, b, c, d) {
    };
 };
 
-let rng = function(state, inc) {
-   let state = state | 0;
-   let inc = inc | 0;
+const rng = function(state = 0, inc = 0) {
+   // let state = state | 0;
+   // let inc = inc | 0;
    return {
       "state": state,
       "inc": inc
@@ -253,12 +253,12 @@ function srandom(seed, seq) {
 }
 
 function random_r(_rng) {
-   let oldstate = _rng.state;
+   const oldstate = _rng.state;
    _rng.state = oldstate.mul(UINT64(0x5851f42d, 0x4c957f2d)).add(_rng.inc);
-   let xorshifted = oldstate.rshift(18).xor(oldstate).rshift(27).and(UINT64(0, 0xffffffff));
-   let rot = oldstate.rshift(59)._a00;
-   let rot2 = (-rot) & 31;
-   let result = xorshifted.rshift(rot).or(xorshifted.lshift(rot2)).and(UINT64(0, 0xffffffff));
+   const xorshifted = oldstate.rshift(18).xor(oldstate).rshift(27).and(UINT64(0, 0xffffffff));
+   const rot = oldstate.rshift(59)._a00;
+   const rot2 = (-rot) & 31;
+   const result = xorshifted.rshift(rot).or(xorshifted.lshift(rot2)).and(UINT64(0, 0xffffffff));
    return parseInt(result.hex(), 16); // result32;
 }
 
