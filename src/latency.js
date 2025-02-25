@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.4.3"
+ *  Version: "0.4.4"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,19 +14,19 @@
    /*
     *  main
     */
-   const __script = { "name": "latency.js", "version": "0.4.3" };
+   const __script = { "name": "latency.js", "version": "0.4.4" };
    if (typeof console === 'undefined') {
       /*
        *  legacy mongo detected
        */
-      var console = {};
-      console.log = print;
-      console.clear = () => _runMongoProgram('clear');
-      console.error = tojson;
-      console.debug = tojson;
-      console.dir = tojson;
-      var EJSON = {};
-      EJSON.parse = JSON.parse;
+      var console = {
+         log: print,
+         clear: () => _runMongoProgram('clear'),
+         error: arg => util.inspect(arg, { "depth": null, "colors": true }),
+         debug: arg => util.inspect(arg, { "depth": null, "colors": true }),
+         dir: arg => util.inspect(arg, { "depth": null, "colors": true })
+      };
+      var EJSON = { parse: JSON.parse };
    }
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m`);
 
