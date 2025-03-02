@@ -1,6 +1,6 @@
 /*
  *  Name: "modifiedCountDocumentsByKey.js"
- *  Version: "0.1.5"
+ *  Version: "0.1.6"
  *  Description: "overloaded countDocuments mongosh helper"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,15 +11,19 @@ Object.getPrototypeOf(db.getSiblingDB('$').getCollection('_')).countDocuments = 
     *  overloading the factory countDocuments helper to support this documented use case:
     *  https://www.mongodb.com/docs/manual/reference/method/db.collection.countDocuments/#count-all-documents-in-a-collection
     */
-   const _prototype = () => Object.getPrototypeOf(db.getSiblingDB('$').getCollection('_')); // collection's prototype
-   const fn = 'countDocuments'; // overloaded method's name
-   const _fn = '_' + fn;        // wrapped shadow method's name
+   const method = () => db.getSiblingDB('$').getCollection('_'); // collection method
+   const fn = 'countDocuments'; // target method's name for overloaded
+   //
+   const _prototype = () => Object.getPrototypeOf(method()); // method's prototype
+   const _fn = '_' + fn; // wrapped shadow method's name
    if (_prototype()[fn].name !== 'modifiedCountDocumentsByKey') {
       // copy to shadowed method from the prototype if it doesn't already exist
       _prototype()[_fn] = _prototype()[fn];
    }
-   // https://www.mongodb.com/docs/manual/reference/method/db.collection.countDocuments/#syntax
    function modifiedCountDocumentsByKey(query = {}, options = {}, dbOptions = {}) {
+      /*
+       *  https://www.mongodb.com/docs/manual/reference/method/db.collection.countDocuments/#syntax
+       */
       // substitute an empty filter with the optimised key scan method
       query = (Object.keys(query).length) ? query : { "_id": { "$gte": MinKey } };
 
