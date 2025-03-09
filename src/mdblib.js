@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.13.0"
+ *  Version: "0.13.1"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.13.0"
+      "version": "0.13.1"
 });
 
 /*
@@ -115,8 +115,8 @@ if (typeof Object.getPrototypeOf(Object).entries === 'undefined') {
          const ansi = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
          return [...arguments].map(arg =>
             typeof arg === 'string'
-                  ? arg.replaceAll(ansi, '')
-                  : arg
+                 ? arg.replaceAll(ansi, '')
+                 : arg
          );
       };
 
@@ -303,8 +303,8 @@ function isSharded() {
    }
 
    const proc = (serverStatus().ok) ? serverStatus().process
-            : (sharded) ? 'mongos'
-            : 'unknown';
+              : (sharded) ? 'mongos'
+              : 'unknown';
 
    return proc === 'mongos';
 }
@@ -329,8 +329,8 @@ function getDBNames(dbFilter = /^.+/) {
    const filterRegex = new RegExp(dbFilter, filterOptions);
    const filter = { "name": filterRegex };
    const restrictedNamespaces = (isAtlasPlatform('serverless')) ? ['admin', 'config', 'local']
-                            : (isAtlasPlatform('sharedTier')) ? ['admin', 'config', 'local']
-                            : [];
+                              : (isAtlasPlatform('sharedTier')) ? ['admin', 'config', 'local']
+                              : [];
    const comment = `list databases with ${__lib.name} v${__lib.version}`;
    if (!(isAtlasPlatform('serverless') || isAtlasPlatform('sharedTier'))) {
       // ignoring filter on unsupported platforms
