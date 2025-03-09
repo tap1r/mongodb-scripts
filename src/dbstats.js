@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.11.18"
+ *  Version: "0.12.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -101,6 +101,39 @@
  *    mongosh --quiet --eval 'let options = { output: { format: "json" } };' -f dbstats.js
  */
 
+/*
+ *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
+ *  Save libs to the $MDBLIB or other valid search path
+ */
+
+(() => {
+   const __script = { "name": "dbstats.js", "version": "0.12.0" };
+   if (typeof __lib === 'undefined') {
+      /*
+       *  Load helper library mdblib.js
+       */
+      let __lib = { "name": "mdblib.js", "paths": null, "path": null };
+      if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
+         __lib.paths = [_getEnv('MDBLIB'), `${_getEnv('HOME')}/.mongodb`, '.'];
+         __lib.path = `${__lib.paths.find(path => fileExists(`${path}/${__lib.name}`))}/${__lib.name}`;
+      } else if (typeof process !== 'undefined') { // mongosh process.env attribute
+         __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
+         __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
+      } else {
+         print(`\x1b[31m[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory\x1b[0m`);
+         __lib.path = __lib.name;
+      }
+      load(__lib.path);
+   }
+   let __comment = `#### Running script ${__script.name} v${__script.version}`;
+   __comment += ` with ${__lib.name} v${__lib.version}`;
+   __comment += ` on shell v${version()}`;
+   console.log(`\n\n\x1b[33m${__comment}\x1b[0m`);
+   if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n\x1b[31m[WARN] Possibly incompatible legacy shell version detected: ${version()}\x1b[0m`);
+   if (shellVer() < 1.0 && typeof process !== 'undefined') console.log(`\n\x1b[31m[WARN] Possible incompatible non-GA shell version detected: ${version()}\x1b[0m`);
+   if (serverVer() < 4.2) console.log(`\n\x1b[31m[ERROR] Unsupported mongod/s version detected: ${db.version()}\x1b[0m`);
+})();
+
 (() => {
    /*
     *  Ensure authorized users have the following minimum required roles
@@ -126,43 +159,11 @@
    }
 })();
 
-/*
- *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
- *  Save libs to the $MDBLIB or other valid search path
- */
-
 // (async(db, options, dbstats = {}) => {
 (async() => {
-   const __script = { "name": "dbstats.js", "version": "0.11.18" };
-   if (typeof __lib === 'undefined') {
-      /*
-       *  Load helper library mdblib.js
-       */
-      let __lib = { "name": "mdblib.js", "paths": null, "path": null };
-      if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
-         __lib.paths = [_getEnv('MDBLIB'), `${_getEnv('HOME')}/.mongodb`, '.'];
-         __lib.path = `${__lib.paths.find(path => fileExists(`${path}/${__lib.name}`))}/${__lib.name}`;
-      } else if (typeof process !== 'undefined') { // mongosh process.env attribute
-         __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
-         __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
-      } else {
-         print(`\x1b[31m[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory\x1b[0m`);
-         __lib.path = __lib.name;
-      }
-      load(__lib.path);
-   }
-   let __comment = `#### Running script ${__script.name} v${__script.version}`;
-   __comment += ` with ${__lib.name} v${__lib.version}`;
-   __comment += ` on shell v${version()}`;
-   console.log(`\n\n\x1b[33m${__comment}\x1b[0m`);
-   if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n\x1b[31m[WARN] Possibly incompatible legacy shell version detected: ${version()}\x1b[0m`);
-   if (shellVer() < 1.0 && typeof process !== 'undefined') console.log(`\n\x1b[31m[WARN] Possible incompatible non-GA shell version detected: ${version()}\x1b[0m`);
-   if (serverVer() < 4.2) console.log(`\n\x1b[31m[ERROR] Unsupported mongod/s version detected: ${db.version()}\x1b[0m`);
-
    /*
     *  User defined parameters
     */
-
    const optionsDefaults = {
       "filter": {
          "db": new RegExp(/.+/),
@@ -309,8 +310,8 @@
       delete dbPath.compressor;
 
       const dbNames = (shellVer() >= 2.0 && typeof process !== 'undefined')
-         ? getDBNames(dbFilter).toSorted(sortAsc) // mongosh v2 optimised
-         : getDBNames(dbFilter).sort(sortAsc);    // legacy shell(s) method
+                    ? getDBNames(dbFilter).toSorted(sortAsc) // mongosh v2 optimised
+                    : getDBNames(dbFilter).sort(sortAsc);    // legacy shell(s) method
       console.log('');
       // add debug clause
       // if (dbPath.shards.length > 0) {
