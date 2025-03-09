@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.12.2"
+ *  Version: "0.13.0"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.12.2"
+      "version": "0.13.0"
 });
 
 /*
@@ -95,6 +95,36 @@ if (typeof Object.getPrototypeOf(Object).entries === 'undefined') {
       return entries;
    }
 }
+
+(typeof process !== 'undefined') && (console['log'] = (function() {
+   /*
+    *  overloading the console.log() method
+    *  strip out ANSI escape sequences from non-TTY output
+    */
+   const method = () => console;
+   const fn = 'log'; // target method's attribute name for overloading
+   //
+   const _fn = '_' + fn; // wrapped shadow method's name
+   if (method()[fn].name !== 'modifiedLog') {
+      // copy to the shadowed method if it doesn't already exist
+      method()[_fn] = method()[fn];
+   }
+   function modifiedLog() {
+      const isTTY = process.stdout.isTTY;
+      const args = () => {
+         const ansi = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
+         return [...arguments].map(arg =>
+            typeof arg === 'string'
+                  ? arg.replaceAll(ansi, '')
+                  : arg
+         );
+      };
+
+      return method()[_fn].apply(null, isTTY ? arguments : args());
+   };
+
+   return modifiedLog;
+})());
 
 if (typeof console === 'undefined') {
    /*
