@@ -1,13 +1,13 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.1.10"
+    *  Version: "0.2.0"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Notes:
-    *  - Curation relies on blocking operator for bucket estimations
+    *  - Curation relies on a semi-blocking operator for bucket estimations
     *  - Good for matching up to 2,147,483,647,000 documents
     *
     *  TODOs:
@@ -18,7 +18,6 @@
     *    - debouce serverStatus() requests to fixed intervals
     *  - add progress counters with estimated time remaining
     *  - add congestion meter for admission control
-    *  - investigate non-blocking mode curation techniques
     *  - add more granular/progressive admission control based on dirtyFill
     *  - add repl-lag metric for admission control
     *  - fix secondary reads for curation
@@ -56,7 +55,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.1.10" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.0" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -75,49 +74,80 @@
          },
          pipeline = [
             { "$match": filter },
-            // { "$setWindowFields": {
-            //    "sortBy": { "_id": 1 },
-            //    "output": {
-            //       "ordinal": { "$documentNumber": {} },
-            //       "IDsTotal": { "$count": {} }
-            // } } },
-            // { "$bucketAuto": { // fixed height bucketing
-            //    "groupBy": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
-            //    "buckets": buckets,
-            //    "output": {
-            //       "IDs": { "$push": "$_id" },
-            //       "bucketSize": { "$sum": 1 },
-            //       "IDsTotal": { "$max": "$IDsTotal" }
-            // } } },
-            // { "$setWindowFields": {
-            //    "sortBy": { "_id": 1 },
-            //    "output": {
-            //       "bucketId": { "$documentNumber": {} },
-            //       "bucketsTotal": { "$count": {} },
-            //       "IDsCumulative": {
-            //          "$sum": "$bucketSize",
-            //          "window": { "documents": ["unbounded", "current"] }
-            // } } } },
-            { "$setWindowFields": { // assign ordinal numbers incrementally
+            /* v1 blocking mode with count estimations
+               // { "$setWindowFields": {
+               //    "sortBy": { "_id": 1 },
+               //    "output": {
+               //       "ordinal": { "$documentNumber": {} },
+               //       "IDsTotal": { "$count": {} }
+               // } } },
+               // { "$bucketAuto": { // fixed height bucketing
+               //    "groupBy": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
+               //    "buckets": buckets,
+               //    "output": {
+               //       "IDs": { "$push": "$_id" },
+               //       "bucketSize": { "$sum": 1 },
+               //       "IDsTotal": { "$max": "$IDsTotal" }
+               // } } },
+               // { "$setWindowFields": {
+               //    "sortBy": { "_id": 1 },
+               //    "output": {
+               //       "bucketId": { "$documentNumber": {} },
+               //       "bucketsTotal": { "$count": {} },
+               //       "IDsCumulative": {
+               //          "$sum": "$bucketSize",
+               //          "window": { "documents": ["unbounded", "current"] }
+               // } } } },
+            */
+            /* v2 reduced non-blocking mode without count estimations
+               // { "$setWindowFields": { // assign ordinal numbers incrementally
+               //    "sortBy": { "_id": 1 },
+               //    "output": { "ordinal": { "$documentNumber": {} } }
+               // } },
+               // { "$set": { // assign bucket IDs based on ordinal, avoiding full grouping
+               //    "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } }
+               // } },
+               // { "$group": { // group into buckets incrementally
+               //    "_id": "$bucketId",
+               //    "IDs": { "$push": "$_id" },
+               //    "bucketSize": { "$sum": 1 }
+               // } },
+               // { "$setWindowFields": { // compute cumulative bucket sizes
+               //    "sortBy": { "_id": 1 },
+               //    "output": {
+               //       "bucketId": { "$documentNumber": {} }, // renumber buckets sequentially
+               //       "IDsCumulative": {
+               //          "$sum": "$bucketSize",
+               //          "window": { "documents": ["unbounded", "current"] }
+               // } } } },
+            */
+            // v3 non-blocking mode
+            { "$setWindowFields": { // assign ordinal numbers
                "sortBy": { "_id": 1 },
                "output": { "ordinal": { "$documentNumber": {} } }
             } },
-            { "$set": { // assign bucket IDs based on ordinal, avoiding full grouping
-               "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } }
+            { "$set": { // compute bucketId and running cumulative count
+               "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
+               "bucketSizeContribution": 1 // Each document contributes 1 to its bucket
             } },
-            { "$group": { // group into buckets incrementally
-               "_id": "$bucketId",
-               "IDs": { "$push": "$_id" },
-               "bucketSize": { "$sum": 1 }
-            } },
-            { "$setWindowFields": { // compute cumulative bucket sizes
+            { "$setWindowFields": { // compute cumulative sum at document level
+               "partitionBy": "$bucketId",
                "sortBy": { "_id": 1 },
                "output": {
-                  "bucketId": { "$documentNumber": {} }, // renumber buckets sequentially
                   "IDsCumulative": {
-                     "$sum": "$bucketSize",
+                     "$sum": "$bucketSizeContribution",
                      "window": { "documents": ["unbounded", "current"] }
-            } } } },
+                  },
+                  "IDs": { "$push": "$_id" },
+                  "bucketSize": { "$sum": 1 }
+               }
+            } },
+            { "$match": {
+               "$expr": {
+                  "$eq": ["$IDsCumulative", "$bucketSize"]
+               }
+            } },
+            //
             { "$project": {
                "_id": 0,
                "bucketId": 1, // ordinal of current bucket
@@ -172,7 +202,7 @@
          sleep(Math.floor(500 + Math.random() * 500));
          sleepIntervalMS = await admissionControl();
       };
-      console.log('\t\t...batch', bucketId, 'pre-sleeping for', sleepIntervalMS, 'ms');
+      console.log('\t\t...batch', bucketId, 'buffering for', sleepIntervalMS, 'ms');
       sleep(sleepIntervalMS);
       const session = db.getMongo().startSession(sessionOpts);
       const namespace = session.getDatabase(dbName).getCollection(collName);
