@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.0"
+    *  Version: "0.2.1"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -55,7 +55,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.0" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.1" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -123,16 +123,18 @@
             */
             // v3 non-blocking mode
             { "$setWindowFields": { // assign ordinal numbers
-               "sortBy": { "_id": 1 },
+               // "sortBy": { "_id": 1 },
+               "sortBy": { [Object.keys(filter)[0]]: 1 },
                "output": { "ordinal": { "$documentNumber": {} } }
             } },
             { "$set": { // compute bucketId and running cumulative count
                "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
-               "bucketSizeContribution": 1 // Each document contributes 1 to its bucket
+               "bucketSizeContribution": 1 // each document contributes 1 to its bucket
             } },
-            { "$setWindowFields": { // compute cumulative sum at document level
+            { "$setWindowFields": { // compute cumulative sum in the bucket
                "partitionBy": "$bucketId",
-               "sortBy": { "_id": 1 },
+               // "sortBy": { "_id": 1 },
+               "sortBy": { [Object.keys(filter)[0]]: 1 },
                "output": {
                   "IDsCumulative": {
                      "$sum": "$bucketSizeContribution",
@@ -142,7 +144,7 @@
                   "bucketSize": { "$sum": 1 }
                }
             } },
-            { "$match": {
+            { "$match": { // reduce to the last bucket of each group
                "$expr": {
                   "$eq": ["$IDsCumulative", "$bucketSize"]
                }
@@ -639,10 +641,10 @@
          sleepIntervalMS = 'wait';
       } else if (dirtyStatus == 'medium' || dirtyUpdatesStatus == 'medium') {
          // moderate write cache pressure, we can pause slightly
-         sleepIntervalMS = Math.floor(100 + Math.random() * 100);
+         sleepIntervalMS = Math.floor(50 + Math.random() * 150);
       } else if ((wtReadTicketsStatus == 'high' || wtWriteTicketsStatus == 'high') && checkpointStatus == 'high') {
          // tickets highly contended, we should mitigate storage pressure
-         sleepIntervalMS = Math.floor(200 + Math.random() * 250);
+         sleepIntervalMS = Math.floor(150 + Math.random() * 150);
       } else {
          // no cache pressure, we can open up the throttle
          sleepIntervalMS = 0;
@@ -687,7 +689,8 @@
       const bucketSizeLimit = 100; // aligns with SPM-2227
       const readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // support monotonic writes
       const readPreference = {
-         "mode": "nearest", // offload the bucket generation to a less busy node
+         // "mode": "nearest", // offload the bucket generation to a less busy node
+         "mode": "secondaryPreferred", // offload the bucket generation to a less busy node
          "tags": [ // Atlas friendly defaults
             { "nodeType": "READ_ONLY", "diskState": "READY" },
             { "nodeType": "ANALYTICS", "diskState": "READY" },
