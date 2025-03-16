@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.1"
+    *  Version: "0.2.2"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
     *  - add backoff expiry timer
     *  - add better sharding support
     *  - revise lowPriorityAdmissionBypassThreshold for backward compatibility
-    *  - improve support for Flex teirs
+    *  - improve support for Atlas Flex tiers
     */
 
    // Syntax: mongosh [connection options] [--quiet] [--eval 'let dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>;'] [-f|--file] niceDeleteMany.js
@@ -55,115 +55,114 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.1" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.2" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
    async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
-      // _id curation (employs blocking aggregation operators)
+      // _id curation (employs partial-blocking aggregation operators)
       const session = db.getMongo().startSession(sessionOpts);
       const namespace = session.getDatabase(dbName).getCollection(collName);
-      const buckets = Math.pow(2, 31) - 1, // max 32bit Int
-         aggOpts = {
-            "allowDiskUse": true,
-            "collation": collation,
-            "hint": hint,
-            "maxTimeMS": 0, // required to overide potential v8 defaultMaxTimeMS cluster settings
-            "comment": "Bucketing IDs via niceDeleteMany.js",
-            "let": { "bucketSizeLimit": bucketSizeLimit }
-         },
-         pipeline = [
-            { "$match": filter },
-            /* v1 blocking mode with count estimations
-               // { "$setWindowFields": {
-               //    "sortBy": { "_id": 1 },
-               //    "output": {
-               //       "ordinal": { "$documentNumber": {} },
-               //       "IDsTotal": { "$count": {} }
-               // } } },
-               // { "$bucketAuto": { // fixed height bucketing
-               //    "groupBy": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
-               //    "buckets": buckets,
-               //    "output": {
-               //       "IDs": { "$push": "$_id" },
-               //       "bucketSize": { "$sum": 1 },
-               //       "IDsTotal": { "$max": "$IDsTotal" }
-               // } } },
-               // { "$setWindowFields": {
-               //    "sortBy": { "_id": 1 },
-               //    "output": {
-               //       "bucketId": { "$documentNumber": {} },
-               //       "bucketsTotal": { "$count": {} },
-               //       "IDsCumulative": {
-               //          "$sum": "$bucketSize",
-               //          "window": { "documents": ["unbounded", "current"] }
-               // } } } },
-            */
-            /* v2 reduced non-blocking mode without count estimations
-               // { "$setWindowFields": { // assign ordinal numbers incrementally
-               //    "sortBy": { "_id": 1 },
-               //    "output": { "ordinal": { "$documentNumber": {} } }
-               // } },
-               // { "$set": { // assign bucket IDs based on ordinal, avoiding full grouping
-               //    "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } }
-               // } },
-               // { "$group": { // group into buckets incrementally
-               //    "_id": "$bucketId",
-               //    "IDs": { "$push": "$_id" },
-               //    "bucketSize": { "$sum": 1 }
-               // } },
-               // { "$setWindowFields": { // compute cumulative bucket sizes
-               //    "sortBy": { "_id": 1 },
-               //    "output": {
-               //       "bucketId": { "$documentNumber": {} }, // renumber buckets sequentially
-               //       "IDsCumulative": {
-               //          "$sum": "$bucketSize",
-               //          "window": { "documents": ["unbounded", "current"] }
-               // } } } },
-            */
-            // v3 non-blocking mode
-            { "$setWindowFields": { // assign ordinal numbers
-               // "sortBy": { "_id": 1 },
-               "sortBy": { [Object.keys(filter)[0]]: 1 },
-               "output": { "ordinal": { "$documentNumber": {} } }
-            } },
-            { "$set": { // compute bucketId and running cumulative count
-               "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
-               "bucketSizeContribution": 1 // each document contributes 1 to its bucket
-            } },
-            { "$setWindowFields": { // compute cumulative sum in the bucket
-               "partitionBy": "$bucketId",
-               // "sortBy": { "_id": 1 },
-               "sortBy": { [Object.keys(filter)[0]]: 1 },
-               "output": {
-                  "IDsCumulative": {
-                     "$sum": "$bucketSizeContribution",
-                     "window": { "documents": ["unbounded", "current"] }
-                  },
-                  "IDs": { "$push": "$_id" },
-                  "bucketSize": { "$sum": 1 }
-               }
-            } },
-            { "$match": { // reduce to the last bucket of each group
-               "$expr": {
-                  "$eq": ["$IDsCumulative", "$bucketSize"]
-               }
-            } },
-            //
-            { "$project": {
-               "_id": 0,
-               "bucketId": 1, // ordinal of current bucket
-               // "bucketsTotal": 1, // total number of buckets
-               // "bucketsRemaining": { "$subtract": ["$bucketsTotal", "$bucketId"] }, // number of buckets remaining
-               "bucketSize": 1, // number of _ids in the current bucket
-               "bucketSizeLimit": "$$bucketSizeLimit", // bucket size limit
-               "IDsCumulative": 1, // cumulative total number of IDs
-               // "IDsRemaining": { "$subtract": ["$IDsTotal", "$IDsCumulative"] }, // total number of IDs remaining
-               "IDsTotal": 1, // total number of IDs
-               "IDs": 1 // IDs in the current bucket
-            } }
-         ];
-
+      // const buckets = Math.pow(2, 31) - 1; // max 32bit Int
+      const aggOpts = {
+         "allowDiskUse": true,
+         "collation": collation,
+         "cursor": { "batchSize": bucketSizeLimit * vitals.numCores }, // multiple of bucketSizeLimit * concurrency
+         "hint": hint,
+         "maxTimeMS": 0, // required to overide potential v8 defaultMaxTimeMS cluster settings
+         "comment": "Bucketing IDs via niceDeleteMany.js",
+         "let": { "bucketSizeLimit": bucketSizeLimit }
+      };
+      const pipeline = [
+         { "$match": filter },
+         /* v1 blocking mode with count estimations
+            // { "$setWindowFields": {
+            //    "sortBy": { "_id": 1 },
+            //    "output": {
+            //       "ordinal": { "$documentNumber": {} },
+            //       "IDsTotal": { "$count": {} }
+            // } } },
+            // { "$bucketAuto": { // fixed height bucketing
+            //    "groupBy": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
+            //    "buckets": buckets,
+            //    "output": {
+            //       "IDs": { "$push": "$_id" },
+            //       "bucketSize": { "$sum": 1 },
+            //       "IDsTotal": { "$max": "$IDsTotal" }
+            // } } },
+            // { "$setWindowFields": {
+            //    "sortBy": { "_id": 1 },
+            //    "output": {
+            //       "bucketId": { "$documentNumber": {} },
+            //       "bucketsTotal": { "$count": {} },
+            //       "IDsCumulative": {
+            //          "$sum": "$bucketSize",
+            //          "window": { "documents": ["unbounded", "current"] }
+            // } } } },
+         */
+         /* v2 reduced non-blocking mode without count estimations
+            // { "$setWindowFields": { // assign ordinal numbers incrementally
+            //    "sortBy": { "_id": 1 },
+            //    "output": { "ordinal": { "$documentNumber": {} } }
+            // } },
+            // { "$set": { // assign bucket IDs based on ordinal, avoiding full grouping
+            //    "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } }
+            // } },
+            // { "$group": { // group into buckets incrementally
+            //    "_id": "$bucketId",
+            //    "IDs": { "$push": "$_id" },
+            //    "bucketSize": { "$sum": 1 }
+            // } },
+            // { "$setWindowFields": { // compute cumulative bucket sizes
+            //    "sortBy": { "_id": 1 },
+            //    "output": {
+            //       "bucketId": { "$documentNumber": {} }, // renumber buckets sequentially
+            //       "IDsCumulative": {
+            //          "$sum": "$bucketSize",
+            //          "window": { "documents": ["unbounded", "current"] }
+            // } } } },
+         */
+         // v3 non-blocking mode
+         { "$setWindowFields": { // assign ordinal numbers
+            "sortBy": { [Object.keys(filter)[0]]: 1 },
+            "output": { "ordinal": { "$documentNumber": {} } }
+         } },
+         { "$set": { // compute bucketId and running cumulative count
+            "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
+            "cardianal": 1 // each document contributes 1 to its bucket
+         } },
+         { "$setWindowFields": { // compute cumulative sum in the bucket
+            "partitionBy": "$bucketId",
+            "sortBy": { [Object.keys(filter)[0]]: 1 },
+            "output": {
+               "IDsCumulative": {
+                  "$sum": "$cardianal",
+                  "window": { "documents": ["unbounded", "current"] }
+               },
+               "IDs": { "$push": "$_id" },
+               "bucketSize": { "$sum": 1 }
+            }
+         } },
+         { "$match": { // reduce to the last bucket of each group
+            "$expr": {
+               "$eq": ["$IDsCumulative", "$bucketSize"]
+            }
+         } },
+         //
+         { "$project": {
+            "_id": 0,
+            "bucketId": 1, // ordinal of current bucket
+            // "bucketsTotal": 1, // total number of buckets
+            // "bucketsRemaining": { "$subtract": ["$bucketsTotal", "$bucketId"] }, // number of buckets remaining
+            "bucketSize": 1, // number of _ids in the current bucket
+            "bucketSizeLimit": "$$bucketSizeLimit", // bucket size limit
+            "IDsCumulative": 1, // cumulative total number of IDs
+            // "IDsRemaining": { "$subtract": ["$IDsTotal", "$IDsCumulative"] }, // total number of IDs remaining
+            "IDsTotal": 1, // total number of IDs
+            "IDs": 1 // IDs in the current bucket
+         } }
+      ];
+      // offload iterator to the server's cursor
       yield* namespace.aggregate(pipeline, aggOpts);
    }
 
@@ -190,6 +189,7 @@
             "allowDiskUse": true,
             "readOnce": true, // may or may not work in aggregation?
             // "readConcern": readConcern,
+            "readConcern": "local",
             "collation": collation,
             "hint": hint,
             "comment": "Validating IDs via niceDeleteMany.js"
@@ -214,7 +214,7 @@
          //    "w": "majority",
          //    "j": false
          // },
-         "comment": "Simulating deleteMany() workload via niceDeleteMany.js"
+         "comment": `Simulating deleteMany(${JSON.stringify(filter)}) workload via niceDeleteMany.js`
       };
       const deleteManyFilter = { "_id": { "$in": IDs } };
       const deleteManyOpts = { "collation": collation };
@@ -623,7 +623,6 @@
        *  see also https://jira.mongodb.org/browse/SPM-1123
        */
 
-      vitals = await congestionMonitor();
       const {
          cacheStatus,
          dirtyStatus,
@@ -631,26 +630,13 @@
          wtReadTicketsStatus,
          wtWriteTicketsStatus,
          checkpointStatus
-      } = vitals;
-      let sleepIntervalMS = 'wait';
+      } = await congestionMonitor();
 
-      // heuristics based on this write workload pattern
-      // add mongos detection here
-      if (cacheStatus == 'high' || dirtyStatus == 'high' || dirtyUpdatesStatus == 'high') {
-         // WT app threads evicting, we should not contribute to excess cache pressure
-         sleepIntervalMS = 'wait';
-      } else if (dirtyStatus == 'medium' || dirtyUpdatesStatus == 'medium') {
-         // moderate write cache pressure, we can pause slightly
-         sleepIntervalMS = Math.floor(50 + Math.random() * 150);
-      } else if ((wtReadTicketsStatus == 'high' || wtWriteTicketsStatus == 'high') && checkpointStatus == 'high') {
-         // tickets highly contended, we should mitigate storage pressure
-         sleepIntervalMS = Math.floor(150 + Math.random() * 150);
-      } else {
-         // no cache pressure, we can open up the throttle
-         sleepIntervalMS = 0;
-      }
-
-      return sleepIntervalMS;
+      // heuristics based on write workload pattern (add mongos detection here)
+      return (cacheStatus == 'high' || dirtyStatus == 'high' || dirtyUpdatesStatus == 'high') ? 'wait' // WT app threads evicting, we should not contribute to excess cache pressure
+           : (dirtyStatus == 'medium' || dirtyUpdatesStatus == 'medium') ? Math.floor(20 + Math.random() * 80) // moderate write cache pressure, we can pause slightly
+           : (wtWriteTicketsStatus == 'high' && checkpointStatus == 'high') ? Math.floor(100 + Math.random() * 100) // tickets highly contended, we should mitigate storage pressure
+           : 0; // no cache pressure, we can open up the throttle
    }
 
    async function* asyncThreadPool(method = () => {}, threads = [], poolSize = 1, sessionOpts = {}) {
@@ -684,13 +670,13 @@
 
    async function main() {
       vitals = await congestionMonitor();
-      const numCores = vitals.numCores;
+      const { numCores } = vitals;
       const concurrency = (numCores > 4) ? numCores : 4; // see https://www.mongodb.com/docs/manual/reference/parameters/#mongodb-parameter-param.wiredTigerConcurrentWriteTransactions
       const bucketSizeLimit = 100; // aligns with SPM-2227
       const readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // support monotonic writes
       const readPreference = {
          // "mode": "nearest", // offload the bucket generation to a less busy node
-         "mode": "secondaryPreferred", // offload the bucket generation to a less busy node
+         "mode": "secondaryPreferred", // offload the bucket generation to a different node
          "tags": [ // Atlas friendly defaults
             { "nodeType": "READ_ONLY", "diskState": "READY" },
             { "nodeType": "ANALYTICS", "diskState": "READY" },
@@ -709,7 +695,7 @@
       banner = `\n\x1b[33m${banner}\x1b[0m`;
       banner += `\n\nCurating deletion Ids from namespace '${dbName}.${collName}' with filter ${JSON.stringify(filter)} ...please wait\n`;
       if (safeguard) {
-         banner += '\nWarning: Safeguard is enabled, simulating deletes only\n';
+         banner += '\nWarning: Safeguard is enabled, simulating deletes only (via transaction rollbacks)\n';
       }
       console.clear();
       console.log(banner);
