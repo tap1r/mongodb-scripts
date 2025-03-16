@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.1.9"
+    *  Version: "0.1.10"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -56,7 +56,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.1.9" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.1.10" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -75,25 +75,45 @@
          },
          pipeline = [
             { "$match": filter },
-            { "$setWindowFields": {
+            // { "$setWindowFields": {
+            //    "sortBy": { "_id": 1 },
+            //    "output": {
+            //       "ordinal": { "$documentNumber": {} },
+            //       "IDsTotal": { "$count": {} }
+            // } } },
+            // { "$bucketAuto": { // fixed height bucketing
+            //    "groupBy": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
+            //    "buckets": buckets,
+            //    "output": {
+            //       "IDs": { "$push": "$_id" },
+            //       "bucketSize": { "$sum": 1 },
+            //       "IDsTotal": { "$max": "$IDsTotal" }
+            // } } },
+            // { "$setWindowFields": {
+            //    "sortBy": { "_id": 1 },
+            //    "output": {
+            //       "bucketId": { "$documentNumber": {} },
+            //       "bucketsTotal": { "$count": {} },
+            //       "IDsCumulative": {
+            //          "$sum": "$bucketSize",
+            //          "window": { "documents": ["unbounded", "current"] }
+            // } } } },
+            { "$setWindowFields": { // assign ordinal numbers incrementally
+               "sortBy": { "_id": 1 },
+               "output": { "ordinal": { "$documentNumber": {} } }
+            } },
+            { "$set": { // assign bucket IDs based on ordinal, avoiding full grouping
+               "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } }
+            } },
+            { "$group": { // group into buckets incrementally
+               "_id": "$bucketId",
+               "IDs": { "$push": "$_id" },
+               "bucketSize": { "$sum": 1 }
+            } },
+            { "$setWindowFields": { // compute cumulative bucket sizes
                "sortBy": { "_id": 1 },
                "output": {
-                  "ordinal": { "$documentNumber": {} },
-                  "IDsTotal": { "$count": {} }
-            } } },
-            { "$bucketAuto": { // fixed height bucketing
-               "groupBy": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
-               "buckets": buckets,
-               "output": {
-                  "IDs": { "$push": "$_id" },
-                  "bucketSize": { "$sum": 1 },
-                  "IDsTotal": { "$max": "$IDsTotal" }
-            } } },
-            { "$setWindowFields": {
-               "sortBy": { "_id": 1 },
-               "output": {
-                  "bucketId": { "$documentNumber": {} },
-                  "bucketsTotal": { "$count": {} },
+                  "bucketId": { "$documentNumber": {} }, // renumber buckets sequentially
                   "IDsCumulative": {
                      "$sum": "$bucketSize",
                      "window": { "documents": ["unbounded", "current"] }
@@ -101,12 +121,12 @@
             { "$project": {
                "_id": 0,
                "bucketId": 1, // ordinal of current bucket
-               "bucketsTotal": 1, // total number of buckets
-               "bucketsRemaining": { "$subtract": ["$bucketsTotal", "$bucketId"] }, // number of buckets remaining
+               // "bucketsTotal": 1, // total number of buckets
+               // "bucketsRemaining": { "$subtract": ["$bucketsTotal", "$bucketId"] }, // number of buckets remaining
                "bucketSize": 1, // number of _ids in the current bucket
                "bucketSizeLimit": "$$bucketSizeLimit", // bucket size limit
                "IDsCumulative": 1, // cumulative total number of IDs
-               "IDsRemaining": { "$subtract": ["$IDsTotal", "$IDsCumulative"] }, // total number of IDs remaining
+               // "IDsRemaining": { "$subtract": ["$IDsTotal", "$IDsCumulative"] }, // total number of IDs remaining
                "IDsTotal": 1, // total number of IDs
                "IDs": 1 // IDs in the current bucket
             } }
@@ -615,7 +635,8 @@
           *  Then expose such promise, so it's possible to later reference
           *  and remove it from the executing pool.
           */
-         let msg = `\n\n\tScheduling batch ${thread.bucketId} with ${thread.bucketsRemaining} buckets queued remaining:\n`;
+         // let msg = `\n\n\tScheduling batch ${thread.bucketId} with ${thread.bucketsRemaining} buckets queued remaining:\n`;
+         let msg = `\n\n\tScheduling batch ${thread.bucketId}:\n`;
          msg = banner + msg;
          console.clear();
          console.log(msg);
@@ -665,7 +686,8 @@
          console.log('\tNo matching documents found to match the filter, double-check the namespace and filter');
       } else {
          // initial batch
-         let msg = `\nForking ${initialBatch.bucketsTotal} batches of ${initialBatch.bucketSizeLimit} documents with concurrency execution of ${concurrency} to delete ${initialBatch.IDsTotal} documents`;
+         // let msg = `\nForking ${initialBatch.bucketsTotal} batches of ${initialBatch.bucketSizeLimit} documents with concurrency execution of ${concurrency} to delete ${initialBatch.IDsTotal} documents`;
+         let msg = `\nForking batches of ${initialBatch.bucketSizeLimit} documents with concurrency execution of ${concurrency} threads`;
          banner += msg;
          console.log(msg);
          for await (const [bucketId, deletedCount] of asyncThreadPool(deleteManyTask, [initialBatch], concurrency, sessionOpts)) {
@@ -679,9 +701,9 @@
       console.log(`\nValidating deletion results ...please wait\n`);
       const finalCount = countIds(filter);
       if (safeguard) {
-         console.log('Simulation safeguard is enabled, no deletions were actually performed, but since you asked:\n');
+         console.log('Simulation safeguard is enabled, no deletions were actually performed:\n');
       }
-      console.log('\tInitial document count matching filter: ', (initialEmptyBatch === true) ? 0 : initialBatch.IDsTotal);
+      // console.log('\tInitial document count matching filter: ', (initialEmptyBatch === true) ? 0 : initialBatch.IDsTotal);
       console.log('\tResidual document count matching filter:', finalCount);
       console.log('\nDone!');
    }
