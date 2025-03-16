@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.1.8"
+    *  Version: "0.1.9"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,6 +25,7 @@
     *  - add backoff expiry timer
     *  - add better sharding support
     *  - revise lowPriorityAdmissionBypassThreshold for backward compatibility
+    *  - improve support for Flex teirs
     */
 
    // Syntax: mongosh [connection options] [--quiet] [--eval 'let dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>;'] [-f|--file] niceDeleteMany.js
@@ -43,17 +44,19 @@
    /*
     *  Start user defined options defaults
     */
+
    typeof dbName !== 'string' && (dbName = '');
    typeof collName !== 'string' && (collName = '');
    typeof filter !== 'object' && (filter = {});
    typeof hint !== 'object' && (hint = {});
    typeof collation !== 'object' && (collation = {});
    typeof safeguard !== 'boolean' && (safeguard = true);
+
    /*
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.1.8" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.1.9" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -143,7 +146,7 @@
    }
 
    async function deleteManyTask({ IDs, bucketId } = {}, sessionOpts = {}) {
-      const sleepIntervalMS = await admissionControl();
+      let sleepIntervalMS = await admissionControl();
       while (sleepIntervalMS == 'wait') {
          console.log('\t\t...batch', bucketId, 'is awaiting scheduling due to back pressure');
          sleep(Math.floor(500 + Math.random() * 500));
