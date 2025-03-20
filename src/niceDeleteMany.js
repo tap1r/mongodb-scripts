@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.2"
+    *  Version: "0.2.3"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -55,7 +55,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.2" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.3" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -129,14 +129,14 @@
          } },
          { "$set": { // compute bucketId and running cumulative count
             "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
-            "cardianal": 1 // each document contributes 1 to its bucket
+            "cardinal": 1 // each document contributes 1 to its bucket
          } },
          { "$setWindowFields": { // compute cumulative sum in the bucket
             "partitionBy": "$bucketId",
             "sortBy": { [Object.keys(filter)[0]]: 1 },
             "output": {
                "IDsCumulative": {
-                  "$sum": "$cardianal",
+                  "$sum": "$cardinal",
                   "window": { "documents": ["unbounded", "current"] }
                },
                "IDs": { "$push": "$_id" },
