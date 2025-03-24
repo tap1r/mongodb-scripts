@@ -1,13 +1,13 @@
 (() => {
    /*
     *  Name: "aggSleepy.js"
-    *  Version: "0.1.4"
+    *  Version: "0.2.0"
     *  Description: "aggregation based '$sleepy' pipeline PoC to substitute for $function's sleep()"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     */
 
-   const __script = { "name": "aggSleepy.js", "version": "0.1.4" };
+   const __script = { "name": "aggSleepy.js", "version": "0.2.0" };
    if (typeof console === 'undefined') {
       /*
        *  legacy mongo detected
@@ -29,14 +29,19 @@
    const $sleepy = [
       { "$documents": [
          // seed the initial range to sample time meaurement performance
-         { "array": { "$range": [0, "$$samples"] } }
+         { "_": {
+            "$map": {
+               "input": { "$range": [0, "$$samples"] },
+               "in": null
+            }
+         } }
       ] },
-      { "$unwind": "$array" },
+      { "$unwind": "$_" },
       { "$lookup": {
          "from": "_",
          "pipeline": [
             { "$collStats": {} }, // get realtime clock measurement per lookup
-            { "$replaceRoot": { "newRoot": { "localTime": "$localTime" } } }
+            { "$replaceWith": { "localTime": "$localTime" } }
          ],
          "as": "_now"
       } },
@@ -52,26 +57,31 @@
       } },
       { "$set": {
          // extrapolate range to the remaining desired sleep time
-         "array": {
-            "$range": [
-               0,
-               { "$ceil": {
-                  "$multiply": [
-                     "$opCounters",
-                     { "$subtract": [
-                        "$$sleepy",
-                        // round down initial sample
-                        { "$add": ["$initialSleepMS", -1] }
-                     ] },
-                     1.025 // execution weighting for extrapolation
-         ] } }] }
+         "_": {
+            "$map": {
+               "input": {
+                  "$range": [
+                     0,
+                     { "$ceil": {
+                        "$multiply": [
+                           "$opCounters",
+                           { "$subtract": [
+                              "$$sleepy",
+                              // round down initial sample
+                              { "$add": ["$initialSleepMS", -1] }
+                           ] },
+                           1 // weighting
+                  ] } }]
+               },
+               "in": null
+         } }
       } },
-      { "$unwind": "$array" },
+      { "$unwind": "$_" },
       { "$lookup": {
          "from": "_",
          "pipeline": [
             { "$collStats": {} },
-            { "$replaceRoot": { "newRoot": { "localTime": "$localTime" } } }
+            { "$replaceWith": { "localTime": "$localTime" } }
          ],
          "as": "_now"
       } },
@@ -120,11 +130,11 @@
       "comment": filter,  // required for performance validation
       "let": {
          "sleepy": 1000,  // target sleep time in milliseconds
-         "samples": 10000 // initial sample size (worth ~40-80ms)
+         "samples": 1000  // initial sample size
       }
    };
 
-   console.dir(namespace.aggregate(pipeline, aggOptions).toArray());
+   console.log(namespace.aggregate(pipeline, aggOptions).toArray());
    // console.log(namespace.aggregate(pipeline, aggOptions).explain());
    const [{ 'attr': { durationMillis = -1 } = {} } = {}] = db.adminCommand(
          { "getLog": "global" }
