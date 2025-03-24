@@ -1,13 +1,13 @@
 (() => {
    /*
     *  Name: "aggSleepy.js"
-    *  Version: "0.2.1"
+    *  Version: "0.2.2"
     *  Description: "aggregation based '$sleepy' pipeline PoC to substitute for $function's sleep()"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     */
 
-   const __script = { "name": "aggSleepy.js", "version": "0.2.1" };
+   const __script = { "name": "aggSleepy.js", "version": "0.2.2" };
    if (typeof console === 'undefined') {
       /*
        *  legacy mongo detected
@@ -27,16 +27,13 @@
    const dbName = '$';
    const namespace = db.getSiblingDB(dbName);
    const $sleepy = [
-      { "$documents": [
+      { "$documents": {
          // seed the initial range to sample time meaurement performance
-         { "_": {
-            "$map": {
-               "input": { "$range": [0, "$$samples"] },
-               "in": null
-            }
-         } }
-      ] },
-      { "$unwind": "$_" },
+         "$map": {
+            "input": { "$range": [0, "$$samples"] },
+            "in": { "_": null }
+         }
+      } },
       { "$lookup": {
          "from": "_",
          "pipeline": [
