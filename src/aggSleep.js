@@ -1,13 +1,13 @@
 (() => {
    /*
     *  Name: "aggSleepy.js"
-    *  Version: "0.2.0"
+    *  Version: "0.2.1"
     *  Description: "aggregation based '$sleepy' pipeline PoC to substitute for $function's sleep()"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     */
 
-   const __script = { "name": "aggSleepy.js", "version": "0.2.0" };
+   const __script = { "name": "aggSleepy.js", "version": "0.2.1" };
    if (typeof console === 'undefined') {
       /*
        *  legacy mongo detected
@@ -47,7 +47,7 @@
       } },
       { "$group": {
          // count lookup interations per millisecond interval
-         "_id": { "$arrayElemAt": ["$_now.localTime", 0] },
+         "_id": { "$first": "$_now.localTime" },
          "opCount": { "$count": {} }
       } },
       { "$group": {
@@ -86,7 +86,7 @@
          "as": "_now"
       } },
       { "$group": {
-         "_id": { "_now": { "$arrayElemAt": ["$_now.localTime", 0] } },
+         "_id": { "$first": "$_now.localTime" },
          "initialSleepMS": { "$first": "$initialSleepMS" },
          "opCounters": { "$first": "$opCounters" }
       } },
