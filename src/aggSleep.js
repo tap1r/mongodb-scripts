@@ -1,13 +1,13 @@
 (() => {
    /*
     *  Name: "aggSleepy.js"
-    *  Version: "0.2.2"
+    *  Version: "0.2.3"
     *  Description: "aggregation based '$sleepy' pipeline PoC to substitute for $function's sleep()"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     */
 
-   const __script = { "name": "aggSleepy.js", "version": "0.2.2" };
+   const __script = { "name": "aggSleepy.js", "version": "0.2.3" };
    if (typeof console === 'undefined') {
       /*
        *  legacy mongo detected
@@ -124,10 +124,10 @@
       { "$unionWith": { "pipeline": $sleepy } }
    ];
    const aggOptions = {
-      "comment": filter,  // required for performance validation
+      "comment": filter, // required for performance validation
       "let": {
-         "sleepy": 1000,  // target sleep time in milliseconds
-         "samples": 1000  // initial sample size
+         "sleepy": 1000, // target sleep time in milliseconds (max 75000)
+         "samples": 5000 // initial sample size (max 410000)
       }
    };
 
