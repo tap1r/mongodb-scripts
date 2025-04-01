@@ -1,13 +1,14 @@
 (() => {
    /*
     *  Name: "aggSleepy.js"
-    *  Version: "0.2.3"
+    *  Version: "0.2.4"
     *  Description: "aggregation based '$sleepy' pipeline PoC to substitute for $function's sleep()"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     */
 
-   const __script = { "name": "aggSleepy.js", "version": "0.2.3" };
+   const __script = { "name": "aggSleepy.js", "version": "0.2.4" };
+
    if (typeof console === 'undefined') {
       /*
        *  legacy mongo detected
@@ -28,7 +29,7 @@
    const namespace = db.getSiblingDB(dbName);
    const $sleepy = [
       { "$documents": {
-         // seed the initial range to sample time meaurement performance
+         // seed the initial range to sample time measurement performance
          "$map": {
             "input": { "$range": [0, "$$samples"] },
             "in": { "_": null }
@@ -37,13 +38,13 @@
       { "$lookup": {
          "from": "_",
          "pipeline": [
-            { "$collStats": {} }, // get realtime clock measurement per lookup
+            { "$collStats": {} }, // get realtime clock measurement per $lookup
             { "$replaceWith": { "localTime": "$localTime" } }
          ],
          "as": "_now"
       } },
       { "$group": {
-         // count lookup interations per millisecond interval
+         // count $lookup interations per millisecond interval
          "_id": { "$first": "$_now.localTime" },
          "opCount": { "$count": {} }
       } },
@@ -149,19 +150,19 @@
 /*
    [
       {
-      _id: ObjectId('67572aa3779e427f39592d0d'),
-      name: 'Robert',
-      number: 1
+         _id: ObjectId('67572aa3779e427f39592d0d'),
+         name: 'Robert',
+         number: 1
       },
       {
-      _id: ObjectId('67572aa3779e427f39592d0e'),
-      name: 'Alice',
-      number: 5
+         _id: ObjectId('67572aa3779e427f39592d0e'),
+         name: 'Alice',
+         number: 5
       },
       {
-      _id: ObjectId('67572aa3779e427f39592d0f'),
-      name: 'Eve',
-      number: 42
+         _id: ObjectId('67572aa3779e427f39592d0f'),
+         name: 'Eve',
+         number: 42
       },
       { _id: '$sleepy', samples: 10000, sleepy: 100, totalSleepMS: 100 }
    ]
