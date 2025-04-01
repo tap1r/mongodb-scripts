@@ -1,8 +1,10 @@
-// miscellaneous unsorted scripts
+/*
+ *  miscellaneous unsorted scripts
+ */
 
 (() => { // $sample expression testing
-   let dbName = 'database', collName = 'collection';
-   let namespace = db.getSiblingDB(dbName).getCollection(collName),
+   const dbName = 'database', collName = 'collection';
+   const namespace = db.getSiblingDB(dbName).getCollection(collName),
       sampleSize = 4.9, // percentage
       options = {
          "allowDiskUse": true,
@@ -15,18 +17,17 @@
       pipeline = [
          // { "$addFields": { "_sampleSize": "$$sampleN" } }, // fails
          // { "$sample": { "size": "$_sampleSize" } } // fails
-         // { "$sample": { "size": 1000 } } // factory default works as expected
+         { "$sample": { "size": 1000 } } // factory default works as expected
          // { "$sample": { "size": "$$sampleN" } } // fails
-         { "$sample": { "size": { "$expr": "$$sampleN" } } } // fails
+         // { "$sample": { "size": { "$expr": "$$sampleN" } } } // fails
       ];
 
    namespace.aggregate(pipeline, options).forEach(printjson);
 })();
 
 (() => {
-   let dbName = 'database', collName = 'collection';
-
-   let namespace = db.getSiblingDB(dbName).getCollection(collName),
+   const dbName = 'database', collName = 'collection';
+   const namespace = db.getSiblingDB(dbName).getCollection(collName),
       sampleCap = 50000, // 50K
       collSize = namespace.estimatedDocumentCount(),
       collCap = 2000000, // 2M
@@ -35,7 +36,7 @@
                  : (collSize <= collCap) ? collSize * rndCursorLimit
                  : sampleCap;
 
-   let options = {
+   const options = {
          "allowDiskUse": true,
          "readConcern": { "level": "local" }
       },
@@ -47,28 +48,30 @@
 })();
 
 (() => { // collmod validators
-   let dbName = 'database', collName = 'collection';
-   let db = db.getSiblingDB(dbName),
-      validatorLevel = 'moderate', validatorActions = 'warn', validator = { "$jsonSchema": { } };
+   const dbName = 'database', collName = 'collection';
+   const namespace = db.getSiblingDB(dbName),
+      validatorLevel = 'moderate',
+      validatorActions = 'warn',
+      validator = { "$jsonSchema": {} };
 
-   db.runCommand({
+   console.log(namespace.runCommand({
       "collMod": collName,
       "validator": validator,
       "validationLevel": validatorLevel,
       "validationAction": validatorActions
-   });
+   }));
 
-   db.getCollectionInfos({ "name": collName })[0]['options'];
-   // db.getCollectionInfos({ "name": collName })[0]['options']['validator'];
-   // db.getCollectionInfos({ "name": collName })[0]['options']['validationLevel'];
-   // db.getCollectionInfos({ "name": collName })[0]['options']['validationAction'];
+   console.log(namespace.getCollectionInfos({ "name": collName })[0]['options']);
+   // console.log(namespace.getCollectionInfos({ "name": collName })[0]['options']['validator']);
+   // console.log(namespace.getCollectionInfos({ "name": collName })[0]['options']['validationLevel']);
+   // console.log(namespace.getCollectionInfos({ "name": collName })[0]['options']['validationAction']);
 })();
 
 (() => { // stringify $function
-   let dbName = 'database', collName = 'collection';
-   let db = db.getSiblingDB(dbName);
-   let namespace = db.getCollection(collName);
-   let options = {
+   const dbName = 'database', collName = 'collection';
+   const dbHandle = db.getSiblingDB(dbName);
+   const namespace = db.getCollection(collName);
+   const options = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
@@ -86,18 +89,18 @@
 
    namespace.aggregate(pipeline, options).forEach(printjson);
 
-   let view = 'view';
-   db.createView(view, collName, pipeline);
+   const view = 'view';
+   dbHandle.createView(view, collName, pipeline);
 })();
 
 (() => { // JSON parser $function
-   let dbName = 'database', collName = 'collection';
-   let namespace = db.getSiblingDB(dbName).getCollection(collName),
+   const dbName = 'database', collName = 'collection';
+   const namespace = db.getSiblingDB(dbName).getCollection(collName),
       options = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
-         "comment": "JOSN parser aggregation query"
+         "comment": "JSON parser aggregation query"
       },
       pipeline = [{
          "$project": {
@@ -113,8 +116,8 @@
 })();
 
 (() => { // localtime date match on ObjectID
-   let dbName = 'database', collName = 'collection';
-   let namespace = db.getSiblingDB(dbName).getCollection(collName);
+   const dbName = 'database', collName = 'collection';
+   const namespace = db.getSiblingDB(dbName).getCollection(collName);
       options = {
          "comment": "Aggregation pipeline to match localtime",
          "let": {
@@ -170,7 +173,7 @@
 })();
 
 (async() => { // op monitoring script, refactored async script - testing w/concurrency
-   let cores = (typeof db.hostInfo().system.numCores !== 'undefined') ? db.hostInfo().system.numCores : 16; // else max 16 is probably a good default
+   const cores = (typeof db.hostInfo().system.numCores !== 'undefined') ? db.hostInfo().system.numCores : 16; // else max 16 is probably a good default
 
    db.getMongo().getDBNames().filter(dbs => dbs.match(/^(?!(admin|config|local)$)/)).map(dbName =>
       db.getSiblingDB(dbName).getCollectionNames().filter(collections => collections.match(/^(?!(system\.))/)).map(async collName => {
@@ -184,11 +187,11 @@
 
 exports = function() { // Sample trigger to update a materialised view
    // console.log('Start of function');
-   let isSystemUser = context.runningAsSystem();
+   const isSystemUser = context.runningAsSystem();
    if (isSystemUser) {
       // console.log('Running function in system context');
-      let cluster = 'cluster', dbName = 'database', collName = 'collection', mergedColl = 'hash_count';
-      let offset = 1 * (24 * 3600 * 1000); // 1 day (in milliseconds),
+      const cluster = 'cluster', dbName = 'database', collName = 'collection', mergedColl = 'hash_count';
+      const offset = 1 * (24 * 3600 * 1000); // 1 day (in milliseconds),
          collection = context.services.get(cluster).db(dbName).collection(collName),
          pipeline = [
             { "$match": { "$expr": { "$gte": ["$creation_date", { "$subtract": ["$$NOW", offset] }] } } },
@@ -212,7 +215,7 @@ exports = function() { // Sample trigger to update a materialised view
 };
 
 (() => { // reproduction for javascript BSON types 13 & 15
-   let batch = [
+   const batch = [
       { "name": "Javascript type 13", "js": Code(function(){}) },
       { "name": "Javascript type 13", "js": Code(() => {}) },
       { "name": "Javascript type 13", "js": Code("function(){}") },
@@ -231,8 +234,8 @@ exports = function() { // Sample trigger to update a materialised view
       { "name": "Javascript type unknown?", "js": Code("() => {}", []) }
    ];
 
-   let dbName = 'database', collName = 'collection';
-   let namespace = db.getSiblingDB(dbName).getCollection(collName),
+   const dbName = 'database', collName = 'jsTypes';
+   const namespace = db.getSiblingDB(dbName).getCollection(collName),
       options = {
          "readConcern": { "level": "local" },
          "comment": "reproduction for javascript BSON types 13 & 15"
@@ -250,11 +253,11 @@ exports = function() { // Sample trigger to update a materialised view
 
    namespace.drop();
    namespace.insertMany(batch);
-   namespace.aggregate(pipeline, options);
+   namespace.aggregate(pipeline, options).forEach(printjson);
 })();
 
 (() => { // replset config changes, rename replset hosts
-   let hosts = ["host1:27017", "host2:27018", "host3:27019"];
+   const hosts = ["host1:27017", "host2:27018", "host3:27019"];
    rs.reconfig({
       ...rs.conf(),
       "members": rs.conf().members.map(member => ({
@@ -265,7 +268,7 @@ exports = function() { // Sample trigger to update a materialised view
 })();
 
 (() => { // replset config changes, set split-horizon mappings
-   let horizons = [
+   const horizons = [
       { "external": "external:37017" },
       { "external": "external:37018" },
       { "external": "external:37019" }
@@ -288,7 +291,7 @@ exports = function() { // Sample trigger to update a materialised view
 // currentOp usage examples
 
 (() => { // template
-   let dbName = 'database';
+   const dbName = 'database';
    db.adminCommand({
       "currentOp": true,
       // "$ownOps": true,
@@ -303,9 +306,11 @@ exports = function() { // Sample trigger to update a materialised view
    );
 })();
 
-db.runCommand({ "connectionStatus": 1, "showPrivileges": true });
+(() => { // connectionStatus to show auth'd user with roles
+   console.log(db.adminCommand({ "connectionStatus": 1, "showPrivileges": true }));
+})();
 
-(() => { // template
+(() => { // legacy currentOp cmd template
    db.adminCommand({
       "currentOp": true,
       "active": true,
@@ -316,7 +321,7 @@ db.runCommand({ "connectionStatus": 1, "showPrivileges": true });
    );
 })();
 
-(() => { // template
+(() => { // $currentOp cmd template
    db.getSiblingDB('admin').aggregate([
       { "$currentOp": { } },
       { "$match": {
@@ -326,9 +331,9 @@ db.runCommand({ "connectionStatus": 1, "showPrivileges": true });
       } }
    ]).forEach(op =>
       print('\nCurrently validating namespace:',
-            op.command['$db'] + '.' +
-            op.command.validate, 'for',
-            +op.secs_running, 'seconds')
+         op.command['$db'] + '.' +
+         op.command.validate, 'for',
+         +op.secs_running, 'seconds')
    );
 })();
 
@@ -336,12 +341,12 @@ db.runCommand({ "connectionStatus": 1, "showPrivileges": true });
 
 (() => { // template
    db.getSiblingDB('admin').aggregate([
-      { "$currentOp": { } },
+      { "$currentOp": {} },
       { "$match": { "active": true } }
    ]).forEach(op =>
       print('\nCurrent multi-document transactions:',
-            'TXN:', op.transaction.parameters.txnNumber,
-            'Participating shards', printjson(op.transaction.participants)
+         'TXN:', op.transaction.parameters.txnNumber,
+         'Participating shards', printjson(op.transaction.participants)
    ));
 })();
 
@@ -368,7 +373,7 @@ db.runCommand({ "connectionStatus": 1, "showPrivileges": true });
 // change stream monitoring script 
 
 (() => {
-   let dbName = 'database', collName = 'collection';
+   const dbName = 'database', collName = 'collection';
    let changeStream = db.getSiblingDB(dbName).getCollection(collName).watch();
 
    while (!changeStream.isClosed()) {
@@ -387,8 +392,8 @@ db.runCommand({ "connectionStatus": 1, "showPrivileges": true });
 })();
 
 (async() => {
-   let dbName = 'database', collName = 'collection';
-   let namespace = db.getSiblingDB(dbName).getCollection(collName);
+   const dbName = 'database', collName = 'collection';
+   const namespace = db.getSiblingDB(dbName).getCollection(collName);
    let watchCursor; // scope the watcher
 
    async function main() {
@@ -449,7 +454,7 @@ db.runCommand({ "connectionStatus": 1, "showPrivileges": true });
 // Running and monitoring compact()
 
 (() => { // template
-   let dbName = 'database', collName = 'collection';
+   const dbName = 'database', collName = 'collection';
    db.getSiblingDB(dbName).runCommand({ "compact": collName });
 
    db.adminCommand({ "getLog": "global" }).log.filter(line => line.match(/[Cc]ompact/)).map(entry => console.log(entry));
@@ -463,8 +468,8 @@ db.runCommand({ "connectionStatus": 1, "showPrivileges": true });
       } }
    ]).forEach(({ command }) =>
       print('\nCurrently compacting namespace:',
-            command['$db'] + '.' +
-            command.compact)
+         command['$db'] + '.' +
+         command.compact)
    );
 })();
 
@@ -542,17 +547,17 @@ db.runCommand({ "connectionStatus": 1, "showPrivileges": true });
    /*
     *  cache pre-warming script
     */
-   let dbName = 'database';
-   let collName = 'collection';
-   let idxName = '_id';
+   const dbName = 'database';
+   const collName = 'collection';
+   const idxName = '_id';
 
    let initialCacheSize, delta;
-   let namespace = db.getSiblingDB(dbName).getCollection(collName);
-   let cacheSizeBytes = () => db.serverStatus().wiredTiger.cache['bytes belonging to page images in the cache'];
+   const namespace = db.getSiblingDB(dbName).getCollection(collName);
+   const cacheSizeBytes = () => db.serverStatus().wiredTiger.cache['bytes belonging to page images in the cache'];
 
    // cache pre-warming for collection
    initialCacheSize = cacheSizeBytes.call();
-   let { documentsScanned, objectSizeBytes } = namespace.aggregate(
+   const { documentsScanned, objectSizeBytes } = namespace.aggregate(
       { "$match": {} },
       { "$group": {
          "_id": null,
@@ -596,9 +601,9 @@ db.runCommand({ "connectionStatus": 1, "showPrivileges": true });
  *  report stale indexes
  */
 (() => {
-   let dbName = 'database', collName = 'collection';
-   let idxAge = 24 * 3600 * 1000; // 24hrs in millis
-   let indexes = db.getSiblingDB(dbName).getCollection(collName).aggregate(
+   const dbName = 'database', collName = 'collection';
+   const idxAge = 24 * 3600 * 1000; // 24hrs in millis
+   const indexes = db.getSiblingDB(dbName).getCollection(collName).aggregate(
       { "$indexStats": {} },
       { "$match": {
          // "name": "_id_", // explicitly add specific index
@@ -610,7 +615,7 @@ db.runCommand({ "connectionStatus": 1, "showPrivileges": true });
       } }
    );
    for (let { name, accesses } of indexes) {
-      let since = (accesses.ops < 1) ? 'never since startup' : accesses.since;
+      const since = (accesses.ops < 1) ? 'never since startup' : accesses.since;
       console.log(`Index ${name} last accessed ${since}`);
    }
 })();
@@ -646,13 +651,14 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
 
 // concurrent MongoClient()s
 (() => {
-   let datasets = Mongo('mongodb://localhost:27017'),
+   const datasets = Mongo('mongodb://localhost:27017'),
       superpowers = Mongo('mongodb://localhost:27018'),
       movies1 = datasets.getSiblingDB('sample_mflix').getCollection('movies'),
       movies2 = superpowers.getSiblingDB('sample_mflix').getCollection('movies'),
       cursor1 = movies1.find().sort({ "_id": 1 }),
-      cursor2 = movies2.find().sort({ "_id": 1 }),
-      i = 0, doc;
+      cursor2 = movies2.find().sort({ "_id": 1 });
+
+   let i = 0, doc;
 
    while (doc = cursor1.next()) {
       let otherDoc = cursor2.next();
@@ -664,9 +670,9 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
 // bin subtype eval
 
 (() => {
-   let dbName = 'admin';
-   let namespace = db.getSiblingDB(dbName);
-   let options = {
+   const dbName = '$';
+   const namespace = db.getSiblingDB(dbName);
+   const options = {
          "comment": "bin type eval"
       },
       pipeline = [
@@ -707,11 +713,11 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
  *  $sample substitute using readOnce cursor option
  */
 (() => {
-   let dbName = 'database', collName = 'collection';
-   let { count } = db.getSiblingDB(dbName).getCollection(collName).stats();
-   let sampleSize = 5;
-   let sampleRate = (sampleSize * 1.1) / count; // oversample slightly to round out nearer to the expected sample size
-   let sample = db.getSiblingDB(dbName).runCommand({
+   const dbName = 'database', collName = 'collection';
+   const { count } = db.getSiblingDB(dbName).getCollection(collName).stats();
+   const sampleSize = 5;
+   const sampleRate = (sampleSize * 1.1) / count; // oversample slightly to round out nearer to the expected sample size
+   const sample = db.getSiblingDB(dbName).runCommand({
       "find": collName,
       "filter": { "$sampleRate": sampleRate },
       "hint": "_id_",
@@ -724,13 +730,13 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
 })();
 
 (() => {
-   let dbName = 'database', collName = 'collection';
-   let database = db.getSiblingDB(dbName);
-   let namespace = db.getSiblingDB(dbName).getCollection(collName);
-   let { count } = namespace.stats();
-   let sampleSize = 1000;
-   let sampleRate = (sampleSize * 1.1) / count; // oversample slightly to round out nearer to the expected sample size
-   let samplerCmd = {
+   const dbName = 'database', collName = 'collection';
+   const database = db.getSiblingDB(dbName);
+   const namespace = db.getSiblingDB(dbName).getCollection(collName);
+   const { count } = namespace.stats();
+   const sampleSize = 1000;
+   const sampleRate = (sampleSize * 1.1) / count; // oversample slightly to round out nearer to the expected sample size
+   const samplerCmd = {
       "find": collName,
       "filter": { "$sampleRate": sampleRate },
       "hint": "_id_",
@@ -739,7 +745,7 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
       // "returnKey": true,
       "comment": "sampling with readOnce cursor option"
    };
-   let { 'executionStats': samplerCmdStats } = database.runCommand({
+   const { 'executionStats': samplerCmdStats } = database.runCommand({
       "explain": samplerCmd,
       "verbosity": "executionStats",
       "comment": "psuedo-sampler stats"
@@ -750,22 +756,22 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
 // by distribution
 
 (() => {
-   let dbName = 'database', collName = 'collection';
-   let database = db.getSiblingDB(dbName);
-   let namespace = db.getSiblingDB(dbName).getCollection(collName);
-   // let { count } = namespace.stats();
-   let sampleSize = 1000;
-   // let sampleRate = (sampleSize * 1.1) / count; // oversample slightly to round out nearer to the expected sample size
-   // let bucketSize = Math.ceil(count / sampleSize); // 64;
-   let explainPlan = 'executionStats'; // ['queryPlanner'|'executionStats'|'allPlansExecution']
-   let options = {
+   const dbName = 'database', collName = 'collection';
+   const database = db.getSiblingDB(dbName);
+   const namespace = db.getSiblingDB(dbName).getCollection(collName);
+   // const { count } = namespace.stats();
+   const sampleSize = 1000;
+   // const sampleRate = (sampleSize * 1.1) / count; // oversample slightly to round out nearer to the expected sample size
+   // const bucketSize = Math.ceil(count / sampleSize); // 64;
+   const explainPlan = 'executionStats'; // ['queryPlanner'|'executionStats'|'allPlansExecution']
+   const options = {
       "allowDiskUse": true,
       "cursor": { "batchSize": sampleSize },
       "readConcern": { "level": "local" },
       "hint": { "_id": 1 },
       "comment": "sampling with readOnce cursor option",
    };
-   let pipeline = [
+   const pipeline = [
       { "$bucketAuto": {
          "groupBy": "$_id",
          "buckets": sampleSize, // bucketSize,
@@ -778,11 +784,11 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
          "total": { "$sum": 1 }
       } } */
    ];
-   let { 'stages': [{ '$cursor': { 'executionStats': bucketStats } }] } = namespace.explain(explainPlan).aggregate(pipeline, options);
+   const { 'stages': [{ '$cursor': { 'executionStats': bucketStats } }] } = namespace.explain(explainPlan).aggregate(pipeline, options);
    printjson(bucketStats);
-   let buckets = namespace.aggregate(pipeline, options).toArray().map(id => { return id['_id'] });
+   const buckets = namespace.aggregate(pipeline, options).toArray().map(id => { return id['_id'] });
    // printjson(buckets);
-   let samplerCmd = {
+   const samplerCmd = {
       "find": collName,
       "filter": { "_id": { "$in": buckets } },
       // "hint": "_id_",
@@ -790,7 +796,7 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
       "readConcern": { "level": "local" },
       "comment": "sampling with readOnce cursor option"
    };
-   let { 'executionStats': samplerCmdStats } = database.runCommand({
+   const { 'executionStats': samplerCmdStats } = database.runCommand({
       "explain": samplerCmd,
       "verbosity": "executionStats",
       "comment": "psuedo-sampler stats"
@@ -799,26 +805,26 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
 })();
 
 (() => {
-   let dbName = 'database', collName = 'collection';
-   let database = db.getSiblingDB(dbName);
-   let namespace = db.getSiblingDB(dbName).getCollection(collName);
-   // let { count } = namespace.stats();
-   let sampleSize = 1000;
-   // let sampleRate = (sampleSize * 1.1) / count; // oversample slightly to round out nearer to the expected sample size
-   // let bucketSize = Math.ceil(count / sampleSize); // 64;
-   let explainPlan = 'executionStats'; // ['queryPlanner'|'executionStats'|'allPlansExecution']
-   let options = {
+   const dbName = 'database', collName = 'collection';
+   const database = db.getSiblingDB(dbName);
+   const namespace = db.getSiblingDB(dbName).getCollection(collName);
+   // const { count } = namespace.stats();
+   const sampleSize = 1000;
+   // const sampleRate = (sampleSize * 1.1) / count; // oversample slightly to round out nearer to the expected sample size
+   // const bucketSize = Math.ceil(count / sampleSize); // 64;
+   const explainPlan = 'executionStats'; // ['queryPlanner'|'executionStats'|'allPlansExecution']
+   const options = {
       "allowDiskUse": true,
       "cursor": { "batchSize": sampleSize },
       "readConcern": { "level": "local" },
       // "hint": { "_id": 1 },
       "comment": "sampling with readOnce cursor option",
    };
-   let pipeline = [
+   const pipeline = [
       { "$sample": { "size": sampleSize } },
    ];
-   // let { 'stages': [{ '$cursor': { 'executionStats': bucketStats } }] } = namespace.explain(explainPlan).aggregate(pipeline, options);
-   let bucketStats = namespace.explain(explainPlan).aggregate(pipeline, options);
+   // const { 'stages': [{ '$cursor': { 'executionStats': bucketStats } }] } = namespace.explain(explainPlan).aggregate(pipeline, options);
+   const bucketStats = namespace.explain(explainPlan).aggregate(pipeline, options);
    printjson(bucketStats);
 })();
 
