@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.3"
+    *  Version: "0.2.4"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -55,7 +55,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.3" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.4" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -627,7 +627,7 @@
          cacheStatus,
          dirtyStatus,
          dirtyUpdatesStatus,
-         wtReadTicketsStatus,
+         // wtReadTicketsStatus,
          wtWriteTicketsStatus,
          checkpointStatus
       } = await congestionMonitor();
