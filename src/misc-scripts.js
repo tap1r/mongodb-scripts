@@ -166,9 +166,9 @@
       } }
    ]).forEach(op =>
       print('\nCurrently validating namespace:',
-            op.command['$db'] + '.' +
-            op.command.validate, 'for',
-            +op.secs_running, 'seconds')
+         op.command['$db'] + '.' +
+         op.command.validate, 'for',
+         +op.secs_running, 'seconds')
    );
 })();
 
@@ -262,7 +262,7 @@ exports = function() { // Sample trigger to update a materialised view
       ...rs.conf(),
       "members": rs.conf().members.map(member => ({
          ...member,
-         "host": hosts[member._id],
+         "host": hosts[member._id]
       }))
    });
 })();
@@ -323,7 +323,7 @@ exports = function() { // Sample trigger to update a materialised view
 
 (() => { // $currentOp cmd template
    db.getSiblingDB('admin').aggregate([
-      { "$currentOp": { } },
+      { "$currentOp": {} },
       { "$match": {
          "active": true,
          "op": "command",
@@ -352,7 +352,7 @@ exports = function() { // Sample trigger to update a materialised view
 
 // indexing build
 
-(() => { // template
+(() => { // monitor index builds
    db.getSiblingDB('admin').aggregate([
       { "$currentOp": {
          "allUsers": true,
@@ -475,7 +475,7 @@ exports = function() { // Sample trigger to update a materialised view
 
 // monitoring $sample
 
-(() => { // template
+(() => { // monitor mongoslqd sampling
    db.getSiblingDB('admin').aggregate([
       { "$currentOp": {} },
       { "$match": {
@@ -493,17 +493,17 @@ exports = function() { // Sample trigger to update a materialised view
    if (db.serverStatus().process !== 'mongos') {
       print('\n\tMust be connected via a mongos!\n');
    } else {
-      let shardedNamespaces = db.getSiblingDB('config')
-                                .getCollection('collections')
-                                .find({
-                                    "_id": /^(?!(config\.))/,
-                                    "dropped": { "$ne": true }
-                                 },
-                                 { "_id": 1 }
-                              ).toArray(),
+      const shardedNamespaces = db.getSiblingDB('config')
+                                  .getCollection('collections')
+                                  .find({
+                                       "_id": /^(?!(config\.))/,
+                                       "dropped": { "$ne": true }
+                                    },
+                                    { "_id": 1 }
+                                 ).toArray(),
          { shards } = db.adminCommand({ "listShards": 1 }),
-         sleepInterval = 2000, // ms
-         result;
+         sleepInterval = 2000; // ms
+      let result;
       print('\nSharded collections:');
       shardedNamespaces.forEach(namespace => print(`\t${namespace._id}`));
       print('\nShards:');
@@ -511,7 +511,7 @@ exports = function() { // Sample trigger to update a materialised view
       shards.forEach(shard => {
          print(`\nConnecting to: ${shard._id}`);
          // let { setName, seedList } = shard.host.match(/(?<setName>\w+)\/(?<seedList>.+)/).groups,
-         let [, setName, seedList] = shard.host.match(/(\w+)\/(.+)/),
+         const [, setName, seedList] = shard.host.match(/(\w+)\/(.+)/),
             uri = `mongodb://${seedList}/?replicaSet=${setName}&readPreference=primary`,
             shardPrimary = new Mongo(uri).getDB('admin');
          shardedNamespaces.forEach(namespace => {
@@ -769,7 +769,7 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
       "cursor": { "batchSize": sampleSize },
       "readConcern": { "level": "local" },
       "hint": { "_id": 1 },
-      "comment": "sampling with readOnce cursor option",
+      "comment": "sampling with readOnce cursor option"
    };
    const pipeline = [
       { "$bucketAuto": {
@@ -818,10 +818,10 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
       "cursor": { "batchSize": sampleSize },
       "readConcern": { "level": "local" },
       // "hint": { "_id": 1 },
-      "comment": "sampling with readOnce cursor option",
+      "comment": "sampling with readOnce cursor option"
    };
    const pipeline = [
-      { "$sample": { "size": sampleSize } },
+      { "$sample": { "size": sampleSize } }
    ];
    // const { 'stages': [{ '$cursor': { 'executionStats': bucketStats } }] } = namespace.explain(explainPlan).aggregate(pipeline, options);
    const bucketStats = namespace.explain(explainPlan).aggregate(pipeline, options);
