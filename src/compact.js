@@ -1,6 +1,6 @@
 /*
  *  Name: "compact.js"
- *  Version: "0.2.9"
+ *  Version: "0.2.10"
  *  Description: schrödinger's page reproduction
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -12,7 +12,7 @@
  *  User defined parameters
  */
 
-let options = {
+const options = {
    "dbName": "database",
    "collName": "collection",
    // "n": 25, // = % chance of being matched
@@ -25,16 +25,16 @@ let options = {
    /*
     *  ...
     */
-   let __script = { "name": "compact.js", "version": "0.2.9" };
+   const __script = { "name": "compact.js", "version": "0.2.10" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
-   let dbFilter = dbName, collFilter = collName, reportLog;
-   let namespace = db.getSiblingDB(dbName).getCollection(collName);
+   const dbFilter = dbName, collFilter = collName, reportLog;
+   const namespace = db.getSiblingDB(dbName).getCollection(collName);
    if (!namespace.exists()) {
       throw `\x1b[31m[ERROR] namespace "${dbName}.${collName}" does not exist\x1b[0m`;
    }
 
-   let randFilter = { "$expr": { "$gt": [n/100, { "$rand": {} }] } };
+   const randFilter = { "$expr": { "$gt": [n/100, { "$rand": {} }] } };
    // let update = { "$set": { "x": Math.random() } };
 
    for (let i = 1; i <= rounds; ++i) {
@@ -61,13 +61,14 @@ let options = {
    load('dbstats.js');
 
    // compact()
-   let dbContext = db.getSiblingDB(dbName);
-   let compactCmd = { "compact": collName };
-   let compactCmdOptions = { "readPreference": "secondary" };
+   const dbContext = db.getSiblingDB(dbName);
+   const compactCmd = { "compact": collName };
+   const compactCmdOptions = { "readPreference": "secondary" };
    for (let i = 1; i <= compactions; ++i) {
       console.log(`Compacting collection ${i} of ${compactions}`);
-      let { bytesFreed } = (shellVer() >= 2.0 && typeof process !== 'undefined') ? dbContext.runCommand(compactCmd, compactCmdOptions)
-                         : dbContext.runCommand(compactCmd);
+      const { bytesFreed } = (shellVer() >= 2.0 && typeof process !== 'undefined')
+                           ? dbContext.runCommand(compactCmd, compactCmdOptions)
+                           : dbContext.runCommand(compactCmd);
 
       /*
          db.getSiblingDB('admin').aggregate([
