@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.13.3"
+ *  Version: "0.13.4"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.13.3"
+      "version": "0.13.4"
 });
 
 /*
@@ -185,7 +185,37 @@ if (typeof console === 'undefined') {
     *  legacy mongo detected
     */
    var console = {
-      log: print,
+      log: arguments => {
+         const tags = [
+            { "tag": "\/", "code": 0, "alt": "reset" },
+            { "tag": "bold", "code": 1, "alt": "bold" },
+            { "tag": "dim", "code": 2, "alt": "dim" },
+            { "tag": "italic", "code": 3, "alt": "italic" },
+            { "tag": "underline", "code": 4, "alt": "underline" },
+            { "tag": "blink", "code": 5, "alt": "blink" },
+            { "tag": "reverse", "code": 7, "alt": "reverse" },
+            { "tag": "hide", "code": 8, "alt": "hide" },
+            { "tag": "strike", "code": 9, "alt": "strike" },
+            { "tag": "black", "code": 30, "alt": "black" },
+            { "tag": "red", "code": 31, "alt": "red" },
+            { "tag": "green", "code": 32, "alt": "green" },
+            { "tag": "yellow", "code": 33, "alt": "yellow" },
+            { "tag": "blue", "code": 34, "alt": "blue" },
+            { "tag": "magenta", "code": 35, "alt": "magenta" },
+            { "tag": "cyan", "code": 36, "alt": "cyan" },
+            { "tag": "white", "code": 37, "alt": "white" },
+            { "tag": "default", "code": 39, "alt": "default" }
+         ];
+         const markup = text => {
+            tags.forEach(({ tag, code }) => {
+               const re = new RegExp(`\\[${tag}\\]`, 'gi');
+               text = text.replace(re, `\x1b[${code}m`);
+            });
+            return text;
+         };
+
+         return print(markup(arguments));
+      },
       clear: () => _runMongoProgram('clear'),
       error: tojson,
       debug: tojson,
