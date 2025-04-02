@@ -1,6 +1,6 @@
 /*
  *  Name: "batchUpdater.js"
- *  Version: "0.1.4"
+ *  Version: "0.1.5"
  *  Description: batch updater with ranged based pagination
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -8,27 +8,27 @@
 
 // Usage: "mongosh [connection options] --quiet batchUpdater.js"
 
-const __script = { "name": "batchUpdater.js", "version": "0.1.4" };
+const __script = { "name": "batchUpdater.js", "version": "0.1.5" };
 
 // user defined variables
-let dbName = 'database',
+const dbName = 'database',
     collName = 'collection',
     batchSize = 10000,
     sleepIntervalMS = 5000,
     update = [{ "$set": { "x": { "$toInt": "$x" } } }],
     comment = `run by script ${__script.name} v${__script.version}`;
 
-let namespace = db.getSiblingDB(dbName).getCollection(collName);
+const namespace = db.getSiblingDB(dbName).getCollection(collName);
 
 // script variables
-let sort = { "_id": 1 },
+const sort = { "_id": 1 },
     options = {
         "upsert": false,
-        "writeConcern": { "w": "majority", "j": true }
+        "writeConcern": { "w": "majority", "j": false }
     },
-    currentKey = MinKey(),
     readPref = 'primary',
     readConcern = 'local';
+let currentKey = MinKey();
 
 db.getMongo().setReadPref(readPref);
 
