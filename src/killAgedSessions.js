@@ -1,7 +1,7 @@
 (async(filter = {}, age = 300000) => {
    /*
     *  Name: "killAgedSessions.js"
-    *  Version: "0.1.0"
+    *  Version: "0.1.1"
     *  Description: "kill aged sessions (and associated operations) by user"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -30,13 +30,14 @@
     *  Example: terminates all user sessions older than 1 minute
     *
     *    mongosh --host "replset/localhost" --eval 'let user = { "allUsers": true }, age = 60000;' killAgedSessions.js
-    * 
+    *
     *  Example: terminates user dba's sessions older than 500ms
     *
     *    mongosh --host "replset/localhost" --eval 'let user = { "users": [{ "user": "dba", "db": "admin" }] }, age = 500;' killAgedSessions.js
     */
 
-   await db.getSiblingDB('config').getCollection('system.sessions').aggregate([
+   const namespace = db.getSiblingDB('config').getCollection('system.sessions');
+   const listSessions = [
       { "$listSessions": filter },
       { "$match": {
          "$expr": {
@@ -45,14 +46,21 @@
                { "$subtract": ["$$NOW", age] }
          ] }
       } }
-   ]).forEach(async({ '_id': { 'id': uuid } }) => {
-      console.log('Killing session ID:', uuid);
+   ];
+   const killSessions = async({
+         '_id': { 'id': uuid = null } = {},
+         'user': { 'name': user = null } = {},
+         'lastUse': age = 0
+      } = {}) => {
+      console.log('Killing session', uuid, 'for user', user, 'last active', age.toISOString());
       try {
          db.adminCommand({ "killSessions": [{ "id": uuid }] });
       } catch(e) {
          console.log('Failed to terminate', uuid, 'with error:', e);
       }
-   });
+   }
+
+   namespace.aggregate(listSessions).forEach(killSessions);
 })();
 
 // EOF
