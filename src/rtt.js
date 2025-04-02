@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "rtt.js"
-    *  Version: "0.2.1"
+    *  Version: "0.2.2"
     *  Description: "reports application round trip time latency"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,7 +17,7 @@
 
    // Syntax: mongosh [connection options] --quiet [-f|--file] rtt.js
 
-   const __script = { "name": "rtt.js", "version": "0.2.1" };
+   const __script = { "name": "rtt.js", "version": "0.2.2" };
    const banner = `\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`;
    console.clear();
    console.log(banner);
@@ -91,17 +91,12 @@
 
    function mongosSeededURI(seedList = []) {
       /*
-       *
+       *  return the seeded URI
        */
       const [username, password, authSource, authMech, compressors, tls] = mongoOptions();
-      let seededURI;
-      if (username == null) {
-         seededURI = `mongodb://${seedList.toString()}/?tls=${tls}&compressors=${compressors}`;
-      } else {
-         seededURI = `mongodb://${username}:${password}@${seedList.toString()}/?tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}`;
-      }
-
-      return seededURI;
+      return (username === null)
+         ? `mongodb://${seedList.toString()}/?tls=${tls}&compressors=${compressors}`
+         : `mongodb://${username}:${password}@${seedList.toString()}/?tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}`;
    }
 
    function servers() {
@@ -117,8 +112,8 @@
        */
       return Intl.NumberFormat('en', {
          "minimumIntegerDigits": 1,
-         "minimumFractionDigits": 1,
-         "maximumFractionDigits": 1,
+         "minimumFractionDigits": 0,
+         "maximumFractionDigits": 0,
          "style": "unit",
          "unit": "millisecond",
          "unitDisplay": "short"
