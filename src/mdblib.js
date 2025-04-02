@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.13.2"
+ *  Version: "0.13.3"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.13.2"
+      "version": "0.13.3"
 });
 
 /*
@@ -99,6 +99,7 @@ if (typeof Object.getPrototypeOf(Object).entries === 'undefined') {
 (typeof process !== 'undefined') && (console['log'] = (function() {
    /*
     *  overloading the console.log() method
+    *  add colour markup support for TTY output
     *  strip out ANSI escape sequences from non-TTY output
     */
    const method = () => console;
@@ -111,7 +112,60 @@ if (typeof Object.getPrototypeOf(Object).entries === 'undefined') {
    }
    function modifiedLog() {
       const isTTY = process.stdout.isTTY;
-      const args = () => {
+      const tags = [
+         { "tag": "\/", "code": 0, "alt": "reset" },
+         { "tag": "bold", "code": 1, "alt": "bold" },
+         { "tag": "dim", "code": 2, "alt": "dim" },
+         { "tag": "italic", "code": 3, "alt": "italic" },
+         { "tag": "underline", "code": 4, "alt": "underline" },
+         { "tag": "blink", "code": 5, "alt": "blink" },
+         { "tag": "reverse", "code": 7, "alt": "reverse" },
+         { "tag": "hide", "code": 8, "alt": "hide" },
+         { "tag": "strike", "code": 9, "alt": "strike" },
+         // Color Name	Foreground Color Code	Background Color Code
+         // Black	   30    40
+         // Red	   31    41
+         // Green	   32	   42
+         // Yellow	33	   43
+         // Blue	   34	   44
+         // Magenta	35	   45
+         // Cyan	   36	   46
+         // White	   37	   47
+         // Default	39	   49
+         { "tag": "black", "code": 30, "alt": "black" },
+         { "tag": "red", "code": 31, "alt": "red" },
+         { "tag": "green", "code": 32, "alt": "green" },
+         { "tag": "yellow", "code": 33, "alt": "yellow" },
+         { "tag": "blue", "code": 34, "alt": "blue" },
+         { "tag": "magenta", "code": 35, "alt": "magenta" },
+         { "tag": "cyan", "code": 36, "alt": "cyan" },
+         { "tag": "white", "code": 37, "alt": "white" },
+         { "tag": "default", "code": 39, "alt": "default" }
+         // Color Name	Foreground Color Code	Background Color Code
+         // Bright Black   90	   100
+         // Bright Red     91	   101
+         // Bright Green	92	   102
+         // Bright Yellow	93	   103
+         // Bright Blue    94	   104
+         // Bright Magenta	95	   105
+         // Bright Cyan    96	   106
+         // Bright White	97	   107
+      ];
+      const markup = text => {
+         tags.forEach(({ tag, code }) => {
+            const re = new RegExp(`\\[${tag}\\]`, 'gi');
+            text = text.replaceAll(re, `\x1b[${code}m`);
+         });
+         return text;
+      };
+      const colourise = () => { // add colour markup support
+         return [...arguments].map(arg =>
+            typeof arg === 'string'
+                 ? markup(arg)
+                 : arg
+         );
+      };
+      const noEsc = () => { // strip out ANSI escape sequences
          const ansi = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
          return [...arguments].map(arg =>
             typeof arg === 'string'
@@ -120,7 +174,7 @@ if (typeof Object.getPrototypeOf(Object).entries === 'undefined') {
          );
       };
 
-      return method()[_fn].apply(null, isTTY ? arguments : args());
+      return method()[_fn].apply(null, isTTY ? colourise() : noEsc(colourise()));
    };
 
    return modifiedLog;
