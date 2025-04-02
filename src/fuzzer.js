@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.27"
+ *  Version: "0.6.28"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -8,26 +8,26 @@
 
 // Usage: [mongo|mongosh] [connection options] --quiet fuzzer.js
 
-(async() => {
-   /*
-    *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
-    *  Save libs to the $MDBLIB or other valid search path
-    */
+/*
+ *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
+ *  Save libs to the $MDBLIB or other valid search path
+ */
 
-   const __script = { "name": "fuzzer.js", "version": "0.6.27" };
+(() => {
+   const __script = { "name": "fuzzer.js", "version": "0.6.28" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
        */
-      const __lib = { "name": "mdblib.js", "paths": null, "path": null };
+      let __lib = { "name": "mdblib.js", "paths": null, "path": null };
       if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
          __lib.paths = [_getEnv('MDBLIB'), `${_getEnv('HOME')}/.mongodb`, '.'];
          __lib.path = `${__lib.paths.find(path => fileExists(`${path}/${__lib.name}`))}/${__lib.name}`;
-      } else if (typeof process !== 'undefined') { // mongosh process.env[] method
+      } else if (typeof process !== 'undefined') { // mongosh process.env attribute
          __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
          __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
       } else {
-         print(`\x1b[31m[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory\x1b[0m`);
+         print(`[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory`);
          __lib.path = __lib.name;
       }
       load(__lib.path);
@@ -35,9 +35,13 @@
    let __comment = `#### Running script ${__script.name} v${__script.version}`;
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
-   console.clear();
-   console.log(`\n\x1b[33m${__comment}\x1b[0m`);
+   console.log(`\n\n[yellow]${__comment}[/]`);
+   if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
+   if (shellVer() < 1.0 && typeof process !== 'undefined') console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
+   if (serverVer() < 4.2) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
+})();
 
+(async() => {
    /*
     *  User defined parameters
     */
@@ -442,7 +446,7 @@
                               ]
                            })
                          : 'requires v5.2+', */
-      /* "sensitive": fCV(7.0)
+         /* "sensitive": fCV(7.0)
                          ? BinData(8, await window.crypto.subtle.generateKey(
                            {
                               "name": "HMAC",
