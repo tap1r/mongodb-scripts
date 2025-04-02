@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.13.5"
+ *  Version: "0.13.6"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.13.5"
+      "version": "0.13.6"
 });
 
 /*
@@ -96,6 +96,52 @@ if (typeof Object.getPrototypeOf(Object).entries === 'undefined') {
    }
 }
 
+const ansiTags = [
+   { "tag": "\/", "code": 0 }, // reset
+   { "tag": "bold", "code": 1 },
+   { "tag": "dim", "code": 2 },
+   { "tag": "italic", "code": 3 },
+   { "tag": "underline", "code": 4 },
+   { "tag": "blink", "code": 5 },
+   { "tag": "reverse", "code": 7 },
+   { "tag": "hide", "code": 8 },
+   { "tag": "strike", "code": 9 },
+   { "tag": "black", "code": 30 },
+   { "tag": "red", "code": 31 },
+   { "tag": "green", "code": 32 },
+   { "tag": "yellow", "code": 33 },
+   { "tag": "blue", "code": 34 },
+   { "tag": "magenta", "code": 35 },
+   { "tag": "cyan", "code": 36 },
+   { "tag": "white", "code": 37 },
+   { "tag": "default", "code": 39 },
+   { "tag": "bg black", "code": 40 },
+   { "tag": "bg red", "code": 41 },
+   { "tag": "bg green", "code": 42 },
+   { "tag": "bg yellow", "code": 43 },
+   { "tag": "bg blue", "code": 44 },
+   { "tag": "bg magenta", "code": 45 },
+   { "tag": "bg cyan", "code": 46 },
+   { "tag": "bg white", "code": 47 },
+   { "tag": "bg default", "code": 49 },
+   { "tag": "bright black", "code": 90 },
+   { "tag": "bright red", "code": 91 },
+   { "tag": "bright green", "code": 92 },
+   { "tag": "bright yellow", "code": 93 },
+   { "tag": "bright blue", "code": 94 },
+   { "tag": "bright magenta", "code": 95 },
+   { "tag": "bright cyan", "code": 96 },
+   { "tag": "bright white", "code": 97 },
+   { "tag": "bg bright black", "code": 100 },
+   { "tag": "bg bright red", "code": 101 },
+   { "tag": "bg bright green", "code": 102 },
+   { "tag": "bg bright yellow", "code": 103 },
+   { "tag": "bg bright blue", "code": 104 },
+   { "tag": "bg bright magenta", "code": 105 },
+   { "tag": "bg bright cyan", "code": 106 },
+   { "tag": "bg bright white", "code": 107 }
+];
+
 (typeof process !== 'undefined') && (console['log'] = (function() {
    /*
     *  overloading the console.log() method
@@ -112,47 +158,8 @@ if (typeof Object.getPrototypeOf(Object).entries === 'undefined') {
    }
    function modifiedLog() {
       const isTTY = process.stdout.isTTY;
-      const tags = [
-         { "tag": "\/", "code": 0, "alt": "reset" },
-         { "tag": "bold", "code": 1, "alt": "bold" },
-         { "tag": "dim", "code": 2, "alt": "dim" },
-         { "tag": "italic", "code": 3, "alt": "italic" },
-         { "tag": "underline", "code": 4, "alt": "underline" },
-         { "tag": "blink", "code": 5, "alt": "blink" },
-         { "tag": "reverse", "code": 7, "alt": "reverse" },
-         { "tag": "hide", "code": 8, "alt": "hide" },
-         { "tag": "strike", "code": 9, "alt": "strike" },
-         // Color Name  Foreground  Background
-         // Black	   30    40
-         // Red	   31    41
-         // Green	   32	   42
-         // Yellow	33	   43
-         // Blue	   34	   44
-         // Magenta	35	   45
-         // Cyan	   36	   46
-         // White	   37	   47
-         // Default	39	   49
-         { "tag": "black", "code": 30, "alt": "black" },
-         { "tag": "red", "code": 31, "alt": "red" },
-         { "tag": "green", "code": 32, "alt": "green" },
-         { "tag": "yellow", "code": 33, "alt": "yellow" },
-         { "tag": "blue", "code": 34, "alt": "blue" },
-         { "tag": "magenta", "code": 35, "alt": "magenta" },
-         { "tag": "cyan", "code": 36, "alt": "cyan" },
-         { "tag": "white", "code": 37, "alt": "white" },
-         { "tag": "default", "code": 39, "alt": "default" }
-         // Color Name     Foreground  Background
-         // Bright Black   90	   100
-         // Bright Red     91	   101
-         // Bright Green	92	   102
-         // Bright Yellow	93	   103
-         // Bright Blue    94	   104
-         // Bright Magenta	95	   105
-         // Bright Cyan    96	   106
-         // Bright White	97	   107
-      ];
       const markup = text => {
-         tags.forEach(({ tag, code }) => {
+         ansiTags.forEach(({ tag, code }) => {
             const re = new RegExp(`\\[${tag}\\]`, 'gi');
             text = text.replaceAll(re, `\x1b[${code}m`);
          });
@@ -186,28 +193,8 @@ if (typeof console === 'undefined') {
     */
    var console = {
       log: args => {
-         const tags = [
-            { "tag": "\/", "code": 0, "alt": "reset" },
-            { "tag": "bold", "code": 1, "alt": "bold" },
-            { "tag": "dim", "code": 2, "alt": "dim" },
-            { "tag": "italic", "code": 3, "alt": "italic" },
-            { "tag": "underline", "code": 4, "alt": "underline" },
-            { "tag": "blink", "code": 5, "alt": "blink" },
-            { "tag": "reverse", "code": 7, "alt": "reverse" },
-            { "tag": "hide", "code": 8, "alt": "hide" },
-            { "tag": "strike", "code": 9, "alt": "strike" },
-            { "tag": "black", "code": 30, "alt": "black" },
-            { "tag": "red", "code": 31, "alt": "red" },
-            { "tag": "green", "code": 32, "alt": "green" },
-            { "tag": "yellow", "code": 33, "alt": "yellow" },
-            { "tag": "blue", "code": 34, "alt": "blue" },
-            { "tag": "magenta", "code": 35, "alt": "magenta" },
-            { "tag": "cyan", "code": 36, "alt": "cyan" },
-            { "tag": "white", "code": 37, "alt": "white" },
-            { "tag": "default", "code": 39, "alt": "default" }
-         ];
          const markup = text => {
-            tags.forEach(({ tag, code }) => {
+            ansiTags.forEach(({ tag, code }) => {
                const re = new RegExp(`\\[${tag}\\]`, 'gi');
                text = text.replace(re, `\x1b[${code}m`);
             });
