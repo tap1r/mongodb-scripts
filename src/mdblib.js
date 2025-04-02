@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.13.4"
+ *  Version: "0.13.5"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.13.4"
+      "version": "0.13.5"
 });
 
 /*
@@ -122,7 +122,7 @@ if (typeof Object.getPrototypeOf(Object).entries === 'undefined') {
          { "tag": "reverse", "code": 7, "alt": "reverse" },
          { "tag": "hide", "code": 8, "alt": "hide" },
          { "tag": "strike", "code": 9, "alt": "strike" },
-         // Color Name	Foreground Color Code	Background Color Code
+         // Color Name  Foreground  Background
          // Black	   30    40
          // Red	   31    41
          // Green	   32	   42
@@ -141,7 +141,7 @@ if (typeof Object.getPrototypeOf(Object).entries === 'undefined') {
          { "tag": "cyan", "code": 36, "alt": "cyan" },
          { "tag": "white", "code": 37, "alt": "white" },
          { "tag": "default", "code": 39, "alt": "default" }
-         // Color Name	Foreground Color Code	Background Color Code
+         // Color Name     Foreground  Background
          // Bright Black   90	   100
          // Bright Red     91	   101
          // Bright Green	92	   102
@@ -158,23 +158,23 @@ if (typeof Object.getPrototypeOf(Object).entries === 'undefined') {
          });
          return text;
       };
-      const colourise = () => { // add colour markup support
-         return [...arguments].map(arg =>
+      const colourise = args => { // add colour markup support
+         return [...args].map(arg =>
             typeof arg === 'string'
                  ? markup(arg)
                  : arg
          );
       };
-      const noEsc = () => { // strip out ANSI escape sequences
+      const noEsc = args => { // strip out ANSI escape sequences
          const ansi = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
-         return [...arguments].map(arg =>
+         return [...args].map(arg =>
             typeof arg === 'string'
                  ? arg.replaceAll(ansi, '')
                  : arg
          );
       };
 
-      return method()[_fn].apply(null, isTTY ? colourise() : noEsc(colourise()));
+      return method()[_fn].apply(null, isTTY ? colourise(arguments) : noEsc(colourise(arguments)));
    };
 
    return modifiedLog;
@@ -185,7 +185,7 @@ if (typeof console === 'undefined') {
     *  legacy mongo detected
     */
    var console = {
-      log: arguments => {
+      log: args => {
          const tags = [
             { "tag": "\/", "code": 0, "alt": "reset" },
             { "tag": "bold", "code": 1, "alt": "bold" },
@@ -213,8 +213,14 @@ if (typeof console === 'undefined') {
             });
             return text;
          };
+         const noEsc = arg => { // strip out ANSI escape sequences
+            const ansi = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
+            return typeof arg === 'string'
+                  ? arg.replace(ansi, '')
+                  : arg;
+         };
 
-         return print(markup(arguments));
+         return print(noEsc(markup(args)));
       },
       clear: () => _runMongoProgram('clear'),
       error: tojson,
