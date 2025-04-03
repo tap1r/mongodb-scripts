@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.13.6"
+ *  Version: "0.13.7"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.13.6"
+      "version": "0.13.7"
 });
 
 /*
@@ -480,18 +480,18 @@ function getAllSystemNamespaces() { // TBA
  *  Versioned helper commands
  */
 
-function serverVer(ver) {
+function serverVer(v = false) {
    /*
     *  Evaluate server version
     */
-   const svrVer = () => +db.version().match(/^\d+\.\d+/);
+   const svrVer = +db.version().match(/^\d+\.\d+/);
 
-   return (typeof ver !== 'undefined' && ver <= svrVer()) ? true
-        : (typeof ver !== 'undefined' && ver >  svrVer()) ? false
-        : svrVer();
+   return (v && v <= svrVer) ? true
+        : (v && v >  svrVer) ? false
+        : svrVer;
 }
 
-function fCV(ver) { // updated for shared tier compatibility
+function fCV(v = false) { // updated for shared tier compatibility
    /*
     *  Evaluate feature compatibility version
     */
@@ -503,29 +503,29 @@ function fCV(ver) { // updated for shared tier compatibility
       cmd.ok = 0;
    }
 
-   const featureVer = ver => {
+   const featureVer = () => {
       return (serverStatus().ok && serverStatus().process == 'mongod' && cmd.ok )
            ? +db.adminCommand({
                "getParameter": 1,
                "featureCompatibilityVersion": 1
              }).featureCompatibilityVersion.version
-           : serverVer(ver);
+           : serverVer();
    }
 
-   return (typeof ver !== 'undefined' && ver <= featureVer()) ? true
-        : (typeof ver !== 'undefined' && ver >  featureVer()) ? false
+   return (v && v <= featureVer()) ? true
+        : (v && v >  featureVer()) ? false
         : featureVer();
 }
 
-function shellVer(ver) {
+function shellVer(v = false) {
    /*
     *  Evaluate shell version
     */
-   const shell = () => +version().match(/^\d+\.\d+/);
+   const shell = +version().match(/^\d+\.\d+/);
 
-   return (typeof ver !== 'undefined' && ver <= shell()) ? true
-        : (typeof ver !== 'undefined' && ver >  shell()) ? false
-        : shell();
+   return (v && v <= shell) ? true
+        : (v && v >  shell) ? false
+        : shell;
 }
 
 function slaveOk(readPref = 'primaryPreferred') {
