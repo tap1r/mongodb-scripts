@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.4"
+    *  Version: "0.2.5"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,6 +25,7 @@
     *  - add better sharding support
     *  - revise lowPriorityAdmissionBypassThreshold for backward compatibility
     *  - improve support for Atlas Flex tiers
+    *  - build-in IXSCAN check to support the supplied filter
     */
 
    // Syntax: mongosh [connection options] [--quiet] [--eval 'let dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>;'] [-f|--file] niceDeleteMany.js
@@ -55,7 +56,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.4" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.5" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -618,9 +619,9 @@
 
    async function admissionControl() {
       /*
-       *  dynamic admission control
-       *  threads should not compete under these contended conditions
-       *  see also https://jira.mongodb.org/browse/SPM-1123
+       *  dynamic admission controller
+       *  - threads should not compete under these contended conditions
+       *  - see also https://jira.mongodb.org/browse/SPM-1123
        */
 
       const {
@@ -682,7 +683,7 @@
             { "nodeType": "ANALYTICS", "diskState": "READY" },
             { "workloadType": "OPERATIONAL", "diskState": "READY" },
             { "diskState": "READY" },
-            { }
+            {}
          ]
       };
       const sessionOpts = {
@@ -722,7 +723,7 @@
       if (safeguard) {
          console.log('Simulation safeguard is enabled, no deletions were actually performed:\n');
       }
-      // console.log('\tInitial document count matching filter: ', (initialEmptyBatch === true) ? 0 : initialBatch.IDsTotal);
+      // console.log('\tInitial document count matching filter:', (initialEmptyBatch === true) ? 0 : initialBatch.IDsTotal);
       console.log('\tResidual document count matching filter:', finalCount);
       console.log('\nDone!');
    }
