@@ -1,7 +1,8 @@
+// require('events').EventEmitter.prototype._maxListeners = 128;
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.21"
+    *  Version: "0.1.22"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -38,8 +39,8 @@
          );
       } catch(e) {
          // else we can just grab the list of discoverable nodes
-         let { hosts = [], passives = [] } = db.hello();
-         members = hosts.concat(passives).map(
+         const { hosts = [], passives = [] } = db.hello();
+         members = [...hosts, ...passives].map(
             name => new Object({ "host": name })
          );
       }
@@ -52,14 +53,14 @@
        *  returns an array of available mongos instances attached to the sharded cluster
        */
       let mongos = [];
-      let namespace = db.getSiblingDB('config').getCollection('mongos');
-      let options = {
+      const namespace = db.getSiblingDB('config').getCollection('mongos');
+      const options = {
          "allowDiskUse": true,
          "readConcern": { "level": "local" },
          "comment": "Discovering living mongos process"
       };
-      let offsetMS = 60000; // 1min
-      let pipeline = [
+      const offsetMS = 60000; // 1min
+      const pipeline = [
          { "$match": {
             "$expr": {
                "$gte": ["$ping", { "$subtract": ["$$NOW", offsetMS] }]
@@ -132,7 +133,7 @@
        *  returns an array of hosts across all available shards
        */
       return shards.map(({ host }) => {
-         let { setName, seedList } = host.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
+         const { setName, seedList } = host.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
          return seedList.split(',').map(name =>
             new Object({ "name": setName, "host": name })
          );
@@ -150,13 +151,13 @@
       /*
        *  execute a command on a mongod
        */
-      let [username, password, authSource, authMech, compressors, tls] = mongoOptions();
-      let readPreference = 'secondaryPreferred';
+      const [username, password, authSource, authMech, compressors, tls] = mongoOptions();
+      const readPreference = 'secondaryPreferred';
       let credentials, node;
       if (username !== null) {
          credentials = username + ':' + password + '@';
       }
-      let directURI = `mongodb://${credentials}${hostname}/?directConnection=true&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
+      const directURI = `mongodb://${credentials}${hostname}/?directConnection=true&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
       try {
          node = connect(directURI);
       } catch(e) {
@@ -174,13 +175,13 @@
       /*
        *  execute a command on a mongos
        */
-      let [username, password, authSource, authMech, compressors, tls] = mongoOptions();
-      let readPreference = 'secondaryPreferred';
+      const [username, password, authSource, authMech, compressors, tls] = mongoOptions();
+      const readPreference = 'secondaryPreferred';
       let credentials, node;
       if (username !== null) {
          credentials = username + ':' + password + '@';
       }
-      let directURI = `mongodb://${credentials}${hostname}/?directConnection=true&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
+      const directURI = `mongodb://${credentials}${hostname}/?directConnection=true&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
       try {
          node = connect(directURI);
       } catch(e) {
@@ -188,26 +189,24 @@
          return e;
       }
 
-      let results = {
+      return {
          "process": hostname,
          "results": await cmdFn(node, { "readPreference": readPreference })
       };
-
-      return results;
    }
 
    async function execShardCmd({ 'host': shardString } = {}, cmdFn = async() => {}) {
       /*
        *  execute a command on a shard replset
        */
-      let [username, password, authSource, authMech, compressors, tls] = mongoOptions();
-      let readPreference = 'primaryPreferred';
-      let { setName, seedList } = shardString.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
+      const [username, password, authSource, authMech, compressors, tls] = mongoOptions();
+      const readPreference = 'primaryPreferred';
+      const { setName, seedList } = shardString.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
       let credentials, shard;
       if (username !== null) {
          credentials = username + ':' + password + '@';
       }
-      let shardURI = `mongodb://${credentials}${seedList}/?replicaSet=${setName}&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
+      const shardURI = `mongodb://${credentials}${seedList}/?replicaSet=${setName}&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
 
       try {
          shard = connect(shardURI);
@@ -226,7 +225,7 @@
       /*
        *  async exec wrapper to parallelise tasks
        */
-      let promises = () => hosts.map(host => execHostCmd(host, cmdFn));
+      const promises = () => hosts.map(host => execHostCmd(host, cmdFn));
 
       return await Promise.allSettled(promises()).then(results => {
          return results.map(({ status, value }) => (status == 'fulfilled') && value);
@@ -237,7 +236,7 @@
       /*
        *  async exec wrapper to parallelise tasks
        */
-      let promises = () => mongos.map(host => execMongosCmd(host, cmdFn));
+      const promises = () => mongos.map(host => execMongosCmd(host, cmdFn));
 
       return await Promise.allSettled(promises()).then(results => {
          return results.map(({ status, value }) => (status == 'fulfilled') && value);
@@ -248,7 +247,7 @@
       /*
        *  async exec wrapper to parallelise tasks
        */
-      let promises = () => shards.map(host => execShardCmd(host, cmdFn));
+      const promises = () => shards.map(host => execShardCmd(host, cmdFn));
 
       return await Promise.allSettled(promises()).then(results => {
          return results.map(({ status, value }) => (status == 'fulfilled') && value);
@@ -280,13 +279,13 @@
       /*
        *  returns MongoClient() options to construct new connections
        */
-      let {
+      const {
          username = null,
          password = null,
          'source': authSource = 'admin',
          'mechanism': authMech = 'DEFAULT'
       } = db.getMongo().__serviceProvider.mongoClient.options?.credentials ?? {};
-      let {
+      const {
          compressors = ['none'],
          tls = false
       } = db.getMongo().__serviceProvider.mongoClient.options;
@@ -304,16 +303,24 @@
        *  Execute mongos/shard/host specific commands
        */
 
-      let mongos, csrs, csrsHosts, shards, hosts,
+      let mongos, csrs, csrsHosts, shards,
          allMongosResults, allCSRSResults,
          csrsResults, allShardResults,
-         allHostResults;
+         hosts, allHostResults;
 
-      let mongosCmd = async(client, options) => 'I am a mongos, ' + await me(client);
-      let shardCmd = async(client, options) => 'I am a shard primary, ' + await me(client);
-      let csrsCmd = async(client, options) => 'I am the CSRS primary, ' + await me(client);
-      let csrsHostCmd = async(client, options) => 'I am a CSRS member host, ' + await me(client);
-      let hostCmd = async(client, options) => 'I am a member host, ' + await me(client);
+      const mongosCmd = async(client, options) => 'I am a mongos, ';
+      const shardCmd = async(client, options) => 'I am a shard primary, ' + await me(client);
+      const csrsCmd = async(client, options) => 'I am the CSRS primary, ' + await me(client);
+      const csrsHostCmd = async(client, options) => 'I am a CSRS member host, ' + await me(client);
+      const hostCmd = async(client, options) => 'I am a member host, ' + await me(client);
+      // const hostCmd = async(client, options) => await dbstats(client, options);
+      async function dbstats(client /*, options*/) {
+         const db = client;
+         const options = { "output": { "format": "json" } };
+         let dbStats;
+         // load('dbstats.js');
+         return await dbStats;
+      }
 
       // discover topology
       if (isSharded()) {
@@ -343,12 +350,12 @@
 
       // return command results
       if (isSharded()) {
-         console.log('all mongos cmd results:', allMongosResults);
-         console.log('csrs shard cmd results:', allCSRSResults);
-         console.log('csrs hosts cmd results:', csrsResults);
-         console.log('all shards cmd results:', allShardResults);
+         console.log(`"all mongos cmd results":`, allMongosResults);
+         console.log(`"csrs shard cmd results:`, allCSRSResults);
+         console.log(`"csrs hosts cmd results:`, csrsResults);
+         console.log(`"all shards cmd results:`, allShardResults);
       }
-      console.log('all hosts cmd results:', allHostResults);
+      console.log(`"all hosts cmd results":`, allHostResults);
 
       return;
    }
