@@ -126,7 +126,7 @@
    /*
     *  Aggregation template with $documents pipeline (req v5.1)
     */
-   let dbName = 'database';
+   let dbName = '$';
    let namespace = db.getSiblingDB(dbName);
    let options = {
          // "allowDiskUse": true,
