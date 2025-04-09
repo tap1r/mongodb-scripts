@@ -667,8 +667,9 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
    }
 })();
 
-// bin subtype eval
-
+/*
+ *  evaluate binary subtype
+ */
 (() => {
    const dbName = '$';
    const namespace = db.getSiblingDB(dbName);
