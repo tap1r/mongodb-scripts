@@ -2,7 +2,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.22"
+    *  Version: "0.1.23"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -312,15 +312,21 @@
       const shardCmd = async(client, options) => 'I am a shard primary, ' + await me(client);
       const csrsCmd = async(client, options) => 'I am the CSRS primary, ' + await me(client);
       const csrsHostCmd = async(client, options) => 'I am a CSRS member host, ' + await me(client);
-      const hostCmd = async(client, options) => 'I am a member host, ' + await me(client);
+      // const hostCmd = async(client, options) => 'I am a member host, ' + await me(client);
       // const hostCmd = async(client, options) => await dbstats(client, options);
-      async function dbstats(client /*, options*/) {
-         const db = client;
-         const options = { "output": { "format": "json" } };
-         let dbStats;
-         // load('dbstats.js');
-         return await dbStats;
-      }
+      const hostCmd = async(client, options) => await autoCompact(client, options);
+      const autoCompact = (client, options) => client.getSiblingDB('admin').runCommand({
+         "autoCompact": true,
+         "freeSpaceTargetMB": 1,
+         "runOnce": true
+      }, options);
+      // async function dbstats(client /*, options*/) {
+      //    const db = client;
+      //    const options = { "output": { "format": "json" } };
+      //    let dbStats;
+      //    // load('dbstats.js');
+      //    return await dbStats;
+      // }
 
       // discover topology
       if (isSharded()) {
