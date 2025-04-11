@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "rtt.js"
-    *  Version: "0.2.2"
+    *  Version: "0.2.3"
     *  Description: "reports application round trip time latency"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,7 +17,7 @@
 
    // Syntax: mongosh [connection options] --quiet [-f|--file] rtt.js
 
-   const __script = { "name": "rtt.js", "version": "0.2.2" };
+   const __script = { "name": "rtt.js", "version": "0.2.3" };
    const banner = `\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`;
    console.clear();
    console.log(banner);
@@ -108,7 +108,7 @@
 
    function latency(rtt) {
       /*
-       *  rtt in ms to 1 decimal place
+       *  rtt in ms to 0 decimal places
        */
       return Intl.NumberFormat('en', {
          "minimumIntegerDigits": 1,
