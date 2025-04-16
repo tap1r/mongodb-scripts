@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.29"
+ *  Version: "0.6.30"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.29" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.30" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -321,10 +321,10 @@
          console.log(`\nResharding complete.`);
       }
       else if (isSharded() && (shardedOptions.reShard) && !fCV(5.0)) {
-         console.log('\x1b[31m[WARN] \x1b[33mreshardCollection() \x1b[31mrequires v5.0+\x1b[0m');
+         console.log('[red][WARN] [yellow]reshardCollection() [red]requires v5.0+[/]');
       }
 
-      return console.log('\n \x1b[32mFuzzing completed!\x1b[0m\n');
+      return console.log('\n [green]Fuzzing completed![/]\n');
    }
 
    function genDocument({
