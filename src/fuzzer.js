@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.28"
+ *  Version: "0.6.29"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.28" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.29" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -387,7 +387,7 @@
                $getRandRatioInt([80, 0, 0, 5, 0, 3, 2])
             ],
             // "txt": (() => {
-            //    let lines = $getRandIntInc(2, 512);
+            //    const lines = $getRandIntInc(2, 512);
             //    let string = '';
             //    for (let line = 0; line < lines; ++line) {
             //       string += `${$genRandStr($getRandIntInc(8, 24)) + $genRandSymbol()}`;
@@ -763,8 +763,8 @@
             indexes.forEach(index => console.log(`\tkey: ${tojson(index)}`));
             const indexing = () => {
                const options = (fCV(4.4) && (isReplSet() || isSharded()))
-                           ? [indexes, indexOptions, indexPrefs.commitQuorum]
-                           : [indexes, indexOptions];
+                             ? [indexes, indexOptions, indexPrefs.commitQuorum]
+                             : [indexes, indexOptions];
 
                return namespace.createIndexes(...options);
             }
@@ -787,8 +787,8 @@
          if (specialIndexes.length > 0) {
             console.log(`\nBuilding exceptional index${(specialIndexes.length === 1) ? '' : 'es'} (no collation support) with commit quorum "${(fCV(4.4) && (isReplSet() || isSharded())) ? indexPrefs.commitQuorum : 'disabled'}":`);
             specialIndexes.forEach(index => console.log(`\tkey: ${tojson(index)}`));
-            let sIndexing = () => {
-               let sOptions = (fCV(4.4) && (isReplSet() || isSharded()))
+            const sIndexing = () => {
+               const sOptions = (fCV(4.4) && (isReplSet() || isSharded()))
                             ? [specialIndexes, specialIndexOptions, indexPrefs.commitQuorum]
                             : [specialIndexes, specialIndexOptions];
 
