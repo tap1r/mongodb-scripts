@@ -37,15 +37,15 @@ if (typeof nonce === 'undefined') {
 
 /*
  *  Helper functions, derived from:
- *  https://github.com/uxitten/polyfill/blob/master/string.polyfill.js
- *  https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/padStart
- *  https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/padEnd
- *  https://github.com/tc39/proposal-object-values-entries
+ *    https://github.com/uxitten/polyfill/blob/master/string.polyfill.js
+ *    https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/padStart
+ *    https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/padEnd
+ *    https://github.com/tc39/proposal-object-values-entries
  */
 
 if (typeof Object.getPrototypeOf(String).padStart === 'undefined') {
    /*
-    *  Add to legacy shell
+    *  Add to the legacy mongo shell
     */
    Object.getPrototypeOf(String).padStart = (targetLength, padString) => {
       targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
@@ -64,7 +64,7 @@ if (typeof Object.getPrototypeOf(String).padStart === 'undefined') {
 
 if (typeof Object.getPrototypeOf(String).padEnd === 'undefined') {
    /*
-    *  Add to legacy shell
+    *  Add to the legacy mongo shell
     */
    Object.getPrototypeOf(String).padEnd = (targetLength, padString) => {
       targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
@@ -83,7 +83,7 @@ if (typeof Object.getPrototypeOf(String).padEnd === 'undefined') {
 
 if (typeof Object.getPrototypeOf(Object).entries === 'undefined') {
    /*
-    *  Add to legacy shell
+    *  Add to the legacy mongo shell
     */
    Object.getPrototypeOf(Object).entries = obj => {
       const ownProps = Object.keys(obj);
@@ -145,12 +145,14 @@ const ansiTags = [
 (typeof process !== 'undefined') && (console['log'] = (function() {
    /*
     *  overloading the console.log() method
-    *  add colour markup support for TTY output
-    *  strip out ANSI escape sequences from non-TTY output
+    *  - add colour markup support for TTY output
+    *  - strips out ANSI escape sequences from non-TTY output
     */
    const method = () => console;
    const fn = 'log'; // target method's attribute name for overloading
-   //
+   /*
+    *  end user defined options
+    */
    const _fn = '_' + fn; // wrapped shadow method's name
    if (method()[fn].name !== 'modifiedLog') {
       // copy to the shadowed method if it doesn't already exist
@@ -172,7 +174,7 @@ const ansiTags = [
                  : arg
          );
       };
-      const noEsc = args => { // strip out ANSI escape sequences
+      const noEsc = args => { // strips out ANSI escape sequences
          const ansi = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
          return [...args].map(arg =>
             typeof arg === 'string'
@@ -189,7 +191,7 @@ const ansiTags = [
 
 if (typeof console === 'undefined') {
    /*
-    *  legacy mongo detected
+    *  legacy mongo shell detected
     */
    var console = {
       log: args => {
@@ -249,7 +251,7 @@ class AutoFactor {
       }
       return this.number;
    }
-   get metrics() { // array indexed by scale factor
+   get metrics() { // array ordered by scale factor
       return [
          { "unit":      "bytes", "symbol":   "B", "factor": 1,                 "precision": 0, "pctPoint": 2 },
          { "unit":  "kibibytes", "symbol": "KiB", "factor": 1024,              "precision": 2, "pctPoint": 1 },
@@ -363,14 +365,14 @@ function $floor(num) {
 
 function isReplSet() {
    /*
-    *  Determine if current host is a replSet member
+    *  Determine if the current host is a replSet member
     */
    return typeof hello().hosts !== 'undefined';
 }
 
 function isSharded() {
    /*
-    *  Determine if current host is a mongos
+    *  Determine if the current host is a mongos
     */
    let sharded;
    try {
@@ -419,7 +421,7 @@ function getDBNames(dbFilter = /^.+/) {
    }
    slaveOk(options.readPreference);
    const dbs = (shellVer() >= 2.0 && typeof process !== 'undefined') ? db.getSiblingDB('admin').runCommand(command, options)
-           : db.getSiblingDB('admin').runCommand(command);
+             : db.getSiblingDB('admin').runCommand(command);
 
    return dbs.databases.map(({ name }) => name).filter(namespace => !restrictedNamespaces.includes(namespace));
 };
@@ -482,7 +484,7 @@ function getAllSystemNamespaces() { // TBA
 
 function serverVer(v = false) {
    /*
-    *  Evaluate server version
+    *  Evaluate the server version
     */
    const svrVer = +db.version().match(/^\d+\.\d+/);
 
@@ -519,7 +521,7 @@ function fCV(v = false) { // updated for shared tier compatibility
 
 function shellVer(v = false) {
    /*
-    *  Evaluate shell version
+    *  Evaluate the shell version
     */
    const shell = +version().match(/^\d+\.\d+/);
 
@@ -603,7 +605,7 @@ function serverCmdLineOpts() {
 
 function isAtlasPlatform(type = null) {
    /*
-    *  Evaluate Atlas deployment platform type
+    *  Evaluate the Atlas deployment platform type
     */
    const { 'msg': helloMsg = false } = hello();
    const isMongos = (helloMsg == 'isdbgrid') ? true : false;
