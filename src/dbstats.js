@@ -94,7 +94,7 @@
  *
  *    mongosh --quiet --eval 'let options = { sort: { collection: { dataSize: -1 }, index: { idxStorageSize: -1 } } };' -f dbstats.js
  *    mongosh --quiet --eval 'let options = { sort: { collection: { freeStorageSize: -1 }, index: { idxFreeStorageSize: -1 } } };' -f dbstats.js
- * 
+ *
  *  Examples of using formatting:
  *
  *    mongosh --quiet --eval 'let options = { output: { format: "tabular" } };' -f dbstats.js
@@ -128,6 +128,7 @@
    let __comment = `#### Running script ${__script.name} v${__script.version}`;
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
+   // console.clear();
    console.log(`\n\n[yellow]${__comment}[/]`);
    if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
    if (shellVer() < 1.0 && typeof process !== 'undefined') console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
