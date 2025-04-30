@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.5"
+    *  Version: "0.2.6"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -56,7 +56,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.5" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.6" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -205,7 +205,7 @@
          sleep(Math.floor(500 + Math.random() * 500));
          sleepIntervalMS = await admissionControl();
       };
-      console.log('\t\t...batch', bucketId, 'buffering for', sleepIntervalMS, 'ms');
+      console.log('\t\t...batch', bucketId, 'executing (buffering:', sleepIntervalMS, 'ms)');
       sleep(sleepIntervalMS);
       const session = db.getMongo().startSession(sessionOpts);
       const namespace = session.getDatabase(dbName).getCollection(collName);
@@ -655,7 +655,7 @@
           *  and remove it from the executing pool.
           */
          // let msg = `\n\n\tScheduling batch ${thread.bucketId} with ${thread.bucketsRemaining} buckets queued remaining:\n`;
-         let msg = `\n\n\tScheduling batch ${thread.bucketId}:\n`;
+         let msg = `\n\n\tScheduling batch# ${thread.bucketId}:\n`;
          msg = banner + msg;
          console.clear();
          console.log(msg);
@@ -694,9 +694,13 @@
          "writeConcern": writeConcern
       };
       banner = `\n\x1b[33m${banner}\x1b[0m`;
-      banner += `\n\nCurating deletion Ids from namespace '${dbName}.${collName}' with filter ${JSON.stringify(filter)} ...please wait\n`;
+      banner += `\n\nCurating '\x1b[32m_id\x1b[0m' deletion list from namespace:` +
+                `\n\n\t\x1b[32m${dbName}.${collName}\x1b[0m` +
+                `\n\nwith filter:` +
+                `\n\n\t\x1b[32m${JSON.stringify(filter)}\x1b[0m` +
+                `\n\n...please wait\n`;
       if (safeguard) {
-         banner += '\nWarning: Safeguard is enabled, simulating deletes only (via transaction rollbacks)\n';
+         banner += '\n\x1b[31mWarning:\x1b[0m \x1b[32mSafeguard is enabled, simulating deletes only (via transaction rollbacks)\n\x1b[0m';
       }
       console.clear();
       console.log(banner);
@@ -707,15 +711,15 @@
       } else {
          // initial batch
          // let msg = `\nForking ${initialBatch.bucketsTotal} batches of ${initialBatch.bucketSizeLimit} documents with concurrency execution of ${concurrency} to delete ${initialBatch.IDsTotal} documents`;
-         let msg = `\nForking batches of ${initialBatch.bucketSizeLimit} documents with concurrency execution of ${concurrency} threads`;
+         let msg = `\nForking ${concurrency} threads of ${initialBatch.bucketSizeLimit} batched documents`;
          banner += msg;
          console.log(msg);
          for await (const [bucketId, deletedCount] of asyncThreadPool(deleteManyTask, [initialBatch], concurrency, sessionOpts)) {
-            console.log('\t\t...batch', bucketId, 'deleted', deletedCount, 'documents');
+            console.log('\t\t...batch#', bucketId, 'deleted', deletedCount, 'documents');
          }
          // remaining batches
          for await (const [bucketId, deletedCount] of asyncThreadPool(deleteManyTask, deletionList, concurrency, sessionOpts)) {
-            console.log('\t\t...batch', bucketId, 'deleted', deletedCount, 'documents');
+            console.log('\t\t...batch#', bucketId, 'deleted', deletedCount, 'documents');
          }
       }
       console.log(`\nValidating deletion results ...please wait\n`);
