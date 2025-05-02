@@ -6,9 +6,9 @@
    /*
     *  Aggregation template with extended options
     */
-   let dbName = 'database', collName = 'collection', readPref = 'primary';
-   let namespace = db.getSiblingDB(dbName).getCollection(collName);
-   let options = {
+   const dbName = 'database', collName = 'collection', readPref = 'primary';
+   const namespace = db.getSiblingDB(dbName).getCollection(collName);
+   const options = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          // "maxTimeMS": 0,
@@ -38,9 +38,9 @@
    /*
     *  Aggregation template with explain options
     */
-   let dbName = 'database', collName = 'collection', readPref = 'primary';
-   let namespace = db.getSiblingDB(dbName).getCollection(collName);
-   let explainPlan = 'executionStats', // ['queryPlanner'|'executionStats'|'allPlansExecution']
+   const dbName = 'database', collName = 'collection', readPref = 'primary';
+   const namespace = db.getSiblingDB(dbName).getCollection(collName);
+   const explainPlan = 'executionStats', // ['queryPlanner'|'executionStats'|'allPlansExecution']
       options = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
@@ -71,9 +71,9 @@
    /*
     *  Aggregation template for $sql queries
     */
-   let dbName = 'database', collName = 'collection';
-   let namespace = db.getSiblingDB(dbName).getCollection(collName);
-   let options = { "comment": "My $sql query" },
+   const dbName = 'database', collName = 'collection';
+   const namespace = db.getSiblingDB(dbName).getCollection(collName);
+   const options = { "comment": "My $sql query" },
       sql = `
          SELECT *
          FROM ${collName}
@@ -95,7 +95,7 @@
    /*
     *  Aggregation template for $currentOp
     */
-   let options = {
+   const options = {
          "cursor": { "batchSize": 0 },
          "comment": "$currentOp template",
          // "let": { } // v5.0+ only
@@ -126,9 +126,9 @@
    /*
     *  Aggregation template with $documents pipeline (req v5.1)
     */
-   let dbName = '$';
-   let namespace = db.getSiblingDB(dbName);
-   let options = {
+   const dbName = '$';
+   const namespace = db.getSiblingDB(dbName);
+   const options = {
          // "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          // "maxTimeMS": 0,
