@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.4"
+    *  Version: "0.2.5"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -206,7 +206,7 @@
          },
          get cacheStatus() {
             return (this.cacheUtil < this.evictionTarget) ? 'low'
-                 : (this.cacheUtil > this.evictionTrigger) ? 'high'
+                 : (this.cacheUtil >= this.evictionTrigger) ? 'high'
                  : 'medium';
          },
          get dirtyUtil() {
@@ -214,7 +214,7 @@
          },
          get dirtyStatus() {
             return (this.dirtyUtil < this.evictionDirtyTarget) ? 'low'
-                 : (this.dirtyUtil > this.evictionDirtyTrigger) ? 'high'
+                 : (this.dirtyUtil >= this.evictionDirtyTrigger) ? 'high'
                  : 'medium';
          },
          get dirtyUpdatesUtil() {
@@ -222,17 +222,17 @@
          },
          get dirtyUpdatesStatus() {
             return (this.dirtyUpdatesUtil < this.evictionUpdatesTarget) ? 'low'
-                 : (this.dirtyUpdatesUtil > this.evictionUpdatesTrigger) ? 'high'
+                 : (this.dirtyUpdatesUtil >= this.evictionUpdatesTrigger) ? 'high'
                  : 'medium';
          },
          get cacheEvictions() {
             return (this.cacheUtil > this.evictionTrigger);
          },
          get dirtyCacheEvictions() {
-            return (this.dirtyUtil > this.evictionDirtyTrigger);
+            return (this.dirtyUtil >= this.evictionDirtyTrigger);
          },
          get dirtyUpdatesCacheEvictions() {
-            return (this.dirtyUpdatesUtil > this.evictionUpdatesTrigger);
+            return (this.dirtyUpdatesUtil >= this.evictionUpdatesTrigger);
          },
          get evictionsTriggered() {
             return (this.cacheEvictions || this.dirtyCacheEvictions || this.dirtyUpdatesCacheEvictions);
@@ -244,7 +244,7 @@
          },
          get cacheHitStatus() {
             return (this.cacheHitRatio < 20) ? 'high'
-                 : (this.cacheHitRatio > 75) ? 'low'
+                 : (this.cacheHitRatio >= 75) ? 'low'
                  : 'medium';
          },
          get cacheMissRatio() {
@@ -254,7 +254,7 @@
          },
          get cacheMissStatus() {
             return (this.cacheMissRatio < 20) ? 'low'
-                 : (this.cacheMissRatio > 75) ? 'high'
+                 : (this.cacheMissRatio >= 75) ? 'high'
                  : 'medium';
          },
          get memSizeBytes() {
@@ -290,7 +290,7 @@
          get memoryFragmentationStatus() {
             // mimicing the (bad) t2 derived metric for now
             return (this.memoryFragmentationRatio < 10) ? 'low'  // 25 is more realistic
-                 : (this.memoryFragmentationRatio > 30) ? 'high' // 50 is more realistic
+                 : (this.memoryFragmentationRatio >= 30) ? 'high' // 50 is more realistic
                  : 'medium';
          },
          get backupCursorOpen() {
@@ -336,12 +336,12 @@
          },
          get wtReadTicketsStatus() {
             return (this.wtReadTicketsUtil < 20) ? 'low'
-                 : (this.wtReadTicketsUtil > 75) ? 'high'
+                 : (this.wtReadTicketsUtil >= 75) ? 'high'
                  : 'medium';
          },
          get wtWriteTicketsStatus() {
             return (this.wtWriteTicketsUtil < 20) ? 'low'
-                 : (this.wtWriteTicketsUtil > 75) ? 'high'
+                 : (this.wtWriteTicketsUtil >= 75) ? 'high'
                  : 'medium';
          },
          get activeShardMigrations() {
@@ -365,7 +365,7 @@
          },
          get checkpointStatus() {
             return (this.checkpointRuntimeRatio < 50) ? 'low'
-                 : (this.checkpointRuntimeRatio > 100) ? 'high'
+                 : (this.checkpointRuntimeRatio >= 100) ? 'high'
                  : 'medium';
          },
          get activeReplLag() { // calculate the highest repl-lag from healthy members
