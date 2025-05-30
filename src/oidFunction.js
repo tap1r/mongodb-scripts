@@ -1,18 +1,18 @@
 (() => {
    /*
     *  Name: "oidFunction.js"
-    *  Version: "0.1.4"
+    *  Version: "0.1.5"
     *  Description: "aggregation based OID 'view function' reproduction (requires v5.0+)"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     */
 
-   let dbName = 'database', oidView = '_oidGenerator', nonceName = '_nonceGenerator';
+   const dbName = 'database', oidView = '_oidGenerator', nonceName = '_nonceGenerator';
 
-   let namespace = db.getSiblingDB(dbName);
-   let view = namespace.getCollection(oidView);
-   let nonceGenerator = namespace.getCollection(nonceName);
-   let nonce = (+((+db.adminCommand({ "features": 1 }).oidMachine).toString() + (+db.serverStatus().pid).toString())).toString(16).substring(0, 10);
+   const namespace = db.getSiblingDB(dbName);
+   const view = namespace.getCollection(oidView);
+   const nonceGenerator = namespace.getCollection(nonceName);
+   const nonce = (+((+db.adminCommand({ "features": 1 }).oidMachine).toString() + (+db.serverStatus().pid).toString())).toString(16).substring(0, 10);
 
    nonceGenerator.updateOne(
       { "_id": 1 },
@@ -20,7 +20,7 @@
       { "upsert": true }
    );
 
-   let oidPipeline = [
+   const oidPipeline = [
       { "$collStats": {} },
       // 4-byte epoch timestamp
       { "$set": {
@@ -160,7 +160,7 @@
     *  Usage demonstration
     */
 
-   let pipeline = [
+   const pipeline = [
       { "$documents": [ // sample documents for update
          { "_id": new ObjectId(), "name": "Bob", "activity": { "date": "$$NOW" } },
          { "_id": new ObjectId(), "name": "Alice", "activity": { "date": "$$NOW" } },
