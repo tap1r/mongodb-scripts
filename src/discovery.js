@@ -2,7 +2,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.23"
+    *  Version: "0.1.24"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -154,9 +154,7 @@
       const [username, password, authSource, authMech, compressors, tls] = mongoOptions();
       const readPreference = 'secondaryPreferred';
       let credentials, node;
-      if (username !== null) {
-         credentials = username + ':' + password + '@';
-      }
+      if (username !== null) credentials = username + ':' + password + '@';
       const directURI = `mongodb://${credentials}${hostname}/?directConnection=true&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
       try {
          node = connect(directURI);
@@ -178,9 +176,7 @@
       const [username, password, authSource, authMech, compressors, tls] = mongoOptions();
       const readPreference = 'secondaryPreferred';
       let credentials, node;
-      if (username !== null) {
-         credentials = username + ':' + password + '@';
-      }
+      if (username !== null) credentials = username + ':' + password + '@';
       const directURI = `mongodb://${credentials}${hostname}/?directConnection=true&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
       try {
          node = connect(directURI);
@@ -203,9 +199,7 @@
       const readPreference = 'primaryPreferred';
       const { setName, seedList } = shardString.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
       let credentials, shard;
-      if (username !== null) {
-         credentials = username + ':' + password + '@';
-      }
+      if (username !== null) credentials = username + ':' + password + '@';
       const shardURI = `mongodb://${credentials}${seedList}/?replicaSet=${setName}&tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}&readPreference=${readPreference}`;
 
       try {
@@ -308,7 +302,7 @@
          csrsResults, allShardResults,
          hosts, allHostResults;
 
-      const mongosCmd = async(client, options) => 'I am a mongos, ';
+      const mongosCmd = async(client, options) => 'I am a mongos, ' + await me(client);
       const shardCmd = async(client, options) => 'I am a shard primary, ' + await me(client);
       const csrsCmd = async(client, options) => 'I am the CSRS primary, ' + await me(client);
       const csrsHostCmd = async(client, options) => 'I am a CSRS member host, ' + await me(client);
