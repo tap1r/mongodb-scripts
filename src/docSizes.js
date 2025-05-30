@@ -1,6 +1,6 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.27"
+ *  Version: "0.1.28"
  *  Description: "sample document size distribution"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -22,11 +22,12 @@ const options = {
    /*
     *  main
     */
-   const __script = { "name": "docSizes.js", "version": "0.1.27" };
+   const __script = { "name": "docSizes.js", "version": "0.1.28" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
    // connection preferences
+   const hello = db.hello();
    if (typeof readPref === 'undefined')
-      (readPref = (db.hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
+      (readPref = (hello.secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
    db.getMongo().setReadPref(readPref);
    try {
       if (db.getSiblingDB(dbName).getCollectionInfos({ "name": collName }, true)[0]?.name != collName)
@@ -68,8 +69,8 @@ const options = {
          namespace.stats(),
          { get(target, name) {
             if (name == 'extras') {
-               let regexFilter = /block_compressor=(?<compressor>\w+).+internal_page_max=(?<internalPageSize>\d+).+leaf_page_max=(?<dataPageSize>\d+)/;
-               let { compressor, dataPageSize, internalPageSize } = target['wiredTiger']['creationString'].match(regexFilter).groups;
+               const regexFilter = /block_compressor=(?<compressor>\w+).+internal_page_max=(?<internalPageSize>\d+).+leaf_page_max=(?<dataPageSize>\d+)/;
+               const { compressor, dataPageSize, internalPageSize } = target['wiredTiger']['creationString'].match(regexFilter).groups;
                return { "compressor": compressor, "dataPageSize": dataPageSize * 1024, "internalPageSize": internalPageSize * 1024 };
             }
             return target[name];
@@ -93,7 +94,7 @@ const options = {
          (_, idx) => start + idx * step
       );
    };
-   const { maxBsonObjectSize } = db.hello();
+   const { maxBsonObjectSize = 16777216 } = hello;
    // byte offset to reach the bucket's inclusive boundary
    const buckets = range(1, maxBsonObjectSize + 1, internalPageSize),
       pages = range(1, maxBsonObjectSize + 1, dataPageSize);
@@ -143,7 +144,7 @@ const options = {
          "CollectionTotals": {
             "hostname": hostname,
             "dbPath": dbPath,
-            "URI": (db.hello().msg == 'isdbgrid') ? 'sharded' : dhandle,
+            "URI": (hello.msg == 'isdbgrid') ? 'sharded' : dhandle,
             "namespace": `${dbName}.${collName}`,
             "dataSize": dataSize,
             "storageSize": storageSize,
