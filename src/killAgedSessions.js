@@ -1,7 +1,7 @@
 (async(filter = {}, age = 300000) => {
    /*
     *  Name: "killAgedSessions.js"
-    *  Version: "0.1.1"
+    *  Version: "0.1.2"
     *  Description: "kill aged sessions (and associated operations) by user"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -48,7 +48,7 @@
       } }
    ];
    const killSessions = async({
-         '_id': { 'id': uuid = null } = {},
+         '_id': { 'id': uuid = new uuid() } = {},
          'user': { 'name': user = null } = {},
          'lastUse': age = 0
       } = {}) => {
