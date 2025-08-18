@@ -61,39 +61,42 @@ Estimated current oplog churn:                    0.02 MB/hr
 A aggregation pipeline to describe a collection _schema_ as inferred from a canonicalised document _shape_.
 
 ```javascript
-const dbName = 'database', collName = 'collection';
-const options = { "allowDiskUse": true };
-const pipeline = [
-   { "$sample": { "size": 1000 } },
-   { "$group": {
-      "_id": null,
-      "__doc": { "$mergeObjects": "$$ROOT" }
-   } },
-   { "$facet": {
-      "Canonical (1D) shape (with most recent values)": [
-         { "$project": { "_id": 0 } },
-         { "$replaceRoot": { "newRoot": { "$mergeObjects": "$__doc" } } }
-      ],
-      "Canonical (1D) shape with types": [
-         { "$project": {
-            "_id": 0,
-            "__doc": { "$objectToArray": "$__doc" }
-         } },
-         { "$unwind": "$__doc" },
-         { "$set": { "__doc.v": { "$type": "$__doc.v" } } },
-         { "$group": {
-            "_id": null,
-            "__doc": { "$push": { "k": "$__doc.k", "v": "$__doc.v" } }
-         } },
-         { "$project": {
-            "_id": 0,
-            "__doc": { "$arrayToObject": "$__doc" }
-         } },
-         { "$replaceRoot": { "newRoot": { "$mergeObjects": "$__doc" } } }
-      ]
-   } }
-];
-db.getSiblingDB(dbName).getCollection(collName).aggregate(pipeline, options).pretty();
+(() => {
+   const dbName = 'database', collName = 'collection';
+   const namespace = db.getSiblingDB(dbName).getCollection(collName);
+   const options = { "allowDiskUse": true };
+   const pipeline = [
+      { "$sample": { "size": 1000 } },
+      { "$group": {
+         "_id": null,
+         "__doc": { "$mergeObjects": "$$ROOT" }
+      } },
+      { "$facet": {
+         "Canonical (1D) shape (with most recent values)": [
+            { "$unset": "_id" },
+            { "$replaceRoot": { "newRoot": { "$mergeObjects": "$__doc" } } }
+         ],
+         "Canonical (1D) shape with types": [
+            { "$project": {
+               "_id": 0,
+               "__doc": { "$objectToArray": "$__doc" }
+            } },
+            { "$unwind": "$__doc" },
+            { "$set": { "__doc.v": { "$type": "$__doc.v" } } },
+            { "$group": {
+               "_id": null,
+               "__doc": { "$push": { "k": "$__doc.k", "v": "$__doc.v" } }
+            } },
+            { "$project": {
+               "_id": 0,
+               "__doc": { "$arrayToObject": "$__doc" }
+            } },
+            { "$replaceRoot": { "newRoot": { "$mergeObjects": "$__doc" } } }
+         ]
+      } }
+   ];
+   namespace.aggregate(pipeline, options).forEach(printjson);
+})();
 ```
 
 ### Sample schema output
