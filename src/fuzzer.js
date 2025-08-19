@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.30"
+ *  Version: "0.6.31"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.30" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.31" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -237,7 +237,15 @@
                // Resharding a collection that has a uniqueness constraint is not supported
                "unique": shardedOptions.unique,
                "numInitialChunks": numInitialChunks,
-               "collation": collation
+               "collation": collation,
+               // "zones": [
+               //       {
+               //          "min": { "<document with same shape as shardkey>" },
+               //          "max": { "<document with same shape as shardkey>" },
+               //          "zone": null // <string> | null
+               //       }
+               // ],
+               ...(fCV(8.0) && { "forceRedistribution": true })
                // writeConcernMajorityJournalDefault must be true
             });
          };
@@ -370,8 +378,8 @@
       }
       const date = new Date(now + secondsOffset * 1000);
       const ts = (typeof process !== 'undefined') // MONGOSH-930
-             ? new Timestamp({ "t": timestamp + secondsOffset, "i": 0 })
-             : new Timestamp(timestamp + secondsOffset, 0);
+               ? new Timestamp({ "t": timestamp + secondsOffset, "i": 0 })
+               : new Timestamp(timestamp + secondsOffset, 0);
       schemas = new Array();
       schemas.push({
          "_id": oid,
@@ -789,8 +797,8 @@
             specialIndexes.forEach(index => console.log(`\tkey: ${tojson(index)}`));
             const sIndexing = () => {
                const sOptions = (fCV(4.4) && (isReplSet() || isSharded()))
-                            ? [specialIndexes, specialIndexOptions, indexPrefs.commitQuorum]
-                            : [specialIndexes, specialIndexOptions];
+                              ? [specialIndexes, specialIndexOptions, indexPrefs.commitQuorum]
+                              : [specialIndexes, specialIndexOptions];
 
                return namespace.createIndexes(...sOptions);
             }
