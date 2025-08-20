@@ -1,12 +1,12 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.31"
+ *  Version: "0.6.32"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: [mongo|mongosh] [connection options] --quiet fuzzer.js
+// Usage: [mongo|mongosh] [connection options] --quiet -f </path/to/>fuzzer.js
 
 /*
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
@@ -14,7 +14,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.31" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.32" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -111,7 +111,7 @@
             // "date": 1
          },
          "unique": false,
-         "numInitialChunksPerShard": 1,
+         "numInitialChunksPerShard": 64,
          // "collation": collation,  // inherit from collection options
          // "timeseries": tsOptions, // not required after initial collection creation
          "reShard": true
@@ -230,7 +230,7 @@
       if (isSharded() && (shardedOptions.reShard) && fCV(5.0)) {
          const resharding = async() => {
             const numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
-            await db.adminCommand({
+            return await db.adminCommand({
                "reshardCollection": `${dbName}.${collName}`,
                // The new shard key cannot have a uniqueness constraint
                "key": shardedOptions.key,
@@ -246,7 +246,6 @@
                //       }
                // ],
                ...(fCV(8.0) && { "forceRedistribution": true })
-               // writeConcernMajorityJournalDefault must be true
             });
          };
          const rebalancingOps = () => {
@@ -312,14 +311,19 @@
          }
          console.log('\nResharding activated...');
          if (typeof process !== 'undefined') {
-            resharding();
-            sleep(500);
+            const pollIntervalMS = 500;
+            try {
+               resharding();
+            } catch(e) {
+               console.log('Resharding attempt:', e);
+            }
+            sleep(pollIntervalMS);
             res = rebalancingOps();
             while (res.length > 0) {
                console.clear();
                console.log(`\nMonitoring resharding operations:\n`);
                if (res.length > 0) printjson(...res);
-               sleep(500);
+               sleep(pollIntervalMS);
                res = rebalancingOps();
             }
          } else {
@@ -443,27 +447,27 @@
          "uuid": UUID(),
          "md5": MD5($genRandHex(32)),
          "fle": BinData(6, UUID().base64()),
-         /* "columnStore": fCV(5.2)
-                         ? BinData(7, $getRandIntInc(0, Math.pow(10, 4)),
-                           {
-                              "unit": +$getRandNum(0, Math.pow(10, 6)).toFixed(2),
-                              "qty": $getRandIntInc(0, Math.pow(10, 4)),
-                              "price": [
-                                 +$getRandNum(0, Math.pow(10, 4)).toFixed(2),
-                                 $genRandCurrency()
-                              ]
-                           })
-                         : 'requires v5.2+', */
-         /* "sensitive": fCV(7.0)
-                         ? BinData(8, await window.crypto.subtle.generateKey(
-                           {
-                              "name": "HMAC",
-                              "hash": { "name": "SHA-512" },
-                           },
-                           true,
-                           ["sign", "verify"],
-                           ))
-                         : 'requires v7.0+', */
+         // "columnStore": fCV(5.2)
+         //              ? BinData(7, $getRandIntInc(0, Math.pow(10, 4)),
+         //                {
+         //                   "unit": +$getRandNum(0, Math.pow(10, 6)).toFixed(2),
+         //                   "qty": $getRandIntInc(0, Math.pow(10, 4)),
+         //                   "price": [
+         //                      +$getRandNum(0, Math.pow(10, 4)).toFixed(2),
+         //                      $genRandCurrency()
+         //                   ]
+         //                })
+         //              : 'requires v5.2+',
+         // "sensitive": fCV(7.0)
+         //            ? BinData(8, window.crypto.subtle.generateKey(
+         //                {
+         //                   "name": "HMAC",
+         //                   "hash": { "name": "SHA-512" },
+         //                },
+         //                true,
+         //                ["sign", "verify"],
+         //                ))
+         //            : 'requires v7.0+',
          "random": +$getRandNum(0, totalDocs).toFixed(4),
          "symbol": $genRandSymbol(),
          "credit card": $genRandCardNumber()
@@ -727,7 +731,7 @@
          try {
             db.getSiblingDB(dbName).createCollection(collName, options);
          } catch(e) {
-            console.log('\nNamespace creation failed:', e);
+            console.log('\n[red][ERROR] Namespace creation failed:[/]', e);
          }
 
          if (sharding && isSharded() && db.getSiblingDB(dbName).getCollection(collName).exists()) {
@@ -752,7 +756,7 @@
                sh.startBalancer();
             }
             catch(e) {
-               console.log('Sharding namespace failed:', e);
+               console.log('[red][ERROR] Sharding namespace failed:[/]', e);
             }
          }
       }
