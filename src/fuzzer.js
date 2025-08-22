@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.32"
+ *  Version: "0.6.33"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.32" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.33" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -111,7 +111,7 @@
             // "date": 1
          },
          "unique": false,
-         "numInitialChunksPerShard": 64,
+         "numInitialChunksPerShard": 2,
          // "collation": collation,  // inherit from collection options
          // "timeseries": tsOptions, // not required after initial collection creation
          "reShard": true
@@ -169,7 +169,7 @@
 
    const namespace = db.getSiblingDB(dbName).getCollection(collName);
    const now = new Date().getTime();
-   const timestamp = $floor(now / 1000.0);
+   const timestamp = $floor(now / 1000);
    let sampleSize = 8, docSize = 0, totalBatches = 1, residual = 0;
 
    fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
@@ -230,7 +230,8 @@
       if (isSharded() && (shardedOptions.reShard) && fCV(5.0)) {
          const resharding = async() => {
             const numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
-            return await db.adminCommand({
+            let res;
+            const cmd = () => db.adminCommand({
                "reshardCollection": `${dbName}.${collName}`,
                // The new shard key cannot have a uniqueness constraint
                "key": shardedOptions.key,
@@ -247,6 +248,13 @@
                // ],
                ...(fCV(8.0) && { "forceRedistribution": true })
             });
+            try {
+               res = cmd();
+            } catch(e) {
+               console.log('Resharding attempt:', e);
+            }
+
+            return res;
          };
          const rebalancingOps = () => {
             return db.getSiblingDB('admin').aggregate([
@@ -261,10 +269,12 @@
                      "$arrayElemAt": [
                         { "$regexFindAll": {
                            "input": "$desc",
-                           "regex": /^(ReshardingDonorService|ReshardingRecipientService) ([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})$/
+                           // cater for $currentOp schema change in v7
+                           "regex": /^(ReshardingDonorService|ReshardingMetricsDonorService|ReshardingRecipientService|ReshardingMetricsRecipientService) ([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})$/
                         } },
-                        0]
-               } } } ,
+                        0
+                     ]
+               } } },
                { "$set": {
                   "migrationService": { "$arrayElemAt": ["$migration.captures", 0] },
                   "migrationId": { "$arrayElemAt": ["$migration.captures", -1] }
@@ -296,28 +306,33 @@
                      "$filter": {
                         "input": "$shards",
                         "as": "shard",
-                        "cond": { "$eq": ["$$shard.migrationService", "ReshardingDonorService"] }
-               } } } },
+                        "cond": {
+                           "$or": [ // cater for $currentOp schema change in v7
+                              { "$eq": ["$$shard.migrationService", "ReshardingDonorService"] },
+                              { "$eq": ["$$shard.migrationService", "ReshardingMetricsDonorService"] }
+                           ]
+               } } } } },
                { "$set": {
                   "recipients": {
                      "$filter": {
                         "input": "$shards",
                         "as": "shard",
-                        "cond": { "$eq": ["$$shard.migrationService", "ReshardingRecipientService"] }
-               } } } },
+                        "cond": {
+                           "$or": [ // cater for $currentOp schema change in v7
+                              { "$eq": ["$$shard.migrationService", "ReshardingRecipientService"] },
+                              { "$eq": ["$$shard.migrationService", "ReshardingMetricsRecipientService"] }
+                           ]
+               } } } } },
                { "$unset": ["_id", "shards"] }
             ],
             { "comment": "Monitoring resharding progress by fuzzer.js" }).toArray();
          }
          console.log('\nResharding activated...');
          if (typeof process !== 'undefined') {
+            const initialPollIntervalMS = 1000;
             const pollIntervalMS = 500;
-            try {
-               resharding();
-            } catch(e) {
-               console.log('Resharding attempt:', e);
-            }
-            sleep(pollIntervalMS);
+            resharding();
+            sleep(initialPollIntervalMS);
             res = rebalancingOps();
             while (res.length > 0) {
                console.clear();
