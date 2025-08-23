@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.33"
+ *  Version: "0.6.34"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.33" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.34" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -110,7 +110,7 @@
             "string": "hashed"
             // "date": 1
          },
-         "unique": false,
+         "unique": false, // resharding a collection that has a uniqueness constraint is not supported
          "numInitialChunksPerShard": 2,
          // "collation": collation,  // inherit from collection options
          // "timeseries": tsOptions, // not required after initial collection creation
@@ -205,7 +205,10 @@
 
       // (re)create the namespace
       dropNS(dropNamespace, dbName, collName);
-      createNS(dbName, collName, compressor, expireAfterSeconds, collation, writeConcern, tsOptions, sharding, shardedOptions, capped, cappedOptions);
+      createNS(dbName, collName, compressor,
+               expireAfterSeconds, collation,
+               writeConcern, tsOptions, sharding,
+               shardedOptions, capped, cappedOptions);
 
       // set collection/index build order, generate and bulk write the documents, create indexes
       console.log(`\nIndex build order preference "${indexPrefs.order}"`);
@@ -227,7 +230,7 @@
       }
 
       // redistribute chunks if required
-      if (isSharded() && (shardedOptions.reShard) && fCV(5.0)) {
+      if (isSharded() && (shardedOptions.reShard) && (!shardedOptions.unique) && fCV(5.0)) {
          const resharding = async() => {
             const numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
             let res;
@@ -347,6 +350,9 @@
          }
          console.log(`\nResharding complete.`);
       }
+      else if (isSharded() && (shardedOptions.unique) && fCV(5.0)) {
+         console.log('[red][WARN] [yellow]reshardCollection() [red]with a uniqueness constraint is not supported[/]');
+      }
       else if (isSharded() && (shardedOptions.reShard) && !fCV(5.0)) {
          console.log('[red][WARN] [yellow]reshardCollection() [red]requires v5.0+[/]');
       }
@@ -361,28 +367,29 @@
       /*
        *  generate pseudo-random key values
        */
+      let day = 86400;
       let secondsOffset;
       switch (distribution.toLowerCase()) {
          case 'uniform':
-            secondsOffset = $floor($getRandNum(offset, offset + range) * 86400);
+            secondsOffset = $floor($getRandNum(offset, offset + range) * day);
             break;
          case 'normal': // genNormal(mu, sigma)
-            secondsOffset = $floor($genNormal(offset + (range / 2), range / 2) * 86400);
+            secondsOffset = $floor($genNormal(offset + (range / 2), range / 2) * day);
             break;
          case 'bimodal': // not implemented yet
-            // secondsOffset = $floor($getRandNum(offset, offset + range) * 86400);
+            // secondsOffset = $floor($getRandNum(offset, offset + range) * day);
             // break;
          case 'pareto': // not implemented yet
             // $genRandIncPareto(min, alpha = 1.161) {}
-            // secondsOffset = $floor($genRandIncPareto(offset + range) * 86400);
+            // secondsOffset = $floor($genRandIncPareto(offset + range) * day);
             // break;
          case 'exponential': // not implemented yet
             // $getRandExp();
-            // secondsOffset = $floor($getRandExp(offset, offset + range, 128) * 86400);
+            // secondsOffset = $floor($getRandExp(offset, offset + range, 128) * day);
             // break;
          default:
             console.log(`\nUnsupported distribution type: ${distribution}\nDefaulting to "uniform"`);
-            secondsOffset = +$floor($getRandNum(offset, offset + range) * 86400);
+            secondsOffset = +$floor($getRandNum(offset, offset + range) * day);
       }
       let oid;
       switch (id.toLowerCase()) {
@@ -784,6 +791,7 @@
          console.log('\nDropping all existing indexes:');
          namespace.dropIndexes();
       }
+
       if (indexPrefs.build) {
          if (indexes.length > 0) {
             console.log(`\nBuilding index${(indexes.length === 1) ? '' : 'es'} with collation locale "${collation.locale}" with commit quorum "${(fCV(4.4) && (isReplSet() || isSharded())) ? indexPrefs.commitQuorum : 'disabled'}":`);
@@ -811,6 +819,7 @@
             console.log(idxMsg());
          } else
             console.log('No regular index builds specified.');
+
          if (specialIndexes.length > 0) {
             console.log(`\nBuilding exceptional index${(specialIndexes.length === 1) ? '' : 'es'} (no collation support) with commit quorum "${(fCV(4.4) && (isReplSet() || isSharded())) ? indexPrefs.commitQuorum : 'disabled'}":`);
             specialIndexes.forEach(index => console.log(`\tkey: ${tojson(index)}`));
@@ -837,6 +846,7 @@
             console.log(sidxMsg());
          } else
             console.log('\nNo special index builds specified.');
+
       } else
          console.log('\nBuilding indexes: "false"');
 
