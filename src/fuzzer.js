@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.34"
+ *  Version: "0.6.35"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.34" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.35" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -273,26 +273,21 @@
                         { "$regexFindAll": {
                            "input": "$desc",
                            // cater for $currentOp schema change in v7
-                           "regex": /^(ReshardingDonorService|ReshardingMetricsDonorService|ReshardingRecipientService|ReshardingMetricsRecipientService) ([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})$/
+                           "regex": /^Resharding\w+(Donor|Recipient)Service ([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})$/
                         } },
                         0
                      ]
                } } },
-               { "$set": {
-                  "migrationService": { "$arrayElemAt": ["$migration.captures", 0] },
-                  "migrationId": { "$arrayElemAt": ["$migration.captures", -1] }
-               } },
                { "$group": {
                   "_id": {
-                     "migrationId": "$migrationId",
+                     "migrationId": { "$arrayElemAt": ["$migration.captures", -1] },
                      "namespace": "$ns"
                   },
                   "shards": {
                      "$push": {
                         "shard": "$shard",
-                        "migrationService": "$migrationService",
-                        "recipientState": "$recipientState",
-                        "donorState": "$donorState",
+                        "migrationService": { "$arrayElemAt": ["$migration.captures", 0] },
+                        "state": { "$ifNull": ["$donorState", "$recipientState"] },
                         "approxDocumentsToCopy":{ "$ifNull": [{ "$toInt": "$approxDocumentsToCopy" }, "$$REMOVE"] },
                         "documentsCopied": { "$ifNull": [{ "$toInt": "$documentsCopied" }, "$$REMOVE"] },
                         "approxBytesToCopy": { "$ifNull": [{ "$toInt": "$approxBytesToCopy" }, "$$REMOVE"] },
@@ -309,33 +304,24 @@
                      "$filter": {
                         "input": "$shards",
                         "as": "shard",
-                        "cond": {
-                           "$or": [ // cater for $currentOp schema change in v7
-                              { "$eq": ["$$shard.migrationService", "ReshardingDonorService"] },
-                              { "$eq": ["$$shard.migrationService", "ReshardingMetricsDonorService"] }
-                           ]
-               } } } } },
+                        "cond": { "$eq": ["$$shard.migrationService", "Donor"] }
+               } } } },
                { "$set": {
                   "recipients": {
                      "$filter": {
                         "input": "$shards",
                         "as": "shard",
-                        "cond": {
-                           "$or": [ // cater for $currentOp schema change in v7
-                              { "$eq": ["$$shard.migrationService", "ReshardingRecipientService"] },
-                              { "$eq": ["$$shard.migrationService", "ReshardingMetricsRecipientService"] }
-                           ]
-               } } } } },
-               { "$unset": ["_id", "shards"] }
+                        "cond": { "$eq": ["$$shard.migrationService", "Recipient"] }
+               } } } },
+               { "$unset": ["_id", "shards", "donors.migrationService", "recipients.migrationService"] }
             ],
             { "comment": "Monitoring resharding progress by fuzzer.js" }).toArray();
          }
          console.log('\nResharding activated...');
          if (typeof process !== 'undefined') {
-            const initialPollIntervalMS = 1000;
             const pollIntervalMS = 500;
             resharding();
-            sleep(initialPollIntervalMS);
+            sleep(pollIntervalMS);
             res = rebalancingOps();
             while (res.length > 0) {
                console.clear();
@@ -367,7 +353,7 @@
       /*
        *  generate pseudo-random key values
        */
-      let day = 86400;
+      const day = 86400;
       let secondsOffset;
       switch (distribution.toLowerCase()) {
          case 'uniform':
