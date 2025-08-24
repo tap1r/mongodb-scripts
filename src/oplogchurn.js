@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.7"
+ *  Version: "0.5.8"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -10,7 +10,7 @@
 
 /*
  *  Custom parameters:
- *  [mongo|mongosh] [connection options] --quiet --eval "let intervalHrs = 1;" [-f|--file] oplogchurn.js
+ *  [mongo|mongosh] [connection options] --quiet --eval "let intervalHrs = 1;" [-f|--file] </path/to/>oplogchurn.js
  */
 
 (() => {
@@ -18,7 +18,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.5.7" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.8" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -41,9 +41,9 @@
    __comment += ` on shell v${version()}`;
    console.clear();
    console.log(`\n\n[yellow]${__comment}[/]`);
-   if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
-   if (shellVer() < 1.0 && typeof process !== 'undefined') console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
-   if (serverVer() < 4.2) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
+   if (shellVer() < serverVer() && !isMongosh()) console.log(`\n[R][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
+   if (shellVer() < 1.0 && isMongosh()) console.log(`\n[R][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
+   if (serverVer() < 4.2) console.log(`\n[R][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
 })();
 
 (() => {
@@ -72,7 +72,7 @@
          d2 = date.toISOString(), // end datetime
          t1 = Math.floor(date.setHours(date.getHours() - intervalHrs) / 1000.0), // start timestamp
          d1 = date.toISOString(), // start datetime
-         $match = (typeof process !== 'undefined') // MONGOSH-930
+         $match = (isMongosh()) // MONGOSH-930
                 ? { "$match": {
                      "ts": {
                         "$gt": Timestamp({ "t": t1, "i": 0 }),
@@ -135,26 +135,26 @@
 
       // Print results
       console.log('\n');
-      console.log(`[yellow]${'═'.repeat(termWidth)}[/]`);
-      console.log(`[green]Hostname:[/] ${hostname.padStart(termWidth - 'Hostname: '.length)}`);
-      console.log(`[green]dbPath:[/] ${dbPath.padStart(termWidth - 'dbPath: '.length)}`);
-      console.log(`[yellow]${'━'.repeat(termWidth)}[/]`);
-      console.log(`[green]${'Start time:'.padEnd(rowHeader)}[/] ${d1.padStart(columnWidth)}`);
-      console.log(`[green]${'End time:'.padEnd(rowHeader)}[/] ${d2.padStart(columnWidth)}`);
-      console.log(`[green]${'Interval duration:'.padEnd(rowHeader)}[/] ${`${intervalHrs} hr${(intervalHrs == 1) ? '' : 's'}`.padStart(columnWidth)}`);
-      console.log(`[green]${'Average oplog compression ratio:'.padEnd(rowHeader)}[/] ${`${ratio}:1`.padStart(columnWidth)}`);
-      console.log(`[green]${'Interval document count:'.padEnd(rowHeader)}[/] ${docs.toString().padStart(columnWidth)}`);
-      console.log(`[green]${'Interval data size:'.padEnd(rowHeader)}[/] ${`${intervalDataSize}`.padStart(columnWidth)}`);
-      console.log(`[green]${'Estimated interval storage size:'.padEnd(rowHeader)}[/] ${`${intervalStorageSize}`.padStart(columnWidth)}`);
-      console.log(`[yellow]${'━'.repeat(termWidth)}[/]`);
-      console.log(`[green]${'Estimated current oplog data churn:'.padEnd(rowHeader)}[/] ${`${oplogChurn}/hr`.padStart(columnWidth)}`);
-      console.log(`[yellow]${'═'.repeat(termWidth)}[/]`);
+      console.log(`[y]${'═'.repeat(termWidth)}[/]`);
+      console.log(`[g]Hostname:[/] ${hostname.padStart(termWidth - 'Hostname: '.length)}`);
+      console.log(`[g]dbPath:[/] ${dbPath.padStart(termWidth - 'dbPath: '.length)}`);
+      console.log(`[y]${'━'.repeat(termWidth)}[/]`);
+      console.log(`[g]${'Start time:'.padEnd(rowHeader)}[/] ${d1.padStart(columnWidth)}`);
+      console.log(`[g]${'End time:'.padEnd(rowHeader)}[/] ${d2.padStart(columnWidth)}`);
+      console.log(`[g]${'Interval duration:'.padEnd(rowHeader)}[/] ${`${intervalHrs} hr${(intervalHrs == 1) ? '' : 's'}`.padStart(columnWidth)}`);
+      console.log(`[g]${'Average oplog compression ratio:'.padEnd(rowHeader)}[/] ${`${ratio}:1`.padStart(columnWidth)}`);
+      console.log(`[g]${'Interval document count:'.padEnd(rowHeader)}[/] ${docs.toString().padStart(columnWidth)}`);
+      console.log(`[g]${'Interval data size:'.padEnd(rowHeader)}[/] ${`${intervalDataSize}`.padStart(columnWidth)}`);
+      console.log(`[g]${'Estimated interval storage size:'.padEnd(rowHeader)}[/] ${`${intervalStorageSize}`.padStart(columnWidth)}`);
+      console.log(`[y]${'━'.repeat(termWidth)}[/]`);
+      console.log(`[g]${'Estimated current oplog data churn:'.padEnd(rowHeader)}[/] ${`${oplogChurn}/hr`.padStart(columnWidth)}`);
+      console.log(`[y]${'═'.repeat(termWidth)}[/]`);
       console.log('\n');
    }
 
    if (!isReplSet()) {
       console.log('\n');
-      console.log('\t[red]Host is not a replica set member....exiting![/]');
+      console.log('\t[R]Host is not a replica set member....exiting![/]');
       console.log('\n');
    } else main();
 })();
