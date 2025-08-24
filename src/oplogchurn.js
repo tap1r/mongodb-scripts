@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.8"
+ *  Version: "0.5.9"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,7 +18,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.5.8" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.9" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -72,7 +72,7 @@
          d2 = date.toISOString(), // end datetime
          t1 = Math.floor(date.setHours(date.getHours() - intervalHrs) / 1000.0), // start timestamp
          d1 = date.toISOString(), // start datetime
-         $match = (isMongosh()) // MONGOSH-930
+         $match = isMongosh() // MONGOSH-930
                 ? { "$match": {
                      "ts": {
                         "$gt": Timestamp({ "t": t1, "i": 0 }),
