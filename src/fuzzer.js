@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.35"
+ *  Version: "0.6.36"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.35" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.36" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -36,8 +36,8 @@
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    console.log(`\n\n[yellow]${__comment}[/]`);
-   if (shellVer() < serverVer() && typeof process === 'undefined') console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
-   if (shellVer() < 1.0 && typeof process !== 'undefined') console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
+   if (shellVer() < serverVer() && !isMongosh()) console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
+   if (shellVer() < 1.0 && isMongosh()) console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
    if (serverVer() < 4.2) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
 })();
 
@@ -272,7 +272,7 @@
                      "$arrayElemAt": [
                         { "$regexFindAll": {
                            "input": "$desc",
-                           // cater for $currentOp schema change in v7
+                           // cater for $currentOp sharding schema change in v7
                            "regex": /^Resharding\w+(Donor|Recipient)Service ([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})$/
                         } },
                         0
@@ -318,16 +318,16 @@
             { "comment": "Monitoring resharding progress by fuzzer.js" }).toArray();
          }
          console.log('\nResharding activated...');
-         if (typeof process !== 'undefined') {
+         if (isMongosh()) {
             const pollIntervalMS = 500;
             resharding();
-            sleep(pollIntervalMS);
+            sleep(3 * pollIntervalMS); // klugde to address race condition before $currentOp produces the initial output
             res = rebalancingOps();
             while (res.length > 0) {
+               sleep(pollIntervalMS);
                console.clear();
                console.log(`\nMonitoring resharding operations:\n`);
                if (res.length > 0) printjson(...res);
-               sleep(pollIntervalMS);
                res = rebalancingOps();
             }
          } else {
@@ -389,7 +389,7 @@
             );
       }
       const date = new Date(now + secondsOffset * 1000);
-      const ts = (typeof process !== 'undefined') // MONGOSH-930
+      const ts = (isMongosh()) // MONGOSH-930
                ? new Timestamp({ "t": timestamp + secondsOffset, "i": 0 })
                : new Timestamp(timestamp + secondsOffset, 0);
       schemas = new Array();
@@ -846,7 +846,7 @@
          const bulk = namespace.initializeUnorderedBulkOp();
          for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument(fuzzer, timestamp))
          const result = bulk.execute(writeConcern);
-         const bInserted = (typeof process !== 'undefined') ? result.insertedCount : result.nInserted;
+         const bInserted = (isMongosh()) ? result.insertedCount : result.nInserted;
          console.log(`\t[Batch ${1 + i}/${totalBatches}] bulk inserted ${bInserted} document${(bInserted === 1) ? '' : 's'}`);
       }
 
