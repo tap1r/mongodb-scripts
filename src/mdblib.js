@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.13.8"
+ *  Version: "0.13.9"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.13.8"
+      "version": "0.13.9"
 });
 
 /*
@@ -102,7 +102,7 @@ function isMongosh() {
     *  Evaluate the shell type
     */
 
-   return (typeof process !== 'undefined');
+   return typeof process !== 'undefined';
 }
 
 // shell tty colour helper
