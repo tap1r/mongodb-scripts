@@ -1,12 +1,12 @@
 /*
  *  Name: "oid-sampler.js"
- *  Version = "0.1.2"
+ *  Version = "0.1.3"
  *  Description: OID sampler
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "mongo [connection options] --quiet oid-sampler.js"
+// Usage: "mongo [connection options] --quiet [-f|--file] </path/to/>oid-sampler.js"
 
 /*
  *  Load helper lib (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
@@ -40,9 +40,9 @@ function oplog() {
     */
    let total = 0, docs = 0;
    let date = new Date();
-   let t2 = (date.getTime() / 1000.0)|0; // end timestamp
+   let t2 = (date.getTime() / 1000)|0; // end timestamp
    let d2 = date.toISOString(); // end datetime
-   let t1 = (date.setHours(date.getHours() - hrs) / 1000.0)|0; // start timestamp
+   let t1 = (date.setHours(date.getHours() - hrs) / 1000)|0; // start timestamp
    let d1 = date.toISOString(); // start datetime
    let agg = [
       { "$match": {
@@ -79,7 +79,7 @@ function sampler() {
          "$limit": 1
    }];
    let agg3 = [{
-      $collStats: { count: {} }
+      "$collStats": { "count": {} }
    }];
    slaveOk();
    db.getSiblingDB(dbName).getCollection(collName).aggregate(agg1, options).map(oid => {
