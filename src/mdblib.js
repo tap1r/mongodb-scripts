@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.13.7"
+ *  Version: "0.13.8"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.13.7"
+      "version": "0.13.8"
 });
 
 /*
@@ -96,6 +96,16 @@ if (typeof Object.getPrototypeOf(Object).entries === 'undefined') {
    }
 }
 
+// shell type detection helper
+function isMongosh() {
+   /*
+    *  Evaluate the shell type
+    */
+
+   return (typeof process !== 'undefined');
+}
+
+// shell tty colour helper
 const ansiTags = [
    { "tag": "\/", "code": 0 }, // reset
    { "tag": "bold", "code": 1 },
@@ -107,13 +117,21 @@ const ansiTags = [
    { "tag": "hide", "code": 8 },
    { "tag": "strike", "code": 9 },
    { "tag": "black", "code": 30 },
+   { "tag": "k", "code": 30 }, // black (CMYK)
    { "tag": "red", "code": 31 },
+   { "tag": "r", "code": 31 },
    { "tag": "green", "code": 32 },
+   { "tag": "g", "code": 32 }, // green
    { "tag": "yellow", "code": 33 },
+   { "tag": "y", "code": 33 }, // yellow (CMYK)
    { "tag": "blue", "code": 34 },
+   { "tag": "b", "code": 34 }, // blue
    { "tag": "magenta", "code": 35 },
+   { "tag": "m", "code": 35 }, // magenta (CMYK)
    { "tag": "cyan", "code": 36 },
+   { "tag": "c", "code": 36 }, // cyan (CMYK)
    { "tag": "white", "code": 37 },
+   { "tag": "e", "code": 37 }, // light grey
    { "tag": "default", "code": 39 },
    { "tag": "bg black", "code": 40 },
    { "tag": "bg red", "code": 41 },
@@ -125,13 +143,21 @@ const ansiTags = [
    { "tag": "bg white", "code": 47 },
    { "tag": "bg default", "code": 49 },
    { "tag": "bright black", "code": 90 },
+   { "tag": "K", "code": 90 }, // bold black (CMYK)
    { "tag": "bright red", "code": 91 },
+   { "tag": "R", "code": 91 }, // bold red
    { "tag": "bright green", "code": 92 },
+   { "tag": "G", "code": 92 }, // bold green
    { "tag": "bright yellow", "code": 93 },
+   { "tag": "Y", "code": 93 }, // bold yellow (CMYK)
    { "tag": "bright blue", "code": 94 },
+   { "tag": "B", "code": 94 }, // bold blue
    { "tag": "bright magenta", "code": 95 },
+   { "tag": "M", "code": 95 }, // bold magenta (CMYK)
    { "tag": "bright cyan", "code": 96 },
+   { "tag": "C", "code": 96 }, // bold cyan (CMYK)
    { "tag": "bright white", "code": 97 },
+   { "tag": "W", "code": 97 }, // bold white
    { "tag": "bg bright black", "code": 100 },
    { "tag": "bg bright red", "code": 101 },
    { "tag": "bg bright green", "code": 102 },
@@ -142,7 +168,7 @@ const ansiTags = [
    { "tag": "bg bright white", "code": 107 }
 ];
 
-(typeof process !== 'undefined') && (console['log'] = (function() {
+(isMongosh()) && (console['log'] = (function() {
    /*
     *  overloading the console.log() method
     *  - add colour markup support for TTY output
@@ -333,7 +359,7 @@ function $rand() {
    /*
     *  Choose your preferred PRNG
     */
-   if (typeof process !== 'undefined') {
+   if (isMongosh()) {
       // mongosh/nodejs detected
       return crypto.webcrypto.getRandomValues(new Uint32Array(1))[0] / Uint32MaxVal;
    } else {
@@ -420,7 +446,7 @@ function getDBNames(dbFilter = /^.+/) {
       command.comment = comment;
    }
    slaveOk(options.readPreference);
-   const dbs = (shellVer() >= 2.0 && typeof process !== 'undefined') ? db.getSiblingDB('admin').runCommand(command, options)
+   const dbs = (shellVer() >= 2.0 && isMongosh()) ? db.getSiblingDB('admin').runCommand(command, options)
              : db.getSiblingDB('admin').runCommand(command);
 
    return dbs.databases.map(({ name }) => name).filter(namespace => !restrictedNamespaces.includes(namespace));
@@ -441,14 +467,14 @@ function getAllNonSystemNamespaces() { // TBA
          "type": /^(?:collection|timeseries)$/,
          "name": /(?:^(?!(system\..+|replset\..+)$).+)/
       },
-      (typeof process !== 'undefined') ? { "nameOnly": true } : true,
+      (isMongosh()) ? { "nameOnly": true } : true,
       true
    ];
    const listViewOpts = [{
          "type": "view",
          "name": /(?:^(?!system\..+$).+)/
       },
-      (typeof process !== 'undefined') ? { "nameOnly": true } : true,
+      (isMongosh()) ? { "nameOnly": true } : true,
       true
    ];
    // return dbs = db.adminCommand(...listDbOpts).databases.map(dbName => dbName.name);
@@ -482,18 +508,18 @@ function getAllSystemNamespaces() { // TBA
  *  Versioned helper commands
  */
 
-function serverVer(v = false) {
+function serverVer(ver = false) {
    /*
     *  Evaluate the server version
     */
    const svrVer = +db.version().match(/^\d+\.\d+/);
 
-   return (v && v <= svrVer) ? true
-        : (v && v >  svrVer) ? false
+   return (ver && ver <= svrVer) ? true
+        : (ver && ver >  svrVer) ? false
         : svrVer;
 }
 
-function fCV(v = false) { // updated for shared tier compatibility
+function fCV(ver = false) { // updated for shared tier compatibility
    /*
     *  Evaluate feature compatibility version
     */
@@ -514,19 +540,19 @@ function fCV(v = false) { // updated for shared tier compatibility
            : serverVer();
    }
 
-   return (v && v <= featureVer()) ? true
-        : (v && v >  featureVer()) ? false
+   return (ver && ver <= featureVer()) ? true
+        : (ver && ver >  featureVer()) ? false
         : featureVer();
 }
 
-function shellVer(v = false) {
+function shellVer(ver = false) {
    /*
     *  Evaluate the shell version
     */
    const shell = +version().match(/^\d+\.\d+/);
 
-   return (v && v <= shell) ? true
-        : (v && v >  shell) ? false
+   return (ver && ver <= shell) ? true
+        : (ver && ver >  shell) ? false
         : shell;
 }
 
@@ -735,7 +761,7 @@ if (typeof bsonsize === 'undefined') {
    bsonsize = arg => Object.getPrototypeOf(Object).bsonsize(arg);
 }
 
-if (typeof process !== 'undefined') {
+if (isMongosh()) {
    /*
     *  mongosh wrappers
     */
@@ -794,7 +820,7 @@ function $NumberLong(arg) {
    /*
     *  NumberLong() wrapper
     */
-   return (typeof process !== 'undefined')
+   return (isMongosh())
         ? Long.fromNumber(arg)
         : NumberLong(arg);
 }
@@ -803,7 +829,7 @@ function $NumberDecimal(arg) {
    /*
     *  NumberDecimal() wrapper
     */
-   return (typeof process !== 'undefined')
+   return (isMongosh())
         ? Decimal128.fromString(arg.toString())
         : NumberDecimal(arg);
 }
@@ -812,7 +838,7 @@ function $NumberInt(arg) {
    /*
     *  NumberInt() wrapper
     */
-   return (typeof process !== 'undefined')
+   return (isMongosh())
         ? NumberInt(arg)
         : NumberInt(arg);
 }
@@ -1435,7 +1461,7 @@ function $stats(dbName = db.getName()) {
     */
    let stats = db.getSiblingDB(dbName).stats( // max precision due to SERVER-69036
       // MONGOSH-1108 (mongosh v1.2.0) & SERVER-62277 (mongod v5.0.6)
-      (serverVer(5.0) && (shellVer() >= 5.0 || (typeof process !== 'undefined' && shellVer() >= 1.2)))
+      (serverVer(5.0) && (shellVer() >= 5.0 || (isMongosh() && shellVer() >= 1.2)))
          ? { "freeStorage": 1, "scale": 1 } : 1
    );
    stats.name = dbName;
