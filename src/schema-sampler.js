@@ -1,6 +1,6 @@
 /*
  *  Name: "schema-sampler.js"
- *  Version: "0.2.12"
+ *  Version: "0.2.13"
  *  Description: generate schema with simulated mongosqld sampling commands
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -22,7 +22,7 @@ const userOptions = {
    /*
     *
     */
-   const __script = { "name": "schema-sampler.js", "version": "0.2.12" };
+   const __script = { "name": "schema-sampler.js", "version": "0.2.13" };
    print(`\n#### Running script ${__script.name} v${__script.version}\n`);
 
    function main({ sampleSize = 1, dbs = [], readPreference = 'secondaryPreferred' }) {
@@ -73,8 +73,8 @@ const userOptions = {
       const namespace = (dbName, collName) => db.getSiblingDB(dbName).getCollection(collName);
       const collections = (dbName) => {
          return db.getSiblingDB(dbName)
-           .getCollectionInfos(...listColOpts)
-           .map(({ 'name': collName }) => ({
+            .getCollectionInfos(...listColOpts)
+            .map(({ 'name': collName }) => ({
                "name":      collName,
                "documents": namespace(dbName, collName).stats().count,
                "indexes":   namespace(dbName, collName).getIndexes(),
@@ -83,8 +83,8 @@ const userOptions = {
       };
       const views = (dbName) => {
          return db.getSiblingDB(dbName)
-           .getCollectionInfos(...listViewOpts)
-           .map(({ 'name': viewName, 'options': viewOptions }) => ({
+            .getCollectionInfos(...listViewOpts)
+            .map(({ 'name': viewName, 'options': viewOptions }) => ({
                "name":     viewName,
                "options":  viewOptions,
                "$sample":  namespace(dbName, viewName).aggregate(viewPipeline, options).toArray()
@@ -103,7 +103,7 @@ const userOptions = {
        */
       return (typeof process !== 'undefined')
            ? console.log(util.inspect(schema, { "depth": null, "colors": true }))
-           : print(tojson(schema))
+           : print(tojson(schema));
    }
 
    main(userOptions);
