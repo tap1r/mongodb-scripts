@@ -1,12 +1,12 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.36"
+ *  Version: "0.6.37"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: [mongo|mongosh] [connection options] --quiet -f </path/to/>fuzzer.js
+// Usage: [mongo|mongosh] [connection options] --quiet [-f|--file] </path/to/>fuzzer.js
 
 /*
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
@@ -14,7 +14,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.36" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.37" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -389,7 +389,7 @@
             );
       }
       const date = new Date(now + secondsOffset * 1000);
-      const ts = (isMongosh()) // MONGOSH-930
+      const ts = isMongosh() // MONGOSH-930
                ? new Timestamp({ "t": timestamp + secondsOffset, "i": 0 })
                : new Timestamp(timestamp + secondsOffset, 0);
       schemas = new Array();
@@ -846,7 +846,7 @@
          const bulk = namespace.initializeUnorderedBulkOp();
          for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument(fuzzer, timestamp))
          const result = bulk.execute(writeConcern);
-         const bInserted = (isMongosh()) ? result.insertedCount : result.nInserted;
+         const bInserted = isMongosh() ? result.insertedCount : result.nInserted;
          console.log(`\t[Batch ${1 + i}/${totalBatches}] bulk inserted ${bInserted} document${(bInserted === 1) ? '' : 's'}`);
       }
 
