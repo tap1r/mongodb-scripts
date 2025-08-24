@@ -1,12 +1,12 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.9"
+ *  Version: "0.5.10"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "[mongo|mongosh] [connection options] --quiet oplogchurn.js"
+// Usage: "[mongo|mongosh] [connection options] --quiet [-f|--file] </path/to/>oplogchurn.js"
 
 /*
  *  Custom parameters:
@@ -18,7 +18,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.5.9" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.10" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -66,11 +66,12 @@
       /*
        *  main
        */
-      let opSize = 0, docs = 0, date = new Date();
+      let opSize = 0, docs = 0;
+      const date = new Date();
       const scaled = new AutoFactor();
-      const t2 = Math.floor(date.getTime() / 1000.0), // end timestamp
+      const t2 = Math.floor(date.getTime() / 1000), // end timestamp
          d2 = date.toISOString(), // end datetime
-         t1 = Math.floor(date.setHours(date.getHours() - intervalHrs) / 1000.0), // start timestamp
+         t1 = Math.floor(date.setHours(date.getHours() - intervalHrs) / 1000), // start timestamp
          d1 = date.toISOString(), // start datetime
          $match = isMongosh() // MONGOSH-930
                 ? { "$match": {
@@ -85,8 +86,16 @@
                   } } },
          $project = serverVer(4.2)
                   ? { "$unset": "_id" }
-                  : { "$addFields": { "_id": "$$REMOVE" } };
-      let pipeline = [$match, $project];
+                  : { "$addFields": { "_id": "$$REMOVE" } },
+         $group = {
+            "$group": {
+               "_id": null,
+               "_bsonDataSize": { "$sum": { "$bsonSize": "$$ROOT" } },
+               "_documentCount": { "$sum": 1 }
+         } };
+      const pipeline = serverVer(4.4)
+                     ? [$match, $project, $group]
+                     : [$match, $project];
       const options = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
@@ -98,16 +107,9 @@
       const oplog = db.getSiblingDB('local').getCollection('oplog.rs');
 
       if (serverVer(4.4)) {
-         // Using the v4.4+ $bsonSize aggregation operator
-         pipeline.push({
-            "$group": {
-               "_id": null,
-               "_bsonDataSize": { "$sum": { "$bsonSize": "$$ROOT" } },
-               "_documentCount": { "$sum": 1 }
-         } });
          ([{ '_bsonDataSize': opSize, '_documentCount': docs }] = oplog.aggregate(pipeline, options).toArray());
       } else {
-         console.log('\n[red]Warning: Using the legacy client side calculation technique[/]');
+         console.log('\n[R]Warning: Using the legacy client side calculation technique[/]');
          oplog.aggregate(pipeline, options).forEach(op => {
             opSize += bsonsize(op);
             ++docs;
