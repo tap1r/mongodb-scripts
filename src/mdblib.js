@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.13.9"
+ *  Version: "0.13.10"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.13.9"
+      "version": "0.13.10"
 });
 
 /*
@@ -168,7 +168,7 @@ const ansiTags = [
    { "tag": "bg bright white", "code": 107 }
 ];
 
-(isMongosh()) && (console['log'] = (function() {
+isMongosh() && (console['log'] = (function() {
    /*
     *  overloading the console.log() method
     *  - add colour markup support for TTY output
@@ -467,14 +467,14 @@ function getAllNonSystemNamespaces() { // TBA
          "type": /^(?:collection|timeseries)$/,
          "name": /(?:^(?!(system\..+|replset\..+)$).+)/
       },
-      (isMongosh()) ? { "nameOnly": true } : true,
+      isMongosh() ? { "nameOnly": true } : true,
       true
    ];
    const listViewOpts = [{
          "type": "view",
          "name": /(?:^(?!system\..+$).+)/
       },
-      (isMongosh()) ? { "nameOnly": true } : true,
+      isMongosh() ? { "nameOnly": true } : true,
       true
    ];
    // return dbs = db.adminCommand(...listDbOpts).databases.map(dbName => dbName.name);
@@ -820,7 +820,7 @@ function $NumberLong(arg) {
    /*
     *  NumberLong() wrapper
     */
-   return (isMongosh())
+   return isMongosh()
         ? Long.fromNumber(arg)
         : NumberLong(arg);
 }
@@ -829,7 +829,7 @@ function $NumberDecimal(arg) {
    /*
     *  NumberDecimal() wrapper
     */
-   return (isMongosh())
+   return isMongosh()
         ? Decimal128.fromString(arg.toString())
         : NumberDecimal(arg);
 }
@@ -838,7 +838,7 @@ function $NumberInt(arg) {
    /*
     *  NumberInt() wrapper
     */
-   return (isMongosh())
+   return isMongosh()
         ? NumberInt(arg)
         : NumberInt(arg);
 }
