@@ -1,6 +1,6 @@
 /*
  *  Name: "compact.js"
- *  Version: "0.2.10"
+ *  Version: "0.2.11"
  *  Description: schrödinger's page reproduction
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,7 +25,7 @@ const options = {
    /*
     *  ...
     */
-   const __script = { "name": "compact.js", "version": "0.2.10" };
+   const __script = { "name": "compact.js", "version": "0.2.11" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    const dbFilter = dbName, collFilter = collName, reportLog;
@@ -66,7 +66,7 @@ const options = {
    const compactCmdOptions = { "readPreference": "secondary" };
    for (let i = 1; i <= compactions; ++i) {
       console.log(`Compacting collection ${i} of ${compactions}`);
-      const { bytesFreed } = (shellVer() >= 2.0 && typeof process !== 'undefined')
+      const { bytesFreed } = (shellVer() >= 2.0 && isMongosh())
                            ? dbContext.runCommand(compactCmd, compactCmdOptions)
                            : dbContext.runCommand(compactCmd);
 
