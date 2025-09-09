@@ -457,7 +457,7 @@ exports = function() { // Sample trigger to update a materialised view
    const dbName = 'database', collName = 'collection';
    db.getSiblingDB(dbName).runCommand({ "compact": collName });
 
-   db.adminCommand({ "getLog": "global" }).log.filter(line => line.match(/[Cc]ompact/)).map(entry => console.log(entry));
+   db.adminCommand({ "getLog": "global" }).log.filter(line => line.match(/[Cc]ompact/)).forEach(entry => console.log(entry));
 
    db.getSiblingDB('admin').aggregate([
       { "$currentOp": {} },
