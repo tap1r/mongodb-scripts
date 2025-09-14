@@ -1,12 +1,12 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.28"
+ *  Version: "0.1.29"
  *  Description: "sample document size distribution"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: mongosh [connection options] --quiet docSizes.js
+// Usage: mongosh [connection options] --quiet [-f|--file] docSizes.js
 
 /*
  *  User defined parameters
@@ -15,14 +15,14 @@
 const options = {
    "dbName": "database",
    "collName": "collection",
-   // "sampleSize": 1000 // parameter to $sample
+   "sampleSize": 1000 // parameter to $sample
 };
 
 (({ dbName, collName, sampleSize = 1000 } = options) => {
    /*
     *  main
     */
-   const __script = { "name": "docSizes.js", "version": "0.1.28" };
+   const __script = { "name": "docSizes.js", "version": "0.1.29" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
    // connection preferences
    const hello = db.hello();
@@ -51,31 +51,32 @@ const options = {
 
    // retrieve collection metadata
    const namespace = db.getSiblingDB(dbName).getCollection(collName);
-   const { 'count': documentCount,
-         'extras': {
-            compressor,
-            dataPageSize,
-            internalPageSize
+   const {
+      'count': documentCount,
+      'extras': {
+         compressor,
+         dataPageSize,
+         internalPageSize
+      },
+      'size': dataSize,
+      'wiredTiger': {
+         'block-manager': {
+            'file bytes available for reuse': blocksFree,
+            'file size in bytes': storageSize
          },
-         'size': dataSize,
-         'wiredTiger': {
-            'block-manager': {
-               'file bytes available for reuse': blocksFree,
-               'file size in bytes': storageSize
-            },
-            'uri': dhandle
+         'uri': dhandle
+      }
+   } = new Proxy(
+      namespace.stats(),
+      { get(target, name) {
+         if (name == 'extras') {
+            const regexFilter = /block_compressor=(?<compressor>\w+).+internal_page_max=(?<internalPageSize>\d+).+leaf_page_max=(?<dataPageSize>\d+)/;
+            const { compressor, dataPageSize, internalPageSize } = target['wiredTiger']['creationString'].match(regexFilter).groups;
+            return { "compressor": compressor, "dataPageSize": dataPageSize * 1024, "internalPageSize": internalPageSize * 1024 };
          }
-      } = new Proxy(
-         namespace.stats(),
-         { get(target, name) {
-            if (name == 'extras') {
-               const regexFilter = /block_compressor=(?<compressor>\w+).+internal_page_max=(?<internalPageSize>\d+).+leaf_page_max=(?<dataPageSize>\d+)/;
-               const { compressor, dataPageSize, internalPageSize } = target['wiredTiger']['creationString'].match(regexFilter).groups;
-               return { "compressor": compressor, "dataPageSize": dataPageSize * 1024, "internalPageSize": internalPageSize * 1024 };
-            }
-            return target[name];
-         } }
-      );
+         return target[name];
+      } }
+   );
    const aggOptions = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
@@ -96,8 +97,8 @@ const options = {
    };
    const { maxBsonObjectSize = 16777216 } = hello;
    // byte offset to reach the bucket's inclusive boundary
-   const buckets = range(1, maxBsonObjectSize + 1, internalPageSize),
-      pages = range(1, maxBsonObjectSize + 1, dataPageSize);
+   const buckets = range(1, 1 + maxBsonObjectSize, internalPageSize),
+      pages = range(1, 1 + maxBsonObjectSize, dataPageSize);
 
    // measure document and page size distribution
    const pipeline = [
