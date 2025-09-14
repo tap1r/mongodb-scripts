@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.13.10"
+ *  Version: "0.13.12"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.13.10"
+      "version": "0.13.12"
 });
 
 /*
@@ -446,7 +446,7 @@ function getDBNames(dbFilter = /^.+/) {
       command.comment = comment;
    }
    slaveOk(options.readPreference);
-   const dbs = (shellVer() >= 2.0 && isMongosh()) ? db.getSiblingDB('admin').runCommand(command, options)
+   const dbs = (shellVer(2.0) && isMongosh()) ? db.getSiblingDB('admin').runCommand(command, options)
              : db.getSiblingDB('admin').runCommand(command);
 
    return dbs.databases.map(({ name }) => name).filter(namespace => !restrictedNamespaces.includes(namespace));
@@ -561,7 +561,7 @@ function slaveOk(readPref = 'primaryPreferred') {
     *  Backward compatibility with rs.slaveOk() and MONGOSH-910
     */
    return (typeof rs.slaveOk === 'undefined' && typeof rs.secondaryOk !== 'undefined')
-        ? db.getMongo().setReadPref(readPref) // else if (shellVer() >= 4.4)
+        ? db.getMongo().setReadPref(readPref) // else if (shellVer(4.4))
         : (typeof rs.secondaryOk === 'function') ? rs.secondaryOk()
         : rs.slaveOk();
 }
@@ -901,7 +901,7 @@ function $getRandRatioInt(ratios = [1]) {
     */
    const weightedIndex = [];
    ratios.forEach((ratio, idx) => {
-      for (let i = 0; i < ratio; ++i) {
+      for (const i = 0; i < ratio; ++i) {
          weightedIndex.push(idx);
       }
    });
@@ -914,7 +914,7 @@ function $genRandHex(len = 1) {
     *  generate random hexadecimal string
     */
    let res = '';
-   for (let i = 0; i < len; ++i) {
+   for (const i = 0; i < len; ++i) {
       res += ($floor($rand() * 16)).toString(16);
    }
 
@@ -927,7 +927,7 @@ function $genRandStr(len = 1) {
     */
    let res = '';
    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-   for (let i = 0; i < len; ++i) {
+   for (const i = 0; i < len; ++i) {
       res += chars.charAt($floor($rand() * chars.length));
    }
 
@@ -950,7 +950,7 @@ function $genRandAlpha(len = 1) {
     */
    let res = '';
    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-   for (let i = 0; i < len; ++i) {
+   for (const i = 0; i < len; ++i) {
       res += chars.charAt($getRandInt(0, chars.length));
    }
 
@@ -980,7 +980,7 @@ function $genArrayElements(len) {
     *  generate array of random strings
     */
    const array = [];
-   for (let i = 0; i < len; ++i) {
+   for (const i = 0; i < len; ++i) {
       array.push($genRandStr($getRandIntInc(6, 24)));
    }
 
@@ -992,7 +992,7 @@ function $genArrayStrings(len) {
     *  generate array of random strings
     */
    const array = [];
-   for (let i = 0; i < len; ++i) {
+   for (const i = 0; i < len; ++i) {
       array.push($genRandStr($getRandIntInc(6, 24)));
    }
 
@@ -1004,7 +1004,7 @@ function $genArrayInts(len) {
     *  generate array of random integers
     */
    const array = [];
-   for (let i = 0; i < len; ++i) {
+   for (const i = 0; i < len; ++i) {
       array.push($getRandIntInc(1, 1000));
    }
 
@@ -1063,7 +1063,7 @@ function $genLuhnNumber(input) {
       sum = 0,
       shouldDouble = false;
 
-   for (let i = digits.length - 1; i >= 0; i--) {
+   for (const i = digits.length - 1; i >= 0; i--) {
       let digit = digits[i];
       if (shouldDouble) {
          digit *= 2;
@@ -1461,7 +1461,7 @@ function $stats(dbName = db.getName()) {
     */
    let stats = db.getSiblingDB(dbName).stats( // max precision due to SERVER-69036
       // MONGOSH-1108 (mongosh v1.2.0) & SERVER-62277 (mongod v5.0.6)
-      (serverVer(5.0) && (shellVer() >= 5.0 || (isMongosh() && shellVer() >= 1.2)))
+      (serverVer(5.0) && (shellVer(5.0) || (isMongosh() && shellVer(1.2))))
          ? { "freeStorage": 1, "scale": 1 } : 1
    );
    stats.name = dbName;
@@ -1474,7 +1474,7 @@ function $stats(dbName = db.getName()) {
       stats.nindexes = stats.indexes;
       stats.freeStorageSize = 0;
       stats.indexFreeStorageSize = 0;
-      for (let shard in stats.raw) {
+      for (const shard in stats.raw) {
          if (stats.raw.hasOwnProperty(shard)) {
             stats.collections.push(+stats.raw[shard].collections);
             stats.views.push(+stats.raw[shard].views);
