@@ -1,12 +1,12 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.0"
+ *  Version: "0.1.1"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "[mongo|mongosh] [connection options] --quiet onlineDefrag.js"
+// Usage: "[mongo|mongosh] [connection options] --quiet [-f|--file] onlineDefrag.js"
 
 /*
  *  Custom parameters:
@@ -84,15 +84,18 @@
          totalUpdatesRatio = 0.2 // 20% pass
       ) {
       const {
-         'wiredTiger': {
-            'block-manager': {
-               'file bytes available for reuse': reusableBytes
-         } },
-         'size': dataSize,
-         'count': documentCount,
-         storageSize,
-         avgObjSize
-      } = namespace.stats();
+         'storageStats': {
+            'wiredTiger': {
+               'block-manager': {
+                  'file bytes available for reuse': reusableBytes
+               } = {}
+            } = {},
+            'size': dataSize,
+            'count': documentCount,
+            storageSize,
+            avgObjSize
+         } = {}
+      } = namespace.aggregate([{ "$collStats": { "storageStats": { "freeStorage": 1, "scale": 1 } } }]).toArray()[0];
       const compression = dataSize / (storageSize - reusableBytes);
       const dataPageSize = 32 * 1024;
       const pageFillTarget = Math.ceil((pageFillRatio * dataPageSize * compression) / avgObjSize);
