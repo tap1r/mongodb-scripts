@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.12"
+ *  Version: "0.5.13"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,7 +18,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.5.12" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.13" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -132,7 +132,7 @@
                size = 0,
                internalPageSize = (creationString.match(/internal_page_max=(\d+)/)[1] * 1024)
             } = {}
-         } = oplog.aggregate([{ "$collStats": { "storageStats": { "freeStorage": 1, "scale": 1 } } }]).toArray()[0];
+         } = oplog.aggregate([{ "$collStats": { "storageStats": { "scale": 1 } } }]).toArray()[0];
       const overhead = internalPageSize;
       const ratio = +((size / (storageSize - blocksFree - overhead)).toFixed(2)),
          intervalDataSize = scaled.format(opSize);
