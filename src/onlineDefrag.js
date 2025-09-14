@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.1"
+ *  Version: "0.1.2"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -95,7 +95,7 @@
             storageSize,
             avgObjSize
          } = {}
-      } = namespace.aggregate([{ "$collStats": { "storageStats": { "freeStorage": 1, "scale": 1 } } }]).toArray()[0];
+      } = namespace.aggregate([{ "$collStats": { "storageStats": { "scale": 1 } } }]).toArray()[0];
       const compression = dataSize / (storageSize - reusableBytes);
       const dataPageSize = 32 * 1024;
       const pageFillTarget = Math.ceil((pageFillRatio * dataPageSize * compression) / avgObjSize);
