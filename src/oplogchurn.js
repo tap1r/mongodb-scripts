@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.10"
+ *  Version: "0.5.11"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,7 +18,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.5.10" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.11" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -41,9 +41,9 @@
    __comment += ` on shell v${version()}`;
    console.clear();
    console.log(`\n\n[yellow]${__comment}[/]`);
-   if (shellVer() < serverVer() && !isMongosh()) console.log(`\n[R][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
-   if (shellVer() < 1.0 && isMongosh()) console.log(`\n[R][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
-   if (serverVer() < 4.2) console.log(`\n[R][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
+   if (shellVer(serverVer()) && !isMongosh()) console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
+   if (!shellVer(1.9) && isMongosh()) console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
+   if (!serverVer(4.2)) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
 })();
 
 (() => {
@@ -117,18 +117,22 @@
       }
 
       // Get host info & oplog stats
-      const { 'system': { hostname } } = hostInfo(),
-         { 'parsed': { 'storage': { dbPath } } } = db.serverCmdLineOpts(),
+      const { 'system': { hostname = 'unknown' } = {} } = hostInfo(),
+         { 'parsed': { 'storage': { dbPath = 'unknown' } = {} } = {} } = db.serverCmdLineOpts(),
          // Get oplog collection stats
-         { 'wiredTiger': {
-            creationString,
-            'block-manager': {
-               'file bytes available for reuse': blocksFree,
-               'file size in bytes': storageSize
-            } },
-            size,
-            internalPageSize = (creationString.match(/internal_page_max=(\d+)/)[1] * 1024)
-         } = oplog.stats();
+         {
+            'storageStats': {
+               'wiredTiger': {
+                  creationString,
+                  'block-manager': {
+                     'file bytes available for reuse': blocksFree,
+                     'file size in bytes': storageSize
+                  } = {}
+               } ={},
+               size,
+               internalPageSize = (creationString.match(/internal_page_max=(\d+)/)[1] * 1024)
+            } = {}
+         } = oplog.aggregate([{ "$collStats": { "storageStats": { "freeStorage": 1, "scale": 1 } } }]).toArray()[0];
       const overhead = internalPageSize;
       const ratio = +((size / (storageSize - blocksFree - overhead)).toFixed(2)),
          intervalDataSize = scaled.format(opSize);
