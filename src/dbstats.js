@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.2"
+ *  Version: "0.12.3"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -107,7 +107,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.2" };
+   const __script = { "name": "dbstats.js", "version": "0.12.3" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -130,9 +130,9 @@
    __comment += ` on shell v${version()}`;
    // console.clear();
    console.log(`\n\n[yellow]${__comment}[/]`);
-   if (shellVer() < serverVer() && !isMongosh()) console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
-   if (shellVer() < 1.0 && isMongosh()) console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
-   if (serverVer() < 4.2) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
+   if (shellVer(serverVer()) && !isMongosh()) console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
+   if (!shellVer(1.9) && isMongosh()) console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
+   if (!serverVer(4.2)) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
 })();
 
 (() => {
@@ -310,7 +310,7 @@
       // delete dbPath.nindexes;
       delete dbPath.compressor;
 
-      const dbNames = (shellVer() >= 2.0 && isMongosh())
+      const dbNames = (shellVer(2.0) && isMongosh())
                     ? getDBNames(dbFilter).toSorted(sortAsc) // mongosh v2 optimised
                     : getDBNames(dbFilter).sort(sortAsc);    // legacy shell(s) method
       console.log('');
@@ -389,7 +389,7 @@
       // }
 
       let collNamesTasks = dbPath.databases.map(async database => {
-         database.collections = (shellVer() >= 2.0 && isMongosh())
+         database.collections = (shellVer(2.0) && isMongosh())
             ? db.getSiblingDB(database.name).getCollectionInfos({ // mongosh v2 optimised
                   "type": /^(collection|timeseries)$/,
                   "name": collFilter
@@ -404,7 +404,7 @@
                isMongosh() ? { "nameOnly": true } : true,
                true
               ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
-         database.views = (shellVer() >= 2.0 && isMongosh())
+         database.views = (shellVer(2.0) && isMongosh())
             ? db.getSiblingDB(database.name).getCollectionInfos({ // mongosh v2 optimised
                   "type": "view",
                   "name": collFilter
@@ -440,7 +440,7 @@
             delete collection.proc;
             delete collection.dbPath;
             // collection.indexes.sort(sortBy('index')); // add toSorted optimisation here
-            collection.indexes = (shellVer() >= 2.0 && isMongosh())
+            collection.indexes = (shellVer(2.0) && isMongosh())
                ? collection.indexes.toSorted(sortBy('index')) // mongosh v2 optimised
                : collection.indexes.sort(sortBy('index'));    // legacy shell(s) method
 
@@ -448,7 +448,7 @@
          });
          database.collections = await Promise.all(collFetchTasks);
          // database.collections.sort(sortBy('collection')); // add toSorted optimisation here
-         database.collections = (shellVer() >= 2.0 && isMongosh())
+         database.collections = (shellVer(2.0) && isMongosh())
             ? database.collections.toSorted(sortBy('collection')) // mongosh v2 optimised
             : database.collections.sort(sortBy('collection'));    // legacy shell(s) method
          database.views = db.getSiblingDB(database.name).getCollectionInfos({
@@ -458,17 +458,17 @@
             isMongosh() ? { "nameOnly": true } : true,
             true
          ); // .sort(sortBy('view')); // add toSorted optimisation here
-         database.views = (shellVer() >= 2.0 && isMongosh())
+         database.views = (shellVer(2.0) && isMongosh())
             ? database.views.toSorted(sortBy('view')) // mongosh v2 optimised
             : database.views.sort(sortBy('view'));    // legacy shell(s) method
-         dbPath.databases = (shellVer() >= 2.0 && isMongosh())
+         dbPath.databases = (shellVer(2.0) && isMongosh())
             ? dbPath.databases.toSorted(sortBy('db')) // mongosh v2 optimised
             : dbPath.databases.sort(sortBy('db'));    // legacy shell(s) method
 
          return database;
       });
       dbPath.databases = await Promise.all(dbFetchTasks);
-      dbPath.databases = (shellVer() >= 2.0 && isMongosh())
+      dbPath.databases = (shellVer(2.0) && isMongosh())
          ? dbPath.databases.toSorted(sortBy('db')) // mongosh v2 optimised
          : dbPath.databases.sort(sortBy('db'));    // legacy shell(s) method
 
