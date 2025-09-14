@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.1.1"
+    *  Version: "0.1.2"
     *  Description: "autoCompact() with log monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -23,15 +23,14 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.1.1" };
+   const __script = { "name": "autoCompact.js", "version": "0.1.2" };
 
    const cmd = (freeSpaceTargetMB = 1, runOnce = true) => db.adminCommand({
       "autoCompact": true,
       "freeSpaceTargetMB": freeSpaceTargetMB,
       "runOnce": runOnce
    });
-   const tailLogs = () => {
-      let ts = ISODate();
+   const tailLogs = (ts) => {
       let pause = 0;
       let msg = '';
       // expected to be the last namespace
@@ -41,14 +40,14 @@
       ).log.map(
          EJSON.parse
       ).filter(log => {
-         return log?.attr?.message?.session_name == 'WT_SESSION.compact' && log?.t > ts
+         return log?.c == 'WTCMPCT' && log?.t > ts
       });
 
       do {
          const logs = getLogs(ts);
          if (logs.length) {
             logs.forEach(log => {
-               ts = log?.t ?? ISODate();
+               ts = log?.t ?? ISODate()
                msg = log?.attr?.message?.msg ?? '';
                console.log(ts.toJSON(), msg);
             });
@@ -67,8 +66,9 @@
    freeSpaceTargetMB = typeof freeSpaceTargetMB !== 'undefined' ? freeSpaceTargetMB ?? 1 : 1;
    runOnce = typeof runOnce !== 'undefined' ? runOnce ?? true : true;
    console.log(`\nautoCompact() command options freeSpaceTargetMB ${freeSpaceTargetMB}, runOnce: ${runOnce}\n`);
+   const ts = ISODate();
    cmd(freeSpaceTargetMB, runOnce);
-   tailLogs();
+   tailLogs(ts);
 })();
 
 // EOF
