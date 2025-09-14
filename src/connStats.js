@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.1.5"
+    *  Version: "0.1.6"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,10 +17,10 @@
     *  - add support for DRIVERS-3027 when complete
     */
 
-   // Usage: mongosh [connection options] --quiet connStats.js
+   // Usage: mongosh [connection options] --quiet [-f|--file] connStats.js
 
    const aggOpts = {
-         "comment": "connStats.js v0.1.5"
+         "comment": "connStats.js v0.1.6"
       },
       pipeline = [
          { "$currentOp": {
@@ -218,10 +218,7 @@
             // "secs_running": { "$gte": 0 }
          } },
          { "$sort": { "totalConnections": -1 } },
-         { "$project": {
-            "_id": 0,
-            "connections": 0
-         } }
+         { "$unset": ["_id", "connections"] }
       ];
       // results;
 
