@@ -1,12 +1,12 @@
 /*
  *  Name: "compact.js"
- *  Version: "0.2.11"
+ *  Version: "0.2.12"
  *  Description: schrödinger's page reproduction
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "mongosh [connection options] --quiet -f compact.js"
+// Usage: "mongosh [connection options] --quiet [-f|--file] compact.js"
 
 /*
  *  User defined parameters
@@ -25,7 +25,7 @@ const options = {
    /*
     *  ...
     */
-   const __script = { "name": "compact.js", "version": "0.2.11" };
+   const __script = { "name": "compact.js", "version": "0.2.12" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    const dbFilter = dbName, collFilter = collName, reportLog;
