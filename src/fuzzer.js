@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.37"
+ *  Version: "0.6.38"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.37" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.38" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -36,9 +36,9 @@
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    console.log(`\n\n[yellow]${__comment}[/]`);
-   if (shellVer() < serverVer() && !isMongosh()) console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
-   if (shellVer() < 1.0 && isMongosh()) console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
-   if (serverVer() < 4.2) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
+   if (shellVer(serverVer()) && !isMongosh()) console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
+   if (!shellVer(1.9) && isMongosh()) console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
+   if (!serverVer(4.2)) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
 })();
 
 (async() => {
@@ -747,7 +747,7 @@
             const numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments({});
             console.log(`with initial chunks: ${numInitialChunks}`);
             try {
-               (serverVer() < 6.0) && (sh.enableSharding(dbName).ok);
+               (!serverVer(6.0)) && (sh.enableSharding(dbName).ok);
                sh.shardCollection(
                   `${dbName}.${collName}`,
                   shardedOptions.key,
@@ -760,7 +760,7 @@
                );
                // console.log(`enable balancing`);
                sh.enableBalancing(`${dbName}.${collName}`);
-               (serverVer() < 6.0) && (sh.enableAutoSplit());
+               (!serverVer(6.0)) && (sh.enableAutoSplit());
                sh.startBalancer();
             }
             catch(e) {
@@ -844,7 +844,7 @@
       for (let i = 0; i < totalBatches; ++i) {
          if (i == totalBatches - 1 && residual > 0) batchSize = residual;
          const bulk = namespace.initializeUnorderedBulkOp();
-         for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument(fuzzer, timestamp))
+         for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument(fuzzer, timestamp));
          const result = bulk.execute(writeConcern);
          const bInserted = isMongosh() ? result.insertedCount : result.nInserted;
          console.log(`\t[Batch ${1 + i}/${totalBatches}] bulk inserted ${bInserted} document${(bInserted === 1) ? '' : 's'}`);
