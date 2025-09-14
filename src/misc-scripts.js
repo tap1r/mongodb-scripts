@@ -2,7 +2,10 @@
  *  miscellaneous unsorted scripts
  */
 
-(() => { // $sample expression testing
+(() => {
+   /*
+    * $sample expression testing
+    */
    const dbName = 'database', collName = 'collection';
    const namespace = db.getSiblingDB(dbName).getCollection(collName),
       sampleSize = 4.9, // percentage
@@ -301,12 +304,15 @@ exports = function() { // Sample trigger to update a materialised view
          { "op": "command", "command.createIndexes": { "$exists": true } },
          { "op": "none", "msg": /^Index Build/ }
       ]
-   }).inprog.forEach(op =>
-      printjson({ "message": op.msg })
+   }).inprog.forEach(({ msg = '' }) =>
+      printjson({ "message": msg })
    );
 })();
 
-(() => { // connectionStatus to show auth'd user with roles
+(() => {
+   /*
+    * connectionStatus to show auth'd user with roles
+    */
    console.log(db.adminCommand({ "connectionStatus": 1, "showPrivileges": true }));
 })();
 
@@ -382,7 +388,7 @@ exports = function() { // Sample trigger to update a materialised view
          // printjson(changeStream);
    } }
 
-   let watchCursor = db.getMongo().watch([{ "$match": { } }]);
+   let watchCursor = db.getMongo().watch([{ "$match": {} }]);
    while (!watchCursor.isClosed()) {
       let next = watchCursor.tryNext();
       while (next !== null) {
@@ -597,10 +603,10 @@ exports = function() { // Sample trigger to update a materialised view
    console.log(`\n`);
 })();
 
-/*
- *  report stale indexes
- */
 (() => {
+   /*
+    *  report stale indexes
+    */
    const dbName = 'database', collName = 'collection';
    const idxAge = 24 * 3600 * 1000; // 24hrs in millis
    const indexes = db.getSiblingDB(dbName).getCollection(collName).aggregate(
@@ -614,7 +620,7 @@ exports = function() { // Sample trigger to update a materialised view
          "building": { "$ne": true }
       } }
    );
-   for (let { name, accesses } of indexes) {
+   for (const { name = '', accesses = 0 } of indexes) {
       const since = (accesses.ops < 1) ? 'never since startup' : accesses.since;
       console.log(`Index ${name} last accessed ${since}`);
    }
@@ -715,7 +721,7 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
  */
 (() => {
    const dbName = 'database', collName = 'collection';
-   const { count } = db.getSiblingDB(dbName).getCollection(collName).stats();
+   const { count = 0 } = db.getSiblingDB(dbName).getCollection(collName).stats();
    const sampleSize = 5;
    const sampleRate = (sampleSize * 1.1) / count; // oversample slightly to round out nearer to the expected sample size
    const sample = db.getSiblingDB(dbName).runCommand({
@@ -734,7 +740,7 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
    const dbName = 'database', collName = 'collection';
    const database = db.getSiblingDB(dbName);
    const namespace = db.getSiblingDB(dbName).getCollection(collName);
-   const { count } = namespace.stats();
+   const { count = 0 } = namespace.stats();
    const sampleSize = 1000;
    const sampleRate = (sampleSize * 1.1) / count; // oversample slightly to round out nearer to the expected sample size
    const samplerCmd = {
@@ -746,7 +752,7 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
       // "returnKey": true,
       "comment": "sampling with readOnce cursor option"
    };
-   const { 'executionStats': samplerCmdStats } = database.runCommand({
+   const { 'executionStats': samplerCmdStats = null } = database.runCommand({
       "explain": samplerCmd,
       "verbosity": "executionStats",
       "comment": "psuedo-sampler stats"
@@ -785,7 +791,7 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
          "total": { "$sum": 1 }
       } } */
    ];
-   const { 'stages': [{ '$cursor': { 'executionStats': bucketStats } }] } = namespace.explain(explainPlan).aggregate(pipeline, options);
+   const { 'stages': [{ '$cursor': { 'executionStats': bucketStats = null } = {} } = {}] = [] } = namespace.explain(explainPlan).aggregate(pipeline, options);
    printjson(bucketStats);
    const buckets = namespace.aggregate(pipeline, options).toArray().map(id => { return id['_id'] });
    // printjson(buckets);
@@ -797,7 +803,7 @@ JSON.stringify(Object.fromEntries(Object.entries(db.adminCommand({ "getCmdLineOp
       "readConcern": { "level": "local" },
       "comment": "sampling with readOnce cursor option"
    };
-   const { 'executionStats': samplerCmdStats } = database.runCommand({
+   const { 'executionStats': samplerCmdStats = null } = database.runCommand({
       "explain": samplerCmd,
       "verbosity": "executionStats",
       "comment": "psuedo-sampler stats"
