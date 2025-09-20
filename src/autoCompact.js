@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.1.2"
+    *  Version: "0.1.3"
     *  Description: "autoCompact() with log monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -23,14 +23,14 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.1.2" };
+   const __script = { "name": "autoCompact.js", "version": "0.1.3" };
 
    const cmd = (freeSpaceTargetMB = 1, runOnce = true) => db.adminCommand({
       "autoCompact": true,
       "freeSpaceTargetMB": freeSpaceTargetMB,
       "runOnce": runOnce
    });
-   const tailLogs = (ts) => {
+   const tailLogs = ts => {
       let pause = 0;
       let msg = '';
       // expected to be the last namespace
@@ -51,7 +51,7 @@
                msg = log?.attr?.message?.msg ?? '';
                console.log(ts.toJSON(), msg);
             });
-            pause = 0; // reset pause when logs are found
+            pause = 0; // reset pause when new log entries are present
          } else if (!pause) {
             console.log('\n-----Work in progress, waiting for new logs-----\n');
             pause = 1; // set pause to prevent repeated messages
