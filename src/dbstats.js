@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.3"
+ *  Version: "0.12.4"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -107,7 +107,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.3" };
+   const __script = { "name": "dbstats.js", "version": "0.12.4" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -807,8 +807,8 @@
                      : compactionHelper('collection', storageSize, freeStorageSize) ? 'compact'
                      : '--  ';
       console.log(`[yellow]${'━'.repeat(termWidth)}[/]`);
-      if (name.length > 45) name = `${name.substring(0, collWidth)}~`;
-      console.log(`└[cyan]${(' ' + name).padEnd(rowHeader - 1)}[/] ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} [cyan]${compaction.padStart(columnWidth - 2)}[/]`);
+      if (name.length > 44) name = `${name.substring(0, collWidth)}~`;
+      console.log(`╰>[cyan]${(' ' + name).padEnd(rowHeader - 2)}[/] ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} [cyan]${compaction.padStart(columnWidth - 2)}[/]`);
 
       return;
    }
@@ -824,7 +824,7 @@
                        : '--  ';
       console.log(`[yellow]${'━'.repeat(termWidth)}[/]`);
       if (namespace.length > 45) namespace = `${namespace.substring(0, collWidth)}~`;
-      console.log(`└[cyan]${(' ' + namespace).padEnd(rowHeader - 1)}[/] ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} [cyan]${compaction.padStart(columnWidth - 2)}[/]`);
+      console.log(`╰>[cyan]${(' ' + namespace).padEnd(rowHeader - 2)}[/] ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} [cyan]${compaction.padStart(columnWidth - 2)}[/]`);
 
       return;
    }
@@ -854,12 +854,12 @@
        *  Print index level stats
        */
       const indexWidth = rowHeader + columnWidth * 2;
-      const compaction = (name == '_id_' && compactionHelper('index', storageSize, freeStorageSize)) ? 'compact()'
+      const compaction = (name == '_id_' && compactionHelper('index', storageSize, freeStorageSize)) ? 'compact'
                      : compactionHelper('index', storageSize, freeStorageSize) ? 'rebuild'
                      : '--  ';
       console.log(`  [yellow]${'━'.repeat(termWidth - 2)}[/]`);
       if (name.length > 64) name = `${name.substring(0, indexWidth)}~`;
-      console.log(`   [red]${name.padEnd(indexWidth)}[/] ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${''.toString().padStart(columnWidth)} [cyan]${compaction.padStart(columnWidth - 2)}[/]`);
+      console.log(`  ╰» [red]${name.padEnd(indexWidth - 2)}[/] ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' |' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${''.toString().padStart(columnWidth)} [cyan]${compaction.padStart(columnWidth - 2)}[/]`);
 
       return;
    }
@@ -944,7 +944,7 @@
          console.log(`[bold][green]${`All indexes:[/]    ${JSON.stringify(nindexes)}`.padEnd(rowHeader + 4)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ' |' + (formatPct(totalIndexBytesReusable, totalIndexSize)).padStart(6)).padStart(columnWidth + 8)} ${''.padStart(columnWidth)} [cyan]${dbPathIdxCompaction.padStart(columnWidth - 2)}[/]`);
       }
       console.log(`[yellow]${'═'.repeat(termWidth)}[/]`);
-      console.log(`[bold][green]Host:[/] [cyan]${hostname}[/]   [bold][green]Type:[/] [cyan]${proc}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]   [bold][green]dbPath:[/] [cyan]${dbPath}[/]`);
+      console.log(`[bold][green]Hostname:[/] [cyan]${hostname}[/]   [bold][green]Type:[/] [cyan]${proc}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]   [bold][green]dbPath:[/] [cyan]${dbPath}[/]`);
       if (shards.length > 0) {
          console.log(`[bold][green]Shards:[/] ${JSON.stringify(shards)}`);
       }
