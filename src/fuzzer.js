@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.39"
+ *  Version: "0.6.40"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.39" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.40" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -159,8 +159,16 @@
          "default_language": idioma
       };
       if (idxCompressor != 'default') {
-         indexOptions.storageEngine = { "wiredTiger": { "configString": `block_compressor=${parseCompressor(idxCompressor)[0]}` } };
-         specialIndexOptions.storageEngine = { "wiredTiger": { "configString": `block_compressor=${parseCompressor(idxCompressor)[0]}` } };
+         indexOptions.storageEngine = {
+            "wiredTiger": {
+               "configString": `block_compressor=${parseCompressor(idxCompressor)[0]}`
+            }
+         };
+         specialIndexOptions.storageEngine = {
+            "wiredTiger": {
+               "configString": `block_compressor=${parseCompressor(idxCompressor)[0]}`
+            }
+         };
       }
 
    /*
@@ -205,10 +213,11 @@
 
       // (re)create the namespace
       dropNS(dropNamespace, dbName, collName);
-      createNS(dbName, collName, compressor,
-               expireAfterSeconds, collation,
-               writeConcern, tsOptions, sharding,
-               shardedOptions, capped, cappedOptions
+      createNS(
+         dbName, collName, compressor,
+         expireAfterSeconds, collation,
+         writeConcern, tsOptions, sharding,
+         shardedOptions, capped, cappedOptions
       );
 
       // set collection/index build order, generate and bulk write the documents, create indexes
@@ -349,7 +358,7 @@
 
    function genDocument({
          id = 'ts', range = 365.2422, offset = -300, interval = 7,
-         distribution = 'uniform', schemas = [], ratios = [1] } = {},
+         distribution = 'uniform', /* schemas = [], */ ratios = [1] } = {},
          timestamp) {
       /*
        *  generate pseudo-random key values
@@ -385,7 +394,7 @@
             break;
          default: // the 'ts' option
             oid = new ObjectId( // employ native mongosh method
-               Math.floor(timestamp + secondsOffset).toString(16) +
+               $floor(timestamp + secondsOffset).toString(16) +
                $genRandHex(16)
             );
       }
@@ -393,7 +402,7 @@
       const ts = isMongosh() // MONGOSH-930
                ? new Timestamp({ "t": timestamp + secondsOffset, "i": 0 })
                : new Timestamp(timestamp + secondsOffset, 0);
-      // let schemas = new Array();
+      let schemas = new Array();
       schemas.push({
          "_id": oid,
          "schema": {
@@ -709,10 +718,9 @@
          console.log(`\twith block compressor:\t"${compressor}" ${msg}`);
          console.log(`\twith collation locale:\t"${collation.locale}"`);
          let options = {
-            "storageEngine": {
-               "wiredTiger": {
-                  "configString": `block_compressor=${compressor}`
-            } },
+            "storageEngine": (isAtlasPlatform('sharedTier'))
+                           ? undefined
+                           : { "wiredTiger": { "configString": `block_compressor=${compressor}` } },
             "collation": collation,
             "writeConcern": writeConcern,
             // fCV(5.3) && "clusteredIndex": {},
