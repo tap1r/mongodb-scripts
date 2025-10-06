@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.13.12"
+ *  Version: "0.13.13"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.13.12"
+      "version": "0.13.13"
 });
 
 /*
@@ -901,7 +901,7 @@ function $getRandRatioInt(ratios = [1]) {
     */
    const weightedIndex = [];
    ratios.forEach((ratio, idx) => {
-      for (const i = 0; i < ratio; ++i) {
+      for (let i = 0; i < ratio; ++i) {
          weightedIndex.push(idx);
       }
    });
@@ -914,7 +914,7 @@ function $genRandHex(len = 1) {
     *  generate random hexadecimal string
     */
    let res = '';
-   for (const i = 0; i < len; ++i) {
+   for (let i = 0; i < len; ++i) {
       res += ($floor($rand() * 16)).toString(16);
    }
 
@@ -927,7 +927,7 @@ function $genRandStr(len = 1) {
     */
    let res = '';
    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-   for (const i = 0; i < len; ++i) {
+   for (let i = 0; i < len; ++i) {
       res += chars.charAt($floor($rand() * chars.length));
    }
 
@@ -950,7 +950,7 @@ function $genRandAlpha(len = 1) {
     */
    let res = '';
    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-   for (const i = 0; i < len; ++i) {
+   for (let i = 0; i < len; ++i) {
       res += chars.charAt($getRandInt(0, chars.length));
    }
 
@@ -980,7 +980,7 @@ function $genArrayElements(len) {
     *  generate array of random strings
     */
    const array = [];
-   for (const i = 0; i < len; ++i) {
+   for (let i = 0; i < len; ++i) {
       array.push($genRandStr($getRandIntInc(6, 24)));
    }
 
@@ -992,7 +992,7 @@ function $genArrayStrings(len) {
     *  generate array of random strings
     */
    const array = [];
-   for (const i = 0; i < len; ++i) {
+   for (let i = 0; i < len; ++i) {
       array.push($genRandStr($getRandIntInc(6, 24)));
    }
 
@@ -1004,7 +1004,7 @@ function $genArrayInts(len) {
     *  generate array of random integers
     */
    const array = [];
-   for (const i = 0; i < len; ++i) {
+   for (let i = 0; i < len; ++i) {
       array.push($getRandIntInc(1, 1000));
    }
 
@@ -1063,7 +1063,7 @@ function $genLuhnNumber(input) {
       sum = 0,
       shouldDouble = false;
 
-   for (const i = digits.length - 1; i >= 0; i--) {
+   for (let i = digits.length - 1; i >= 0; i--) {
       let digit = digits[i];
       if (shouldDouble) {
          digit *= 2;
