@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.38"
+ *  Version: "0.6.39"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.38" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.39" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -208,7 +208,8 @@
       createNS(dbName, collName, compressor,
                expireAfterSeconds, collation,
                writeConcern, tsOptions, sharding,
-               shardedOptions, capped, cappedOptions);
+               shardedOptions, capped, cappedOptions
+      );
 
       // set collection/index build order, generate and bulk write the documents, create indexes
       console.log(`\nIndex build order preference "${indexPrefs.order}"`);
@@ -321,7 +322,7 @@
          if (isMongosh()) {
             const pollIntervalMS = 500;
             resharding();
-            sleep(3 * pollIntervalMS); // klugde to address race condition before $currentOp produces the initial output
+            sleep(3 * pollIntervalMS); // kludge to address race condition before $currentOp produces the initial output
             res = rebalancingOps();
             while (res.length > 0) {
                sleep(pollIntervalMS);
@@ -392,7 +393,7 @@
       const ts = isMongosh() // MONGOSH-930
                ? new Timestamp({ "t": timestamp + secondsOffset, "i": 0 })
                : new Timestamp(timestamp + secondsOffset, 0);
-      schemas = new Array();
+      // let schemas = new Array();
       schemas.push({
          "_id": oid,
          "schema": {
