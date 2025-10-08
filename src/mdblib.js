@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.13.14"
+ *  Version: "0.13.15"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,14 +9,25 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.13.14"
+      "version": "0.13.15"
 });
+
+// Import crypto module for Node.js/mongosh environments
+// if (typeof crypto === 'undefined' && isMongosh()) {
+//    const crypto = require('crypto');
+//    global.crypto = crypto;
+// }
+
+// // Import db object from the global scope
+// if (typeof db === 'undefined') {
+//    db = global.db;
+// }
 
 /*
  *  Global defaults
  */
 
-if (typeof bsonMax === 'undefined') (bsonMax = (hello()) ? hello().maxBsonObjectSize : 16 * Math.pow(1024, 2));
+if (typeof bsonMax === 'undefined') (bsonMax = (hello().ok) ? hello().maxBsonObjectSize : 16 * Math.pow(1024, 2));
 if (typeof maxWriteBatchSize === 'undefined') (
    maxWriteBatchSize = (typeof hello().maxWriteBatchSize === 'undefined')
                      ? 100000
@@ -86,6 +97,8 @@ if (typeof Object.getPrototypeOf(Object).entries === 'undefined') {
     *  Add to the legacy mongo shell
     */
    Object.getPrototypeOf(Object).entries = obj => {
+      if (obj == null)
+         throw new TypeError('Cannot convert undefined or null to object');
       const ownProps = Object.keys(obj);
       let i = ownProps.length;
       let entries = new Array(i); // preallocate the Array
@@ -1462,7 +1475,7 @@ function $stats(dbName = db.getName()) {
    let stats = db.getSiblingDB(dbName).stats( // max precision due to SERVER-69036
       // MONGOSH-1108 (mongosh v1.2.0) & SERVER-62277 (mongod v5.0.6)
       (serverVer(5.0) && (shellVer(5.0) || (isMongosh() && shellVer(1.2))))
-         ? { "freeStorage": 1, "scale": 1 } : 1
+      ? { "freeStorage": 1, "scale": 1 } : 1
    );
    stats.name = dbName;
    delete stats.db;
@@ -1737,5 +1750,20 @@ function $collStats(dbName = db.getName(), collName = '') {
 
    return results;
 }
+
+// Export for Node.js/mongosh require() usage
+// if (typeof module !== 'undefined' && module.exports) {
+//    module.exports = {
+//       __lib,
+//       isMongosh,
+//       ansiTags,
+//       // Add other functions and variables as needed
+//       bsonMax: (typeof bsonMax !== 'undefined') ? bsonMax : undefined,
+//       maxWriteBatchSize: (typeof maxWriteBatchSize !== 'undefined') ? maxWriteBatchSize : undefined,
+//       idiomas: (typeof idiomas !== 'undefined') ? idiomas : undefined,
+//       pid: (typeof pid !== 'undefined') ? pid : undefined,
+//       nonce: (typeof nonce !== 'undefined') ? nonce : undefined
+//    };
+// }
 
 // EOF
