@@ -1,0 +1,27 @@
+{
+  "name": "mongodb-scripts",
+  "version": "1.0.0",
+  "description": "A collection of useful MongoDB related scripts and command tips",
+  "main": "src/mdblib.js",
+  "scripts": {
+    "lint": "eslint \"src/**/*.js\"",
+    "format": "prettier --write \"src/**/*.js\""
+  },
+  "keywords": [
+    "mongodb",
+    "mongo",
+    "mongosh",
+    "shell",
+    "scripts",
+    "javascript"
+  ],
+  "author": "tap1r <luke.prochazka@gmail.com>",
+  "license": "ISC",
+  "devDependencies": {
+    "eslint": "^8.56.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.1.3",
+    "globals": "^13.24.0",
+    "prettier": "^3.2.5"
+  }
+}
