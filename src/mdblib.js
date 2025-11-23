@@ -18,7 +18,7 @@ if (typeof __lib === 'undefined') (
 //    global.crypto = crypto;
 // }
 
-// // Import db object from the global scope
+// Import db object from the global scope
 // if (typeof db === 'undefined') {
 //    db = global.db;
 // }
