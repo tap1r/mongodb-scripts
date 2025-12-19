@@ -1,7 +1,8 @@
 /*
  *  Name: "explainHisto.js"
- *  Version: "0.1.0"
+ *  Version: "0.1.1"
  *  Description: "Generates a text-based histogram of aggregation stage execution timers"
+ *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
@@ -13,7 +14,7 @@
    const namespace = db.getSiblingDB(dbName).getCollection(collName);
    const sampleSize = 100;
 
-   // Construct pipeline with sampling for performance
+   // Construct pipeline with sampling for performance (if required)
    const pipeline = [
       { "$sample": { "size": sampleSize } },
       ...pipeline
@@ -71,7 +72,7 @@
    
    // Print Histogram
    console.log(`Stage Execution Timers (Estimate) over ${sampleSize} documents:`);
-   console.log('='.repeat(95));
+   console.log('━'.repeat(95));
    
    data.forEach(item => {
       const pct = maxTime > 0 ? (item.time / maxTime) : 0;
@@ -87,10 +88,10 @@
       console.log(`${labelPad} | ${bar} ${timePad} ${deltaPad}`);
    });
    
-   console.log('-'.repeat(95));
+   console.log('━'.repeat(95));
    console.log(`Total estimated time: ${totalTime}ms`);
    console.log(`Per document estimated average time: ${totalTime / sampleSize}ms`);
-   console.log('='.repeat(95));
+   console.log('━'.repeat(95));
 
 })();
 
