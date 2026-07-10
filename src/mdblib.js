@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.13.15"
+ *  Version: "0.13.16"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.13.15"
+      "version": "0.13.16"
 });
 
 // Import crypto module for Node.js/mongosh environments
@@ -817,8 +817,8 @@ function compactionHelper(type = 'collection', storageSize = 4096, freeStorageSi
    const compactCollectionThreshold = 0.2; // 20% reusable collection bytes
    const compactIndexThreshold = 0.5;      // 50% reusable index bytes
    const minSizeBytes = serverVer(8)
-                      ? 1048576            // 1MB as WT ignores anything smaller (v8+)
-                      : 2097152;           // 2MB as WT ignores anything smaller
+                      ? 1048576            // 1MiB as WT ignores anything smaller (v8+)
+                      : 2097152;           // 2MiB as WT ignores anything smaller
    const syncThreshold = 0.5;              // 50% total dbPath reusable bytes
    const sizeThreshold = storageSize > minSizeBytes;
    const freeThreshold = freeStorageSize / storageSize;
@@ -914,7 +914,7 @@ function $getRandRatioInt(ratios = [1]) {
     */
    const weightedIndex = [];
    ratios.forEach((ratio, idx) => {
-      for (let i = 0; i < ratio; ++i) {
+      for (let i = 0; i < ratio; i++) {
          weightedIndex.push(idx);
       }
    });
@@ -927,7 +927,7 @@ function $genRandHex(len = 1) {
     *  generate random hexadecimal string
     */
    let res = '';
-   for (let i = 0; i < len; ++i) {
+   for (let i = 0; i < len; i++) {
       res += ($floor($rand() * 16)).toString(16);
    }
 
@@ -940,7 +940,7 @@ function $genRandStr(len = 1) {
     */
    let res = '';
    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-   for (let i = 0; i < len; ++i) {
+   for (let i = 0; i < len; i++) {
       res += chars.charAt($floor($rand() * chars.length));
    }
 
@@ -963,7 +963,7 @@ function $genRandAlpha(len = 1) {
     */
    let res = '';
    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-   for (let i = 0; i < len; ++i) {
+   for (let i = 0; i < len; i++) {
       res += chars.charAt($getRandInt(0, chars.length));
    }
 
@@ -993,7 +993,7 @@ function $genArrayElements(len) {
     *  generate array of random strings
     */
    const array = [];
-   for (let i = 0; i < len; ++i) {
+   for (let i = 0; i < len; i++) {
       array.push($genRandStr($getRandIntInc(6, 24)));
    }
 
@@ -1005,7 +1005,7 @@ function $genArrayStrings(len) {
     *  generate array of random strings
     */
    const array = [];
-   for (let i = 0; i < len; ++i) {
+   for (let i = 0; i < len; i++) {
       array.push($genRandStr($getRandIntInc(6, 24)));
    }
 
@@ -1017,7 +1017,7 @@ function $genArrayInts(len) {
     *  generate array of random integers
     */
    const array = [];
-   for (let i = 0; i < len; ++i) {
+   for (let i = 0; i < len; i++) {
       array.push($getRandIntInc(1, 1000));
    }
 
