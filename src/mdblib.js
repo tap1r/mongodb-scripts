@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.13.17"
+ *  Version: "0.14.0"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.13.17"
+      "version": "0.14.0"
 });
 
 // Import crypto module for Node.js/mongosh environments
@@ -366,6 +366,67 @@ class MetaStats {
    get totalStorageSize() { // unused
       return this.storageSize + (this.totalIndexSize + this.overhead) * this.nindexes;
    }
+}
+
+/* Add to mdblib.js */
+class ProgressTracker {
+   constructor(total, taskName = 'Task') {
+      this.total = total;
+      this.current = 0;
+      this.taskName = taskName;
+      this.startTime = new Date();
+      this.lastPrintTime = 0;
+      this.printInterval = 500; // ms between updates
+   }
+
+   increment() {
+      this.current++;
+      const now = Date.now();
+      if (this.current === this.total) return this.finish(); // Last one
+
+      // Only print every interval to avoid spamming the TTY
+      if (now - this.lastPrintTime > this.printInterval) {
+         this.print();
+         this.lastPrintTime = now;
+      }
+   }
+
+   print() {
+      const elapsed = (new Date() - this.startTime) / 1000; // seconds
+      const percent = (this.current / this.total) * 100;
+      const rate = this.current / elapsed; // items per second
+      const remaining = (this.total - this.current) / rate; // seconds remaining
+      
+      const formatTime = s => {
+         const m = Math.floor(s / 60);
+         const sec = Math.floor(s % 60);
+         return `${m}m ${sec}s`;
+      };
+
+      // Create a bar
+      const barLength = 30;
+      const filled = Math.floor(percent / 100 * barLength);
+      const empty = barLength - filled;
+      const bar = '█'.repeat(filled) + '░'.repeat(empty);
+
+      // Output: [Bar] Task (15/100) 15% | ETA: 2m 10s
+      const msg = `[blue]${bar}[/] [green]${this.taskName}[/] [cyan](${this.current}/${this.total}) ${percent.toFixed(1)}%[/] | ETA: [yellow]${formatTime(remaining)}[/]`;
+      
+      // Use \r to overwrite the line
+      console.log(`\r${msg}   `); 
+   }
+
+   finish() {
+      const elapsed = (new Date() - this.startTime) / 1000;
+      console.log(`\n[yellow][DONE] ${this.taskName} completed in ${formatTime(elapsed)}[/]\n`);
+   }
+}
+
+// Helper to format time (needed outside class)
+function formatTime(s) {
+   const m = Math.floor(s / 60);
+   const sec = Math.floor(s % 60);
+   return `${m}m ${sec}s`;
 }
 
 function $rand() {
@@ -1727,8 +1788,8 @@ function $collStats(dbName = db.getName(), collName = '') {
 
    try {
       results = namespace.aggregate(pipeline, options).toArray()[0];
-   } catch(error) {
-      if (error.codeName == 'Unauthorized') {
+   } catch(err) {
+      if (err.codeName == 'Unauthorized') {
          results = {
             "name": `${collName} (unauthorized)`,
             "nodes": 0,
