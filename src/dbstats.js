@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.5"
+ *  Version: "0.12.6"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -107,7 +107,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.5" };
+   const __script = { "name": "dbstats.js", "version": "0.12.6" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -689,14 +689,14 @@
       /*
        *  sort by index "dataSize" ascending
        */
-      return x.storageSize - x.freeStorageSize - y.storageSize - y.freeStorageSize;
+      return (x.storageSize - x.freeStorageSize) - (y.storageSize - y.freeStorageSize);
    }
 
    function sortIdxDataSizeDesc(x, y) {
       /*
        *  sort by index "dataSize" descending
        */
-      return y.storageSize - y.freeStorageSize - x.storageSize - x.freeStorageSize;
+      return (y.storageSize - y.freeStorageSize) - (x.storageSize - x.freeStorageSize);
    }
 
    function sortIdxFreeStorageSizeAsc(x, y) {
