@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.13.16"
+ *  Version: "0.13.17"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.13.16"
+      "version": "0.13.17"
 });
 
 // Import crypto module for Node.js/mongosh environments
@@ -812,13 +812,15 @@ const int64MinVal = -Math.pow(2, 63);
 const int64MaxVal = Math.pow(2, 63) - 1;
 const dec128MinVal = -10 * Math.pow(2, 110);
 const dec128MaxVal = 10 * Math.pow(2, 110) - 1;
+const WIREDTIGER_MIN_RECLAIM_SIZE_V8 = 1048576;     // 1 MiB as WT ignores anything smaller (v8+)
+const WIREDTIGER_MIN_RECLAIM_SIZE_LEGACY = 2097152; // 2 MiB as WT ignores anything smaller
 
 function compactionHelper(type = 'collection', storageSize = 4096, freeStorageSize = 0) {
    const compactCollectionThreshold = 0.2; // 20% reusable collection bytes
    const compactIndexThreshold = 0.5;      // 50% reusable index bytes
    const minSizeBytes = serverVer(8)
-                      ? 1048576            // 1MiB as WT ignores anything smaller (v8+)
-                      : 2097152;           // 2MiB as WT ignores anything smaller
+                      ? WIREDTIGER_MIN_RECLAIM_SIZE_V8
+                      : WIREDTIGER_MIN_RECLAIM_SIZE_LEGACY;
    const syncThreshold = 0.5;              // 50% total dbPath reusable bytes
    const sizeThreshold = storageSize > minSizeBytes;
    const freeThreshold = freeStorageSize / storageSize;
