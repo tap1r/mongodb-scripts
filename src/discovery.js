@@ -1,8 +1,7 @@
-// require('events').EventEmitter.prototype._maxListeners = 128;
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.24"
+    *  Version: "0.1.25"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -297,10 +296,12 @@
        *  Execute mongos/shard/host specific commands
        */
 
-      let mongos, csrs, csrsHosts, shards,
-         allMongosResults, allCSRSResults,
-         csrsResults, allShardResults,
-         hosts, allHostResults;
+      let mongos, csrs, csrsHosts, shards, hosts;
+      let allMongosResults = [],
+         allCSRSResults = [],
+         csrsResults = [],
+         allShardResults = [],
+         allHostResults = [];
 
       const mongosCmd = async(client, options) => 'I am a mongos, ' + await me(client);
       const shardCmd = async(client, options) => 'I am a shard primary, ' + await me(client);
@@ -340,13 +341,13 @@
 
       // execute commands
       if (isSharded()) {
-         allMongosResults = execAllMongosesCmd(mongos, mongosCmd);
-         allCSRSResults = execAllShardsCmd(csrs, csrsCmd);
-         allShardResults = execAllShardsCmd(shards, shardCmd);
-         csrsResults = execAllShardsCmd(csrs, csrsCmd);
-         allCSRSResults = execAllHostsCmd(csrsHosts, csrsHostCmd);
+         allMongosResults = await execAllMongosesCmd(mongos, mongosCmd);
+         allCSRSResults = await execAllShardsCmd(csrs, csrsCmd);
+         allShardResults = await execAllShardsCmd(shards, shardCmd);
+         csrsResults = await execAllShardsCmd(csrs, csrsCmd);
+         allCSRSResults = await execAllHostsCmd(csrsHosts, csrsHostCmd);
       }
-      allHostResults = execAllHostsCmd(hosts, hostCmd);
+      allHostResults = await execAllHostsCmd(hosts, hostCmd);
 
       // return command results
       if (isSharded()) {
