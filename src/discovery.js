@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.25"
+    *  Version: "0.1.26"
     *  Description: "topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -83,7 +83,7 @@
          mongos = namespace.aggregate(pipeline, options).toArray();
       } catch(e) {
          console.log('Lack the ability to discover mongos:', e);
-         return e;
+         // return e;
       }
 
       return mongos;
@@ -97,8 +97,8 @@
       try {
          shards = db.adminCommand({ "listShards": 1 }).shards;
       } catch(e) {
-         console.log('Lack the ability to discover shards');
-         return e;
+         console.log('Lack the ability to discover shards', e);
+         // return e;
       }
 
       return shards.filter(({ state } = {}) =>
@@ -118,8 +118,8 @@
                { "_id": "shardIdentity" }
             ).toArray();
       } catch(e) {
-         console.log('Lack the ability to discover the CSRS:');
-         return e;
+         console.log('Lack the ability to discover the CSRS:', e);
+         // return e;
       }
 
       return csrs.map(({ shardName, configsvrConnectionString } = {}) =>
@@ -158,8 +158,8 @@
       try {
          node = connect(directURI);
       } catch(e) {
-         console.log('Could not connect to host:', hostname);
-         return e;
+         console.log('Could not connect to host:', hostname, e);
+         // return e;
       }
 
       return {
@@ -180,8 +180,8 @@
       try {
          node = connect(directURI);
       } catch(e) {
-         console.log('Could not connect to host:', hostname);
-         return e;
+         console.log('Could not connect to host:', hostname, e);
+         // return e;
       }
 
       return {
@@ -204,8 +204,8 @@
       try {
          shard = connect(shardURI);
       } catch(e) {
-         console.log('Could not connect to shard:', seedList);
-         return e;
+         console.log('Could not connect to shard:', seedList, e);
+         // return e;
       }
 
       return {
