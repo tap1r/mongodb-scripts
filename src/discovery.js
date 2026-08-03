@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.29"
+    *  Version: "0.1.30"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -310,12 +310,8 @@
 
       const url = new URL(db.getMongo().getURI());
       // optimise params for direct connection and avoid conflicting options
-      // if (!url.searchParams.has('tls') || !url.searchParams.has('ssl')) {
-      //    url.searchParams.set('tls', 'false');
-      // };
-      // url.searchParams.set('directConnection', 'true');
-      // url.searchParams.set('readPreference', 'secondaryPreferred');
-      // url.searchParams.set('authSource', 'admin');
+      url.searchParams.set('directConnection', 'true');
+      url.searchParams.set('readPreference', 'nearest');
       url.searchParams.delete('replicaSet');
       url.searchParams.delete('tags');
       url.searchParams.delete('readPreferenceTags');
@@ -323,9 +319,8 @@
       url.searchParams.delete('minPoolSize');
       url.searchParams.delete('maxPoolSize');
       url.searchParams.delete('srvMaxHosts');
-      url.searchParams.delete('appName');
-
       url.searchParams.sort();
+
       return url;
    }
 
