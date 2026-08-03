@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.28"
+    *  Version: "0.1.29"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -155,8 +155,7 @@
        */
       const url = mongoOptions();
       const readPreference = 'nearest';
-      url.hostname = hostname.split(':')[0];
-      url.port = hostname.split(':')[1];
+      url.host = hostname;
       url.searchParams.set('readPreference', readPreference);
       url.searchParams.set('directConnection', 'true');
       const mongoURL = url.toString();
@@ -194,8 +193,7 @@
       url.searchParams.sort();
 
       let shard;
-      let shardURL = url.toString();
-      shardURL = shardURL.replace('@replaceMe/', `@${seedList}/`);
+      const shardURL = url.toString().replace('@replaceMe/', `@${seedList}/`);
       try {
          shard = connect(shardURL);
       } catch(e) {
@@ -220,8 +218,7 @@
        */
       const url = mongoOptions();
       const readPreference = 'nearest';
-      url.hostname = hostname.split(':')[0];
-      url.port = hostname.split(':')[1];
+      url.host = hostname;
       url.searchParams.set('readPreference', readPreference);
       url.searchParams.set('directConnection', 'true');
       const directURI = url.toString();
