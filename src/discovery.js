@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.34"
+    *  Version: "0.1.35"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -29,7 +29,7 @@
    // }
 
    function parseReplSetHosts(hostString) {
-      const { setName = false, seedList = false } = /^(?<setName>[^/]+)\/(?<seedList>.+)$/.exec(hostString)?.groups || {};
+      const { setName = null, seedList = null } = /^(?<setName>[^/]+)\/(?<seedList>.+)$/.exec(hostString)?.groups || {};
       if (!setName || !seedList) throw new Error(`Invalid replSet connection string: ${hostString}`);
 
       return { setName, seedList };
@@ -80,7 +80,10 @@
             "name": "mongos",
             "host": {
                "$cond": [
-                  { "$ifNull": [{ "$first": "$advisoryHostFQDNs" }, true] },
+                  { "$eq": [
+                     { "$ifNull": ["$advisoryHostFQDNs", null] },
+                     null
+                  ] },
                   "$_id",
                   { "$concat": [
                      { "$first": "$advisoryHostFQDNs" },
@@ -162,7 +165,7 @@
       /*
        *  execute a command on a mongos
        */
-      const url = mongoOptions();
+      const url = buildConnectionURI();
       const readPreference = 'nearest';
       url.host = hostname;
       url.searchParams.set('readPreference', readPreference);
@@ -173,12 +176,14 @@
          node = connect(mongoURL);
          return {
             "success": true,
+            "target": "mongos",
             "process": hostname,
             "results": await cmdFn(node, { "readPreference": readPreference })
          };
       } catch(e) {
          return {
             "success": false,
+            "target": "mongos",
             "process": hostname,
             "results": e.errmsg ?? e.message ?? String(e)
          };
@@ -186,7 +191,7 @@
       // finally {
       //    /*
       //     *  close() method not supported in mongosh
-      //     *  leaving vestiage here in case native nodejs driver is used
+      //     *  leaving vestige here in case native nodejs driver is used
       //     */
       //    try { node.close(); }
       //    catch(_) {}
@@ -198,10 +203,10 @@
        *  execute a command on a shard replset
        */
       const { setName, seedList } = parseReplSetHosts(shardString);
-      const url = mongoOptions();
+      const url = buildConnectionURI();
       const readPreference = 'primaryPreferred';
       url.port = null;
-      url.searchParams.delete('directConnection');
+      // url.searchParams.delete('directConnection');
       url.searchParams.set('readPreference', readPreference);
       url.searchParams.set('replicaSet', setName);
       url.searchParams.sort();
@@ -226,7 +231,7 @@
       // finally {
       //    /*
       //     *  close() method not supported in mongosh
-      //     *  leaving vestiage here in case native nodejs driver is used
+      //     *  leaving vestige here in case native nodejs driver is used
       //     */
       //    try { node.close(); }
       //    catch(_) {}
@@ -237,7 +242,7 @@
       /*
        *  execute a command on a mongod
        */
-      const url = mongoOptions();
+      const url = buildConnectionURI();
       const readPreference = 'nearest';
       url.host = hostname;
       url.searchParams.set('readPreference', readPreference);
@@ -261,7 +266,7 @@
       // finally {
       //    /*
       //     *  close() method not supported in mongosh
-      //     *  leaving vestiage here in case native nodejs driver is used
+      //     *  leaving vestige here in case native nodejs driver is used
       //     */
       //    try { node.close(); }
       //    catch(_) {}
@@ -329,7 +334,7 @@
       return false;
    }
 
-   function mongoOptions() {
+   function buildConnectionURI() {
       /*
        *  returns MongoClient() options to construct new connections
        */
@@ -338,8 +343,8 @@
 
       const url = new URL(db.getMongo().getURI());
       // optimise params for direct connection and avoid conflicting options
-      url.searchParams.set('directConnection', 'true');
-      url.searchParams.set('readPreference', 'nearest');
+      url.searchParams.delete('directConnection');
+      // url.searchParams.set('readPreference', 'nearest');
       url.searchParams.delete('replicaSet');
       url.searchParams.delete('tags');
       url.searchParams.delete('readPreferenceTags');
@@ -357,16 +362,17 @@
        *  discover topology type
        */
 
+      const sharded = isSharded();
+
       const topology = {
-         "type": isSharded() ? 'sharded' : 'replSet',
-         "mongos": isSharded() ? discoverMongos() : null,
-         "csrs": isSharded() ? discoverCSRSshard() : null,
-         "shards": isSharded() ? discoverShards() : null,
-         "csrsHosts": null,
-         "hosts": null
+         "type": sharded ? 'sharded' : 'replSet',
+         "mongos": sharded ? discoverMongos() : [],
+         "csrs": sharded ? discoverCSRSshard() : [],
+         "shards": sharded ? discoverShards() : [],
+         "errors": []
       };
-      topology.csrsHosts = isSharded() ? discoverShardedHosts(topology.csrs) : null;
-      topology.hosts = isSharded() ? discoverShardedHosts(topology.shards) : discoverRSHosts();
+      topology.csrsHosts = sharded ? discoverShardedHosts(topology.csrs) : [];
+      topology.hosts = sharded ? discoverShardedHosts(topology.shards) : discoverRSHosts();
 
       return topology;
    }
