@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.33"
+    *  Version: "0.1.34"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -77,9 +77,10 @@
          } } },
          { "$project": {
             "_id": 0,
+            "name": "mongos",
             "host": {
                "$cond": [
-                  { "$ifNull": ["$advisoryHostFQDNs", true] },
+                  { "$ifNull": [{ "$first": "$advisoryHostFQDNs" }, true] },
                   "$_id",
                   { "$concat": [
                      { "$first": "$advisoryHostFQDNs" },
@@ -181,10 +182,15 @@
             "process": hostname,
             "results": e.errmsg ?? e.message ?? String(e)
          };
-      } finally {
-         try { /* node.close(); */ } // close method not supported
-         catch(_) {}
       }
+      // finally {
+      //    /*
+      //     *  close() method not supported in mongosh
+      //     *  leaving vestiage here in case native nodejs driver is used
+      //     */
+      //    try { node.close(); }
+      //    catch(_) {}
+      // }
    }
 
    async function execShardCmd({ 'host': shardString } = {}, cmdFn = async() => {}) {
@@ -216,10 +222,15 @@
             "process": setName,
             "results": e.errmsg ?? e.message ?? String(e)
          };
-      } finally {
-         try { /* node.close(); */ } // close method not supported
-         catch(_) {}
       }
+      // finally {
+      //    /*
+      //     *  close() method not supported in mongosh
+      //     *  leaving vestiage here in case native nodejs driver is used
+      //     */
+      //    try { node.close(); }
+      //    catch(_) {}
+      // }
    }
 
    async function execHostCmd({ 'host': hostname } = {}, cmdFn = async() => {}) {
@@ -246,10 +257,15 @@
             "process": hostname,
             "results": e.errmsg ?? e.message ?? String(e)
          };
-      } finally {
-         try { /* node.close(); */ } // close method not supported
-         catch(_) {}
       }
+      // finally {
+      //    /*
+      //     *  close() method not supported in mongosh
+      //     *  leaving vestiage here in case native nodejs driver is used
+      //     */
+      //    try { node.close(); }
+      //    catch(_) {}
+      // }
    }
 
    async function execAllMongosesCmd(mongos = [], cmdFn = async() => {}) {
@@ -336,6 +352,25 @@
       return url;
    }
 
+   function discoverTopology() {
+      /*
+       *  discover topology type
+       */
+
+      const topology = {
+         "type": isSharded() ? 'sharded' : 'replSet',
+         "mongos": isSharded() ? discoverMongos() : null,
+         "csrs": isSharded() ? discoverCSRSshard() : null,
+         "shards": isSharded() ? discoverShards() : null,
+         "csrsHosts": null,
+         "hosts": null
+      };
+      topology.csrsHosts = isSharded() ? discoverShardedHosts(topology.csrs) : null;
+      topology.hosts = isSharded() ? discoverShardedHosts(topology.shards) : discoverRSHosts();
+
+      return topology;
+   }
+
    async function main() {
       /*
        *  Discover topology type:
@@ -349,14 +384,12 @@
       /*
        *  TODO:
        *     - Add support for standalone and loadbalanced types
-       *     - Convert to topology object
        */
 
-      let mongos = [], csrs = [], csrsHosts = [], shards = [], hosts = [];
-      const sharded = isSharded();
-      const topology = {};
+      // get topology
+      const topology = discoverTopology();
+      const results = {};
       // const tasks = [];
-      let results = [];
 
       const mongosCmd = async(client) => 'I am a mongos found on ' + await me(client);
       const shardCmd = async(client) => 'I am a shard primary found at ' + await me(client);
@@ -378,34 +411,14 @@
       //    return await dbStats;
       // }
 
-      // discover topology
-      if (sharded) {
-         topology.mongos = discoverMongos();
-         topology.csrs = discoverCSRSshard();
-         topology.shards = discoverShards();
-         topology.csrsHosts = discoverShardedHosts(topology.csrs);
-         topology.hosts = discoverShardedHosts(topology.shards);
-      } else {
-         topology.hosts = discoverRSHosts();
-      }
-
-      // report topology
-      // if (sharded) {
-      //    console.log('mongoses:', mongos);
-      //    console.log('csrs:', csrs);
-      //    console.log('shards:', shards);
-      //    console.log('csrsMembers:', csrsHosts);
-      // }
-      // console.log('hosts:', hosts);
-
       // execute commands
-      if (sharded) {
-         results.push({ "mongosResults": await execAllMongosesCmd(topology.mongos, mongosCmd) });
-         results.push({ "csrsResults": await execAllShardsCmd(topology.csrs, csrsCmd) });
-         results.push({ "allCSRSResults": await execAllHostsCmd(topology.csrsHosts, csrsHostCmd) });
-         results.push({ "allShardResults": await execAllShardsCmd(topology.shards, shardCmd) });
+      if (topology.type === 'sharded') {
+         results.mongos = await execAllMongosesCmd(topology.mongos, mongosCmd);
+         results.csrs = await execAllShardsCmd(topology.csrs, csrsCmd);
+         results.csrsHosts = await execAllHostsCmd(topology.csrsHosts, csrsHostCmd);
+         results.shards = await execAllShardsCmd(topology.shards, shardCmd);
       }
-      results.push({ "allHostResults": await execAllHostsCmd(topology.hosts, hostCmd) });
+      results.hosts = await execAllHostsCmd(topology.hosts, hostCmd);
 
       // Execute all tasks in parallel
       // results = await Promise.allSettled(tasks.map(({ target = {}, fn = () => {} }) => executeRemote(target, fn)));
@@ -419,18 +432,6 @@
       // Add option to target replSet primary or secondaries only
       // Add default option to avoid arbiters
       // Add load monitoring metrics
-
-      // return command results
-      // if (sharded) {
-      //    console.log('All mongos CMD results:', allMongosResults);
-      //    console.log('CSRS shard primaries CMD results:', csrsResults);
-      //    console.log('CSRS hosts CMD results:', allCSRSResults);
-      //    console.log('All shard primaries CMD results:', allShardResults);
-      // }
-      // console.log('All hosts CMD results:', allHostResults);
-
-      // Process results
-      // console.log(results);
 
       return { topology, results };
    }
