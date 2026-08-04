@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.30"
+    *  Version: "0.1.31"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -26,6 +26,12 @@
    // async function stats(client, options) {
    //    return client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, options).databases;
    // }
+
+   function parseReplSetHosts(hostString) {
+      const { setName = null, seedList = null } = /^(?<setName>[^/]+)\/(?<seedList>.+)$/.exec(hostString)?.groups || {};
+      if (!setName || !seedList) throw new Error(`Invalid shard connection string: ${hostString}`);
+      return { setName, seedList };
+   }
 
    function discoverRSHosts() {
       /*
@@ -134,7 +140,7 @@
        *  returns an array of hosts across all available shards
        */
       return shards.map(({ host }) => {
-         const { setName, seedList } = host.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
+         const { setName, seedList } = parseReplSetHosts(host);
          return seedList.split(',').map(name => {
             return { "name": setName, "host": name };
          });
@@ -162,6 +168,11 @@
       let node;
       try {
          node = connect(mongoURL);
+         return {
+            "success": true,
+            "process": hostname,
+            "results": await cmdFn(node, { "readPreference": readPreference })
+         };
       } catch(e) {
          // console.log('Could not connect to mongos:', hostname, e.errmsg);
          return {
@@ -169,33 +180,43 @@
             "process": hostname,
             "results": e.errmsg
          };
+      } finally {
+         try { node.close(); }
+         catch(_) {}
       }
 
-      return {
-         "success": true,
-         "process": hostname,
-         "results": await cmdFn(node, { "readPreference": readPreference })
-      };
+      // return {
+      //    "success": true,
+      //    "process": hostname,
+      //    "results": await cmdFn(node, { "readPreference": readPreference })
+      // };
    }
 
    async function execShardCmd({ 'host': shardString } = {}, cmdFn = async() => {}) {
       /*
        *  execute a command on a shard replset
        */
-      const { setName, seedList } = shardString.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
+      // const { setName, seedList } = shardString.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
+      const { setName, seedList } = parseReplSetHosts(shardString);
       const url = mongoOptions();
       const readPreference = 'primaryPreferred';
       url.port = null;
-      url.hostname = 'replaceMe';
+      // url.hostname = 'replaceMe';
       url.searchParams.delete('directConnection');
       url.searchParams.set('readPreference', readPreference);
       url.searchParams.set('replicaSet', setName);
       url.searchParams.sort();
 
       let shard;
-      const shardURL = url.toString().replace('@replaceMe/', `@${seedList}/`);
+      // const shardURL = url.toString().replace('@replaceMe/', `@${seedList}/`);
+      const shardURL = url.toString().replace(/@[^/]+\//, `@${seedList}/`);
       try {
          shard = connect(shardURL);
+         return {
+            "success": true,
+            "process": await me(shard),
+            "results": await cmdFn(shard, { "readPreference": readPreference })
+         };
       } catch(e) {
          // console.log('Could not connect to shard:', setName + '/' + seedList, e.errmsg);
          return {
@@ -203,13 +224,16 @@
             "process": setName,
             "results": e.errmsg
          };
+      } finally {
+         try { shard.close(); }
+         catch(_) {}
       }
 
-      return {
-         "success": true,
-         "process": await me(shard),
-         "results": await cmdFn(shard, { "readPreference": readPreference })
-      };
+      // return {
+      //    "success": true,
+      //    "process": await me(shard),
+      //    "results": await cmdFn(shard, { "readPreference": readPreference })
+      // };
    }
 
    async function execHostCmd({ 'host': hostname } = {}, cmdFn = async() => {}) {
@@ -225,6 +249,11 @@
       let node;
       try {
          node = connect(directURI);
+         return {
+            "success": true,
+            "process": await me(node),
+            "results": await cmdFn(node, { "readPreference": readPreference })
+         };
       } catch(e) {
          // console.log('Could not connect to mongod:', hostname, e.errmsg);
          return {
@@ -232,13 +261,16 @@
             "process": hostname,
             "results": e.errmsg
          };
+      } finally {
+         try { node.close(); }
+         catch(_) {}
       }
 
-      return {
-         "success": true,
-         "process": await me(node),
-         "results": await cmdFn(node, { "readPreference": readPreference })
-      };
+      // return {
+      //    "success": true,
+      //    "process": await me(node),
+      //    "results": await cmdFn(node, { "readPreference": readPreference })
+      // };
    }
 
    async function execAllMongosesCmd(mongos = [], cmdFn = async() => {}) {
@@ -251,7 +283,7 @@
          return results
             .filter(({ status }) => status == 'fulfilled')
             .map(({ value }) => value);
-      }).catch(console.log);
+      });
    }
 
    async function execAllShardsCmd(shards = [], cmdFn = async() => {}) {
@@ -264,7 +296,7 @@
          return results
             .filter(({ status }) => status == 'fulfilled')
             .map(({ value }) => value);
-      }).catch(console.log);
+      });
    }
 
    async function execAllHostsCmd(hosts = [], cmdFn = async() => {}) {
@@ -277,7 +309,7 @@
          return results
             .filter(({ status }) => status == 'fulfilled')
             .map(({ value }) => value);
-      }).catch(console.log);
+      });
    }
 
    function isSharded() {
