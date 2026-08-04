@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.31"
+    *  Version: "0.1.32"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -28,8 +28,9 @@
    // }
 
    function parseReplSetHosts(hostString) {
-      const { setName = null, seedList = null } = /^(?<setName>[^/]+)\/(?<seedList>.+)$/.exec(hostString)?.groups || {};
-      if (!setName || !seedList) throw new Error(`Invalid shard connection string: ${hostString}`);
+      const { setName = false, seedList = false } = /^(?<setName>[^/]+)\/(?<seedList>.+)$/.exec(hostString)?.groups || {};
+      if (!setName || !seedList) throw new Error(`Invalid replSet connection string: ${hostString}`);
+
       return { setName, seedList };
    }
 
@@ -43,13 +44,13 @@
          members = rs.status().members.filter(
             ({ health, 'stateStr': role }) => health === 1 && role !== 'ARBITER'
          ).map(
-            ({ name, 'stateStr': role }) => new Object({ "host": name, "role": role })
+            ({ name, 'stateStr': role }) => { return { "host": name, "role": role } }
          );
       } catch(e) {
          // else we can just grab the list of discoverable nodes
          const { hosts = [], passives = [] } = db.hello();
          members = [...hosts, ...passives].map(
-            name => new Object({ "host": name })
+            name => { return { "host": name } }
          );
       }
 
@@ -91,7 +92,7 @@
       try {
          mongos = namespace.aggregate(pipeline, options).toArray();
       } catch(e) {
-         console.log('Lack the ability to discover mongos:', e.errmsg);
+         console.log('Lack the ability to discover mongos:', e.errmsg ?? e.message ?? String(e));
       }
 
       return mongos;
@@ -105,15 +106,15 @@
       try {
          shards = db.adminCommand({ "listShards": 1 }).shards;
       } catch(e) {
-         console.log('Lack the ability to discover shards:', e.errmsg);
+         console.log('Lack the ability to discover shards:', e.errmsg ?? e.message ?? String(e));
       }
 
       // TBA: check for non-empty shards array first
       return shards.filter(({ state } = {}) =>
             state === 1
-         ).map(({ _id, host } = {}) =>
-            new Object({ "name": _id, "host": host })
-         );
+         ).map(({ _id, host } = {}) => {
+            return { "name": _id, "host": host };
+         });
    }
 
    function discoverCSRSshard() {
@@ -126,7 +127,7 @@
             { "_id": "shardIdentity" }
          ).toArray();
       } catch(e) {
-         console.log('Lack the ability to discover the CSRS:', e.errmsg);
+         console.log('Lack the ability to discover the CSRS:', e.errmsg ?? e.message ?? String(e));
       }
 
       // TBA: check for non-empty csrs array first
@@ -152,7 +153,7 @@
        *  returns a node's self-identity
        */
       // TBA: add shell version and privileges checks
-      return await node.hello().me || await node.hostInfo().system.hostname;
+      return await node.hello().me || await node.hostInfo().system.hostname || 'unknown';
    }
 
    async function execMongosCmd({ 'host': hostname } = {}, cmdFn = async() => {}) {
@@ -174,41 +175,32 @@
             "results": await cmdFn(node, { "readPreference": readPreference })
          };
       } catch(e) {
-         // console.log('Could not connect to mongos:', hostname, e.errmsg);
          return {
             "success": false,
             "process": hostname,
-            "results": e.errmsg
+            "results": e.errmsg ?? e.message ?? String(e)
          };
       } finally {
-         try { node.close(); }
+         try { /* node.close(); */ } // cloe method not supported
          catch(_) {}
       }
-
-      // return {
-      //    "success": true,
-      //    "process": hostname,
-      //    "results": await cmdFn(node, { "readPreference": readPreference })
-      // };
    }
 
    async function execShardCmd({ 'host': shardString } = {}, cmdFn = async() => {}) {
       /*
        *  execute a command on a shard replset
        */
-      // const { setName, seedList } = shardString.match(/^(?<setName>.+)\/(?<seedList>.+)$/).groups;
       const { setName, seedList } = parseReplSetHosts(shardString);
       const url = mongoOptions();
       const readPreference = 'primaryPreferred';
       url.port = null;
-      // url.hostname = 'replaceMe';
       url.searchParams.delete('directConnection');
       url.searchParams.set('readPreference', readPreference);
       url.searchParams.set('replicaSet', setName);
       url.searchParams.sort();
 
       let shard;
-      // const shardURL = url.toString().replace('@replaceMe/', `@${seedList}/`);
+      // seedlists are considered malformed by the URL() parser, so we splice it manually
       const shardURL = url.toString().replace(/@[^/]+\//, `@${seedList}/`);
       try {
          shard = connect(shardURL);
@@ -218,22 +210,15 @@
             "results": await cmdFn(shard, { "readPreference": readPreference })
          };
       } catch(e) {
-         // console.log('Could not connect to shard:', setName + '/' + seedList, e.errmsg);
          return {
             "success": false,
             "process": setName,
-            "results": e.errmsg
+            "results": e.errmsg ?? e.message ?? String(e)
          };
       } finally {
-         try { shard.close(); }
+         try { /* node.close(); */ } // cloe method not supported
          catch(_) {}
       }
-
-      // return {
-      //    "success": true,
-      //    "process": await me(shard),
-      //    "results": await cmdFn(shard, { "readPreference": readPreference })
-      // };
    }
 
    async function execHostCmd({ 'host': hostname } = {}, cmdFn = async() => {}) {
@@ -255,33 +240,25 @@
             "results": await cmdFn(node, { "readPreference": readPreference })
          };
       } catch(e) {
-         // console.log('Could not connect to mongod:', hostname, e.errmsg);
          return {
             "success": false,
             "process": hostname,
-            "results": e.errmsg
+            "results": e.errmsg ?? e.message ?? String(e)
          };
       } finally {
-         try { node.close(); }
+         try { /* node.close(); */ } // cloe method not supported
          catch(_) {}
       }
-
-      // return {
-      //    "success": true,
-      //    "process": await me(node),
-      //    "results": await cmdFn(node, { "readPreference": readPreference })
-      // };
    }
 
    async function execAllMongosesCmd(mongos = [], cmdFn = async() => {}) {
       /*
        *  async exec wrapper to parallelise tasks
        */
-      const promises = () => mongos.map(host => execMongosCmd(host, cmdFn));
 
-      return await Promise.allSettled(promises()).then(results => {
+      return await Promise.allSettled(mongos.map(host => execMongosCmd(host, cmdFn))).then(results => {
          return results
-            .filter(({ status }) => status == 'fulfilled')
+            .filter(({ status }) => status === 'fulfilled')
             .map(({ value }) => value);
       });
    }
@@ -290,11 +267,10 @@
       /*
        *  async exec wrapper to parallelise tasks
        */
-      const promises = () => shards.map(host => execShardCmd(host, cmdFn));
 
-      return await Promise.allSettled(promises()).then(results => {
+      return await Promise.allSettled(shards.map(host => execShardCmd(host, cmdFn))).then(results => {
          return results
-            .filter(({ status }) => status == 'fulfilled')
+            .filter(({ status }) => status === 'fulfilled')
             .map(({ value }) => value);
       });
    }
@@ -303,11 +279,10 @@
       /*
        *  async exec wrapper to parallelise tasks
        */
-      const promises = () => hosts.map(host => execHostCmd(host, cmdFn));
 
-      return await Promise.allSettled(promises()).then(results => {
+      return await Promise.allSettled(hosts.map(host => execHostCmd(host, cmdFn))).then(results => {
          return results
-            .filter(({ status }) => status == 'fulfilled')
+            .filter(({ status }) => status === 'fulfilled')
             .map(({ value }) => value);
       });
    }
@@ -323,6 +298,8 @@
       /*
        *  is load balanced topology
        */
+      console.log('[TODO] isLoadBalanced() method is not implemented yet');
+
       return false;
    }
 
@@ -330,6 +307,8 @@
       /*
        *  is standalone topology
        */
+      console.log('[TODO] isStandalone() method is not implemented yet');
+
       return false;
    }
 
@@ -438,15 +417,20 @@
       // Execute all tasks in serial only
       // Execute all tasks on shards in parallel serially per shard
       // Execute all tasks in a limited pool in parallel
+      // Add jitter/variance to task execution (random delays)
+      // Add task cancellation if connection times out
+      // Add option to target replSet primary or secondaries only
+      // Add default option to avoid arbiters
+      // Add load monitoring metrics
 
       // return command results
       if (sharded) {
-         console.log('All mongos cmd results:', allMongosResults);
-         console.log('CSRS shard cmd results:', csrsResults);
-         console.log('CSRS hosts cmd results:', allCSRSResults);
-         console.log('All shards cmd results:', allShardResults);
+         console.log('All mongos CMD results:', allMongosResults);
+         console.log('CSRS shard primaries CMD results:', csrsResults);
+         console.log('CSRS hosts CMD results:', allCSRSResults);
+         console.log('All shard primaries CMD results:', allShardResults);
       }
-      console.log('All hosts cmd results:', allHostResults);
+      console.log('All hosts CMD results:', allHostResults);
 
       // Process results
       // console.log(results);
