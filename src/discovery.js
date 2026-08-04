@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.32"
+    *  Version: "0.1.33"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,6 +16,7 @@
     *  TBA:
     *  - add standalone host discovery
     *  - add LoadBalanced topology type
+    *  - add support for arbiters
     *  - add SRV connection string support
     */
 
@@ -66,7 +67,7 @@
       const options = {
          "allowDiskUse": true,
          "readConcern": { "level": "local" },
-         "comment": "Discovering living mongos process"
+         "comment": "Discovering living mongos processes"
       };
       const offsetMS = 60000; // 1min
       const pipeline = [
@@ -181,7 +182,7 @@
             "results": e.errmsg ?? e.message ?? String(e)
          };
       } finally {
-         try { /* node.close(); */ } // cloe method not supported
+         try { /* node.close(); */ } // close method not supported
          catch(_) {}
       }
    }
@@ -216,7 +217,7 @@
             "results": e.errmsg ?? e.message ?? String(e)
          };
       } finally {
-         try { /* node.close(); */ } // cloe method not supported
+         try { /* node.close(); */ } // close method not supported
          catch(_) {}
       }
    }
@@ -246,7 +247,7 @@
             "results": e.errmsg ?? e.message ?? String(e)
          };
       } finally {
-         try { /* node.close(); */ } // cloe method not supported
+         try { /* node.close(); */ } // close method not supported
          catch(_) {}
       }
    }
@@ -352,14 +353,10 @@
        */
 
       let mongos = [], csrs = [], csrsHosts = [], shards = [], hosts = [];
-      let allMongosResults = [],
-         allCSRSResults = [],
-         csrsResults = [],
-         allShardResults = [],
-         allHostResults = [];
       const sharded = isSharded();
+      const topology = {};
       // const tasks = [];
-      // let results;
+      let results = [];
 
       const mongosCmd = async(client) => 'I am a mongos found on ' + await me(client);
       const shardCmd = async(client) => 'I am a shard primary found at ' + await me(client);
@@ -383,32 +380,32 @@
 
       // discover topology
       if (sharded) {
-         mongos = discoverMongos();
-         csrs = discoverCSRSshard();
-         shards = discoverShards();
-         csrsHosts = discoverShardedHosts(csrs);
-         hosts = discoverShardedHosts(shards);
+         topology.mongos = discoverMongos();
+         topology.csrs = discoverCSRSshard();
+         topology.shards = discoverShards();
+         topology.csrsHosts = discoverShardedHosts(topology.csrs);
+         topology.hosts = discoverShardedHosts(topology.shards);
       } else {
-         hosts = discoverRSHosts();
+         topology.hosts = discoverRSHosts();
       }
 
       // report topology
-      if (sharded) {
-         console.log('mongoses:', mongos);
-         console.log('csrs:', csrs);
-         console.log('shards:', shards);
-         console.log('csrsMembers:', csrsHosts);
-      }
-      console.log('hosts:', hosts);
+      // if (sharded) {
+      //    console.log('mongoses:', mongos);
+      //    console.log('csrs:', csrs);
+      //    console.log('shards:', shards);
+      //    console.log('csrsMembers:', csrsHosts);
+      // }
+      // console.log('hosts:', hosts);
 
       // execute commands
       if (sharded) {
-         allMongosResults = await execAllMongosesCmd(mongos, mongosCmd);
-         allShardResults = await execAllShardsCmd(shards, shardCmd);
-         csrsResults = await execAllShardsCmd(csrs, csrsCmd);
-         allCSRSResults = await execAllHostsCmd(csrsHosts, csrsHostCmd);
+         results.push({ "mongosResults": await execAllMongosesCmd(topology.mongos, mongosCmd) });
+         results.push({ "csrsResults": await execAllShardsCmd(topology.csrs, csrsCmd) });
+         results.push({ "allCSRSResults": await execAllHostsCmd(topology.csrsHosts, csrsHostCmd) });
+         results.push({ "allShardResults": await execAllShardsCmd(topology.shards, shardCmd) });
       }
-      allHostResults = await execAllHostsCmd(hosts, hostCmd);
+      results.push({ "allHostResults": await execAllHostsCmd(topology.hosts, hostCmd) });
 
       // Execute all tasks in parallel
       // results = await Promise.allSettled(tasks.map(({ target = {}, fn = () => {} }) => executeRemote(target, fn)));
@@ -424,21 +421,21 @@
       // Add load monitoring metrics
 
       // return command results
-      if (sharded) {
-         console.log('All mongos CMD results:', allMongosResults);
-         console.log('CSRS shard primaries CMD results:', csrsResults);
-         console.log('CSRS hosts CMD results:', allCSRSResults);
-         console.log('All shard primaries CMD results:', allShardResults);
-      }
-      console.log('All hosts CMD results:', allHostResults);
+      // if (sharded) {
+      //    console.log('All mongos CMD results:', allMongosResults);
+      //    console.log('CSRS shard primaries CMD results:', csrsResults);
+      //    console.log('CSRS hosts CMD results:', allCSRSResults);
+      //    console.log('All shard primaries CMD results:', allShardResults);
+      // }
+      // console.log('All hosts CMD results:', allHostResults);
 
       // Process results
       // console.log(results);
 
-      return;
+      return { topology, results };
    }
 
-   await main();
+   console.log(await main());
 })();
 
 // EOF
