@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.35"
+    *  Version: "0.1.36"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -23,10 +23,6 @@
    // Usage: mongosh [connection options] [--quiet] [-f|--file] discovery.js
 
    // Example: mongosh --host "replset/localhost" discovery.js
-
-   // async function stats(client, options) {
-   //    return client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, options).databases;
-   // }
 
    function parseReplSetHosts(hostString) {
       const { setName = null, seedList = null } = /^(?<setName>[^/]+)\/(?<seedList>.+)$/.exec(hostString)?.groups || {};
@@ -81,7 +77,7 @@
             "host": {
                "$cond": [
                   { "$eq": [
-                     { "$ifNull": ["$advisoryHostFQDNs", null] },
+                     { "$ifNull": [{ "$first": "$advisoryHostFQDNs" }, null] },
                      null
                   ] },
                   "$_id",
@@ -161,105 +157,59 @@
       return await node.hello().me || await node.hostInfo().system.hostname || 'unknown';
    }
 
-   async function execMongosCmd({ 'host': hostname } = {}, cmdFn = async() => {}) {
+   async function connectAndExec({ name, host } = {}, cmdFn = async() => {}, { targetType = null, readPreference = 'nearest' } = {}) {
       /*
-       *  execute a command on a mongos
+       *  connect to the target and execute a command
        */
       const url = buildConnectionURI();
-      const readPreference = 'nearest';
-      url.host = hostname;
-      url.searchParams.set('readPreference', readPreference);
-      url.searchParams.set('directConnection', 'true');
-      const mongoURL = url.toString();
+      url.host = host;
+      let targetURL = '';
+      let setName, seedList;
       let node;
-      try {
-         node = connect(mongoURL);
-         return {
-            "success": true,
-            "target": "mongos",
-            "process": hostname,
-            "results": await cmdFn(node, { "readPreference": readPreference })
-         };
-      } catch(e) {
-         return {
-            "success": false,
-            "target": "mongos",
-            "process": hostname,
-            "results": e.errmsg ?? e.message ?? String(e)
-         };
+      
+      const mode = ['shard', 'csrs', 'replSet'].includes(targetType) ? 'replSet' : 'direct';
+      switch (mode) {
+         case 'direct':
+            readPreference = 'nearest';
+            url.searchParams.set('readPreference', readPreference);
+            url.searchParams.set('directConnection', 'true');
+            url.searchParams.sort();
+            targetURL = url.toString();
+            break;
+         case 'replSet':
+            ({ setName, seedList } = parseReplSetHosts(host));
+            readPreference = 'primaryPreferred'
+            url.searchParams.set('readPreference', readPreference);
+            url.searchParams.set('directConnection', 'false');
+            url.searchParams.set('replicaSet', setName);
+            url.searchParams.sort();
+            // seedlists are considered malformed by the URL() parser, so we splice it manually
+            targetURL = url.toString().replace(/@[^/]+\//, `@${seedList}/`);
+            break;
+         // case 'loadBalanced':
+         //    readPreference = 'nearest';
+         //    url.searchParams.set('readPreference', readPreference);
+         //    url.searchParams.set('directConnection', 'false');
+         //    url.searchParams.sort();
+         //    targetURL = url.toString();
+         //    break;
+         default:
+            throw new Error(`Unsupported target type: ${targetType}`);
       }
-      // finally {
-      //    /*
-      //     *  close() method not supported in mongosh
-      //     *  leaving vestige here in case native nodejs driver is used
-      //     */
-      //    try { node.close(); }
-      //    catch(_) {}
-      // }
-   }
 
-   async function execShardCmd({ 'host': shardString } = {}, cmdFn = async() => {}) {
-      /*
-       *  execute a command on a shard replset
-       */
-      const { setName, seedList } = parseReplSetHosts(shardString);
-      const url = buildConnectionURI();
-      const readPreference = 'primaryPreferred';
-      url.port = null;
-      // url.searchParams.delete('directConnection');
-      url.searchParams.set('readPreference', readPreference);
-      url.searchParams.set('replicaSet', setName);
-      url.searchParams.sort();
-
-      let shard;
-      // seedlists are considered malformed by the URL() parser, so we splice it manually
-      const shardURL = url.toString().replace(/@[^/]+\//, `@${seedList}/`);
       try {
-         shard = connect(shardURL);
+         node = connect(targetURL);
          return {
             "success": true,
-            "process": await me(shard),
-            "results": await cmdFn(shard, { "readPreference": readPreference })
-         };
-      } catch(e) {
-         return {
-            "success": false,
-            "process": setName,
-            "results": e.errmsg ?? e.message ?? String(e)
-         };
-      }
-      // finally {
-      //    /*
-      //     *  close() method not supported in mongosh
-      //     *  leaving vestige here in case native nodejs driver is used
-      //     */
-      //    try { node.close(); }
-      //    catch(_) {}
-      // }
-   }
-
-   async function execHostCmd({ 'host': hostname } = {}, cmdFn = async() => {}) {
-      /*
-       *  execute a command on a mongod
-       */
-      const url = buildConnectionURI();
-      const readPreference = 'nearest';
-      url.host = hostname;
-      url.searchParams.set('readPreference', readPreference);
-      url.searchParams.set('directConnection', 'true');
-      const directURI = url.toString();
-      let node;
-      try {
-         node = connect(directURI);
-         return {
-            "success": true,
+            "target": targetType,
             "process": await me(node),
             "results": await cmdFn(node, { "readPreference": readPreference })
          };
       } catch(e) {
          return {
             "success": false,
-            "process": hostname,
+            "target": targetType,
+            "process": host ?? name ?? null,
             "results": e.errmsg ?? e.message ?? String(e)
          };
       }
@@ -272,40 +222,25 @@
       //    catch(_) {}
       // }
    }
-
-   async function execAllMongosesCmd(mongos = [], cmdFn = async() => {}) {
+   async function execAll(targets = [], cmdFn = async() => {}, options = {}) {
       /*
+       *  execute a command on all targets
        *  async exec wrapper to parallelise tasks
        */
-
-      return await Promise.allSettled(mongos.map(host => execMongosCmd(host, cmdFn))).then(results => {
-         return results
-            .filter(({ status }) => status === 'fulfilled')
-            .map(({ value }) => value);
-      });
-   }
-
-   async function execAllShardsCmd(shards = [], cmdFn = async() => {}) {
-      /*
-       *  async exec wrapper to parallelise tasks
-       */
-
-      return await Promise.allSettled(shards.map(host => execShardCmd(host, cmdFn))).then(results => {
-         return results
-            .filter(({ status }) => status === 'fulfilled')
-            .map(({ value }) => value);
-      });
-   }
-
-   async function execAllHostsCmd(hosts = [], cmdFn = async() => {}) {
-      /*
-       *  async exec wrapper to parallelise tasks
-       */
-
-      return await Promise.allSettled(hosts.map(host => execHostCmd(host, cmdFn))).then(results => {
-         return results
-            .filter(({ status }) => status === 'fulfilled')
-            .map(({ value }) => value);
+      const settled = await Promise.allSettled(
+         targets.map(target => connectAndExec(target, cmdFn, options))
+      );
+      // filter out rejected promises so we don't stop processing
+      return settled.map(({ status, value, reason }) => {
+         return status === 'fulfilled'
+            ? value
+            : { // return rejected promises so we log the errors
+               "success": false,
+               "target": options.targetType,
+               "process": null,
+               "results": "",
+               "errors": String(reason)
+            };
       });
    }
 
@@ -334,7 +269,7 @@
       return false;
    }
 
-   function buildConnectionURI() {
+   function buildConnectionURI({ host, seedList, replicaSet, readPreference, directConnection } = {}) {
       /*
        *  returns MongoClient() options to construct new connections
        */
@@ -344,7 +279,6 @@
       const url = new URL(db.getMongo().getURI());
       // optimise params for direct connection and avoid conflicting options
       url.searchParams.delete('directConnection');
-      // url.searchParams.set('readPreference', 'nearest');
       url.searchParams.delete('replicaSet');
       url.searchParams.delete('tags');
       url.searchParams.delete('readPreferenceTags');
@@ -369,12 +303,61 @@
          "mongos": sharded ? discoverMongos() : [],
          "csrs": sharded ? discoverCSRSshard() : [],
          "shards": sharded ? discoverShards() : [],
+         // "replSet": sharded ? discoverShards() : [],
          "errors": []
       };
       topology.csrsHosts = sharded ? discoverShardedHosts(topology.csrs) : [];
-      topology.hosts = sharded ? discoverShardedHosts(topology.shards) : discoverRSHosts();
+      topology.members = sharded ? discoverShardedHosts(topology.shards) : discoverRSHosts();
 
       return topology;
+   }
+
+   async function mongosCmd(client) {
+      return 'I am a mongos found on ' + await me(client);
+   }
+
+   async function shardCmd(client) {
+      return 'I am a shard primary found at ' + await me(client);
+   }
+
+   async function csrsCmd(client) {
+      return 'I am the CSRS primary found at ' + await me(client);
+   }
+
+   async function csrsHostCmd(client) {
+      return 'I am a CSRS member host found at ' + await me(client);
+   }
+
+   async function hostCmd(client, options) {
+      return await dbList(client, options);
+   }
+
+   // async function hostCmd(client) {
+   //    return 'I am a member host found at ' + await me(client);
+   // }
+
+   // async function hostCmd(client, options) {
+   //    return await autoCompact(client, options);
+   // }
+
+   async function autoCompact(client, options) {
+      return client.getSiblingDB('admin').runCommand({
+         "autoCompact": true,
+         "freeSpaceTargetMB": 1,
+         "runOnce": true
+      }, options);
+   }
+
+   async function dbstats(client /*, options*/) {
+      const db = client;
+      const options = { "output": { "format": "json" } };
+      let dbStats;
+      // load('dbstats.js');
+      return await dbStats;
+   }
+
+   async function dbList(client, options) {
+      return client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, options).databases;
    }
 
    async function main() {
@@ -384,7 +367,7 @@
        *  - shards
        *  - replset
        *
-       *  Execute mongos/shard/host specific commands
+       *  Execute mongos/shard/mongod specific commands
        */
 
       /*
@@ -397,39 +380,8 @@
       const results = {};
       // const tasks = [];
 
-      const mongosCmd = async(client) => 'I am a mongos found on ' + await me(client);
-      const shardCmd = async(client) => 'I am a shard primary found at ' + await me(client);
-      const csrsCmd = async(client) => 'I am the CSRS primary found at ' + await me(client);
-      const csrsHostCmd = async(client) => 'I am a CSRS member host found at ' + await me(client);
-      // const hostCmd = async(client) => 'I am a member host found at ' + await me(client);
-      // const hostCmd = async(client, options) => await dbstats(client, options);
-      const hostCmd = async(client, options) => await autoCompact(client, options);
-      const autoCompact = (client, options) => client.getSiblingDB('admin').runCommand({
-         "autoCompact": true,
-         "freeSpaceTargetMB": 1,
-         "runOnce": true
-      }, options);
-      // async function dbstats(client /*, options*/) {
-      //    const db = client;
-      //    const options = { "output": { "format": "json" } };
-      //    let dbStats;
-      //    // load('dbstats.js');
-      //    return await dbStats;
-      // }
-
-      // execute commands
-      if (topology.type === 'sharded') {
-         results.mongos = await execAllMongosesCmd(topology.mongos, mongosCmd);
-         results.csrs = await execAllShardsCmd(topology.csrs, csrsCmd);
-         results.csrsHosts = await execAllHostsCmd(topology.csrsHosts, csrsHostCmd);
-         results.shards = await execAllShardsCmd(topology.shards, shardCmd);
-      }
-      results.hosts = await execAllHostsCmd(topology.hosts, hostCmd);
-
       // Execute all tasks in parallel
       // results = await Promise.allSettled(tasks.map(({ target = {}, fn = () => {} }) => executeRemote(target, fn)));
-
-      // Execute all tasks in parallel
       // Execute all tasks in serial only
       // Execute all tasks on shards in parallel serially per shard
       // Execute all tasks in a limited pool in parallel
@@ -438,6 +390,16 @@
       // Add option to target replSet primary or secondaries only
       // Add default option to avoid arbiters
       // Add load monitoring metrics
+
+      // execute commands
+      if (topology.type === 'sharded') {
+         results.mongos = await execAll(topology.mongos, mongosCmd, { targetType: 'mongos' });
+         results.csrs = await execAll(topology.csrs, csrsCmd, { targetType: 'csrs' });
+         results.csrsHosts = await execAll(topology.csrsHosts, csrsHostCmd, { targetType: 'mongod' });
+         results.shards = await execAll(topology.shards, shardCmd, { targetType: 'shard' });
+      }
+      // results.replSet = await execAll(topology.replSet, rsCmd, { targetType: 'replSet' });
+      results.members = await execAll(topology.members, hostCmd, { targetType: 'mongod' });
 
       return { topology, results };
    }
