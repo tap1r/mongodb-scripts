@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.37"
+    *  Version: "0.1.38"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -92,7 +92,7 @@
          mongos = namespace.aggregate(pipeline, options).toArray();
       } catch(e) {
          // console.log('Lack the ability to discover mongos:', e.errmsg ?? e.message ?? String(e));
-         return { "error": `Lack the ability to discover mongos: ${e.errmsg ?? e.message ?? String(e)}` };
+         return [{ "error": `Lack the ability to discover mongos: ${e.errmsg ?? e.message ?? String(e)}` }];
       }
 
       return mongos;
@@ -161,56 +161,32 @@
    async function connectAndExec({ name, host } = {}, cmdFn = async() => {}, { targetType = null, readPreference = 'nearest' } = {}) {
       /*
        *  connect to the target and execute a command
+       *  setting read preferences to a specific target don't neccessarily align with command read preferences
+       *  therefore the operator will need to exercise discretion for the appropriate command read preferences
        */
-      // const url = buildConnectionURI({ host, targetType });
-      // let targetURL = '';
-      // const targetURL = buildConnectionURI({ host, targetType });
-      // let setName, seedList;
-      // let node;
-      
-      // const mode = ['shard', 'csrs', 'replSet'].includes(targetType) ? 'replSet' : 'direct';
-      // switch (mode) {
-      //    case 'direct':
-      //       url.host = host;
-      //       url.searchParams.set('readPreference', 'nearest');
-      //       url.searchParams.set('directConnection', 'true');
-      //       url.searchParams.sort();
-      //       targetURL = url.toString();
-      //       break;
-      //    case 'replSet':
-      //       ({ setName, seedList } = parseReplSetHosts(host));
-      //       url.searchParams.set('readPreference', 'primaryPreferred');
-      //       url.searchParams.set('directConnection', 'false');
-      //       url.searchParams.set('replicaSet', setName);
-      //       url.searchParams.sort();
-      //       // seedlists are considered malformed by the URL() parser, so we splice it manually
-      //       targetURL = url.toString().replace(/@[^/]+\//, `@${seedList}/`);
-      //       break;
-      //    // case 'loadBalanced':
-      //    //    readPreference = 'nearest';
-      //    //    url.searchParams.set('readPreference', readPreference);
-      //    //    url.searchParams.set('directConnection', 'false');
-      //    //    url.searchParams.sort();
-      //    //    targetURL = url.toString();
-      //    //    break;
-      //    // default:
-      //    //    throw new Error(`Unsupported target type: ${targetType}`);
-      // }
 
       try {
          const node = connect(buildConnectionURI({ host, targetType }));
          return {
             "success": true,
             "target": targetType,
-            "process": host ?? name ?? await me(node),
-            "results": await cmdFn(node, { "readPreference": readPreference })
+            "process": await me(node),
+            "name": name,
+            "host": host,
+            "command": { "readPreference": readPreference },
+            "results": await cmdFn(node, { "readPreference": readPreference }),
+            "error": null
          };
       } catch(e) {
          return {
             "success": false,
             "target": targetType,
             "process": host ?? name ?? null,
-            "results": e.errmsg ?? e.message ?? String(e)
+            "name": name,
+            "host": host,
+            "command": { "readPreference": readPreference },
+            "results": null,
+            "error": e.errmsg ?? e.message ?? String(e)
          };
       }
    }
@@ -231,8 +207,8 @@
                "success": false,
                "target": options.targetType,
                "process": null,
-               "results": "",
-               "errors": String(reason)
+               "results": null,
+               "error": String(reason)
             };
       });
    }
@@ -264,7 +240,7 @@
 
    function buildConnectionURI({ host, targetType } = {}) {
       /*
-       *  returns MongoClient() options to construct new connections
+       *  returns MongoClient() URI to construct new targetted connections
        */
 
       // TODO: add support for SRV connection string conversion
@@ -272,18 +248,18 @@
       const url = new URL(db.getMongo().getURI());
       let targetURL = '';
       // optimise params for direct connection and avoid conflicting options
-      url.searchParams.delete('replicaSet');
       url.searchParams.delete('tags');
       url.searchParams.delete('readPreferenceTags');
       url.searchParams.delete('maxStalenessSeconds');
       url.searchParams.delete('minPoolSize');
       url.searchParams.delete('maxPoolSize');
       url.searchParams.delete('srvMaxHosts');
-      
+
       const mode = ['shard', 'csrs', 'replSet'].includes(targetType) ? 'replSet' : 'direct';
       switch (mode) {
          case 'direct':
             url.host = host;
+            url.searchParams.delete('replicaSet');
             url.searchParams.set('readPreference', 'nearest');
             url.searchParams.set('directConnection', 'true');
             url.searchParams.sort();
@@ -318,18 +294,6 @@
        */
 
       const sharded = isSharded();
-
-      // const topology = {
-      //    "type": sharded ? 'sharded' : 'replSet',
-      //    "mongos": sharded ? discoverMongos() : [],
-      //    "csrs": sharded ? discoverCSRSshard() : [],
-      //    "shards": sharded ? discoverShards() : [],
-      //    // "replSet": sharded ? discoverShards() : [],
-      //    "errors": []
-      // };
-      // topology.csrsHosts = sharded ? discoverShardedHosts(topology.csrs) : [];
-      // topology.members = sharded ? discoverShardedHosts(topology.shards) : discoverRSHosts();
-
       const topology = {
          "type": sharded ? 'sharded' : 'replSet',
          "mongos": [],
@@ -340,7 +304,6 @@
          "members": [],
          "errors": []
       };
-
       if (sharded) {
          try {
             topology.mongos = discoverMongos();
@@ -349,14 +312,14 @@
             topology.csrsHosts = discoverShardedHosts(topology.csrs);
             topology.members = discoverShardedHosts(topology.shards);
          } catch(e) {
-            topology.errors.push(e.message);
+            topology.errors.push(e.errmsg ?? e.message ?? String(e));
          }
       } else {
          try {
             // topology.replSet = discoverShards();
             topology.members = discoverRSHosts();
          } catch(e) {
-            topology.errors.push(e.message);
+            topology.errors.push(e.errmsg ?? e.message ?? String(e));
          }
       }
 
