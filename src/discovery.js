@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.36"
+    *  Version: "0.1.37"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -36,15 +36,13 @@
        *  returns an array of healthy, non-hidden data bearing replica set members
        */
       let members = [];
-      try {
-         // attempt to grab the replica set config to discover hidden nodes
+      try { // attempt to grab the replica set config to discover hidden nodes
          members = rs.status().members.filter(
             ({ health, 'stateStr': role }) => health === 1 && role !== 'ARBITER'
          ).map(
             ({ name, 'stateStr': role }) => { return { "host": name, "role": role } }
          );
-      } catch(e) {
-         // else we can just grab the list of discoverable nodes
+      } catch(e) { // else we can just grab the list of discoverable nodes
          const { hosts = [], passives = [] } = db.hello();
          members = [...hosts, ...passives].map(
             name => { return { "host": name } }
@@ -93,7 +91,8 @@
       try {
          mongos = namespace.aggregate(pipeline, options).toArray();
       } catch(e) {
-         console.log('Lack the ability to discover mongos:', e.errmsg ?? e.message ?? String(e));
+         // console.log('Lack the ability to discover mongos:', e.errmsg ?? e.message ?? String(e));
+         return { "error": `Lack the ability to discover mongos: ${e.errmsg ?? e.message ?? String(e)}` };
       }
 
       return mongos;
@@ -107,7 +106,8 @@
       try {
          shards = db.adminCommand({ "listShards": 1 }).shards;
       } catch(e) {
-         console.log('Lack the ability to discover shards:', e.errmsg ?? e.message ?? String(e));
+         // console.log('Lack the ability to discover shards:', e.errmsg ?? e.message ?? String(e));
+         return { "error": `Lack the ability to discover shards: ${e.errmsg ?? e.message ?? String(e)}` };
       }
 
       // TBA: check for non-empty shards array first
@@ -128,7 +128,8 @@
             { "_id": "shardIdentity" }
          ).toArray();
       } catch(e) {
-         console.log('Lack the ability to discover the CSRS:', e.errmsg ?? e.message ?? String(e));
+         // console.log('Lack the ability to discover the CSRS:', e.errmsg ?? e.message ?? String(e));
+         return { "error": `Lack the ability to discover the CSRS: ${e.errmsg ?? e.message ?? String(e)}` };
       }
 
       // TBA: check for non-empty csrs array first
@@ -161,48 +162,47 @@
       /*
        *  connect to the target and execute a command
        */
-      const url = buildConnectionURI();
-      url.host = host;
-      let targetURL = '';
-      let setName, seedList;
-      let node;
+      // const url = buildConnectionURI({ host, targetType });
+      // let targetURL = '';
+      // const targetURL = buildConnectionURI({ host, targetType });
+      // let setName, seedList;
+      // let node;
       
-      const mode = ['shard', 'csrs', 'replSet'].includes(targetType) ? 'replSet' : 'direct';
-      switch (mode) {
-         case 'direct':
-            readPreference = 'nearest';
-            url.searchParams.set('readPreference', readPreference);
-            url.searchParams.set('directConnection', 'true');
-            url.searchParams.sort();
-            targetURL = url.toString();
-            break;
-         case 'replSet':
-            ({ setName, seedList } = parseReplSetHosts(host));
-            readPreference = 'primaryPreferred'
-            url.searchParams.set('readPreference', readPreference);
-            url.searchParams.set('directConnection', 'false');
-            url.searchParams.set('replicaSet', setName);
-            url.searchParams.sort();
-            // seedlists are considered malformed by the URL() parser, so we splice it manually
-            targetURL = url.toString().replace(/@[^/]+\//, `@${seedList}/`);
-            break;
-         // case 'loadBalanced':
-         //    readPreference = 'nearest';
-         //    url.searchParams.set('readPreference', readPreference);
-         //    url.searchParams.set('directConnection', 'false');
-         //    url.searchParams.sort();
-         //    targetURL = url.toString();
-         //    break;
-         default:
-            throw new Error(`Unsupported target type: ${targetType}`);
-      }
+      // const mode = ['shard', 'csrs', 'replSet'].includes(targetType) ? 'replSet' : 'direct';
+      // switch (mode) {
+      //    case 'direct':
+      //       url.host = host;
+      //       url.searchParams.set('readPreference', 'nearest');
+      //       url.searchParams.set('directConnection', 'true');
+      //       url.searchParams.sort();
+      //       targetURL = url.toString();
+      //       break;
+      //    case 'replSet':
+      //       ({ setName, seedList } = parseReplSetHosts(host));
+      //       url.searchParams.set('readPreference', 'primaryPreferred');
+      //       url.searchParams.set('directConnection', 'false');
+      //       url.searchParams.set('replicaSet', setName);
+      //       url.searchParams.sort();
+      //       // seedlists are considered malformed by the URL() parser, so we splice it manually
+      //       targetURL = url.toString().replace(/@[^/]+\//, `@${seedList}/`);
+      //       break;
+      //    // case 'loadBalanced':
+      //    //    readPreference = 'nearest';
+      //    //    url.searchParams.set('readPreference', readPreference);
+      //    //    url.searchParams.set('directConnection', 'false');
+      //    //    url.searchParams.sort();
+      //    //    targetURL = url.toString();
+      //    //    break;
+      //    // default:
+      //    //    throw new Error(`Unsupported target type: ${targetType}`);
+      // }
 
       try {
-         node = connect(targetURL);
+         const node = connect(buildConnectionURI({ host, targetType }));
          return {
             "success": true,
             "target": targetType,
-            "process": await me(node),
+            "process": host ?? name ?? await me(node),
             "results": await cmdFn(node, { "readPreference": readPreference })
          };
       } catch(e) {
@@ -213,15 +213,8 @@
             "results": e.errmsg ?? e.message ?? String(e)
          };
       }
-      // finally {
-      //    /*
-      //     *  close() method not supported in mongosh
-      //     *  leaving vestige here in case native nodejs driver is used
-      //     */
-      //    try { node.close(); }
-      //    catch(_) {}
-      // }
    }
+
    async function execAll(targets = [], cmdFn = async() => {}, options = {}) {
       /*
        *  execute a command on all targets
@@ -269,7 +262,7 @@
       return false;
    }
 
-   function buildConnectionURI({ host, seedList, replicaSet, readPreference, directConnection } = {}) {
+   function buildConnectionURI({ host, targetType } = {}) {
       /*
        *  returns MongoClient() options to construct new connections
        */
@@ -277,8 +270,8 @@
       // TODO: add support for SRV connection string conversion
 
       const url = new URL(db.getMongo().getURI());
+      let targetURL = '';
       // optimise params for direct connection and avoid conflicting options
-      url.searchParams.delete('directConnection');
       url.searchParams.delete('replicaSet');
       url.searchParams.delete('tags');
       url.searchParams.delete('readPreferenceTags');
@@ -286,9 +279,37 @@
       url.searchParams.delete('minPoolSize');
       url.searchParams.delete('maxPoolSize');
       url.searchParams.delete('srvMaxHosts');
-      url.searchParams.sort();
+      
+      const mode = ['shard', 'csrs', 'replSet'].includes(targetType) ? 'replSet' : 'direct';
+      switch (mode) {
+         case 'direct':
+            url.host = host;
+            url.searchParams.set('readPreference', 'nearest');
+            url.searchParams.set('directConnection', 'true');
+            url.searchParams.sort();
+            targetURL = url.toString();
+            break;
+         case 'replSet':
+            const { setName, seedList } = parseReplSetHosts(host);
+            url.searchParams.set('readPreference', 'primaryPreferred');
+            url.searchParams.set('directConnection', 'false');
+            url.searchParams.set('replicaSet', setName);
+            url.searchParams.sort();
+            // seedlists are considered malformed by the URL() parser, so we splice it manually
+            targetURL = url.toString().replace(/@[^/]+\//, `@${seedList}/`);
+            break;
+         // case 'loadBalanced':
+         //    readPreference = 'nearest';
+         //    url.searchParams.set('readPreference', readPreference);
+         //    url.searchParams.set('directConnection', 'false');
+         //    url.searchParams.sort();
+         //    targetURL = url.toString();
+         //    break;
+         // default:
+         //    throw new Error(`Unsupported target type: ${targetType}`);
+      }
 
-      return url;
+      return targetURL;
    }
 
    function discoverTopology() {
@@ -298,16 +319,46 @@
 
       const sharded = isSharded();
 
+      // const topology = {
+      //    "type": sharded ? 'sharded' : 'replSet',
+      //    "mongos": sharded ? discoverMongos() : [],
+      //    "csrs": sharded ? discoverCSRSshard() : [],
+      //    "shards": sharded ? discoverShards() : [],
+      //    // "replSet": sharded ? discoverShards() : [],
+      //    "errors": []
+      // };
+      // topology.csrsHosts = sharded ? discoverShardedHosts(topology.csrs) : [];
+      // topology.members = sharded ? discoverShardedHosts(topology.shards) : discoverRSHosts();
+
       const topology = {
          "type": sharded ? 'sharded' : 'replSet',
-         "mongos": sharded ? discoverMongos() : [],
-         "csrs": sharded ? discoverCSRSshard() : [],
-         "shards": sharded ? discoverShards() : [],
-         // "replSet": sharded ? discoverShards() : [],
+         "mongos": [],
+         "csrs": [],
+         "shards": [],
+         "replSet": [],
+         "csrsHosts": [],
+         "members": [],
          "errors": []
       };
-      topology.csrsHosts = sharded ? discoverShardedHosts(topology.csrs) : [];
-      topology.members = sharded ? discoverShardedHosts(topology.shards) : discoverRSHosts();
+
+      if (sharded) {
+         try {
+            topology.mongos = discoverMongos();
+            topology.csrs = discoverCSRSshard();
+            topology.shards = discoverShards();
+            topology.csrsHosts = discoverShardedHosts(topology.csrs);
+            topology.members = discoverShardedHosts(topology.shards);
+         } catch(e) {
+            topology.errors.push(e.message);
+         }
+      } else {
+         try {
+            // topology.replSet = discoverShards();
+            topology.members = discoverRSHosts();
+         } catch(e) {
+            topology.errors.push(e.message);
+         }
+      }
 
       return topology;
    }
@@ -328,11 +379,11 @@
       return 'I am a CSRS member host found at ' + await me(client);
    }
 
-   async function hostCmd(client, options) {
+   async function memberCmd(client, options) {
       return await dbList(client, options);
    }
 
-   // async function hostCmd(client) {
+   // async function memberCmd(client) {
    //    return 'I am a member host found at ' + await me(client);
    // }
 
@@ -393,13 +444,13 @@
 
       // execute commands
       if (topology.type === 'sharded') {
-         results.mongos = await execAll(topology.mongos, mongosCmd, { targetType: 'mongos' });
-         results.csrs = await execAll(topology.csrs, csrsCmd, { targetType: 'csrs' });
-         results.csrsHosts = await execAll(topology.csrsHosts, csrsHostCmd, { targetType: 'mongod' });
-         results.shards = await execAll(topology.shards, shardCmd, { targetType: 'shard' });
+         results.mongos = await execAll(topology.mongos, mongosCmd, { "targetType": "mongos", "readPreference": "nearest" });
+         results.csrs = await execAll(topology.csrs, csrsCmd, { "targetType": "csrs", "readPreference": "primaryPreferred" });
+         results.csrsHosts = await execAll(topology.csrsHosts, csrsHostCmd, { "targetType": "mongod", "readPreference": "primaryPreferred" });
+         results.shards = await execAll(topology.shards, shardCmd, { "targetType": "shard", "readPreference": "primaryPreferred" });
       }
-      // results.replSet = await execAll(topology.replSet, rsCmd, { targetType: 'replSet' });
-      results.members = await execAll(topology.members, hostCmd, { targetType: 'mongod' });
+      // results.replSet = await execAll(topology.replSet, rsCmd, { "targetType": "replSet", "readPreference": "primaryPreferred" });
+      results.members = await execAll(topology.members, memberCmd, { "targetType": "mongod", "readPreference": "nearest" });
 
       return { topology, results };
    }
