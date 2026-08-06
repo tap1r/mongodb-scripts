@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.38"
+    *  Version: "0.1.39"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -36,7 +36,7 @@
        *  returns an array of healthy, non-hidden data bearing replica set members
        */
       let members = [];
-      try { // attempt to grab the replica set config to discover hidden nodes
+      try { // attempt to grab the replSet config to discover hidden nodes
          members = rs.status().members.filter(
             ({ health, 'stateStr': role }) => health === 1 && role !== 'ARBITER'
          ).map(
@@ -52,18 +52,18 @@
       return members;
    }
 
-   function discoverMongos() {
+   function discoverMongos(errors = []) {
       /*
        *  returns an array of available mongos instances attached to the sharded cluster
        */
-      let mongos = [];
+      // let mongos = [];
       const namespace = db.getSiblingDB('config').getCollection('mongos');
       const options = {
          "allowDiskUse": true,
          "readConcern": { "level": "local" },
          "comment": "Discovering living mongos processes"
       };
-      const offsetMS = 60000; // 1min
+      const offsetMS = 60000; // 1min defined here because the constant is specific to this function
       const pipeline = [
          { "$match": {
             "$expr": {
@@ -79,7 +79,7 @@
                      null
                   ] },
                   "$_id",
-                  { "$concat": [
+                  { "$concat": [ // potentially fragile to IPv6 format
                      { "$first": "$advisoryHostFQDNs" },
                      ":",
                      { "$arrayElemAt": [{ "$split": ["$_id", ":"] }, 1] }
@@ -89,16 +89,20 @@
          } }
       ];
       try {
-         mongos = namespace.aggregate(pipeline, options).toArray();
+         return namespace.aggregate(pipeline, options).toArray();
       } catch(e) {
-         // console.log('Lack the ability to discover mongos:', e.errmsg ?? e.message ?? String(e));
-         return [{ "error": `Lack the ability to discover mongos: ${e.errmsg ?? e.message ?? String(e)}` }];
+         // return [{ "error": `Lack the ability to discover mongos: ${e.errmsg ?? e.message ?? String(e)}` }];
+         errors.push({
+            "step": "discoverMongos",
+            "message": e.errmsg ?? e.message ?? String(e)
+         });
+         return [errors];
       }
 
-      return mongos;
+      // return mongos;
    }
 
-   function discoverShards() {
+   function discoverShards(errors = []) {
       /*
        *  returns an array of available shards
        */
@@ -107,7 +111,12 @@
          shards = db.adminCommand({ "listShards": 1 }).shards;
       } catch(e) {
          // console.log('Lack the ability to discover shards:', e.errmsg ?? e.message ?? String(e));
-         return { "error": `Lack the ability to discover shards: ${e.errmsg ?? e.message ?? String(e)}` };
+         // return [{ "error": `Lack the ability to discover shards: ${e.errmsg ?? e.message ?? String(e)}` }];
+         errors.push({
+            "step": "discoverShards",
+            "message": e.errmsg ?? e.message ?? String(e)
+         });
+         return [errors];
       }
 
       // TBA: check for non-empty shards array first
@@ -118,7 +127,7 @@
          });
    }
 
-   function discoverCSRSshard() {
+   function discoverCSRSshard(errors = []) {
       /*
        *  returns an array with the CSRS 'config' shard
        */
@@ -129,7 +138,14 @@
          ).toArray();
       } catch(e) {
          // console.log('Lack the ability to discover the CSRS:', e.errmsg ?? e.message ?? String(e));
-         return { "error": `Lack the ability to discover the CSRS: ${e.errmsg ?? e.message ?? String(e)}` };
+         // return [
+         //    { "error": `Lack the ability to discover the CSRS: ${e.errmsg ?? e.message ?? String(e)}` }
+         // ];
+         errors.push({
+            "step": "discoverCSRSshard",
+            "message": e.errmsg ?? e.message ?? String(e)
+         });
+         return [errors];
       }
 
       // TBA: check for non-empty csrs array first
@@ -138,16 +154,33 @@
       });
    }
 
-   function discoverShardedHosts(shards = []) {
+   function discoverShardedHosts(shards = [], errors = []) {
       /*
        *  returns an array of hosts across all available shards
        */
-      return shards.map(({ host }) => {
-         const { setName, seedList } = parseReplSetHosts(host);
-         return seedList.split(',').map(name => {
-            return { "name": setName, "host": name };
-         });
-      }).flat();
+
+      // return shards.map(({ host }) => {
+      //    const { setName, seedList } = parseReplSetHosts(host);
+      //    return seedList.split(',').map(name => {
+      //       return { "name": setName, "host": name };
+      //    });
+      // }).flat();
+      if (!Array.isArray(shards)) return [];
+
+      return shards.flatMap(({ name, host } = {}) => {
+         try {
+            const { setName, seedList } = parseReplSetHosts(host);
+            return seedList.split(',').map(h => ({ 'name': setName, 'host': h }));
+         } catch(e) {
+            errors.push({
+               "step": "discoverShardedHosts",
+               "name": name,
+               "host": host,
+               "message": e.errmsg ?? e.message ?? String(e)
+            });
+            return [];
+         }
+      });
    }
 
    async function me(node) {
@@ -161,30 +194,30 @@
    async function connectAndExec({ name, host } = {}, cmdFn = async() => {}, { targetType = null, readPreference = 'nearest' } = {}) {
       /*
        *  connect to the target and execute a command
-       *  setting read preferences to a specific target don't neccessarily align with command read preferences
-       *  therefore the operator will need to exercise discretion for the appropriate command read preferences
+       *  setting read preferences to a specific target doesn't necessarily align with cmdFn read preferences
+       *  therefore the operator will need to exercise discretion for the appropriate read preferences per command
        */
 
       try {
          const node = connect(buildConnectionURI({ host, targetType }));
          return {
             "success": true,
-            "target": targetType,
-            "process": await me(node),
+            "target": await me(node),
+            "process": targetType,
             "name": name,
             "host": host,
-            "command": { "readPreference": readPreference },
+            "cmdOpts": { "readPreference": readPreference },
             "results": await cmdFn(node, { "readPreference": readPreference }),
             "error": null
          };
       } catch(e) {
          return {
             "success": false,
-            "target": targetType,
-            "process": host ?? name ?? null,
+            "target": host ?? name ?? 'unknown',
+            "process": targetType,
             "name": name,
             "host": host,
-            "command": { "readPreference": readPreference },
+            "cmdOpts": { "readPreference": readPreference },
             "results": null,
             "error": e.errmsg ?? e.message ?? String(e)
          };
@@ -241,6 +274,7 @@
    function buildConnectionURI({ host, targetType } = {}) {
       /*
        *  returns MongoClient() URI to construct new targetted connections
+       *  by design, the discovery scope is limited to the current 'db' context
        */
 
       // TODO: add support for SRV connection string conversion
@@ -294,6 +328,7 @@
        */
 
       const sharded = isSharded();
+      const errors = [];
       const topology = {
          "type": sharded ? 'sharded' : 'replSet',
          "mongos": [],
@@ -305,22 +340,14 @@
          "errors": []
       };
       if (sharded) {
-         try {
-            topology.mongos = discoverMongos();
-            topology.csrs = discoverCSRSshard();
-            topology.shards = discoverShards();
-            topology.csrsHosts = discoverShardedHosts(topology.csrs);
-            topology.members = discoverShardedHosts(topology.shards);
-         } catch(e) {
-            topology.errors.push(e.errmsg ?? e.message ?? String(e));
-         }
+         topology.mongos = discoverMongos(topology.errors);
+         topology.csrs = discoverCSRSshard(topology.errors);
+         topology.shards = discoverShards(topology.errors);
+         topology.csrsHosts = discoverShardedHosts(topology.csrs, topology.errors);
+         topology.members = discoverShardedHosts(topology.shards, topology.errors);
       } else {
-         try {
-            // topology.replSet = discoverShards();
-            topology.members = discoverRSHosts();
-         } catch(e) {
-            topology.errors.push(e.errmsg ?? e.message ?? String(e));
-         }
+         // topology.replSet = discoverShards();
+         topology.members = discoverRSHosts(topology.errors);
       }
 
       return topology;
