@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.42"
+    *  Version: "0.1.43"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,6 +18,14 @@
     *  - add LoadBalanced topology type
     *  - add support for arbiters
     *  - add SRV connection string support
+    *  - Execute all tasks in serial only
+    *  - Execute all tasks on shards in parallel serially per shard
+    *  - Execute all tasks in a limited pool in parallel
+    *  - Add jitter/variance to task execution (random delays)
+    *  - Add task cancellation if connection times out
+    *  - Add option to target replSet primary or secondaries only
+    *  - Add option to include arbiters
+    *  - Add load monitoring metrics
     */
 
    // Usage: mongosh [connection options] [--quiet] [-f|--file] discovery.js
@@ -57,14 +65,22 @@
       }
    }
 
-      function discoverRSName() {
+   function discoverRSName(errors = []) {
       /*
        *  returns the replica set name
        */
       try { // attempt to grab the replSet config to discover the set name
          return rs.config()._id;
-      } catch(e) { // else we can just grab the list of discoverable nodes
-         return db.hello().setName;
+      } catch(e1) {
+         try {
+            return db.hello().setName ?? '';
+         } catch(e2) {
+            errors.push({
+               "step": "discoverRSName",
+               "message": e2.errmsg ?? e2.message ?? String(e2)
+            });
+            return '';
+         }
       }
    }
 
@@ -153,7 +169,6 @@
          return [];
       }
 
-      // TBA: check for non-empty csrs array first
       return csrs.map(({ shardName, configsvrConnectionString } = {}) => (
          { "name": shardName, "host": configsvrConnectionString }
       ));
@@ -359,8 +374,8 @@
          topology.csrsHosts = discoverShardedHosts(topology.csrs, topology.errors);
          topology.members = discoverShardedHosts(topology.shards, topology.errors);
       } else {
-         topology.replSetName = discoverRSName();
-         topology.members = discoverRSMembers();
+         topology.replSetName = discoverRSName(topology.errors);
+         topology.members = discoverRSMembers(topology.errors);
       }
 
       return topology;
@@ -455,17 +470,8 @@
       const topology = discoverTopology();
       const results = {};
       // const tasks = [];
-
       // Execute all tasks in parallel
       // results = await Promise.allSettled(tasks.map(({ target = {}, fn = () => {} }) => executeRemote(target, fn)));
-      // Execute all tasks in serial only
-      // Execute all tasks on shards in parallel serially per shard
-      // Execute all tasks in a limited pool in parallel
-      // Add jitter/variance to task execution (random delays)
-      // Add task cancellation if connection times out
-      // Add option to target replSet primary or secondaries only
-      // Add default option to avoid arbiters
-      // Add load monitoring metrics
 
       // execute commands
       if (topology.type === 'sharded') {
