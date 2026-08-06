@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.40"
+    *  Version: "0.1.41"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,6 +14,7 @@
     *  - WARNING: debugging may leak credentials
     *
     *  TBA:
+    *  - plugable cmd execution
     *  - add standalone host discovery
     *  - add LoadBalanced topology type
     *  - add support for arbiters
@@ -31,32 +32,39 @@
       return { setName, seedList };
    }
 
-   function discoverRSHosts() {
+   function discoverRSMembers() {
       /*
        *  returns an array of healthy, non-hidden data bearing replica set members
        */
-      let members = [];
-      try { // attempt to grab the replSet config to discover hidden nodes
-         members = rs.status().members.filter(
+      try { // attempt to grab the replSet status to discover hidden nodes
+         return rs.status().members.filter(
             ({ health, 'stateStr': role }) => health === 1 && role !== 'ARBITER'
          ).map(
-            ({ name, 'stateStr': role }) => ({ "host": name, "role": role })
+            ({ name, 'stateStr': role }) => ({ "name": "mongod", "host": name, "role": role })
          );
       } catch(e) { // else we can just grab the list of discoverable nodes
          const { hosts = [], passives = [] } = db.hello();
-         members = [...hosts, ...passives].map(
-            name => ({ "host": name })
+         return [...hosts, ...passives].map(
+            name => ({ "name": "mongod", "host": name })
          );
       }
+   }
 
-      return members;
+      function discoverRSName() {
+      /*
+       *  returns the replica set name
+       */
+      try { // attempt to grab the replSet config to discover the set name
+         return rs.config()._id;
+      } catch(e) { // else we can just grab the list of discoverable nodes
+         return db.hello().setName;
+      }
    }
 
    function discoverMongos(errors = []) {
       /*
        *  returns an array of available mongos instances attached to the sharded cluster
        */
-      // let mongos = [];
       const namespace = db.getSiblingDB('config').getCollection('mongos');
       const options = {
          "allowDiskUse": true,
@@ -91,7 +99,6 @@
       try {
          return namespace.aggregate(pipeline, options).toArray();
       } catch(e) {
-         // return [{ "error": `Lack the ability to discover mongos: ${e.errmsg ?? e.message ?? String(e)}` }];
          errors.push({
             "step": "discoverMongos",
             "message": e.errmsg ?? e.message ?? String(e)
@@ -108,8 +115,6 @@
       try {
          shards = db.adminCommand({ "listShards": 1 }).shards;
       } catch(e) {
-         // console.log('Lack the ability to discover shards:', e.errmsg ?? e.message ?? String(e));
-         // return [{ "error": `Lack the ability to discover shards: ${e.errmsg ?? e.message ?? String(e)}` }];
          errors.push({
             "step": "discoverShards",
             "message": e.errmsg ?? e.message ?? String(e)
@@ -117,7 +122,6 @@
          return [];
       }
 
-      // TBA: check for non-empty shards array first
       return shards.filter(({ state } = {}) =>
             state === 1
          ).map(({ _id, host } = {}) => (
@@ -248,7 +252,7 @@
                "process": options.targetType,
                "name": null,
                "host": null,
-               "cmdOpts": { "readPreference": options.readPreference ?? 'unknown' },
+               "cmdOpts": { "readPreference": options.readPreference },
                "results": null,
                "error": String(reason)
             };
@@ -344,7 +348,7 @@
          "mongos": [],
          "csrs": [],
          "shards": [],
-         "replSet": [],
+         "replSetName": '',
          "csrsHosts": [],
          "members": [],
          "errors": []
@@ -356,31 +360,34 @@
          topology.csrsHosts = discoverShardedHosts(topology.csrs, topology.errors);
          topology.members = discoverShardedHosts(topology.shards, topology.errors);
       } else {
-         topology.replSet = discoverRSHosts();
-         topology.members = discoverRSHosts();
+         topology.replSetName = discoverRSName();
+         topology.members = discoverRSMembers();
       }
 
       return topology;
    }
 
-   async function mongosCmd(client) {
-      return 'I am a mongos found on ' + await me(client);
+   async function mongosCmd(client, options) {
+      // return 'I am a mongos found on ' + await me(client);
+      return await appendOplogNote(client, options);
    }
 
-   async function shardCmd(client) {
+   async function shardCmd(client, options) {
       return 'I am a shard primary found at ' + await me(client);
    }
 
-   async function csrsCmd(client) {
+   async function csrsCmd(client, options) {
       return 'I am the CSRS primary found at ' + await me(client);
    }
 
-   async function csrsHostCmd(client) {
+   async function csrsHostCmd(client, options) {
+      // https://www.mongodb.com/docs/manual/reference/supported-shard-direct-commands/
       return 'I am a CSRS member host found at ' + await me(client);
    }
 
    async function memberCmd(client, options) {
-      return await dbList(client, options);
+      // https://www.mongodb.com/docs/manual/reference/supported-shard-direct-commands/
+      return await whatsmyuri(client, options);
    }
 
    // async function memberCmd(client) {
@@ -399,16 +406,35 @@
       }, options);
    }
 
-   async function dbstats(client /*, options*/) {
-      const db = client;
-      const options = { "output": { "format": "json" } };
-      let dbStats;
-      // load('dbstats.js');
-      return await dbStats();
-   }
+   // async function dbstats(client /*, options*/) {
+   //    const db = client;
+   //    const options = { "output": { "format": "json" } };
+   //    let dbStats;
+   //    // load('dbstats.js');
+   //    return await dbStats();
+   // }
 
    async function dbList(client, options) {
       return client.getSiblingDB('admin').runCommand({ "listDatabases": 1, "nameOnly": false }, options).databases;
+   }
+
+   async function appendOplogNote(client, options) {
+      return await client.adminCommand({
+         "appendOplogNote": 1,
+         "data": {
+            "msg": "Advance the change stream highwatermark token timestamp"
+         }
+      }, options);
+   }
+
+   async function shardingState(client, options) {
+      return await client.adminCommand({
+         "shardingState": 1
+      }, options);
+   }
+
+   async function whatsmyuri(client, options) {
+      return await client.adminCommand({ "whatsmyuri": 1 }, options);
    }
 
    async function main() {
