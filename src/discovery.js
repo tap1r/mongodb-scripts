@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.39"
+    *  Version: "0.1.40"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -40,12 +40,12 @@
          members = rs.status().members.filter(
             ({ health, 'stateStr': role }) => health === 1 && role !== 'ARBITER'
          ).map(
-            ({ name, 'stateStr': role }) => { return { "host": name, "role": role } }
+            ({ name, 'stateStr': role }) => ({ "host": name, "role": role })
          );
       } catch(e) { // else we can just grab the list of discoverable nodes
          const { hosts = [], passives = [] } = db.hello();
          members = [...hosts, ...passives].map(
-            name => { return { "host": name } }
+            name => ({ "host": name })
          );
       }
 
@@ -96,10 +96,8 @@
             "step": "discoverMongos",
             "message": e.errmsg ?? e.message ?? String(e)
          });
-         return [errors];
+         return [];
       }
-
-      // return mongos;
    }
 
    function discoverShards(errors = []) {
@@ -116,15 +114,15 @@
             "step": "discoverShards",
             "message": e.errmsg ?? e.message ?? String(e)
          });
-         return [errors];
+         return [];
       }
 
       // TBA: check for non-empty shards array first
       return shards.filter(({ state } = {}) =>
             state === 1
-         ).map(({ _id, host } = {}) => {
-            return { "name": _id, "host": host };
-         });
+         ).map(({ _id, host } = {}) => (
+            { "name": _id, "host": host }
+         ));
    }
 
    function discoverCSRSshard(errors = []) {
@@ -137,21 +135,17 @@
             { "_id": "shardIdentity" }
          ).toArray();
       } catch(e) {
-         // console.log('Lack the ability to discover the CSRS:', e.errmsg ?? e.message ?? String(e));
-         // return [
-         //    { "error": `Lack the ability to discover the CSRS: ${e.errmsg ?? e.message ?? String(e)}` }
-         // ];
          errors.push({
             "step": "discoverCSRSshard",
             "message": e.errmsg ?? e.message ?? String(e)
          });
-         return [errors];
+         return [];
       }
 
       // TBA: check for non-empty csrs array first
-      return csrs.map(({ shardName, configsvrConnectionString } = {}) => {
-         return { "name": shardName, "host": configsvrConnectionString };
-      });
+      return csrs.map(({ shardName, configsvrConnectionString } = {}) => (
+         { "name": shardName, "host": configsvrConnectionString }
+      ));
    }
 
    function discoverShardedHosts(shards = [], errors = []) {
@@ -170,7 +164,7 @@
       return shards.flatMap(({ name, host } = {}) => {
          try {
             const { setName, seedList } = parseReplSetHosts(host);
-            return seedList.split(',').map(h => ({ 'name': setName, 'host': h }));
+            return seedList.split(',').map(seed => ({ 'name': setName, 'host': seed }));
          } catch(e) {
             errors.push({
                "step": "discoverShardedHosts",
@@ -197,6 +191,18 @@
        *  setting read preferences to a specific target doesn't necessarily align with cmdFn read preferences
        *  therefore the operator will need to exercise discretion for the appropriate read preferences per command
        */
+
+      // Document shape
+      // {
+      //    "success": <bool>, // execution status
+      //    "target": <string>, // what actually got targetted
+      //    "process": <string>, // what we tried to target
+      //    "name": <string>, // name of the target
+      //    "host": <string>, // host of the target
+      //    "cmdOpts": <object>, // command options
+      //    "results": <array|object> | <null>, // command results or null
+      //    "error": <string> | <null> // reported errors or null
+      // }
 
       try {
          const node = connect(buildConnectionURI({ host, targetType }));
@@ -238,8 +244,11 @@
             ? value
             : { // return rejected promises so we log the errors
                "success": false,
-               "target": options.targetType,
-               "process": null,
+               "target": null,
+               "process": options.targetType,
+               "name": null,
+               "host": null,
+               "cmdOpts": { "readPreference": options.readPreference ?? 'unknown' },
                "results": null,
                "error": String(reason)
             };
@@ -255,7 +264,7 @@
 
    function isLoadBalanced() {
       /*
-       *  is load balanced topology
+       *  is load balanced topology (Flex cluster?)
        */
       console.log('[TODO] isLoadBalanced() method is not implemented yet');
 
@@ -291,7 +300,7 @@
 
       const mode = ['shard', 'csrs', 'replSet'].includes(targetType) ? 'replSet' : 'direct';
       switch (mode) {
-         case 'direct':
+         case 'direct': {
             url.host = host;
             url.searchParams.delete('replicaSet');
             url.searchParams.set('readPreference', 'nearest');
@@ -299,7 +308,8 @@
             url.searchParams.sort();
             targetURL = url.toString();
             break;
-         case 'replSet':
+         }
+         case 'replSet': {
             const { setName, seedList } = parseReplSetHosts(host);
             url.searchParams.set('readPreference', 'primaryPreferred');
             url.searchParams.set('directConnection', 'false');
@@ -308,6 +318,7 @@
             // seedlists are considered malformed by the URL() parser, so we splice it manually
             targetURL = url.toString().replace(/@[^/]+\//, `@${seedList}/`);
             break;
+         }
          // case 'loadBalanced':
          //    readPreference = 'nearest';
          //    url.searchParams.set('readPreference', readPreference);
@@ -328,7 +339,6 @@
        */
 
       const sharded = isSharded();
-      const errors = [];
       const topology = {
          "type": sharded ? 'sharded' : 'replSet',
          "mongos": [],
@@ -346,8 +356,8 @@
          topology.csrsHosts = discoverShardedHosts(topology.csrs, topology.errors);
          topology.members = discoverShardedHosts(topology.shards, topology.errors);
       } else {
-         // topology.replSet = discoverShards();
-         topology.members = discoverRSHosts(topology.errors);
+         topology.replSet = discoverRSHosts();
+         topology.members = discoverRSHosts();
       }
 
       return topology;
@@ -394,7 +404,7 @@
       const options = { "output": { "format": "json" } };
       let dbStats;
       // load('dbstats.js');
-      return await dbStats;
+      return await dbStats();
    }
 
    async function dbList(client, options) {
