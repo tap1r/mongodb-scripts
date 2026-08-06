@@ -1,14 +1,13 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.41"
+    *  Version: "0.1.42"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Notes:
     *  - mongosh only
-    *  - plugable cmd execution
     *  - support for async required to parallelise and access the topology with auth
     *  - only supports driver URI parameters, some driver options may not be supported
     *  - WARNING: debugging may leak credentials
@@ -32,7 +31,7 @@
       return { setName, seedList };
    }
 
-   function discoverRSMembers() {
+   function discoverRSMembers(errors = []) {
       /*
        *  returns an array of healthy, non-hidden data bearing replica set members
        */
@@ -42,11 +41,19 @@
          ).map(
             ({ name, 'stateStr': role }) => ({ "name": "mongod", "host": name, "role": role })
          );
-      } catch(e) { // else we can just grab the list of discoverable nodes
-         const { hosts = [], passives = [] } = db.hello();
-         return [...hosts, ...passives].map(
-            name => ({ "name": "mongod", "host": name })
-         );
+      } catch(e1) {
+         try {
+            const { hosts = [], passives = [] } = db.hello();
+            return [...hosts, ...passives].map(
+               name => ({ "name": "mongod", "host": name })
+            );
+         } catch(e2) {
+            errors.push({
+               "step": "discoverRSMembers",
+               "message": e2.errmsg ?? e2.message ?? String(e2)
+            });
+            return [];
+         }
       }
    }
 
@@ -113,7 +120,7 @@
        */
       let shards = [];
       try {
-         shards = db.adminCommand({ "listShards": 1 }).shards;
+         shards = db.adminCommand({ "listShards": 1 }).shards ?? [];
       } catch(e) {
          errors.push({
             "step": "discoverShards",
@@ -156,13 +163,6 @@
       /*
        *  returns an array of hosts across all available shards
        */
-
-      // return shards.map(({ host }) => {
-      //    const { setName, seedList } = parseReplSetHosts(host);
-      //    return seedList.split(',').map(name => {
-      //       return { "name": setName, "host": name };
-      //    });
-      // }).flat();
       if (!Array.isArray(shards)) return [];
 
       return shards.flatMap(({ name, host } = {}) => {
@@ -341,7 +341,6 @@
       /*
        *  discover topology type
        */
-
       const sharded = isSharded();
       const topology = {
          "type": sharded ? 'sharded' : 'replSet',
@@ -369,7 +368,7 @@
 
    async function mongosCmd(client, options) {
       // return 'I am a mongos found on ' + await me(client);
-      return await appendOplogNote(client, options);
+      return await whatsmyuri(client, options);
    }
 
    async function shardCmd(client, options) {
