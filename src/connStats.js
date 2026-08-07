@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.1.8"
+    *  Version: "0.1.9"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 
    /*
     *  Notes:
-    *  - requires "inprog" privileges to capture all connections
+    *  - requires "inprog" privileges to capture all connections, but supports fallback
     *  - statistics are per host as determined by connection read preferences
     *
     *  TODO:
@@ -21,7 +21,7 @@
 
    const namespace = db.getSiblingDB('admin'),
       aggOpts = {
-         "comment": "connStats.js v0.1.8"
+         "comment": "connStats.js v0.1.9"
       },
       inprog = [
          { "$currentOp": { "allUsers": true } },
@@ -236,10 +236,8 @@
    }
 
    if (!hasInprog()) {
-      console.error('User has no inprog privilege, falling back to { "$ownOps": true }');
-      inprog[0]['$currentOp'] = { "allUsers": false };
-      inprog[0]['$currentOp'] = { "$ownOps": true };
-      return;
+      console.error('User has no inprog privilege, falling back to { "allUsers": false }');
+      pipeline[0]['$currentOp'].allUsers = false;
    }
 
    namespace.aggregate(pipeline, aggOpts).forEach(console.log);
