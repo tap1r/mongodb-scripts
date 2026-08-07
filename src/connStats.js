@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.1.7"
+    *  Version: "0.1.8"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,14 +19,13 @@
 
    // Usage: mongosh [connection options] [--quiet] [-f|--file] connStats.js
 
-   const aggOpts = {
-         "comment": "connStats.js v0.1.7"
+   const namespace = db.getSiblingDB('admin'),
+      aggOpts = {
+         "comment": "connStats.js v0.1.8"
       },
       inprog = [
-         { "$currentOp": {
-            "allUsers": true
-         } },
-         { "$group": { "_id": "hasInprog" } }
+         { "$currentOp": { "allUsers": true } },
+         { "$limit": 1 }
       ],
       pipeline = [
          { "$currentOp": {
@@ -34,8 +33,8 @@
             "localOps": true,
             "idleConnections": true,
             "idleCursors": true,
-            "idleSessions": true
-            // "targetAllNodes": true // sharded option
+            "idleSessions": true,
+            // "targetAllNodes": (db.hello().msg === 'isdbgrid') ? true : false // sharded option
          } },
          { "$match": {
             "client": { "$exists": true } // minimum requirement to capture network client details
@@ -214,7 +213,7 @@
             } },
             "totalConnections": { "$size": "$connections" }
          } },
-         { "$match": { // post filter recommended on dervied pool metrics
+         // { "$match": { // post filter recommended on derived pool metrics
             // "users": { "$in": [{ "user": "tapir", "db": "admin" }, null] }, // use null to capture SDAM events
             // "appName": { "$in": [/^greedyApp/, null] }, // use null to capture SDAM events
             // "appName": { "$in": [/^(?:mongosh|MongoDB Shell)/, null] }, // use null to capture SDAM events
@@ -222,13 +221,28 @@
             // "ns": /^admin/,
             // "command.aggregate": { "$exists": true },
             // "secs_running": { "$gte": 0 }
-         } },
+         // } },
          { "$sort": { "totalConnections": -1 } },
          { "$unset": ["_id", "connections"] }
       ];
 
-   db.getSiblingDB('admin').aggregate(inprog, aggOpts).forEach(console.log);
-   db.getSiblingDB('admin').aggregate(pipeline, aggOpts).forEach(console.log);
+   function hasInprog() {
+      try {
+         namespace.aggregate(inprog, aggOpts).toArray();
+         return true;
+      } catch(e) {
+         return false;
+      }
+   }
+
+   if (!hasInprog()) {
+      console.error('User has no inprog privilege, falling back to { "$ownOps": true }');
+      inprog[0]['$currentOp'] = { "allUsers": false };
+      inprog[0]['$currentOp'] = { "$ownOps": true };
+      return;
+   }
+
+   namespace.aggregate(pipeline, aggOpts).forEach(console.log);
 })();
 
 // EOF
