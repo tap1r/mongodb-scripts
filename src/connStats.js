@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.1.6"
+    *  Version: "0.1.7"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,14 +14,20 @@
     *
     *  TODO:
     *  - incorporate db.runCommand({ "whatsmyuri": 1}).you;
-    *  - add support for DRIVERS-3027 when complete
+    *  - add support for https://jira.mongodb.org/browse/DRIVERS-3027 when complete
     */
 
-   // Usage: mongosh [connection options] --quiet [-f|--file] connStats.js
+   // Usage: mongosh [connection options] [--quiet] [-f|--file] connStats.js
 
    const aggOpts = {
-         "comment": "connStats.js v0.1.6"
+         "comment": "connStats.js v0.1.7"
       },
+      inprog = [
+         { "$currentOp": {
+            "allUsers": true
+         } },
+         { "$group": { "_id": "hasInprog" } }
+      ],
       pipeline = [
          { "$currentOp": {
             "allUsers": true,
@@ -50,7 +56,7 @@
                "$push": {
                   "applicationName": { "$ifNull": ["$clientMetadata.application.name", "$clientMetadata.driver.name"] },
                   "connectionId": { "$ifNull": ["$connectionId", null] },
-                  "ephemeralPort": { "$toInt": { "$arrayElemAt": [{ "$split": ["$client", ":"] }, 1] } },
+                  "ephemeralPort": { "$toInt": { "$arrayElemAt": [{ "$split": ["$client", ":"] }, 1] } }, // fragile to IPv6
                   "opid": { "$ifNull": ["$opid", null] },
                   // "lsid": { "$ifNull": ["$lsid.id", null] },
                   "opType": { "$ifNull": ["$op", null] },
@@ -220,10 +226,8 @@
          { "$sort": { "totalConnections": -1 } },
          { "$unset": ["_id", "connections"] }
       ];
-      // results;
 
-   // results = db.getSiblingDB('admin').aggregate(pipeline, aggOpts).toArray();
-   // console.log(results);
+   db.getSiblingDB('admin').aggregate(inprog, aggOpts).forEach(console.log);
    db.getSiblingDB('admin').aggregate(pipeline, aggOpts).forEach(console.log);
 })();
 
