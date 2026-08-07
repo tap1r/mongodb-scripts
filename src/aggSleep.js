@@ -1,13 +1,13 @@
 (() => {
    /*
-    *  Name: "aggSleepy.js"
-    *  Version: "0.2.4"
+    *  Name: "sleepy.js"
+    *  Version: "0.2.5"
     *  Description: "aggregation based '$sleepy' pipeline PoC to substitute for $function's sleep()"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     */
 
-   const __script = { "name": "aggSleepy.js", "version": "0.2.4" };
+   const __script = { "name": "sleepy.js", "version": "0.2.5" };
 
    if (typeof console === 'undefined') {
       /*
@@ -36,7 +36,7 @@
          }
       } },
       { "$lookup": {
-         "from": "_",
+         "from": "_", // non-existent from-ns: $collStats for localTime only
          "pipeline": [
             { "$collStats": {} }, // get realtime clock measurement per $lookup
             { "$replaceWith": { "localTime": "$localTime" } }
@@ -164,9 +164,9 @@
          name: 'Eve',
          number: 42
       },
-      { _id: '$sleepy', samples: 10000, sleepy: 100, totalSleepMS: 100 }
+      { _id: '$sleepy', samples: 10000, sleepy: 1000, totalSleepMS: 100 }
    ]
-   logged opTime: 100
+   logged opTime: 1000
 */
 
 // EOF
