@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.1.9"
+    *  Version: "0.1.10"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -10,7 +10,7 @@
    /*
     *  Notes:
     *  - requires "inprog" privileges to capture all connections, but supports fallback
-    *  - statistics are per host as determined by connection read preferences
+    *  - statistics are per mongos/mongod as determined by the connection URI and readPreference
     *
     *  TODO:
     *  - incorporate db.runCommand({ "whatsmyuri": 1}).you;
@@ -21,7 +21,7 @@
 
    const namespace = db.getSiblingDB('admin'),
       aggOpts = {
-         "comment": "connStats.js v0.1.9"
+         "comment": "connStats.js v0.1.10"
       },
       inprog = [
          { "$currentOp": { "allUsers": true } },
@@ -30,7 +30,7 @@
       pipeline = [
          { "$currentOp": {
             "allUsers": true,
-            "localOps": true,
+            "localOps": (db.hello().msg === 'isdbgrid') ? true : false, // sharded option
             "idleConnections": true,
             "idleCursors": true,
             "idleSessions": true,
@@ -44,7 +44,7 @@
             "_id": {
                "host": "$host",
                "client": { // minimum requirement to detect distinct client pools
-                  "endpoint": { "$first": { "$split": ["$client", ":"] } },
+                  "endpoint": { "$first": { "$split": ["$client", ":"] } }, // fragile to IPv6
                   "driverVersion": "$clientMetadata.driver.version",
                   "platform": "$clientMetadata.platform",
                   "os": "$clientMetadata.os"
@@ -58,13 +58,13 @@
                   "ephemeralPort": { "$toInt": { "$arrayElemAt": [{ "$split": ["$client", ":"] }, 1] } }, // fragile to IPv6
                   "opid": { "$ifNull": ["$opid", null] },
                   // "lsid": { "$ifNull": ["$lsid.id", null] },
-                  "opType": { "$ifNull": ["$op", null] },
-                  "msg": { "$ifNull": ["$msg", null] },
+                  // "opType": { "$ifNull": ["$op", null] }, // TBA: unused at this point
+                  // "msg": { "$ifNull": ["$msg", null] }, // TBA: unused at this point
                   "active": "$active",
                   // "currentOpTime": { "$toDate": "$currentOpTime" },
-                  "secs_running": { "$ifNull": ["$secs_running", null] },
-                  "microsecs_running": { "$ifNull": ["$microsecs_running", null] },
-                  "command": { "$ifNull": ["$command", null] },
+                  "secs_running": { "$ifNull": ["$secs_running", null] }, // kept for potential post-filter match
+                  // "microsecs_running": { "$ifNull": ["$microsecs_running", null] },
+                  // "command": { "$ifNull": ["$command", null] }, // TBA: unused at this point
                   "sdam": { // streaming hello monitor
                      "$and": [
                         { "$or": [
@@ -237,6 +237,7 @@
 
    if (!hasInprog()) {
       console.error('User has no inprog privilege, falling back to { "allUsers": false }');
+      console.log('PARTIAL: own ops only');
       pipeline[0]['$currentOp'].allUsers = false;
    }
 
