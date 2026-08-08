@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.1.10"
+    *  Version: "0.1.11"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,6 +11,7 @@
     *  Notes:
     *  - requires "inprog" privileges to capture all connections, but supports fallback
     *  - statistics are per mongos/mongod as determined by the connection URI and readPreference
+    *  - $currentOp client addresses: IPv4/hostname as host:port; IPv6 always bracketed as [addr]:port
     *
     *  TODO:
     *  - incorporate db.runCommand({ "whatsmyuri": 1}).you;
@@ -21,12 +22,39 @@
 
    const namespace = db.getSiblingDB('admin'),
       aggOpts = {
-         "comment": "connStats.js v0.1.10"
+         "comment": "connStats.js v0.1.11"
       },
       inprog = [
          { "$currentOp": { "allUsers": true } },
          { "$limit": 1 }
       ],
+      /*
+       *  Parse $currentOp "client" into endpoint + ephemeralPort.
+       *  Assumes IPv6 is always bracketed ([2001:db8::1]:54321); IPv4/host use a single host:port colon.
+       */
+      parseClient = {
+         "$let": {
+            "vars": {
+               "m": {
+                  "$regexFind": {
+                     "input": "$client",
+                     "regex": /^(?:\[([^\]]+)\]|([^:]+)):(\d+)$/
+                  }
+               }
+            },
+            "in": {
+               "endpoint": {
+                  "$ifNull": [
+                     { "$arrayElemAt": ["$$m.captures", 0] }, // bracketed IPv6 (group 1)
+                     { "$arrayElemAt": ["$$m.captures", 1] }  // IPv4 or hostname (group 2)
+                  ]
+               },
+               "ephemeralPort": {
+                  "$toInt": { "$arrayElemAt": ["$$m.captures", 2] }
+               }
+            }
+         }
+      },
       pipeline = [
          { "$currentOp": {
             "allUsers": true,
@@ -34,37 +62,43 @@
             "idleConnections": true,
             "idleCursors": true,
             "idleSessions": true,
-            // "targetAllNodes": (db.hello().msg === 'isdbgrid') ? true : false // sharded option
+            // "targetAllNodes": (db.hello().msg === 'isdbgrid') ? true : false // TBA: sharded option for future feature on aggreaggte cluster connections
          } },
          { "$match": {
             "client": { "$exists": true } // minimum requirement to capture network client details
             // use post match filter for any other criteria to avoid bypassing the pool matching heuristics
          } },
+         { "$set": {
+            "clientParsed": parseClient
+         } },
          { "$group": {
             "_id": {
                "host": "$host",
                "client": { // minimum requirement to detect distinct client pools
-                  "endpoint": { "$first": { "$split": ["$client", ":"] } }, // fragile to IPv6
+                  "endpoint": "$clientParsed.endpoint",
                   "driverVersion": "$clientMetadata.driver.version",
                   "platform": "$clientMetadata.platform",
                   "os": "$clientMetadata.os"
-                  // do not use application or driver names here
-                  // they can vary on SDAM connections within the same MongoClient() instance
+                  /*
+                   *  Do not use application or driver names here,
+                   *  as the metadata can vary across SDAM connections,
+                   *  even within the same MongoClient() instance
+                   */
             } },
             "connections": {
                "$push": {
                   "applicationName": { "$ifNull": ["$clientMetadata.application.name", "$clientMetadata.driver.name"] },
                   "connectionId": { "$ifNull": ["$connectionId", null] },
-                  "ephemeralPort": { "$toInt": { "$arrayElemAt": [{ "$split": ["$client", ":"] }, 1] } }, // fragile to IPv6
+                  "ephemeralPort": "$clientParsed.ephemeralPort",
                   "opid": { "$ifNull": ["$opid", null] },
                   // "lsid": { "$ifNull": ["$lsid.id", null] },
                   // "opType": { "$ifNull": ["$op", null] }, // TBA: unused at this point
                   // "msg": { "$ifNull": ["$msg", null] }, // TBA: unused at this point
                   "active": "$active",
-                  // "currentOpTime": { "$toDate": "$currentOpTime" },
-                  "secs_running": { "$ifNull": ["$secs_running", null] }, // kept for potential post-filter match
-                  // "microsecs_running": { "$ifNull": ["$microsecs_running", null] },
-                  // "command": { "$ifNull": ["$command", null] }, // TBA: unused at this point
+                  // "currentOpTime": { "$toDate": "$currentOpTime" }, // TBA: kept for potential post-filter match on op age
+                  "secs_running": { "$ifNull": ["$secs_running", null] }, // TBA: kept for potential post-filter match
+                  // "microsecs_running": { "$ifNull": ["$microsecs_running", null] }, // redundant
+                  // "command": { "$ifNull": ["$command", null] }, // TBA: kept for potential post-filter match
                   "sdam": { // streaming hello monitor
                      "$and": [
                         { "$or": [
