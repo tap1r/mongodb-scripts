@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.1.12"
+    *  Version: "0.1.13"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -22,7 +22,7 @@
 
    const namespace = db.getSiblingDB('admin'),
       aggOpts = {
-         "comment": "connStats.js v0.1.12"
+         "comment": "connStats.js v0.1.13"
       },
       inprog = [
          { "$currentOp": { "allUsers": true } },
@@ -260,13 +260,14 @@
       }
    }
 
-   if (!hasInprog()) {
+   const allUsers = hasInprog();
+   if (!allUsers) {
       console.error('User has no inprog privilege, falling back to { "allUsers": false }');
       console.log('PARTIAL: own ops only');
-      pipeline[0]['$currentOp'].allUsers = false;
+      pipeline[0].$currentOp.allUsers = false;
    }
 
-   const scope = hasInprog() ? "allUsers" : "ownOps";
+   const scope = allUsers ? "allUsers" : "ownOps";
    namespace.aggregate( pipeline, aggOpts).forEach(doc => {
       console.log({ scope, ...doc });
    });
