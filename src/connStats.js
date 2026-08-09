@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.1.11"
+    *  Version: "0.1.12"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -22,39 +22,12 @@
 
    const namespace = db.getSiblingDB('admin'),
       aggOpts = {
-         "comment": "connStats.js v0.1.11"
+         "comment": "connStats.js v0.1.12"
       },
       inprog = [
          { "$currentOp": { "allUsers": true } },
          { "$limit": 1 }
       ],
-      /*
-       *  Parse $currentOp "client" into endpoint + ephemeralPort.
-       *  Assumes IPv6 is always bracketed ([2001:db8::1]:54321); IPv4/host use a single host:port colon.
-       */
-      parseClient = {
-         "$let": {
-            "vars": {
-               "m": {
-                  "$regexFind": {
-                     "input": "$client",
-                     "regex": /^(?:\[([^\]]+)\]|([^:]+)):(\d+)$/
-                  }
-               }
-            },
-            "in": {
-               "endpoint": {
-                  "$ifNull": [
-                     { "$arrayElemAt": ["$$m.captures", 0] }, // bracketed IPv6 (group 1)
-                     { "$arrayElemAt": ["$$m.captures", 1] }  // IPv4 or hostname (group 2)
-                  ]
-               },
-               "ephemeralPort": {
-                  "$toInt": { "$arrayElemAt": ["$$m.captures", 2] }
-               }
-            }
-         }
-      },
       pipeline = [
          { "$currentOp": {
             "allUsers": true,
@@ -69,7 +42,27 @@
             // use post match filter for any other criteria to avoid bypassing the pool matching heuristics
          } },
          { "$set": {
-            "clientParsed": parseClient
+            /*
+             *  Parse $currentOp "client" into endpoint + ephemeralPort.
+             *  Assumes IPv6 is always bracketed ([2001:db8::1]:54321); IPv4/host use a single host:port colon.
+             */
+            "clientParsed": {
+               "$let": {
+                  "vars": {
+                     "m": {
+                        "$regexFind": {
+                           "input": "$client",
+                           "regex": /^(?:\[([^\]]+)\]|([^:]+)):(\d+)$/
+                  } } },
+                  "in": {
+                     "endpoint": {
+                        "$ifNull": [
+                           { "$arrayElemAt": ["$$m.captures", 0] }, // bracketed IPv6 (group 1)
+                           { "$arrayElemAt": ["$$m.captures", 1] }  // IPv4 or hostname (group 2)
+                     ] },
+                     "ephemeralPort": {
+                        "$toInt": { "$arrayElemAt": ["$$m.captures", 2] }
+            } } } }
          } },
          { "$group": {
             "_id": {
@@ -91,13 +84,11 @@
                   "connectionId": { "$ifNull": ["$connectionId", null] },
                   "ephemeralPort": "$clientParsed.ephemeralPort",
                   "opid": { "$ifNull": ["$opid", null] },
-                  // "lsid": { "$ifNull": ["$lsid.id", null] },
                   // "opType": { "$ifNull": ["$op", null] }, // TBA: unused at this point
                   // "msg": { "$ifNull": ["$msg", null] }, // TBA: unused at this point
                   "active": "$active",
                   // "currentOpTime": { "$toDate": "$currentOpTime" }, // TBA: kept for potential post-filter match on op age
                   "secs_running": { "$ifNull": ["$secs_running", null] }, // TBA: kept for potential post-filter match
-                  // "microsecs_running": { "$ifNull": ["$microsecs_running", null] }, // redundant
                   // "command": { "$ifNull": ["$command", null] }, // TBA: kept for potential post-filter match
                   "sdam": { // streaming hello monitor
                      "$and": [
@@ -123,7 +114,7 @@
                         { "$not": { "$ifNull": ["$command.maxAwaitTimeMS", false] } },
                         { "$not": { "$ifNull": ["$effectiveUsers.user", false] } }
                   ] },
-                  // "namespace": { "$ifNull": ["$ns", null] },
+                  // "namespace": { "$ifNull": ["$ns", null] }, // TBA: kept for potential post-filter match
                   "user": { // reconstitute the user format
                      "$ifNull": [
                         { "$concat": [
@@ -275,7 +266,10 @@
       pipeline[0]['$currentOp'].allUsers = false;
    }
 
-   namespace.aggregate(pipeline, aggOpts).forEach(console.log);
+   const scope = hasInprog() ? "allUsers" : "ownOps";
+   namespace.aggregate( pipeline, aggOpts).forEach(doc => {
+      console.log({ scope, ...doc });
+   });
 })();
 
 // EOF
