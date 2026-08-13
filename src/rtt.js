@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "rtt.js"
-    *  Version: "0.2.3"
+    *  Version: "0.2.4"
     *  Description: "reports application round trip time latency"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -15,9 +15,9 @@
     *  - TBA
     */
 
-   // Syntax: mongosh [connection options] --quiet [-f|--file] rtt.js
+   // Syntax: mongosh [connection options] [--quiet] [-f|--file] rtt.js
 
-   const __script = { "name": "rtt.js", "version": "0.2.3" };
+   const __script = { "name": "rtt.js", "version": "0.2.4" };
    const banner = `\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`;
    console.clear();
    console.log(banner);
@@ -68,7 +68,10 @@
             "_id": 0,
             "host": {
                "$cond": [
-                  { "$ifNull": ["$advisoryHostFQDNs", true] },
+                  { "$eq": [
+                     { "$ifNull": [{ "$first": "$advisoryHostFQDNs" }, null] },
+                     null
+                  ] },
                   "$_id",
                   { "$concat": [
                      { "$first": "$advisoryHostFQDNs" },
@@ -124,6 +127,7 @@
       db = connect(mongosSeededURI(discoverMongos()));
    }
 
+   // fragile on IPv6
    const me = db.runCommand({ "whatsmyuri": 1 }).you.match(/^(?<src>.+)\:(?:\d+)$/).groups.src;
    for ([host, { 'roundTripTime': rtt } = {}] of servers().entries()) {
       console.log(`Application latency from ${me} to ${host} = ${latency(rtt)}`);
