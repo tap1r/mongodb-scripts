@@ -1,7 +1,7 @@
 (async(filter = {}, age = 300000) => {
    /*
     *  Name: "killAgedSessions.js"
-    *  Version: "0.1.2"
+    *  Version: "0.1.3"
     *  Description: "kill aged sessions (and associated operations) by user"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -29,13 +29,15 @@
     *
     *  Example: terminates all user sessions older than 1 minute
     *
-    *    mongosh --host "replset/localhost" --eval 'let user = { "allUsers": true }, age = 60000;' killAgedSessions.js
+    *    mongosh --host "replset/localhost" --eval 'let filter = { "allUsers": true }, age = 60000;' killAgedSessions.js
     *
     *  Example: terminates user dba's sessions older than 500ms
     *
-    *    mongosh --host "replset/localhost" --eval 'let user = { "users": [{ "user": "dba", "db": "admin" }] }, age = 500;' killAgedSessions.js
+    *    mongosh --host "replset/localhost" --eval 'let filter = { "users": [{ "user": "dba", "db": "admin" }] }, age = 500;' killAgedSessions.js
     */
-
+   const filter = typeof filter !== 'undefined' ? filter
+                : {};
+   const maxIdleMs = typeof age !== 'undefined' ? age : 300_000;
    const namespace = db.getSiblingDB('config').getCollection('system.sessions');
    const listSessions = [
       { "$listSessions": filter },
@@ -43,16 +45,16 @@
          "$expr": {
             "$lt": [
                "$lastUse",
-               { "$subtract": ["$$NOW", age] }
-         ] }
-      } }
+               { "$subtract": ["$$NOW", maxIdleMs] }
+            ]
+      } } }
    ];
    const killSessions = async({
-         '_id': { 'id': uuid = new uuid() } = {},
-         'user': { 'name': user = null } = {},
-         'lastUse': age = 0
+         '_id': { 'id': uuid = UUID() } = {},
+         'user': { 'name': filter = {} } = {},
+         'lastUse': maxIdleMs = 0
       } = {}) => {
-      console.log('Killing session', uuid, 'for user', user, 'last active', age.toISOString());
+      console.log('Killing session', uuid, 'for user', filter, 'last active', maxIdleMs.toISOString());
       try {
          db.adminCommand({ "killSessions": [{ "id": uuid }] });
       } catch(e) {
