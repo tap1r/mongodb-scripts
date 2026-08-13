@@ -1,6 +1,6 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.29"
+ *  Version: "0.1.30"
  *  Description: "sample document size distribution"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -22,12 +22,12 @@ const options = {
    /*
     *  main
     */
-   const __script = { "name": "docSizes.js", "version": "0.1.29" };
+   const __script = { "name": "docSizes.js", "version": "0.1.30" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
    // connection preferences
    const hello = db.hello();
    if (typeof readPref === 'undefined')
-      (readPref = (hello.secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
+      (readPref = (hello.secondary === false) ? 'primaryPreferred' : 'secondaryPreferred');
    db.getMongo().setReadPref(readPref);
    try {
       if (db.getSiblingDB(dbName).getCollectionInfos({ "name": collName }, true)[0]?.name != collName)
@@ -69,7 +69,7 @@ const options = {
    } = new Proxy(
       namespace.stats(),
       { get(target, name) {
-         if (name == 'extras') {
+         if (name === 'extras') {
             const regexFilter = /block_compressor=(?<compressor>\w+).+internal_page_max=(?<internalPageSize>\d+).+leaf_page_max=(?<dataPageSize>\d+)/;
             const { compressor, dataPageSize, internalPageSize } = target['wiredTiger']['creationString'].match(regexFilter).groups;
             return { "compressor": compressor, "dataPageSize": dataPageSize * 1024, "internalPageSize": internalPageSize * 1024 };
@@ -145,7 +145,7 @@ const options = {
          "CollectionTotals": {
             "hostname": hostname,
             "dbPath": dbPath,
-            "URI": (hello.msg == 'isdbgrid') ? 'sharded' : dhandle,
+            "URI": (hello.msg === 'isdbgrid') ? 'sharded' : dhandle,
             "namespace": `${dbName}.${collName}`,
             "dataSize": dataSize,
             "storageSize": storageSize,
