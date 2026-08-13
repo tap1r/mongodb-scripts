@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.14.0"
+ *  Version: "0.14.1"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.14.0"
+      "version": "0.14.1"
 });
 
 // Import crypto module for Node.js/mongosh environments
@@ -336,9 +336,9 @@ class MetaStats {
       this.nviews = nviews;
       this.namespaces = namespaces;
       this.indexes = indexes; // usurp dbStats counter for indexes list
-      this.nindexes = (nindexes == -1) ? +indexes : nindexes; // merge collStats and dbStats n/indexes counters
+      this.nindexes = (nindexes === -1) ? +indexes : nindexes; // merge collStats and dbStats n/indexes counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
-      this.totalIndexSize = (indexSize == 0) ? totalIndexSize : indexSize; // merge collStats and dbStats index size counters
+      this.totalIndexSize = (indexSize === 0) ? totalIndexSize : indexSize; // merge collStats and dbStats index size counters
       // this.totalIndexBytesReusable = indexFreeStorageSize;
       // this.overhead = (typeof internalPageSize === 'number') ? internalPageSize : 4096; // 4KB min allocation block size
       this.overhead = 1024; // unused
@@ -349,15 +349,15 @@ class MetaStats {
                     : hello().me;
       this.hostname = hostInfo().system.hostname;
       this.proc = (serverStatus().ok) ? serverStatus().process
-                : (hello().msg == 'isdbgrid') ? 'mongos'
+                : (hello().msg === 'isdbgrid') ? 'mongos'
                 : (typeof hello().setName !== 'undefined') ? 'mongod'
                 : 'unknown';
       this.dbPath = (isAtlasPlatform('serverless')) ? 'serverless'
                   : (isAtlasPlatform('sharedTier')) ? 'sharedTier'
-                  : (this.proc == 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
-                  : (this.proc == 'mongos') ? 'sharded'
+                  : (this.proc === 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
+                  : (this.proc === 'mongos') ? 'sharded'
                   : 'unknown';
-      this.shards = (this.proc == 'mongos') ? db.adminCommand({ "listShards": 1 }).shards.map(({ _id }) => _id) : [];
+      this.shards = (this.proc === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards.map(({ _id }) => _id) : [];
    }
    get compression() {
       // return this.dataSize / (this.storageSize - this.freeStorageSize - this.overhead);
