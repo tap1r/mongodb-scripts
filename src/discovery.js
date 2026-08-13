@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.1.43"
+    *  Version: "0.2.0"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,11 +13,10 @@
     *  - WARNING: debugging may leak credentials
     *
     *  TBA:
-    *  - plugable cmd execution
-    *  - add standalone host discovery
-    *  - add LoadBalanced topology type
-    *  - add support for arbiters
-    *  - add SRV connection string support
+    *  - Create plugable cmd execution / cmd profiles
+    *  - Add standalone host discovery
+    *  - Add LoadBalanced topology type
+    *  - Add support for arbiters
     *  - Execute all tasks in serial only
     *  - Execute all tasks on shards in parallel serially per shard
     *  - Execute all tasks in a limited pool in parallel
@@ -28,7 +27,7 @@
     *  - Add load monitoring metrics
     */
 
-   // Usage: mongosh [connection options] [--quiet] [-f|--file] discovery.js
+   // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>discovery.js
 
    // Example: mongosh --host "replset/localhost" discovery.js
 
@@ -299,57 +298,120 @@
       return false;
    }
 
+   function decomposeParentUri(rawUri = db.getMongo().getURI()) {
+      /*
+       *  Parent session URI → parts for rebuilding legacy mongodb:// child URIs.
+       *  Parent may be mongodb:// or mongodb+srv://. Hosts always come from topology
+       *  discovery (not DNS SRV re-expansion). Credentials are left as mongosh reports
+       *  them (already URL-safe). Query params are preserved except srvMaxHosts and
+       *  srvServiceName. isSrv drives TLS default when recomposing.
+       */
+      if (!rawUri || typeof rawUri !== 'string') {
+         throw new Error('decomposeParentUri: missing parent URI');
+      }
+
+      const isSrv = /^mongodb\+srv:/i.test(rawUri);
+      // Parse with a non-SRV scheme so URL() accepts the string; children always emit mongodb://
+      const parseable = rawUri.replace(/^mongodb\+srv:/i, 'mongodb:');
+      let url;
+      try {
+         url = new URL(parseable);
+      } catch(e) {
+         throw new Error(`decomposeParentUri: cannot parse parent URI (${e.message})`);
+      }
+
+      const searchParams = new URLSearchParams(url.searchParams);
+      // Only these SRV options must not ride onto non-SRV / multi-host / direct child URIs
+      searchParams.delete('srvMaxHosts');
+      searchParams.delete('srvServiceName');
+
+      return {
+         "isSrv": isSrv,
+         "parentHost": url.hostname || '',
+         "username": url.username || '',
+         "password": url.password || '',
+         "pathname": url.pathname && url.pathname.length ? url.pathname : '/',
+         "searchParams": searchParams
+      };
+   }
+
+   function formatLegacyMongoUri({ username = '', password = '', hosts, pathname = '/', searchParams } = {}) {
+      /*
+       *  Always emit mongodb:// (never mongodb+srv). Userinfo passed through as-is.
+       */
+      if (!hosts) {
+         throw new Error('formatLegacyMongoUri: hosts required');
+      }
+
+      let auth = '';
+      if (username) {
+         auth = username;
+         if (password !== '' && password != null) {
+            auth += `:${password}`;
+         }
+         auth += '@';
+      }
+      const path = pathname || '/';
+      const q = searchParams && searchParams.toString ? searchParams.toString() : '';
+      return `mongodb://${auth}${hosts}${path}${q ? `?${q}` : ''}`;
+   }
+
    function buildConnectionURI({ host, targetType } = {}) {
       /*
        *  returns MongoClient() URI to construct new targetted connections
        *  by design, the discovery scope is limited to the current 'db' context
+       *  parent mongodb+srv is decomposed; children are always legacy mongodb://
        */
+      const parent = decomposeParentUri();
+      const params = new URLSearchParams(parent.searchParams);
 
-      // TODO: add support for SRV connection string conversion
+      // optimise params for direct / targeted connections
+      params.delete('tags');
+      params.delete('readPreferenceTags');
+      params.delete('maxStalenessSeconds');
+      params.delete('minPoolSize');
+      params.delete('maxPoolSize');
+      // srvMaxHosts / srvServiceName already stripped in decomposeParentUri
 
-      const url = new URL(db.getMongo().getURI());
-      let targetURL = '';
-      // optimise params for direct connection and avoid conflicting options
-      url.searchParams.delete('tags');
-      url.searchParams.delete('readPreferenceTags');
-      url.searchParams.delete('maxStalenessSeconds');
-      url.searchParams.delete('minPoolSize');
-      url.searchParams.delete('maxPoolSize');
-      url.searchParams.delete('srvMaxHosts');
+      // mongodb+srv implies TLS by default; mongodb:// does not — apply if unset
+      if (parent.isSrv && !params.has('tls') && !params.has('ssl')) {
+         params.set('tls', 'true');
+      }
 
       const mode = ['shard', 'csrs', 'replSet'].includes(targetType) ? 'replSet' : 'direct';
+      let hosts = '';
+
       switch (mode) {
          case 'direct': {
-            url.host = host;
-            url.searchParams.delete('replicaSet');
-            url.searchParams.set('readPreference', 'nearest');
-            url.searchParams.set('directConnection', 'true');
-            url.searchParams.sort();
-            targetURL = url.toString();
+            hosts = host;
+            params.delete('replicaSet');
+            params.set('readPreference', 'nearest');
+            params.set('directConnection', 'true');
             break;
          }
          case 'replSet': {
             const { setName, seedList } = parseReplSetHosts(host);
-            url.searchParams.set('readPreference', 'primaryPreferred');
-            url.searchParams.set('directConnection', 'false');
-            url.searchParams.set('replicaSet', setName);
-            url.searchParams.sort();
-            // seedlists are considered malformed by the URL() parser, so we splice it manually
-            targetURL = url.toString().replace(/@[^/]+\//, `@${seedList}/`);
+            hosts = seedList;
+            params.set('readPreference', 'primaryPreferred');
+            params.set('directConnection', 'false');
+            params.set('replicaSet', setName);
             break;
          }
          // case 'loadBalanced':
-         //    readPreference = 'nearest';
-         //    url.searchParams.set('readPreference', readPreference);
-         //    url.searchParams.set('directConnection', 'false');
-         //    url.searchParams.sort();
-         //    targetURL = url.toString();
+         //    ...
          //    break;
          // default:
          //    throw new Error(`Unsupported target type: ${targetType}`);
       }
 
-      return targetURL;
+      params.sort();
+      return formatLegacyMongoUri({
+         "username": parent.username,
+         "password": parent.password,
+         "hosts": hosts,
+         "pathname": parent.pathname,
+         "searchParams": params
+      });
    }
 
    function discoverTopology() {
@@ -402,6 +464,8 @@
    async function memberCmd(client, options) {
       // https://www.mongodb.com/docs/manual/reference/supported-shard-direct-commands/
       return await whatsmyuri(client, options);
+      // return await autoCompact(client, options);
+      // return await compact(client, options);
    }
 
    // async function memberCmd(client) {
@@ -412,11 +476,18 @@
    //    return await autoCompact(client, options);
    // }
 
-   async function autoCompact(client, options) {
-      return client.getSiblingDB('admin').runCommand({
+   async function autoCompact(db, options) {
+      return db.getSiblingDB('admin').runCommand({
          "autoCompact": true,
          "freeSpaceTargetMB": 1,
          "runOnce": true
+      }, options);
+   }
+
+   async function compact(db, options) {
+      return db.getSiblingDB('database').runCommand({
+         "compact": 'collection',
+         "force": true
       }, options);
    }
 
@@ -447,8 +518,8 @@
       }, options);
    }
 
-   async function whatsmyuri(client, options) {
-      return await client.adminCommand({ "whatsmyuri": 1 }, options);
+   async function whatsmyuri(db, options) {
+      return await db.adminCommand({ "whatsmyuri": 1 }, options);
    }
 
    async function main() {
@@ -463,7 +534,7 @@
 
       /*
        *  TODO:
-       *     - Add support for standalone and loadbalanced types
+       *  - Add support for standalone and loadbalanced types
        */
 
       // get topology
