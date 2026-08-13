@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.4.6"
+ *  Version: "0.4.7"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
    /*
     *  main
     */
-   const __script = { "name": "latency.js", "version": "0.4.6" };
+   const __script = { "name": "latency.js", "version": "0.4.7" };
    if (typeof console === 'undefined') {
       /*
        *  legacy mongo detected
@@ -31,7 +31,7 @@
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m`);
 
    const spacing = 1;
-   const filter = `Synthetic slow operation at ${Date.now()}`;
+   const filter = `Synthetic slow operation ${UUID()} from ${Date.now()}`;
    const options = {
       "comment": filter,
       "cursor": { "batchSize": 1 },
@@ -42,9 +42,10 @@
       var { slowms = 100 } = db.getSiblingDB('admin').getProfilingStatus();
    } catch(error) {
       var slowms = 200;
-      // console.log('\x1b[31m[WARN] failed to aquire the slowms threshold:\x1b[0m', error);
+      // console.log('\x1b[31m[WARN] failed to acquire the slowms threshold:\x1b[0m', error);
       console.log(`\x1b[31m[WARN] defaulting slowms to ${slowms}ms\x1b[0m`);
    }
+
    const pipeline = [
       { "$currentOp": {} },
       { "$limit": 1 },
@@ -139,15 +140,14 @@
       );
    } catch(error) {
       var procType = 'unknown';
-      console.log('\x1b[31m[WARN] failed to aquire the process type:\x1b[0m', error);
+      console.log('\x1b[31m[WARN] failed to acquire the process type:\x1b[0m', error);
    }
 
+   t0 = Date.now();
    try {
-      t0 = Date.now();
       // add server check for security.javascriptEnabled startup option
       db.getSiblingDB('admin').aggregate(pipeline, options).toArray();
    } catch(error) {
-      t0 = Date.now();
       console.log('Synthetic slow query failed');
       throw error;
    } finally {
@@ -164,11 +164,10 @@
       }
    );
 
+   t2 = Date.now();
    try {
-      t2 = Date.now();
       var { 'ok': ping = 0 } = db.adminCommand({ "ping": 1 });
    } catch(error) {
-      t2 = Date.now();
       console.error('SDAM ping failed');
       throw error;
    } finally {
