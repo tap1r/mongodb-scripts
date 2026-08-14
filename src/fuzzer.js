@@ -1,12 +1,12 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.40"
+ *  Version: "0.6.41"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: [mongo|mongosh] [connection options] --quiet [-f|--file] </path/to/>fuzzer.js
+// Usage: [mongo|mongosh] [connection options] [--quiet] [-f|--file] </path/to/>fuzzer.js
 
 /*
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
@@ -14,7 +14,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.40" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.41" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -262,16 +262,16 @@
                ...(fCV(8.0) && { "forceRedistribution": true })
             });
             try {
-               res = cmd();
+               res = await cmd();
             } catch(e) {
-               console.log('Resharding attempt:', e);
+               console.log('Resharding attempt:', e.errmsg ?? e.message ?? String(e));
             }
 
             return res;
          };
          const rebalancingOps = () => {
             return db.getSiblingDB('admin').aggregate([
-               { "$currentOp": {} },
+               { "$currentOp": { "allUsers": true, "localOps": false } },
                { "$match": {
                   "type": "op",
                   "originatingCommand.reshardCollection": `${dbName}.${collName}`
@@ -330,19 +330,32 @@
          console.log('\nResharding activated...');
          if (isMongosh()) {
             const pollIntervalMS = 500;
-            resharding();
-            sleep(3 * pollIntervalMS); // kludge to address race condition before $currentOp produces the initial output
-            res = rebalancingOps();
-            while (res.length > 0) {
+            let done = false;
+            // Hold the issuing command Promise so mongosh does not exit (and abort resharding) early.
+            // User-defined async functions are not auto-awaited by the mongosh rewriter.
+            const reshardPromise = resharding().finally(() => { done = true; });
+            sleep(3 * pollIntervalMS); // allow $currentOp to publish the initial donor/recipient ops
+            while (!done) {
+               const ops = rebalancingOps();
+               if (ops.length > 0) {
+                  console.clear();
+                  console.log(`\nMonitoring resharding operations:\n`);
+                  printjson(...ops);
+               }
                sleep(pollIntervalMS);
-               console.clear();
-               console.log(`\nMonitoring resharding operations:\n`);
-               if (res.length > 0) printjson(...res);
-               res = rebalancingOps();
+            }
+            try {
+               await reshardPromise;
+            } catch(e) {
+               console.log('Resharding attempt:', e.errmsg ?? e.message ?? String(e));
             }
          } else {
             console.log(`\nMonitoring of resharding (via async) operations are not supported in the legacy shell\n`);
-            resharding();
+            try {
+               await resharding();
+            } catch(e) {
+               console.log('Resharding attempt:', e.errmsg ?? e.message ?? String(e));
+            }
          }
          console.log(`\nResharding complete.`);
       }
@@ -748,7 +761,7 @@
          try {
             db.getSiblingDB(dbName).createCollection(collName, options);
          } catch(e) {
-            console.log('\n[red][ERROR] Namespace creation failed:[/]', e);
+            console.log('\n[red][ERROR] Namespace creation failed:[/]', e.errmsg ?? e.message ?? String(e));
          }
 
          if (sharding && isSharded() && db.getSiblingDB(dbName).getCollection(collName).exists()) {
@@ -773,7 +786,7 @@
                sh.startBalancer();
             }
             catch(e) {
-               console.log('[red][ERROR] Sharding namespace failed:[/]', e);
+               console.log('[red][ERROR] Sharding namespace failed:[/]', e.errmsg ?? e.message ?? String(e));
             }
          }
       }
