@@ -1,12 +1,12 @@
 /*
  *  Name: "compact.js"
- *  Version: "0.2.13"
+ *  Version: "0.2.14"
  *  Description: schrödinger's page reproduction
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "mongosh [connection options] --quiet [-f|--file] compact.js"
+// Usage: "mongosh [connection options] [--quiet] [-f|--file] </path/to/>compact.js"
 
 /*
  *  User defined parameters
@@ -25,7 +25,7 @@ const options = {
    /*
     *  ...
     */
-   const __script = { "name": "compact.js", "version": "0.2.13" };
+   const __script = { "name": "compact.js", "version": "0.2.14" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    const dbFilter = dbName, collFilter = collName, reportLog;
@@ -37,7 +37,7 @@ const options = {
    const randFilter = { "$expr": { "$gt": [n/100, { "$rand": {} }] } };
    // let update = { "$set": { "x": Math.random() } };
 
-   for (let i = 1; i <= rounds; ++i) {
+   for (let i = 1; i <= rounds; i++) {
       /*
        *  generate dataset with increased entropy
        */
