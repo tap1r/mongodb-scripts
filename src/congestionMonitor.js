@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.5"
+    *  Version: "0.2.6"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -12,10 +12,39 @@
     *  - Add support for bytes_dirty_intl & bytes_dirty_leaf when they become available
     */
 
-   // Usage: mongosh [connection options] [--quiet] [-f|--file] congestionMonitor.js
+   // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>congestionMonitor.js
 
    let vitals = {};
    const pollingIntervalMS = 100;
+
+   function isSharded() {
+      /*
+       *  is mongos process
+       */
+      return db.hello().msg === 'isdbgrid';
+   }
+
+   function hostInfo() {
+      let hostInfo = {};
+      try {
+         hostInfo = db.hostInfo();
+      } catch(e) {
+         // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.hostInfo()\n${error}\x1b[0m`);
+      }
+
+      return hostInfo;
+   }
+
+   function rsStatus() {
+      let rsStatus = {};
+      try {
+         rsStatus = rs.status();
+      } catch(e) {
+         // console.debug(`\x1b[31m[WARN] insufficient rights to execute rs.status()\n${error}\x1b[0m`);
+      }
+
+      return rsStatus;
+   }
 
    async function congestionMonitor() {
       /*
@@ -92,35 +121,6 @@
             "serverStatus": true,
             ...{ ...serverStatusOptionsDefaults, ...serverStatusOptions }
          });
-      }
-
-      function isSharded() {
-         /*
-          *  is mongos process
-          */
-         return db.hello().msg === 'isdbgrid';
-      }
-
-      function hostInfo() {
-         let hostInfo = {};
-         try {
-            hostInfo = db.hostInfo();
-         } catch(error) {
-            // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.hostInfo()\n${error}\x1b[0m`);
-         }
-
-         return hostInfo;
-      }
-
-      function rsStatus() {
-         let rsStatus = {};
-         try {
-            rsStatus = rs.status();
-         } catch(error) {
-            // console.debug(`\x1b[31m[WARN] insufficient rights to execute rs.status()\n${error}\x1b[0m`);
-         }
-
-         return rsStatus;
       }
 
       return {
@@ -497,11 +497,11 @@
       const titleSpacing = (tableWidth - tableTitle.length) / 2;
       process.stdout.write('\x1b[?25l;1049h]'); // disable the console cursor and enable alternate buffer 
       console.clear();
-      console.log('┏' + '━'.repeat(titleSpacing - 1) + '┫' + tableTitle + '┣' + '━'.repeat(titleSpacing - 1) + '┓');
+      console.log('╭' + '─'.repeat(titleSpacing - 1) + '┤' + tableTitle + '├' + '─'.repeat(titleSpacing - 1) + '╮');
       metrics.forEach(() => {
-         console.log('┃'+ ' '.repeat(tableWidth) + '┃'); 
+         console.log('│'+ ' '.repeat(tableWidth) + '│'); 
       });
-      console.log('┗'+ '━'.repeat(tableWidth) + '┛');
+      console.log('╰'+ '─'.repeat(tableWidth) + '╯');
       Promise.allSettled( // do not await to background thread
          // begin rendering EQ bars
          metrics.map(({ eq }) => eq.draw())
