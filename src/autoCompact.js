@@ -1,19 +1,20 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.2.1"
+    *  Version: "0.2.2"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Notes:
-    *  - customise command options "freeSpaceTargetMB" and/or "runOnce" if required
+    *  - customise command options "freeSpaceTargetMB", "runOnce", and/or "timeoutMS" if required
     *  - waits for the WTCMPCT sizeStorer skip line, or serverStatus background compact idle
+    *  - timeoutMS aborts the wait (0/omitted = no timeout)
     *  - log poll interval follows getProfilingStatus().slowms (re-read each poll); 100ms without enableProfiler
     *  - mongosh only
     */
 
-   // Usage: mongosh [direct host connection options] [--quiet] [--eval 'const freeSpaceTargetMB = 1, runOnce = true;'] [-f|--file] </path/to/>autoCompact.js
+   // Usage: mongosh [direct host connection options] [--quiet] [--eval 'const freeSpaceTargetMB = 1, runOnce = true, timeoutMS = 0;'] [-f|--file] </path/to/>autoCompact.js
 
    /*
     *  Example of basic direct localhost usage:
@@ -22,10 +23,10 @@
     *
     *  Example using custom autoCompact command options:
     *
-    *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true;' -f autoCompact.js
+    *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true, timeoutMS = 3600000;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.2.1" };
+   const __script = { "name": "autoCompact.js", "version": "0.2.2" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    const autoCompact = (freeSpaceTargetMB = 1, runOnce = true) => db.adminCommand({
@@ -74,16 +75,21 @@
       // return only new compaction activity log entries
       return c === 'WTCMPCT' && t > ts
    });
-   const tailLogs = ts => {
+   const tailLogs = (ts, timeoutMS = 0) => {
       let pause = false;
       let message = '';
       let seenRunning = false;
       let fallbackWarned = false;
       const fallbackMS = 100;
+      const started = Date.now();
       // expected to be the last namespace
       const stop = 'sizeStorer.wt: there is no useful work to do - skipping compaction';
 
       do {
+         if (timeoutMS > 0 && Date.now() - started >= timeoutMS) {
+            console.log(`\x1b[31m[ERROR] timed out after ${timeoutMS}ms waiting for autoCompact\x1b[0m`);
+            return;
+         }
          const logs = getLogs(ts);
          if (logs.length > 0) {
             logs.forEach(({ t = ISODate(), 'attr': { 'message': { msg = '' } = {} } = {} } = {}) => {
@@ -114,9 +120,11 @@
    };
 
    // --eval may bind these with const; never reassign, resolve into locals
+   const timeoutMSOpt = typeof timeoutMS === 'undefined' ? 0 : timeoutMS ?? 0;
    const options = {
       "freeSpaceTargetMB": typeof freeSpaceTargetMB === 'undefined' ? 1 : freeSpaceTargetMB ?? 1,
-      "runOnce": typeof runOnce === 'undefined' ? true : runOnce ?? true
+      "runOnce": typeof runOnce === 'undefined' ? true : runOnce ?? true,
+      "timeoutMS": Number.isFinite(+timeoutMSOpt) && +timeoutMSOpt > 0 ? +timeoutMSOpt : 0
    };
    console.log(`\nExecuting command:\n`);
    console.log(`db.adminCommand({
@@ -136,7 +144,7 @@
       console.log('\x1b[31m[ERROR] autoCompact failed:\x1b[0m', result);
       return;
    }
-   tailLogs(ts);
+   tailLogs(ts, options.timeoutMS);
 })();
 
 // EOF
