@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.2.0"
+    *  Version: "0.2.1"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,7 +25,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.2.0" };
+   const __script = { "name": "autoCompact.js", "version": "0.2.1" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    const autoCompact = (freeSpaceTargetMB = 1, runOnce = true) => db.adminCommand({
@@ -113,18 +113,21 @@
       console.log('\n\t══════ autoCompaction round complete ══════');
    };
 
-   freeSpaceTargetMB = typeof freeSpaceTargetMB !== 'undefined' ? freeSpaceTargetMB ?? 1 : 1;
-   runOnce = typeof runOnce !== 'undefined' ? runOnce ?? true : true;
+   // --eval may bind these with const; never reassign, resolve into locals
+   const options = {
+      "freeSpaceTargetMB": typeof freeSpaceTargetMB === 'undefined' ? 1 : freeSpaceTargetMB ?? 1,
+      "runOnce": typeof runOnce === 'undefined' ? true : runOnce ?? true
+   };
    console.log(`\nExecuting command:\n`);
    console.log(`db.adminCommand({
       "autoCompact": true,
-      "freeSpaceTargetMB": ${freeSpaceTargetMB},
-      "runOnce": ${runOnce} }
+      "freeSpaceTargetMB": ${options.freeSpaceTargetMB},
+      "runOnce": ${options.runOnce} }
    );\n`);
    const ts = ISODate();
    let result;
    try {
-      result = autoCompact(freeSpaceTargetMB, runOnce);
+      result = autoCompact(options.freeSpaceTargetMB, options.runOnce);
    } catch (error) {
       console.log('\x1b[31m[ERROR] autoCompact failed:\x1b[0m', error);
       return;
