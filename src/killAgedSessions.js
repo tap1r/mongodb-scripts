@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "killAgedSessions.js"
-    *  Version: "0.2.1"
+    *  Version: "0.2.2"
     *  Description: "kill aged sessions (and associated operations) by user"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
     *    fixed-size batches and fan out individual killSessions concurrently
     */
 
-   // Syntax: mongosh [connection options] [--quiet] [--eval 'let filter = {}, age = 300000, batchSize = 32;'] [-f|--file] </path/to/>killAgedSessions.js
+   // Syntax: mongosh [connection options] [--quiet] [--eval 'let filter = {}, age = 300000, batchSize = 64, sortByAge = false;'] [-f|--file] </path/to/>killAgedSessions.js
 
    /*
     *  Parameters (--eval globals):
@@ -26,7 +26,13 @@
     *  age: <int> (optional) max idle time in ms; sessions with lastUse older than
     *       (now - age) are killed. Defaults to 300000 (5 minutes)
     *  batchSize: <int> (optional) how many sessions to consume per fan-out
-    *             wave. Defaults to 32
+    *             wave. Defaults to 64
+    *  sortByAge: <bool> (optional) if true, $sort by lastUse ascending so the
+    *             oldest sessions are killed first. Defaults to false.
+    *             WARNING: $sort buffers the matched set server-side before the
+    *             cursor can stream, which increases latency and memory use on
+    *             large session catalogs. Prefer the default (unsorted stream)
+    *             when ruthlessly draining many sessions under load.
     */
 
    /*
@@ -43,16 +49,27 @@
     *    mongosh --host "replset/localhost" --eval 'let filter = { "users": [{ "user": "dba", "db": "admin" }] }, age = 500;' killAgedSessions.js
     */
 
-   const __script = { "name": "killAgedSessions.js", "version": "0.2.1" };
+   const __script = { "name": "killAgedSessions.js", "version": "0.2.2" };
    // Resolve --eval globals (do not shadow with IIFE params — ()() would ignore them)
    const sessionFilter = typeof filter !== 'undefined' ? filter : {};
-   const maxIdleMs = typeof age !== 'undefined' ? Number(age) : 300000;
+   const maxIdleMs = (() => {
+      if (typeof age === 'undefined') return 300000;
+      const n = Number(age);
+      if (!Number.isFinite(n) || n < 0) {
+         throw new Error(`${__script.name}: age must be a finite number >= 0 (got ${EJSON.stringify(age)})`);
+      }
+      return n;
+   })();
    const consumeBatchSize = typeof batchSize !== 'undefined' && Number(batchSize) > 0
       ? Number(batchSize)
-      : 32;
+      : 64;
+   const sortOldestFirst = typeof sortByAge !== 'undefined' ? Boolean(sortByAge) : false;
 
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
-   console.log(`filter: ${EJSON.stringify(sessionFilter)}, maxIdleMs: ${maxIdleMs}, batchSize: ${consumeBatchSize}`);
+   console.log(`filter: ${EJSON.stringify(sessionFilter)}, maxIdleMs: ${maxIdleMs}, batchSize: ${consumeBatchSize}, sortByAge: ${sortOldestFirst}`);
+   if (sortOldestFirst) {
+      console.log('\x1b[33m[WARN] sortByAge=true: $sort buffers matched sessions before streaming; expect higher latency and memory on large catalogs\x1b[0m');
+   }
 
    const namespace = db.getSiblingDB('config').getCollection('system.sessions');
    const listSessionsPipeline = [
@@ -64,7 +81,9 @@
                { "$subtract": ["$$NOW", maxIdleMs] }
             ]
          }
-      } }
+      } },
+      // optional: oldest sessions first (earliest lastUse); see sortByAge warning
+      ...(sortOldestFirst ? [{ "$sort": { "lastUse": 1 } }] : [])
    ];
    const aggOptions = {
       "cursor": { "batchSize": consumeBatchSize },
@@ -132,7 +151,8 @@
             const { outcome, reason } = result.value ?? {};
             if (outcome === 'skipped') {
                counters.skipped++;
-               console.log(`Skipped: ${reason ?? 'unknown reason'}`);
+               const key = reason ?? 'unknown reason';
+               counters.skipReasons[key] = (counters.skipReasons[key] ?? 0) + 1;
             } else {
                counters.killed++;
             }
@@ -144,7 +164,7 @@
       }
    };
 
-   const counters = { "matched": 0, "killed": 0, "skipped": 0, "failed": 0 };
+   const counters = { "matched": 0, "killed": 0, "skipped": 0, "failed": 0, "skipReasons": {} };
    let wave = 0;
 
    for await (const batch of batchConsume(listAgedSessions(), consumeBatchSize)) {
@@ -159,6 +179,13 @@
    if (!counters.matched) {
       console.log('Nothing to kill');
       return;
+   }
+
+   if (counters.skipped > 0) {
+      const detail = Object.entries(counters.skipReasons)
+         .map(([reason, n]) => `${n}× ${reason}`)
+         .join(', ');
+      console.log(`Skipped ${counters.skipped}: ${detail}`);
    }
 
    console.log(`\nSummary: matched=${counters.matched}, killed=${counters.killed}, skipped=${counters.skipped}, failed=${counters.failed}, waves=${wave}`);
