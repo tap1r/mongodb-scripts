@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.2.3"
+    *  Version: "0.3.0"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,6 +13,7 @@
     *  - log poll interval follows getProfilingStatus().slowms (re-read each poll); 100ms without enableProfiler
     *  - mongosh only
     *  - preflight rejects mongos, server < 8.0, non-wiredTiger, and an already-running compact
+    *  - WTCMPCT filenames are replaced with the $listCatalog namespace when resolved (WT name is the fallback)
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'const freeSpaceTargetMB = 1, runOnce = true, timeoutMS = 0;'] [-f|--file] </path/to/>autoCompact.js
@@ -27,7 +28,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true, timeoutMS = 3600000;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.2.3" };
+   const __script = { "name": "autoCompact.js", "version": "0.3.0" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    const autoCompact = (freeSpaceTargetMB = 1, runOnce = true) => db.adminCommand({
@@ -110,6 +111,76 @@
       }
       return true;
    };
+   const identKey = name => String(name ?? '')
+      .replace(/^(?:file:|table:|statistics:table:)/, '')
+      .replace(/\.wt$/, '');
+   const buildIdentMap = () => {
+      // ident -> ns from the local catalog; special WT files are labeled
+      const map = new Map([
+         ['sizeStorer', '(sizeStorer)'],
+         ['WiredTigerHS', '(history store)'],
+         ['_mdb_catalog', '(catalog)']
+      ]);
+      let ok = false;
+      try {
+         db.getSiblingDB('admin').aggregate(
+            [{ "$listCatalog": {} }],
+            { "comment": `${__script.name} v${__script.version} ident map` }
+         ).forEach(doc => {
+            const ns = doc.ns ?? (doc.db && doc.name ? `${doc.db}.${doc.name}` : null);
+            if (typeof doc.ident === 'string' && ns) map.set(doc.ident, ns);
+            if (doc.idxIdent && ns) {
+               for (const [idx, ident] of Object.entries(doc.idxIdent)) {
+                  if (typeof ident === 'string') map.set(ident, `${ns}.${idx}`);
+               }
+            }
+         });
+         ok = true;
+      } catch(e) {
+         console.log('\x1b[31m[WARN] $listCatalog unavailable, WTCMPCT lines will show WT filenames:\x1b[0m', e);
+      }
+      return { map, ok };
+   };
+   const nsFromWt = (name, map) => {
+      const key = identKey(name);
+      return key ? map.get(key) ?? null : null;
+   };
+   const wtNameFromMsg = (msg = '', dhandle) => {
+      if (dhandle) return dhandle;
+      const match = String(msg).match(/(?:file:|table:)?(?:[\w.-]+\/)?[\w.-]+\.wt/);
+      return match ? match[0] : null;
+   };
+   const makeNsResolver = () => {
+      let { map, ok } = buildIdentMap();
+      let refreshed = !ok;
+      return name => {
+         let ns = nsFromWt(name, map);
+         if (ns || !name) return ns;
+         if (!refreshed) {
+            // unknown ident: collection created during this pass
+            refreshed = true;
+            ({ map } = buildIdentMap());
+            ns = nsFromWt(name, map);
+         }
+         return ns;
+      };
+   };
+   const annotateWtMsg = (msg, dhandle, resolveNs) => {
+      const text = String(msg);
+      const wtName = wtNameFromMsg(text, dhandle);
+      let out = text;
+      if (wtName) {
+         const ns = resolveNs(wtName);
+         if (ns && !text.includes(ns)) {
+            const key = identKey(wtName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            if (key) {
+               const substituted = text.replace(new RegExp(`(?:file:|table:)?${key}(?:\\.wt)?`, 'g'), ns);
+               if (substituted !== text) out = substituted;
+            }
+         }
+      }
+      return out.replace(/there is no useful work to do -\s*/g, '');
+   };
    const getSlowms = () => {
       // Atlas may change the effective threshold at runtime; profile status is the live value
       try {
@@ -128,7 +199,7 @@
       // return only new compaction activity log entries
       return c === 'WTCMPCT' && t > ts
    });
-   const tailLogs = (ts, timeoutMS = 0) => {
+   const tailLogs = (ts, timeoutMS = 0, resolveNs = () => null) => {
       let pause = false;
       let message = '';
       let seenRunning = false;
@@ -145,14 +216,14 @@
          }
          const logs = getLogs(ts);
          if (logs.length > 0) {
-            logs.forEach(({ t = ISODate(), 'attr': { 'message': { msg = '' } = {} } = {} } = {}) => {
+            logs.forEach(({ t = ISODate(), 'attr': { 'message': { msg = '', session_dhandle_name } = {} } = {} } = {}) => {
                ts = t;
                message = msg;
-               console.log(t.toJSON(), msg);
+               console.log(t.toJSON(), annotateWtMsg(msg, session_dhandle_name, resolveNs));
             });
             pause = false; // reset pause when new log entries are present
          } else if (!pause) {
-            console.log('\t══════ Compaction work in progress, waiting for new logs ══════');
+            console.log('\n\t══════ Compaction work in progress, waiting for new logs ══════\n');
             pause = true; // set pause to prevent repeated messages
          }
          // serverStatus 1→0 overrides the log stop line (log text/verbosity is version-fragile)
@@ -180,6 +251,7 @@
       "timeoutMS": Number.isFinite(+timeoutMSOpt) && +timeoutMSOpt > 0 ? +timeoutMSOpt : 0
    };
    if (!preflight()) return;
+   const resolveNs = makeNsResolver();
    console.log(`\nExecuting command:\n`);
    console.log(`db.adminCommand({
       "autoCompact": true,
@@ -198,7 +270,7 @@
       console.log('\x1b[31m[ERROR] autoCompact failed:\x1b[0m', result);
       return;
    }
-   tailLogs(ts, options.timeoutMS);
+   tailLogs(ts, options.timeoutMS, resolveNs);
 })();
 
 // EOF
