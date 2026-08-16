@@ -1,13 +1,13 @@
 (() => {
    /*
     *  Name: "sleepy.js"
-    *  Version: "0.2.5"
+    *  Version: "0.2.6"
     *  Description: "aggregation based '$sleepy' pipeline PoC to substitute for $function's sleep()"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     */
 
-   const __script = { "name": "sleepy.js", "version": "0.2.5" };
+   const __script = { "name": "sleepy.js", "version": "0.2.6" };
 
    if (typeof console === 'undefined') {
       /*
@@ -23,7 +23,7 @@
       var EJSON = { parse: JSON.parse };
    }
 
-   console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m`);
+   console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    const dbName = '$';
    const namespace = db.getSiblingDB(dbName);
