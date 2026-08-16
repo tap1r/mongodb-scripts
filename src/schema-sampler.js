@@ -1,12 +1,12 @@
 /*
  *  Name: "schema-sampler.js"
- *  Version: "0.2.14"
+ *  Version: "0.2.15"
  *  Description: generate schema with simulated mongosqld sampling commands
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "[mongo|mongosh] [connection options] --quiet schema-sampler.js > schema.json"
+// Usage: "[mongo|mongosh] [connection options] [--quiet] [-f|--file] </path/to/>schema-sampler.js > schema.json"
 
 /*
  *  User defined parameters
@@ -14,15 +14,18 @@
 
 const userOptions = {
    "sampleSize": 1, // defaults to 1 for performance reasons, increase for sparse data
-   // "dbs": ['namespace'], // restrict list to known namespaces
-   // "readPreference": 'secondaryPreferred'
+   "filter": {
+      "db": /^(?!admin$|config$|local$).+/, // or ['app', 'analytics', 'foo', 'bar']
+      "collection": /^(?!system\.)/
+   },
+   "readPreference": "secondaryPreferred"
 };
 
 ((userOptions = {}) => {
    /*
     *
     */
-   const __script = { "name": "schema-sampler.js", "version": "0.2.14" };
+   const __script = { "name": "schema-sampler.js", "version": "0.2.15" };
    print(`\n#### Running script ${__script.name} v${__script.version}\n`);
 
    function main({ sampleSize = 1, dbs = [], readPreference = 'secondaryPreferred' }) {
@@ -45,7 +48,7 @@ const userOptions = {
       const collectionPipeline = [{ "$sample": { "size": sampleSize } }];
       const viewPipeline = [{ "$sample": { "size": 1 } }];
       const options = {
-         "allowDiskUse": true,
+         "allowDiskUse": false,
          "cursor": { "batchSize": sampleSize },
          "readConcern": { "level": "local" },
          "comment": comment
