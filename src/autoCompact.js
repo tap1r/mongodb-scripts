@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.3.1"
+    *  Version: "0.3.2"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,6 +14,7 @@
     *  - mongosh only
     *  - preflight rejects mongos, server < 8.0, non-wiredTiger, and an already-running compact
     *  - WTCMPCT filenames are replaced with the $listCatalog namespace when resolved (WT name is the fallback)
+    *  - getLog prefilters "c":"WTCMPCT" before EJSON.parse; a bad line or getLog failure does not abort the wait
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'const freeSpaceTargetMB = 1, runOnce = true, timeoutMS = 0;'] [-f|--file] </path/to/>autoCompact.js
@@ -28,7 +29,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true, timeoutMS = 3600000;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.3.1" };
+   const __script = { "name": "autoCompact.js", "version": "0.3.2" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    const autoCompact = (freeSpaceTargetMB = 1, runOnce = true) => db.adminCommand({
@@ -123,17 +124,15 @@
       ]);
       let ok = false;
       try {
-         db.getSiblingDB('admin').aggregate(
-            [
-               { "$listCatalog": {} },
-               { "$project": {
-                  "ns": 1,
-                  "db": 1,
-                  "name": 1,
-                  "ident": 1,
-                  "idxIdent": 1
-               } }
-            ],
+         db.getSiblingDB('admin').aggregate([
+            { "$listCatalog": {} },
+            { "$project": {
+               "ns": 1,
+               "db": 1,
+               "name": 1,
+               "ident": 1,
+               "idxIdent": 1
+            } }],
             { "comment": `${__script.name} v${__script.version} ident map` }
          ).forEach(doc => {
             const ns = doc.ns ?? (doc.db && doc.name ? `${doc.db}.${doc.name}` : null);
@@ -200,14 +199,31 @@
       }
       return null;
    };
-   const getLogs = ts => db.adminCommand(
-      { "getLog": "global" }
-   ).log.map(
-      EJSON.parse
-   ).filter(({ c, t }) => {
-      // return only new compaction activity log entries
-      return c === 'WTCMPCT' && t > ts
-   });
+   let getLogWarned = false;
+   const getLogs = ts => {
+      // ramlog is ~1024 raw JSON lines; skip non-WTCMPCT before EJSON.parse
+      let lines;
+      try {
+         ({ "log": lines = [] } = db.adminCommand({ "getLog": "global" }));
+      } catch(e) {
+         if (!getLogWarned) {
+            console.log('\x1b[31m[WARN] getLog() unavailable, relying on serverStatus idle:\x1b[0m', e);
+            getLogWarned = true;
+         }
+         return [];
+      }
+      const out = [];
+      for (const line of lines) {
+         if (!String(line).includes('"c":"WTCMPCT"')) continue;
+         try {
+            const entry = EJSON.parse(line);
+            if (entry.t > ts) out.push(entry);
+         } catch(e) {
+            // skip malformed WTCMPCT line
+         }
+      }
+      return out;
+   };
    const tailLogs = (ts, timeoutMS = 0, resolveNs = () => null) => {
       let pause = false;
       let message = '';
@@ -225,7 +241,7 @@
          }
          const logs = getLogs(ts);
          if (logs.length > 0) {
-            logs.forEach(({ t = ISODate(), 'attr': { 'message': { msg = '', session_dhandle_name } = {} } = {} } = {}) => {
+            logs.forEach(({ t = ISODate(), 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = {}) => {
                ts = t;
                message = msg;
                console.log(t.toJSON(), annotateWtMsg(msg, session_dhandle_name, resolveNs));
