@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.3.2"
+    *  Version: "0.3.3"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -29,7 +29,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true, timeoutMS = 3600000;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.3.2" };
+   const __script = { "name": "autoCompact.js", "version": "0.3.3" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    const autoCompact = (freeSpaceTargetMB = 1, runOnce = true) => db.adminCommand({
@@ -116,11 +116,11 @@
       .replace(/^(?:file:|table:|statistics:table:)/, '')
       .replace(/\.wt$/, '');
    const buildIdentMap = () => {
-      // ident -> ns from the local catalog; special WT files are labeled
+      // ident -> { kind, ns, idx? }; special WT files are internal
       const map = new Map([
-         ['sizeStorer', '(sizeStorer)'],
-         ['WiredTigerHS', '(history store)'],
-         ['_mdb_catalog', '(catalog)']
+         ['sizeStorer', { "kind": "internal", "ns": "(sizeStorer)" }],
+         ['WiredTigerHS', { "kind": "internal", "ns": "(history store)" }],
+         ['_mdb_catalog', { "kind": "internal", "ns": "(catalog)" }]
       ]);
       let ok = false;
       try {
@@ -136,10 +136,10 @@
             { "comment": `${__script.name} v${__script.version} ident map` }
          ).forEach(doc => {
             const ns = doc.ns ?? (doc.db && doc.name ? `${doc.db}.${doc.name}` : null);
-            if (typeof doc.ident === 'string' && ns) map.set(doc.ident, ns);
+            if (typeof doc.ident === 'string' && ns) map.set(doc.ident, { "kind": "collection", "ns": ns });
             if (doc.idxIdent && ns) {
                for (const [idx, ident] of Object.entries(doc.idxIdent)) {
-                  if (typeof ident === 'string') map.set(ident, `${ns}.${idx}`);
+                  if (typeof ident === 'string') map.set(ident, { "kind": "index", "ns": ns, "idx": idx });
                }
             }
          });
@@ -152,6 +152,16 @@
    const nsFromWt = (name, map) => {
       const key = identKey(name);
       return key ? map.get(key) ?? null : null;
+   };
+   const nsPlain = entry => {
+      if (!entry) return null;
+      return entry.kind === 'index' ? `${entry.ns}.${entry.idx}` : entry.ns;
+   };
+   const nsColored = entry => {
+      if (!entry) return null;
+      if (entry.kind === 'internal') return `\x1b[31m${entry.ns}\x1b[0m`;
+      if (entry.kind === 'index') return `\x1b[33m${entry.ns}\x1b[0m.\x1b[32m${entry.idx}\x1b[0m`;
+      return `\x1b[33m${entry.ns}\x1b[0m`;
    };
    const wtNameFromMsg = (msg = '', dhandle) => {
       if (dhandle) return dhandle;
@@ -178,11 +188,12 @@
       const wtName = wtNameFromMsg(text, dhandle);
       let out = text;
       if (wtName) {
-         const ns = resolveNs(wtName);
-         if (ns && !text.includes(ns)) {
+         const entry = resolveNs(wtName);
+         const plain = nsPlain(entry);
+         if (plain && !text.includes(plain)) {
             const key = identKey(wtName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             if (key) {
-               const substituted = text.replace(new RegExp(`(?:file:|table:)?${key}(?:\\.wt)?`, 'g'), ns);
+               const substituted = text.replace(new RegExp(`(?:file:|table:)?${key}(?:\\.wt)?`, 'g'), nsColored(entry));
                if (substituted !== text) out = substituted;
             }
          }
