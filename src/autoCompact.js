@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.3.0"
+    *  Version: "0.3.1"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -28,7 +28,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true, timeoutMS = 3600000;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.3.0" };
+   const __script = { "name": "autoCompact.js", "version": "0.3.1" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    const autoCompact = (freeSpaceTargetMB = 1, runOnce = true) => db.adminCommand({
@@ -124,7 +124,16 @@
       let ok = false;
       try {
          db.getSiblingDB('admin').aggregate(
-            [{ "$listCatalog": {} }],
+            [
+               { "$listCatalog": {} },
+               { "$project": {
+                  "ns": 1,
+                  "db": 1,
+                  "name": 1,
+                  "ident": 1,
+                  "idxIdent": 1
+               } }
+            ],
             { "comment": `${__script.name} v${__script.version} ident map` }
          ).forEach(doc => {
             const ns = doc.ns ?? (doc.db && doc.name ? `${doc.db}.${doc.name}` : null);
