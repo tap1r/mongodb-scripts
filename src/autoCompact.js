@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.5"
+    *  Version: "0.4.6"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -10,10 +10,10 @@
     *  - mongosh only
     *  - customise command options "freeSpaceTargetMB" and/or "runOnce" if required
     *  - sizeStorer WTCMPCT line is the last file of this pass (skip or compact); ramlog overflow can miss it
-    *  - after at least one WTCMPCT line, 2s with no new WTCMPCT treats the first pass as complete (the in-progress banner does not count)
+    *  - after at least one WTCMPCT line, 2s with no new WTCMPCT treats the first pass as complete only if ramlog overflow was seen or compact is idle (the in-progress banner does not count)
     *  - runOnce=true: after last file, wait for serverStatus idle so recovered bytes include sizeStorer work; idle is also the miss fallback
-    *  - runOnce=false: exit after last file and leave background compact enabled (next walk ~24h); log-quiet and idle are miss fallbacks if sizeStorer was missed
-    *  - never-seen-running + still idle after a short grace is treated as a no-op complete
+    *  - runOnce=false: exit after last file and leave background compact enabled (next walk ~24h); log-quiet (after overflow or idle) and idle are miss fallbacks if sizeStorer was missed
+    *  - never-seen-running + still idle for 5s is treated as a no-op complete
     *  - no wait timeout; interrupt the shell if compact is stuck
     *  - log poll uses a self-regulating backoff, clamped to 50-1000ms (reset to 50ms on new WTCMPCT lines or ramlog overflow; otherwise doubles)
     *  - getLog totalLinesWritten jump >= 1024 warns of missed lines and resets the poll interval to 50ms
@@ -39,7 +39,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.5" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.6" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    function serverStatus(serverStatusOptions = {}) {
@@ -231,7 +231,7 @@
          return false;
       }
       if (running > 0 || running === true) {
-         console.log('\x1b[31m[ERROR] background compact already enabled; First issue { autoCompact: false } to disable\x1b[0m');
+         console.log('\x1b[31m[ERROR] background compact already enabled; Issue { autoCompact: false } first to disable\x1b[0m');
          return false;
       }
       return true;
@@ -335,6 +335,7 @@
    const POLL_MS_MIN = 50;
    const POLL_MS_MAX = 1000;
    const LOG_QUIET_MS = 2000;
+   const NOOP_GRACE_MS = 5000;
    const GETLOG_CAP = 1024;
    const clampPollMS = ms => {
       const n = +ms;
@@ -380,8 +381,8 @@
       let pause = false;
       let firstPassDone = false;
       let seenRunning = false;
-      const graceMS = 2000;
-      const started = Date.now();
+      let overflowSeen = false;
+      let idleSince = null;
       const seen = new Set();
       let pollMS = POLL_MS_MIN;
       let lastTotal = null;
@@ -394,6 +395,7 @@
             && lastTotal != null
             && totalLinesWritten - lastTotal >= GETLOG_CAP;
          if (overflow) {
+            overflowSeen = true;
             console.log(`\x1b[31m[WARN] getLog overflow: ${totalLinesWritten - lastTotal} lines since last poll (ramlog ~${GETLOG_CAP}); resetting poll ${pollMS}ms → ${POLL_MS_MIN}ms\x1b[0m`);
          }
          if (Number.isFinite(totalLinesWritten)) lastTotal = totalLinesWritten;
@@ -411,21 +413,28 @@
             console.log('\t══════ autoCompaction work in progress, waiting for new logs ══════');
             pause = true; // set pause to prevent repeated messages
          }
-         if (!firstPassDone && lastLogAt != null && Date.now() - lastLogAt >= LOG_QUIET_MS) {
+         // 1→0 means the thread stopped (runOnce finished, or compact was disabled).
+         const running = getAutoCompactRunning();
+         if (running === true) {
+            seenRunning = true;
+            idleSince = null;
+         } else if (running === false && idleSince == null) {
+            idleSince = Date.now();
+         }
+         // log-quiet is a miss fallback, not a mid-file gap: require overflow (sizeStorer may have been dropped) or idle
+         if (!firstPassDone && lastLogAt != null && Date.now() - lastLogAt >= LOG_QUIET_MS
+               && (overflowSeen || running === false)) {
             firstPassDone = true;
             console.log(`\n\t══════ no new WTCMPCT logs for ${LOG_QUIET_MS / 1000}s; assuming first pass complete ══════`);
          }
          // runOnce=false cannot wait for idle (thread stays enabled); last file ends the wait
          if (firstPassDone && !runOnce) break;
-         // 1→0 means the thread stopped (runOnce finished, or compact was disabled).
-         // Also the miss fallback when the sizeStorer line was dropped from the ramlog.
-         const running = getAutoCompactRunning();
-         if (running === true) seenRunning = true;
          if (running === false && (seenRunning || (runOnce && firstPassDone))) {
             console.log('\n\t══════ serverStatus: background compact idle ══════');
             break;
          }
-         if (!seenRunning && !firstPassDone && running === false && Date.now() - started >= graceMS) {
+         if (!seenRunning && !firstPassDone && running === false
+               && idleSince != null && Date.now() - idleSince >= NOOP_GRACE_MS) {
             console.log('\n\t══════ serverStatus: background compact idle (no-op) ══════');
             break;
          }
@@ -452,7 +461,8 @@
    const cmd = {
       "autoCompact": true,
       "freeSpaceTargetMB": options.freeSpaceTargetMB,
-      "runOnce": options.runOnce
+      "runOnce": options.runOnce,
+      "comment": `${__script.name} v${__script.version}`
    };
    console.log(`[NOTE] autoCompact() is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact() excludes the oplog.\n`);
    console.log(`Executing shell command:\ndb.adminCommand(${EJSON.stringify(cmd, null, 3)});\n`);
