@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.0"
+    *  Version: "0.4.1"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -15,7 +15,7 @@
     *  - timeoutMS aborts the wait (0/omitted = no timeout)
     *  - log poll interval follows getProfilingStatus().slowms, clamped to 25-500ms (re-read every 10s; 100ms without enableProfiler)
     *  - getLog totalLinesWritten jump >= 1024 warns of missed lines and halves the poll interval until the next slowms read
-    *  - preflight rejects mongos, server < 8.0, non-wiredTiger, and an already-running compact
+    *  - preflight rejects mongos, server < 8.0, non-wiredTiger, and an already-running compact (one-shot: prefer runOnce: true)
     *  - WTCMPCT filenames are replaced with the $listCatalog namespace when resolved (WT name is the fallback)
     *  - getLog prefilters "c":"WTCMPCT" before EJSON.parse; a bad line or getLog failure does not abort the wait
     *  - log watermark is exclusive at start, then inclusive same-ms with t+msg+dhandle dedup
@@ -35,7 +35,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true, timeoutMS = 3600000;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.0" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.1" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    function serverStatus(serverStatusOptions = {}) {
@@ -220,7 +220,7 @@
          return false;
       }
       if (running > 0 || running === true) {
-         console.log('\x1b[31m[ERROR] background compact already running; disable first with db.adminCommand({ "autoCompact": false })\x1b[0m');
+         console.log('\x1b[31m[ERROR] background compact already running; this script is one-shot — use runOnce: true so compact does not stay enabled after the first pass\x1b[0m');
          return false;
       }
       return true;
