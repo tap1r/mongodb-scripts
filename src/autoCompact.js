@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.3"
+    *  Version: "0.4.4"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -10,12 +10,14 @@
     *  - mongosh only
     *  - customise command options "freeSpaceTargetMB" and/or "runOnce" if required
     *  - sizeStorer WTCMPCT line is the last file of this pass (skip or compact); ramlog overflow can miss it
+    *  - after at least one WTCMPCT line, 2s with no new WTCMPCT treats the first pass as complete (the in-progress banner does not count)
     *  - runOnce=true: after last file, wait for serverStatus idle so recovered bytes include sizeStorer work; idle is also the miss fallback
-    *  - runOnce=false: exit after last file and leave background compact enabled (next walk ~24h); idle is the miss fallback if sizeStorer was missed
+    *  - runOnce=false: exit after last file and leave background compact enabled (next walk ~24h); log-quiet and idle are miss fallbacks if sizeStorer was missed
     *  - never-seen-running + still idle after a short grace is treated as a no-op complete
     *  - no wait timeout; interrupt the shell if compact is stuck
     *  - log poll uses a self-regulating backoff, clamped to 50-1000ms (reset to 50ms on new WTCMPCT lines or ramlog overflow; otherwise doubles)
     *  - getLog totalLinesWritten jump >= 1024 warns of missed lines and resets the poll interval to 50ms
+    *  - wiredTiger serverStatus is cached and refreshed at most every 1000ms (recovered-bytes report is uncached)
     *  - preflight rejects mongos, server < 8.0, non-wiredTiger, and an already-running compact (one-shot: prefer runOnce: true)
     *  - WTCMPCT filenames are replaced with the $listCatalog namespace when resolved (WT name is the fallback)
     *  - getLog prefilters "c":"WTCMPCT" before EJSON.parse; a bad line or getLog failure does not abort the wait
@@ -36,7 +38,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.3" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.4" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    function serverStatus(serverStatusOptions = {}) {
@@ -116,9 +118,14 @@
       });
    }
 
-   const getBackgroundCompact = () => {
+   const SERVERSTATUS_MS = 1000;
+   let bcCache = { "at": 0, "value": undefined };
+   const getBackgroundCompact = (fresh = false) => {
       // running + recovered bytes only; success/failed/skipped are lifetime totals, not per-file
-      let running, bytesRecovered;
+      if (!fresh && bcCache.value !== undefined && Date.now() - bcCache.at < SERVERSTATUS_MS) {
+         return bcCache.value;
+      }
+      let running, bytesRecovered, value;
       try {
          ({ 'wiredTiger': {
                'background-compact': {
@@ -129,13 +136,15 @@
          } = serverStatus({
             "wiredTiger": true
          }));
+         value = {
+            "running": running === undefined ? null : (running > 0 || running === true),
+            "bytesRecovered": Number.isFinite(+bytesRecovered) ? +bytesRecovered : null
+         };
       } catch(e) {
-         return null;
+         value = null;
       }
-      return {
-         "running": running === undefined ? null : (running > 0 || running === true),
-         "bytesRecovered": Number.isFinite(+bytesRecovered) ? +bytesRecovered : null
-      };
+      bcCache = { "at": Date.now(), "value": value };
+      return value;
    };
    const getAutoCompactRunning = () => getBackgroundCompact()?.running ?? null;
    class AutoFactor {
@@ -170,7 +179,7 @@
    }
    const scaled = new AutoFactor();
    const reportRecoveredBytes = startBytes => {
-      const endBytes = getBackgroundCompact()?.bytesRecovered;
+      const endBytes = getBackgroundCompact(true)?.bytesRecovered;
       if (endBytes == null) {
          console.log('\t══════ recovered bytes: unavailable ══════');
          return;
@@ -320,6 +329,7 @@
    };
    const POLL_MS_MIN = 50;
    const POLL_MS_MAX = 1000;
+   const LOG_QUIET_MS = 2000;
    const GETLOG_CAP = 1024;
    const clampPollMS = ms => {
       const n = +ms;
@@ -369,6 +379,7 @@
       const seen = new Set();
       let pollMS = POLL_MS_MIN;
       let lastTotal = null;
+      let lastLogAt = null; // wall clock of last new WTCMPCT batch; in-progress banner does not update this
       const startBytes = getBackgroundCompact()?.bytesRecovered;
 
       do {
@@ -381,6 +392,7 @@
          }
          if (Number.isFinite(totalLinesWritten)) lastTotal = totalLinesWritten;
          if (logs.length > 0) {
+            lastLogAt = Date.now();
             logs.forEach(entry => {
                const { t = ISODate(), 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = entry;
                seen.add(logKey(entry));
@@ -392,6 +404,10 @@
          } else if (!pause) {
             console.log('\t══════ autoCompaction work in progress, waiting for new logs ══════');
             pause = true; // set pause to prevent repeated messages
+         }
+         if (!firstPassDone && lastLogAt != null && Date.now() - lastLogAt >= LOG_QUIET_MS) {
+            firstPassDone = true;
+            console.log(`\n\t══════ no new WTCMPCT logs for ${LOG_QUIET_MS / 1000}s; assuming first pass complete ══════`);
          }
          // runOnce=false cannot wait for idle (thread stays enabled); last file ends the wait
          if (firstPassDone && !runOnce) break;
