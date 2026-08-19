@@ -1,22 +1,23 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.3.5"
+    *  Version: "0.3.6"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Notes:
+    *  - mongosh only
     *  - customise command options "freeSpaceTargetMB", "runOnce", and/or "timeoutMS" if required
     *  - waits for first pass (sizeStorer WTCMPCT line); runOnce=true also ends on serverStatus idle
     *  - runOnce=false: exit after first pass and leave background compact enabled (next walk ~24h)
     *  - never-seen-running + still idle after a short grace is treated as a no-op complete
     *  - timeoutMS aborts the wait (0/omitted = no timeout)
     *  - log poll interval follows getProfilingStatus().slowms (re-read each poll); 100ms without enableProfiler
-    *  - mongosh only
     *  - preflight rejects mongos, server < 8.0, non-wiredTiger, and an already-running compact
     *  - WTCMPCT filenames are replaced with the $listCatalog namespace when resolved (WT name is the fallback)
     *  - getLog prefilters "c":"WTCMPCT" before EJSON.parse; a bad line or getLog failure does not abort the wait
+    *  - log watermark is exclusive at start, then inclusive same-ms with t+msg+dhandle dedup
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'const freeSpaceTargetMB = 1, runOnce = true, timeoutMS = 0;'] [-f|--file] </path/to/>autoCompact.js
@@ -31,7 +32,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true, timeoutMS = 3600000;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.3.5" };
+   const __script = { "name": "autoCompact.js", "version": "0.3.6" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    function serverStatus(serverStatusOptions = {}) {
@@ -281,7 +282,9 @@
       return null;
    };
    let getLogWarned = false;
-   const getLogs = ts => {
+   const logKey = ({ t, 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = {}) =>
+      `${+t}\0${session_dhandle_name}\0${msg}`;
+   const getLogs = (since, seen) => {
       // ramlog is ~1024 raw JSON lines; skip non-WTCMPCT before EJSON.parse
       let lines;
       try {
@@ -298,7 +301,12 @@
          if (!String(line).includes('"c":"WTCMPCT"')) continue;
          try {
             const entry = EJSON.parse(line);
-            if (entry.t > ts) out.push(entry);
+            // start watermark is exclusive; later same-ms siblings are kept if not yet seen
+            if (entry.t < since) continue;
+            if (+entry.t === +since && seen.size === 0) continue;
+            const key = logKey(entry);
+            if (seen.has(key)) continue;
+            out.push(entry);
          } catch(e) {
             // skip malformed WTCMPCT line
          }
@@ -313,16 +321,19 @@
       const fallbackMS = 100;
       const graceMS = 2000;
       const started = Date.now();
+      const seen = new Set();
 
       do {
          if (timeoutMS > 0 && Date.now() - started >= timeoutMS) {
             console.log(`\x1b[31m[ERROR] timed out after ${timeoutMS}ms waiting for autoCompact()\x1b[0m`);
             return;
          }
-         const logs = getLogs(ts);
+         const logs = getLogs(ts, seen);
          if (logs.length > 0) {
-            logs.forEach(({ t = ISODate(), 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = {}) => {
-               ts = t;
+            logs.forEach(entry => {
+               const { t = ISODate(), 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = entry;
+               seen.add(logKey(entry));
+               if (t > ts) ts = t;
                if (isSizeStorerSkip(msg, session_dhandle_name)) firstPassDone = true;
                console.log(t.toJSON(), annotateWtMsg(msg, session_dhandle_name, resolveNs));
             });
@@ -372,7 +383,7 @@
       "freeSpaceTargetMB": options.freeSpaceTargetMB,
       "runOnce": options.runOnce
    };
-   console.log(`Executing command:\ndb.adminCommand(${EJSON.stringify(cmd, null, 3)});\n`);
+   console.log(`Executing shell command:\ndb.adminCommand(${EJSON.stringify(cmd, null, 3)});\n`);
    const ts = ISODate();
    let result;
    try {
