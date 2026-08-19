@@ -1,14 +1,16 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.3.4"
+    *  Version: "0.3.5"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Notes:
     *  - customise command options "freeSpaceTargetMB", "runOnce", and/or "timeoutMS" if required
-    *  - waits for a sizeStorer "skipping compaction" WTCMPCT line, or serverStatus background compact idle
+    *  - waits for first pass (sizeStorer WTCMPCT line); runOnce=true also ends on serverStatus idle
+    *  - runOnce=false: exit after first pass and leave background compact enabled (next walk ~24h)
+    *  - never-seen-running + still idle after a short grace is treated as a no-op complete
     *  - timeoutMS aborts the wait (0/omitted = no timeout)
     *  - log poll interval follows getProfilingStatus().slowms (re-read each poll); 100ms without enableProfiler
     *  - mongosh only
@@ -29,7 +31,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true, timeoutMS = 3600000;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.3.4" };
+   const __script = { "name": "autoCompact.js", "version": "0.3.5" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    function serverStatus(serverStatusOptions = {}) {
@@ -146,7 +148,7 @@
          return false;
       }
       if (!Number.isFinite(major) || major < 8) {
-         console.log(`\x1b[31m[ERROR] autoCompact requires MongoDB 8.0+; detected ${db.version()}\x1b[0m`);
+         console.log(`\x1b[31m[ERROR] autoCompact() requires MongoDB 8.0+; detected ${db.version()}\x1b[0m`);
          return false;
       }
       let engine, running;
@@ -158,14 +160,15 @@
                } = {}
             } = {}
          } = serverStatus({
+            "storageEngine": true,
             "wiredTiger": true
          }));
       } catch(e) {
-         console.log('\x1b[31m[ERROR] serverStatus failed:\x1b[0m', e);
+         console.log('\x1b[31m[ERROR] serverStatus() failed:\x1b[0m', e);
          return false;
       }
       if (engine != null && engine !== 'wiredTiger') {
-         console.log(`\x1b[31m[ERROR] autoCompact requires wiredTiger; detected storage engine "${engine}"\x1b[0m`);
+         console.log(`\x1b[31m[ERROR] autoCompact() requires wiredTiger; detected storage engine "${engine}"\x1b[0m`);
          return false;
       }
       if (running > 0 || running === true) {
@@ -207,7 +210,7 @@
          });
          ok = true;
       } catch(e) {
-         console.log('\x1b[31m[WARN] $listCatalog unavailable, WTCMPCT lines will show WT filenames:\x1b[0m', e);
+         console.log('\x1b[31m[WARN] $listCatalog() unavailable, WTCMPCT lines will show WT filenames:\x1b[0m', e);
       }
       return { map, ok };
    };
@@ -265,7 +268,7 @@
    const isSizeStorerSkip = (msg = '', dhandle = '') => {
       // first-pass end: WT skipped sizeStorer (wording varies by verbosity)
       const text = `${dhandle} ${msg}`;
-      return text.includes('sizeStorer') // sizeStorer is assumed to be the last WT namespace, skipped or otherwise
+      return text.includes('sizeStorer') // sizeStorer is assumed to be the last WT namespace, but only if it was skipped
    };
    const getSlowms = () => {
       // Atlas may change the effective threshold at runtime; profile status is the live value
@@ -285,7 +288,7 @@
          ({ "log": lines = [] } = db.adminCommand({ "getLog": "global" }));
       } catch(e) {
          if (!getLogWarned) {
-            console.log('\x1b[31m[WARN] getLog() unavailable, relying on serverStatus idle:\x1b[0m', e);
+            console.log('\x1b[31m[WARN] getLog() unavailable, relying on serverStatus() for idle detection:\x1b[0m', e);
             getLogWarned = true;
          }
          return [];
@@ -302,17 +305,18 @@
       }
       return out;
    };
-   const tailLogs = (ts, timeoutMS = 0, resolveNs = () => null) => {
+   const tailLogs = (ts, timeoutMS = 0, resolveNs = () => null, runOnce = true) => {
       let pause = false;
       let firstPassDone = false;
       let seenRunning = false;
       let fallbackWarned = false;
       const fallbackMS = 100;
+      const graceMS = 2000;
       const started = Date.now();
 
       do {
          if (timeoutMS > 0 && Date.now() - started >= timeoutMS) {
-            console.log(`\x1b[31m[ERROR] timed out after ${timeoutMS}ms waiting for autoCompact\x1b[0m`);
+            console.log(`\x1b[31m[ERROR] timed out after ${timeoutMS}ms waiting for autoCompact()\x1b[0m`);
             return;
          }
          const logs = getLogs(ts);
@@ -324,14 +328,20 @@
             });
             pause = false; // reset pause when new log entries are present
          } else if (!pause) {
-            console.log('\n\t══════ Compaction work in progress, waiting for new logs ══════\n');
+            console.log('\t══════ autoCompaction work in progress, waiting for new logs ══════\n');
             pause = true; // set pause to prevent repeated messages
          }
-         // serverStatus 1→0 overrides the log stop line (log text/verbosity is version-fragile)
+         if (firstPassDone) break;
+         // 1→0 means the thread stopped (runOnce finished, or compact was disabled).
+         // runOnce=false stays running after the first pass — do not require idle.
          const running = getAutoCompactRunning();
          if (running === true) seenRunning = true;
          if (seenRunning && running === false) {
             console.log('\n\t══════ serverStatus: background compact idle ══════');
+            break;
+         }
+         if (!seenRunning && running === false && Date.now() - started >= graceMS) {
+            console.log('\n\t══════ serverStatus: background compact idle (no-op) ══════');
             break;
          }
          const slowms = getSlowms();
@@ -341,6 +351,10 @@
          }
          sleep(slowms ?? fallbackMS);
       } while (!firstPassDone);
+      if (!runOnce && firstPassDone) {
+         console.log('\n\t══════ first pass complete; background compact left enabled (next walk ~24h) ══════');
+         return;
+      }
       console.log('\n\t══════ autoCompaction round complete ══════');
    };
 
@@ -364,14 +378,14 @@
    try {
       result = db.adminCommand(cmd);
    } catch(e) {
-      console.log('\x1b[31m[ERROR] autoCompact failed:\x1b[0m', e);
+      console.log('\x1b[31m[ERROR] autoCompact() failed:\x1b[0m', e);
       return;
    }
    if (result?.ok !== 1) {
-      console.log('\x1b[31m[ERROR] autoCompact failed:\x1b[0m', result);
+      console.log('\x1b[31m[ERROR] autoCompact() failed:\x1b[0m', result);
       return;
    }
-   tailLogs(ts, options.timeoutMS, resolveNs);
+   tailLogs(ts, options.timeoutMS, resolveNs, options.runOnce);
 })();
 
 // EOF
