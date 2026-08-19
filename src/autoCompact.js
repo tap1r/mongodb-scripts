@@ -1,18 +1,18 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.1"
+    *  Version: "0.4.2"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Notes:
     *  - mongosh only
-    *  - customise command options "freeSpaceTargetMB", "runOnce", and/or "timeoutMS" if required
+    *  - customise command options "freeSpaceTargetMB" and/or "runOnce" if required
     *  - waits for first pass (sizeStorer WTCMPCT line); runOnce=true also ends on serverStatus idle
     *  - runOnce=false: exit after first pass and leave background compact enabled (next walk ~24h)
     *  - never-seen-running + still idle after a short grace is treated as a no-op complete
-    *  - timeoutMS aborts the wait (0/omitted = no timeout)
+    *  - no wait timeout; interrupt the shell if compact is stuck
     *  - log poll interval follows getProfilingStatus().slowms, clamped to 25-500ms (re-read every 10s; 100ms without enableProfiler)
     *  - getLog totalLinesWritten jump >= 1024 warns of missed lines and halves the poll interval until the next slowms read
     *  - preflight rejects mongos, server < 8.0, non-wiredTiger, and an already-running compact (one-shot: prefer runOnce: true)
@@ -23,7 +23,7 @@
     *  - other WT compact counters (success/failed/skipped/timeout/interrupted) are process-lifetime aggregates and are not reported
     */
 
-   // Usage: mongosh [direct host connection options] [--quiet] [--eval 'const freeSpaceTargetMB = 1, runOnce = true, timeoutMS = 0;'] [-f|--file] </path/to/>autoCompact.js
+   // Usage: mongosh [direct host connection options] [--quiet] [--eval 'const freeSpaceTargetMB = 1, runOnce = true;'] [-f|--file] </path/to/>autoCompact.js
 
    /*
     *  Example of basic direct localhost usage:
@@ -32,10 +32,10 @@
     *
     *  Example using custom autoCompact command options:
     *
-    *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true, timeoutMS = 3600000;' -f autoCompact.js
+    *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.1" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.2" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    function serverStatus(serverStatusOptions = {}) {
@@ -220,7 +220,7 @@
          return false;
       }
       if (running > 0 || running === true) {
-         console.log('\x1b[31m[ERROR] background compact already running; this script is one-shot — use runOnce: true so compact does not stay enabled after the first pass\x1b[0m');
+         console.log('\x1b[31m[ERROR] background compact already enabled; consider { autoCompact: false } to disable, or { "runOnce": true } to for a single pass\x1b[0m');
          return false;
       }
       return true;
@@ -370,7 +370,7 @@
       }
       return { "logs": out, "totalLinesWritten": totalLinesWritten };
    };
-   const tailLogs = (ts, timeoutMS = 0, resolveNs = () => null, runOnce = true) => {
+   const tailLogs = (ts, resolveNs = () => null, runOnce = true) => {
       let pause = false;
       let firstPassDone = false;
       let seenRunning = false;
@@ -389,11 +389,6 @@
       const startBytes = getBackgroundCompact()?.bytesRecovered;
 
       do {
-         if (timeoutMS > 0 && Date.now() - started >= timeoutMS) {
-            console.log(`\x1b[31m[ERROR] timed out after ${timeoutMS}ms waiting for autoCompact()\x1b[0m`);
-            reportRecoveredBytes(startBytes);
-            return;
-         }
          const { logs, totalLinesWritten } = getLogs(ts, seen);
          if (Number.isFinite(totalLinesWritten)) {
             if (lastTotal != null && totalLinesWritten - lastTotal >= GETLOG_CAP) {
@@ -450,12 +445,10 @@
    };
 
    // --eval may bind these with const; never reassign, resolve into locals
-   const timeoutMSOpt = typeof timeoutMS === 'undefined' ? 0 : timeoutMS ?? 0;
    const options = {
       // we default to 1MB to maximise the effectiveness of the autoCompaction feature, at the cost of extra system load
       "freeSpaceTargetMB": typeof freeSpaceTargetMB === 'undefined' ? 1 : freeSpaceTargetMB ?? 1,
-      "runOnce": typeof runOnce === 'undefined' ? true : runOnce ?? true,
-      "timeoutMS": Number.isFinite(+timeoutMSOpt) && +timeoutMSOpt > 0 ? +timeoutMSOpt : 0
+      "runOnce": typeof runOnce === 'undefined' ? true : runOnce ?? true
    };
    if (!preflight()) return;
    const resolveNs = makeNsResolver();
@@ -478,7 +471,7 @@
       console.log('\x1b[31m[ERROR] autoCompact() failed:\x1b[0m', result);
       return;
    }
-   tailLogs(ts, options.timeoutMS, resolveNs, options.runOnce);
+   tailLogs(ts, resolveNs, options.runOnce);
 })();
 
 // EOF
