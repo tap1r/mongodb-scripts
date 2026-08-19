@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.3.7"
+    *  Version: "0.3.8"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,6 +19,7 @@
     *  - WTCMPCT filenames are replaced with the $listCatalog namespace when resolved (WT name is the fallback)
     *  - getLog prefilters "c":"WTCMPCT" before EJSON.parse; a bad line or getLog failure does not abort the wait
     *  - log watermark is exclusive at start, then inclusive same-ms with t+msg+dhandle dedup
+    *  - reports wiredTiger background-compact recovered bytes for this pass
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'const freeSpaceTargetMB = 1, runOnce = true, timeoutMS = 0;'] [-f|--file] </path/to/>autoCompact.js
@@ -33,7 +34,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true, timeoutMS = 3600000;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.3.7" };
+   const __script = { "name": "autoCompact.js", "version": "0.3.8" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    function serverStatus(serverStatusOptions = {}) {
@@ -113,13 +114,14 @@
       });
    }
 
-   const getAutoCompactRunning = () => {
+   const getBackgroundCompact = () => {
       // WiredTiger background-compact.running is the authoritative idle/active flag
-      let running;
+      let running, bytesRecovered;
       try {
          ({ 'wiredTiger': {
                'background-compact': {
-                  'background compact running': running
+                  'background compact running': running,
+                  'background compact recovered bytes': bytesRecovered
                } = {}
             } = {}
          } = serverStatus({
@@ -128,8 +130,51 @@
       } catch(e) {
          return null;
       }
-      if (running === undefined) return null;
-      return running > 0 || running === true;
+      return {
+         "running": running === undefined ? null : (running > 0 || running === true),
+         "bytesRecovered": Number.isFinite(+bytesRecovered) ? +bytesRecovered : null
+      };
+   };
+   const getAutoCompactRunning = () => getBackgroundCompact()?.running ?? null;
+   class AutoFactor {
+      /*
+       *  Determine scale factor automatically (same idea as mdblib.js / dbstats.js)
+       */
+      scale(number) {
+         if (number < 1) number = 1;
+         return Math.min(Math.floor(Math.log2(number) / 10), this.metrics.length - 1);
+      }
+      metric(number) {
+         return this.metrics[this.scale(number)];
+      }
+      format(number = 0) {
+         const n = Number(number);
+         if (!Number.isFinite(n)) return 'unknown';
+         const value = Math.max(0, n);
+         const metric = this.metric(value);
+         return `${+(value / metric.factor).toFixed(metric.precision)} ${metric.symbol}`;
+      }
+      get metrics() {
+         return [
+            { "unit": "bytes", "symbol": "B", "factor": 1, "precision": 0 },
+            { "unit": "kibibytes", "symbol": "KiB", "factor": 1024, "precision": 2 },
+            { "unit": "mebibytes", "symbol": "MiB", "factor": Math.pow(1024, 2), "precision": 2 },
+            { "unit": "gibibytes", "symbol": "GiB", "factor": Math.pow(1024, 3), "precision": 2 },
+            { "unit": "tebibytes", "symbol": "TiB", "factor": Math.pow(1024, 4), "precision": 2 },
+            { "unit": "pebibytes", "symbol": "PiB", "factor": Math.pow(1024, 5), "precision": 2 },
+            { "unit": "exbibytes", "symbol": "EiB", "factor": Math.pow(1024, 6), "precision": 2 }
+         ];
+      }
+   }
+   const scaled = new AutoFactor();
+   const reportRecoveredBytes = startBytes => {
+      const endBytes = getBackgroundCompact()?.bytesRecovered;
+      if (endBytes == null) {
+         console.log('\t══════ recovered bytes: unavailable ══════');
+         return;
+      }
+      const delta = startBytes != null ? endBytes - startBytes : endBytes;
+      console.log(`\n\t══════ recovered ${scaled.format(delta)} this pass (${scaled.format(endBytes)} cumulative) ══════`);
    };
    const preflight = () => {
       // autoCompact is mongod 8.0+ / wiredTiger only and errors if already running
@@ -340,10 +385,12 @@
       let pollMS = clampPollMS(slowms);
       let lastSlowmsAt = Date.now();
       let lastTotal = null;
+      const startBytes = getBackgroundCompact()?.bytesRecovered;
 
       do {
          if (timeoutMS > 0 && Date.now() - started >= timeoutMS) {
             console.log(`\x1b[31m[ERROR] timed out after ${timeoutMS}ms waiting for autoCompact()\x1b[0m`);
+            reportRecoveredBytes(startBytes);
             return;
          }
          const { logs, totalLinesWritten } = getLogs(ts, seen);
@@ -394,9 +441,11 @@
       } while (!firstPassDone);
       if (!runOnce && firstPassDone) {
          console.log('\n\t══════ first pass complete; background compact left enabled (next walk ~24h) ══════');
+         reportRecoveredBytes(startBytes);
          return;
       }
       console.log('\n\t══════ autoCompaction round complete ══════');
+      reportRecoveredBytes(startBytes);
    };
 
    // --eval may bind these with const; never reassign, resolve into locals
