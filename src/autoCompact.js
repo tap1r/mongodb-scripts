@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.2"
+    *  Version: "0.4.3"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,12 +9,13 @@
     *  Notes:
     *  - mongosh only
     *  - customise command options "freeSpaceTargetMB" and/or "runOnce" if required
-    *  - waits for first pass (sizeStorer WTCMPCT line); runOnce=true also ends on serverStatus idle
-    *  - runOnce=false: exit after first pass and leave background compact enabled (next walk ~24h)
+    *  - sizeStorer WTCMPCT line is the last file of this pass (skip or compact); ramlog overflow can miss it
+    *  - runOnce=true: after last file, wait for serverStatus idle so recovered bytes include sizeStorer work; idle is also the miss fallback
+    *  - runOnce=false: exit after last file and leave background compact enabled (next walk ~24h); idle is the miss fallback if sizeStorer was missed
     *  - never-seen-running + still idle after a short grace is treated as a no-op complete
     *  - no wait timeout; interrupt the shell if compact is stuck
-    *  - log poll interval follows getProfilingStatus().slowms, clamped to 25-500ms (re-read every 10s; 100ms without enableProfiler)
-    *  - getLog totalLinesWritten jump >= 1024 warns of missed lines and halves the poll interval until the next slowms read
+    *  - log poll uses a self-regulating backoff, clamped to 50-1000ms (reset to 50ms on new WTCMPCT lines or ramlog overflow; otherwise doubles)
+    *  - getLog totalLinesWritten jump >= 1024 warns of missed lines and resets the poll interval to 50ms
     *  - preflight rejects mongos, server < 8.0, non-wiredTiger, and an already-running compact (one-shot: prefer runOnce: true)
     *  - WTCMPCT filenames are replaced with the $listCatalog namespace when resolved (WT name is the fallback)
     *  - getLog prefilters "c":"WTCMPCT" before EJSON.parse; a bad line or getLog failure does not abort the wait
@@ -35,7 +36,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.2" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.3" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    function serverStatus(serverStatusOptions = {}) {
@@ -220,7 +221,7 @@
          return false;
       }
       if (running > 0 || running === true) {
-         console.log('\x1b[31m[ERROR] background compact already enabled; consider { autoCompact: false } to disable, or { "runOnce": true } to for a single pass\x1b[0m');
+         console.log('\x1b[31m[ERROR] background compact already enabled; First issue { autoCompact: false } to disable\x1b[0m');
          return false;
       }
       return true;
@@ -313,31 +314,20 @@
       }
       return out.replace(/there is no useful work to do -\s*/g, '');
    };
-   const isSizeStorerSkip = (msg = '', dhandle = '') => {
-      // first-pass end: WT skipped sizeStorer (wording varies by verbosity)
-      const text = `${dhandle} ${msg}`;
-      return text.includes('sizeStorer') // sizeStorer is assumed to be the last WT namespace
+   const isSizeStorer = (msg = '', dhandle = '') => {
+      // last file of the walk (skip or compact); wording varies by verbosity
+      return `${dhandle} ${msg}`.includes('sizeStorer');
    };
-   const POLL_MS_MIN = 25;
-   const POLL_MS_MAX = 500;
-   const POLL_MS_FALLBACK = 100;
-   const SLOWMS_REFRESH_MS = 10000;
+   const POLL_MS_MIN = 50;
+   const POLL_MS_MAX = 1000;
    const GETLOG_CAP = 1024;
    const clampPollMS = ms => {
       const n = +ms;
-      if (!Number.isFinite(n) || n <= 0) return POLL_MS_FALLBACK;
+      if (!Number.isFinite(n) || n <= 0) return POLL_MS_MIN;
       return Math.min(POLL_MS_MAX, Math.max(POLL_MS_MIN, n));
    };
-   const getSlowms = () => {
-      // Atlas may change the effective threshold at runtime; profile status is the live value
-      try {
-         const { slowms } = db.getSiblingDB('admin').getProfilingStatus();
-         if (Number.isFinite(+slowms) && +slowms > 0) return +slowms;
-      } catch(e) {
-         return null; // enableProfiler required
-      }
-      return null;
-   };
+   const regulatePollMS = (pollMS, { overflow = false, active = false } = {}) =>
+      (overflow || active) ? POLL_MS_MIN : clampPollMS(pollMS * 2);
    let getLogWarned = false;
    const logKey = ({ t, 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = {}) =>
       `${+t}\0${session_dhandle_name}\0${msg}`;
@@ -374,67 +364,52 @@
       let pause = false;
       let firstPassDone = false;
       let seenRunning = false;
-      let fallbackWarned = false;
       const graceMS = 2000;
       const started = Date.now();
       const seen = new Set();
-      const slowms = getSlowms();
-      if (slowms == null) {
-         console.log(`\x1b[31m[WARN] getProfilingStatus() unavailable, polling every ${POLL_MS_FALLBACK}ms\x1b[0m`);
-         fallbackWarned = true;
-      }
-      let pollMS = clampPollMS(slowms);
-      let lastSlowmsAt = Date.now();
+      let pollMS = POLL_MS_MIN;
       let lastTotal = null;
       const startBytes = getBackgroundCompact()?.bytesRecovered;
 
       do {
          const { logs, totalLinesWritten } = getLogs(ts, seen);
-         if (Number.isFinite(totalLinesWritten)) {
-            if (lastTotal != null && totalLinesWritten - lastTotal >= GETLOG_CAP) {
-               const next = Math.max(POLL_MS_MIN, Math.floor(pollMS / 2));
-               console.log(`\x1b[31m[WARN] getLog overflow: ${totalLinesWritten - lastTotal} lines since last poll (ramlog ~${GETLOG_CAP}); tightening poll ${pollMS}ms → ${next}ms\x1b[0m`);
-               pollMS = next;
-            }
-            lastTotal = totalLinesWritten;
+         const overflow = Number.isFinite(totalLinesWritten)
+            && lastTotal != null
+            && totalLinesWritten - lastTotal >= GETLOG_CAP;
+         if (overflow) {
+            console.log(`\x1b[31m[WARN] getLog overflow: ${totalLinesWritten - lastTotal} lines since last poll (ramlog ~${GETLOG_CAP}); resetting poll ${pollMS}ms → ${POLL_MS_MIN}ms\x1b[0m`);
          }
+         if (Number.isFinite(totalLinesWritten)) lastTotal = totalLinesWritten;
          if (logs.length > 0) {
             logs.forEach(entry => {
                const { t = ISODate(), 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = entry;
                seen.add(logKey(entry));
                if (t > ts) ts = t;
-               if (isSizeStorerSkip(msg, session_dhandle_name)) firstPassDone = true;
+               if (isSizeStorer(msg, session_dhandle_name)) firstPassDone = true;
                console.log(t.toJSON(), annotateWtMsg(msg, session_dhandle_name, resolveNs));
             });
             pause = false; // reset pause when new log entries are present
          } else if (!pause) {
-            console.log('\t══════ autoCompaction work in progress, waiting for new logs ══════\n');
+            console.log('\t══════ autoCompaction work in progress, waiting for new logs ══════');
             pause = true; // set pause to prevent repeated messages
          }
-         if (firstPassDone) break;
+         // runOnce=false cannot wait for idle (thread stays enabled); last file ends the wait
+         if (firstPassDone && !runOnce) break;
          // 1→0 means the thread stopped (runOnce finished, or compact was disabled).
-         // runOnce=false stays running after the first pass — do not require idle.
+         // Also the miss fallback when the sizeStorer line was dropped from the ramlog.
          const running = getAutoCompactRunning();
          if (running === true) seenRunning = true;
-         if (seenRunning && running === false) {
+         if (running === false && (seenRunning || (runOnce && firstPassDone))) {
             console.log('\n\t══════ serverStatus: background compact idle ══════');
             break;
          }
-         if (!seenRunning && running === false && Date.now() - started >= graceMS) {
+         if (!seenRunning && !firstPassDone && running === false && Date.now() - started >= graceMS) {
             console.log('\n\t══════ serverStatus: background compact idle (no-op) ══════');
             break;
          }
-         if (Date.now() - lastSlowmsAt >= SLOWMS_REFRESH_MS) {
-            const refreshed = getSlowms();
-            if (refreshed == null && !fallbackWarned) {
-               console.log(`\x1b[31m[WARN] getProfilingStatus() unavailable, polling every ${POLL_MS_FALLBACK}ms\x1b[0m`);
-               fallbackWarned = true;
-            }
-            pollMS = clampPollMS(refreshed);
-            lastSlowmsAt = Date.now();
-         }
+         pollMS = regulatePollMS(pollMS, { "overflow": overflow, "active": logs.length > 0 });
          sleep(pollMS);
-      } while (!firstPassDone);
+      } while (true);
       if (!runOnce && firstPassDone) {
          console.log('\n\t══════ first pass complete; background compact left enabled (next walk ~24h) ══════');
          reportRecoveredBytes(startBytes);
