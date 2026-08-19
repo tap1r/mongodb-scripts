@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.6"
+    *  Version: "0.4.7"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -39,7 +39,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.6" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.7" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    function serverStatus(serverStatusOptions = {}) {
@@ -410,7 +410,12 @@
             });
             pause = false; // reset pause when new log entries are present
          } else if (!pause) {
-            console.log('\t══════ autoCompaction work in progress, waiting for new logs ══════');
+            if (firstPassDone) {
+               // last file already seen; runOnce=true is waiting for idle, not more logs
+               if (runOnce) console.log('\t══════ last file done, waiting for background compact idle ══════');
+            } else {
+               console.log('\t══════ autoCompaction work in progress, waiting for new logs ══════');
+            }
             pause = true; // set pause to prevent repeated messages
          }
          // 1→0 means the thread stopped (runOnce finished, or compact was disabled).
