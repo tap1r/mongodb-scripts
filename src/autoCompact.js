@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.3.8"
+    *  Version: "0.4.0"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -20,6 +20,7 @@
     *  - getLog prefilters "c":"WTCMPCT" before EJSON.parse; a bad line or getLog failure does not abort the wait
     *  - log watermark is exclusive at start, then inclusive same-ms with t+msg+dhandle dedup
     *  - reports wiredTiger background-compact recovered bytes for this pass
+    *  - other WT compact counters (success/failed/skipped/timeout/interrupted) are process-lifetime aggregates and are not reported
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'const freeSpaceTargetMB = 1, runOnce = true, timeoutMS = 0;'] [-f|--file] </path/to/>autoCompact.js
@@ -34,7 +35,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true, timeoutMS = 3600000;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.3.8" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.0" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    function serverStatus(serverStatusOptions = {}) {
@@ -115,7 +116,7 @@
    }
 
    const getBackgroundCompact = () => {
-      // WiredTiger background-compact.running is the authoritative idle/active flag
+      // running + recovered bytes only; success/failed/skipped are lifetime totals, not per-file
       let running, bytesRecovered;
       try {
          ({ 'wiredTiger': {
@@ -200,10 +201,10 @@
       }
       let engine, running;
       try {
-         ({ 'storageEngine': { 'name': engine = '' } = {},
+         ({ 'storageEngine': { 'name': engine } = {},
             'wiredTiger': {
                'background-compact': {
-                  'background compact running': running = ''
+                  'background compact running': running
                } = {}
             } = {}
          } = serverStatus({
@@ -315,7 +316,7 @@
    const isSizeStorerSkip = (msg = '', dhandle = '') => {
       // first-pass end: WT skipped sizeStorer (wording varies by verbosity)
       const text = `${dhandle} ${msg}`;
-      return text.includes('sizeStorer') // sizeStorer is assumed to be the last WT namespace, but only if it was skipped
+      return text.includes('sizeStorer') // sizeStorer is assumed to be the last WT namespace
    };
    const POLL_MS_MIN = 25;
    const POLL_MS_MAX = 500;
@@ -451,6 +452,7 @@
    // --eval may bind these with const; never reassign, resolve into locals
    const timeoutMSOpt = typeof timeoutMS === 'undefined' ? 0 : timeoutMS ?? 0;
    const options = {
+      // we default to 1MB to maximise the effectiveness of the autoCompaction feature, at the cost of extra system load
       "freeSpaceTargetMB": typeof freeSpaceTargetMB === 'undefined' ? 1 : freeSpaceTargetMB ?? 1,
       "runOnce": typeof runOnce === 'undefined' ? true : runOnce ?? true,
       "timeoutMS": Number.isFinite(+timeoutMSOpt) && +timeoutMSOpt > 0 ? +timeoutMSOpt : 0
@@ -462,6 +464,7 @@
       "freeSpaceTargetMB": options.freeSpaceTargetMB,
       "runOnce": options.runOnce
    };
+   console.log(`[NOTE] autoCompact() is per mongod instance only, cluster and replSet compaction requires targetted command execution. In addition, autoCompact() excludes the oplog.\n`);
    console.log(`Executing shell command:\ndb.adminCommand(${EJSON.stringify(cmd, null, 3)});\n`);
    const ts = ISODate();
    let result;
