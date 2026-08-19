@@ -1,14 +1,14 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.3.3"
+    *  Version: "0.3.4"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Notes:
     *  - customise command options "freeSpaceTargetMB", "runOnce", and/or "timeoutMS" if required
-    *  - waits for the WTCMPCT sizeStorer skip line, or serverStatus background compact idle
+    *  - waits for a sizeStorer "skipping compaction" WTCMPCT line, or serverStatus background compact idle
     *  - timeoutMS aborts the wait (0/omitted = no timeout)
     *  - log poll interval follows getProfilingStatus().slowms (re-read each poll); 100ms without enableProfiler
     *  - mongosh only
@@ -29,14 +29,86 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true, timeoutMS = 3600000;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.3.3" };
+   const __script = { "name": "autoCompact.js", "version": "0.3.4" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
-   const autoCompact = (freeSpaceTargetMB = 1, runOnce = true) => db.adminCommand({
-      "autoCompact": true,
-      "freeSpaceTargetMB": freeSpaceTargetMB,
-      "runOnce": runOnce
-   });
+   function serverStatus(serverStatusOptions = {}) {
+      /*
+      *  opt-in version of db.serverStatus()
+      */
+      const serverStatusOptionsDefaults = { // multiversion compatible
+         "activeIndexBuilds": false,
+         "asserts": false,
+         "batchedDeletes": false,
+         "bucketCatalog": false,
+         "catalogStats": false,
+         "changeStreamPreImages": false,
+         "collectionCatalog": false,
+         "connections": false,
+         "defaultRWConcern": false,
+         "directShardConnections": false,
+         "electionMetrics": false,
+         "encryptionAtRest": false,
+         "extra_info": false,
+         "featureCompatibilityVersion": false,
+         "fle": false,
+         "flowControl": false,
+         "globalLock": false,
+         "health": false,
+         "hedgingMetrics": false,
+         "indexBuilds": false,
+         "indexBulkBuilder": false,
+         "indexStats": false,
+         "internalTransactions": false,
+         "Instance Information": false,
+         "latchAnalysis": false,
+         "locks": false,
+         "logicalSessionRecordCache": false,
+         "mem": false,
+         "metrics": false,
+         "mirroredReads": false,
+         "network": false,
+         "opLatencies": false,
+         "opReadConcernCounters": false,
+         "opWorkingTime": false,
+         "opWriteConcernCounters": false,
+         "opcounters": false,
+         "opcountersRepl": false,
+         "oplogTruncation": false,
+         "oplogTruncationThread": false,
+         "planCache": false,
+         "profiler": false,
+         "queryAnalyzers": false,
+         "querySettings": false,
+         "queues": false,
+         "readConcernCounters": false,
+         "readPreferenceCounters": false,
+         "recoveryOplogApplier": false,
+         "repl": false,
+         "scramCache": false,
+         "security": false,
+         "sharding": false,
+         "shardingStatistics": false,
+         "shardedIndexConsistency": false,
+         "shardSplits": false,
+         "storageEngine": false,
+         "tcmalloc": false,
+         "tenantMigrations": false,
+         "trafficRecording": false,
+         "transactions": false,
+         "transportSecurity": false,
+         "twoPhaseCommitCoordinator": false,
+         "watchdog": false,
+         "wiredTiger": false,
+         "writeBacksQueued": false
+      };
+
+      return db.adminCommand({
+         "serverStatus": true,
+         ...{ ...serverStatusOptionsDefaults, ...serverStatusOptions }
+      });
+   }
+
    const getAutoCompactRunning = () => {
       // WiredTiger background-compact.running is the authoritative idle/active flag
       let running;
@@ -46,12 +118,7 @@
                   'background compact running': running
                } = {}
             } = {}
-         } = db.adminCommand({
-            "serverStatus": 1,
-            "locks": false,
-            "metrics": false,
-            "repl": false,
-            "tcmalloc": false,
+         } = serverStatus({
             "wiredTiger": true
          }));
       } catch(e) {
@@ -84,18 +151,13 @@
       }
       let engine, running;
       try {
-         ({ 'storageEngine': { 'name': engine } = {},
+         ({ 'storageEngine': { 'name': engine = '' } = {},
             'wiredTiger': {
                'background-compact': {
-                  'background compact running': running
+                  'background compact running': running = ''
                } = {}
             } = {}
-         } = db.adminCommand({
-            "serverStatus": 1,
-            "locks": false,
-            "metrics": false,
-            "repl": false,
-            "tcmalloc": false,
+         } = serverStatus({
             "wiredTiger": true
          }));
       } catch(e) {
@@ -200,6 +262,11 @@
       }
       return out.replace(/there is no useful work to do -\s*/g, '');
    };
+   const isSizeStorerSkip = (msg = '', dhandle = '') => {
+      // first-pass end: WT skipped sizeStorer (wording varies by verbosity)
+      const text = `${dhandle} ${msg}`;
+      return text.includes('sizeStorer') // sizeStorer is assumed to be the last WT namespace, skipped or otherwise
+   };
    const getSlowms = () => {
       // Atlas may change the effective threshold at runtime; profile status is the live value
       try {
@@ -237,13 +304,11 @@
    };
    const tailLogs = (ts, timeoutMS = 0, resolveNs = () => null) => {
       let pause = false;
-      let message = '';
+      let firstPassDone = false;
       let seenRunning = false;
       let fallbackWarned = false;
       const fallbackMS = 100;
       const started = Date.now();
-      // expected to be the last namespace
-      const stop = 'sizeStorer.wt: there is no useful work to do - skipping compaction';
 
       do {
          if (timeoutMS > 0 && Date.now() - started >= timeoutMS) {
@@ -254,7 +319,7 @@
          if (logs.length > 0) {
             logs.forEach(({ t = ISODate(), 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = {}) => {
                ts = t;
-               message = msg;
+               if (isSizeStorerSkip(msg, session_dhandle_name)) firstPassDone = true;
                console.log(t.toJSON(), annotateWtMsg(msg, session_dhandle_name, resolveNs));
             });
             pause = false; // reset pause when new log entries are present
@@ -275,7 +340,7 @@
             fallbackWarned = true;
          }
          sleep(slowms ?? fallbackMS);
-      } while (message !== stop);
+      } while (!firstPassDone);
       console.log('\n\t══════ autoCompaction round complete ══════');
    };
 
@@ -288,16 +353,16 @@
    };
    if (!preflight()) return;
    const resolveNs = makeNsResolver();
-   console.log(`\nExecuting command:\n`);
-   console.log(`db.adminCommand({
+   const cmd = {
       "autoCompact": true,
-      "freeSpaceTargetMB": ${options.freeSpaceTargetMB},
-      "runOnce": ${options.runOnce} }
-   );\n`);
+      "freeSpaceTargetMB": options.freeSpaceTargetMB,
+      "runOnce": options.runOnce
+   };
+   console.log(`Executing command:\ndb.adminCommand(${EJSON.stringify(cmd, null, 3)});\n`);
    const ts = ISODate();
    let result;
    try {
-      result = autoCompact(options.freeSpaceTargetMB, options.runOnce);
+      result = db.adminCommand(cmd);
    } catch(e) {
       console.log('\x1b[31m[ERROR] autoCompact failed:\x1b[0m', e);
       return;
