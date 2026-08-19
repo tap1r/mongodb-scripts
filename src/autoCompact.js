@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.3.6"
+    *  Version: "0.3.7"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,7 +13,8 @@
     *  - runOnce=false: exit after first pass and leave background compact enabled (next walk ~24h)
     *  - never-seen-running + still idle after a short grace is treated as a no-op complete
     *  - timeoutMS aborts the wait (0/omitted = no timeout)
-    *  - log poll interval follows getProfilingStatus().slowms (re-read each poll); 100ms without enableProfiler
+    *  - log poll interval follows getProfilingStatus().slowms, clamped to 25-500ms (re-read every 10s; 100ms without enableProfiler)
+    *  - getLog totalLinesWritten jump >= 1024 warns of missed lines and halves the poll interval until the next slowms read
     *  - preflight rejects mongos, server < 8.0, non-wiredTiger, and an already-running compact
     *  - WTCMPCT filenames are replaced with the $listCatalog namespace when resolved (WT name is the fallback)
     *  - getLog prefilters "c":"WTCMPCT" before EJSON.parse; a bad line or getLog failure does not abort the wait
@@ -32,7 +33,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true, timeoutMS = 3600000;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.3.6" };
+   const __script = { "name": "autoCompact.js", "version": "0.3.7" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    function serverStatus(serverStatusOptions = {}) {
@@ -271,6 +272,16 @@
       const text = `${dhandle} ${msg}`;
       return text.includes('sizeStorer') // sizeStorer is assumed to be the last WT namespace, but only if it was skipped
    };
+   const POLL_MS_MIN = 25;
+   const POLL_MS_MAX = 500;
+   const POLL_MS_FALLBACK = 100;
+   const SLOWMS_REFRESH_MS = 10000;
+   const GETLOG_CAP = 1024;
+   const clampPollMS = ms => {
+      const n = +ms;
+      if (!Number.isFinite(n) || n <= 0) return POLL_MS_FALLBACK;
+      return Math.min(POLL_MS_MAX, Math.max(POLL_MS_MIN, n));
+   };
    const getSlowms = () => {
       // Atlas may change the effective threshold at runtime; profile status is the live value
       try {
@@ -286,15 +297,15 @@
       `${+t}\0${session_dhandle_name}\0${msg}`;
    const getLogs = (since, seen) => {
       // ramlog is ~1024 raw JSON lines; skip non-WTCMPCT before EJSON.parse
-      let lines;
+      let lines, totalLinesWritten;
       try {
-         ({ "log": lines = [] } = db.adminCommand({ "getLog": "global" }));
+         ({ "log": lines = [], "totalLinesWritten": totalLinesWritten } = db.adminCommand({ "getLog": "global" }));
       } catch(e) {
          if (!getLogWarned) {
             console.log('\x1b[31m[WARN] getLog() unavailable, relying on serverStatus() for idle detection:\x1b[0m', e);
             getLogWarned = true;
          }
-         return [];
+         return { "logs": [], "totalLinesWritten": null };
       }
       const out = [];
       for (const line of lines) {
@@ -311,24 +322,39 @@
             // skip malformed WTCMPCT line
          }
       }
-      return out;
+      return { "logs": out, "totalLinesWritten": totalLinesWritten };
    };
    const tailLogs = (ts, timeoutMS = 0, resolveNs = () => null, runOnce = true) => {
       let pause = false;
       let firstPassDone = false;
       let seenRunning = false;
       let fallbackWarned = false;
-      const fallbackMS = 100;
       const graceMS = 2000;
       const started = Date.now();
       const seen = new Set();
+      const slowms = getSlowms();
+      if (slowms == null) {
+         console.log(`\x1b[31m[WARN] getProfilingStatus() unavailable, polling every ${POLL_MS_FALLBACK}ms\x1b[0m`);
+         fallbackWarned = true;
+      }
+      let pollMS = clampPollMS(slowms);
+      let lastSlowmsAt = Date.now();
+      let lastTotal = null;
 
       do {
          if (timeoutMS > 0 && Date.now() - started >= timeoutMS) {
             console.log(`\x1b[31m[ERROR] timed out after ${timeoutMS}ms waiting for autoCompact()\x1b[0m`);
             return;
          }
-         const logs = getLogs(ts, seen);
+         const { logs, totalLinesWritten } = getLogs(ts, seen);
+         if (Number.isFinite(totalLinesWritten)) {
+            if (lastTotal != null && totalLinesWritten - lastTotal >= GETLOG_CAP) {
+               const next = Math.max(POLL_MS_MIN, Math.floor(pollMS / 2));
+               console.log(`\x1b[31m[WARN] getLog overflow: ${totalLinesWritten - lastTotal} lines since last poll (ramlog ~${GETLOG_CAP}); tightening poll ${pollMS}ms → ${next}ms\x1b[0m`);
+               pollMS = next;
+            }
+            lastTotal = totalLinesWritten;
+         }
          if (logs.length > 0) {
             logs.forEach(entry => {
                const { t = ISODate(), 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = entry;
@@ -355,12 +381,16 @@
             console.log('\n\t══════ serverStatus: background compact idle (no-op) ══════');
             break;
          }
-         const slowms = getSlowms();
-         if (slowms == null && !fallbackWarned) {
-            console.log(`\x1b[31m[WARN] getProfilingStatus() unavailable, polling every ${fallbackMS}ms\x1b[0m`);
-            fallbackWarned = true;
+         if (Date.now() - lastSlowmsAt >= SLOWMS_REFRESH_MS) {
+            const refreshed = getSlowms();
+            if (refreshed == null && !fallbackWarned) {
+               console.log(`\x1b[31m[WARN] getProfilingStatus() unavailable, polling every ${POLL_MS_FALLBACK}ms\x1b[0m`);
+               fallbackWarned = true;
+            }
+            pollMS = clampPollMS(refreshed);
+            lastSlowmsAt = Date.now();
          }
-         sleep(slowms ?? fallbackMS);
+         sleep(pollMS);
       } while (!firstPassDone);
       if (!runOnce && firstPassDone) {
          console.log('\n\t══════ first pass complete; background compact left enabled (next walk ~24h) ══════');
