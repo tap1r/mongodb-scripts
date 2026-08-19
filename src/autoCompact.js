@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.4"
+    *  Version: "0.4.5"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -20,7 +20,8 @@
     *  - wiredTiger serverStatus is cached and refreshed at most every 1000ms (recovered-bytes report is uncached)
     *  - preflight rejects mongos, server < 8.0, non-wiredTiger, and an already-running compact (one-shot: prefer runOnce: true)
     *  - WTCMPCT filenames are replaced with the $listCatalog namespace when resolved (WT name is the fallback)
-    *  - getLog prefilters "c":"WTCMPCT" before EJSON.parse; a bad line or getLog failure does not abort the wait
+    *  - unknown WT idents re-query $listCatalog at most every 5s
+    *  - getLog prefilters /"c"\s*:\s*"WTCMPCT"/ before EJSON.parse; a bad line or getLog failure does not abort the wait
     *  - log watermark is exclusive at start, then inclusive same-ms with t+msg+dhandle dedup
     *  - reports wiredTiger background-compact recovered bytes for this pass
     *  - other WT compact counters (success/failed/skipped/timeout/interrupted) are process-lifetime aggregates and are not reported
@@ -38,7 +39,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.4" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.5" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    function serverStatus(serverStatusOptions = {}) {
@@ -288,19 +289,23 @@
    };
    const wtNameFromMsg = (msg = '', dhandle) => {
       if (dhandle) return dhandle;
-      const match = String(msg).match(/(?:file:|table:)?(?:[\w.-]+\/)?[\w.-]+\.wt/);
-      return match ? match[0] : null;
+      const text = String(msg);
+      const prefixed = text.match(/(?:file:|table:|statistics:table:)[\w.-]+(?:\.wt)?/);
+      if (prefixed) return prefixed[0];
+      const wtFile = text.match(/(?:[\w.-]+\/)?[\w.-]+\.wt/);
+      return wtFile ? wtFile[0] : null;
    };
+   const IDENT_REFRESH_MS = 5000;
    const makeNsResolver = () => {
-      let { map, ok } = buildIdentMap();
-      let refreshed = !ok;
+      let { map } = buildIdentMap();
+      let lastRefreshAt = 0; // first unknown refreshes immediately; then at most every IDENT_REFRESH_MS
       return name => {
          let ns = nsFromWt(name, map);
          if (ns || !name) return ns;
-         if (!refreshed) {
+         if (Date.now() - lastRefreshAt >= IDENT_REFRESH_MS) {
             // unknown ident: collection created during this pass
-            refreshed = true;
             ({ map } = buildIdentMap());
+            lastRefreshAt = Date.now();
             ns = nsFromWt(name, map);
          }
          return ns;
@@ -316,7 +321,7 @@
          if (plain && !text.includes(plain)) {
             const key = identKey(wtName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             if (key) {
-               const substituted = text.replace(new RegExp(`(?:file:|table:)?${key}(?:\\.wt)?`, 'g'), nsColored(entry));
+               const substituted = text.replace(new RegExp(`(?:file:|table:|statistics:table:)?${key}(?:\\.wt)?`, 'g'), nsColored(entry));
                if (substituted !== text) out = substituted;
             }
          }
@@ -339,6 +344,7 @@
    const regulatePollMS = (pollMS, { overflow = false, active = false } = {}) =>
       (overflow || active) ? POLL_MS_MIN : clampPollMS(pollMS * 2);
    let getLogWarned = false;
+   const WTCMPCT_RE = /"c"\s*:\s*"WTCMPCT"/;
    const logKey = ({ t, 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = {}) =>
       `${+t}\0${session_dhandle_name}\0${msg}`;
    const getLogs = (since, seen) => {
@@ -355,7 +361,7 @@
       }
       const out = [];
       for (const line of lines) {
-         if (!String(line).includes('"c":"WTCMPCT"')) continue;
+         if (!WTCMPCT_RE.test(String(line))) continue;
          try {
             const entry = EJSON.parse(line);
             // start watermark is exclusive; later same-ms siblings are kept if not yet seen
@@ -448,7 +454,7 @@
       "freeSpaceTargetMB": options.freeSpaceTargetMB,
       "runOnce": options.runOnce
    };
-   console.log(`[NOTE] autoCompact() is per mongod instance only, cluster and replSet compaction requires targetted command execution. In addition, autoCompact() excludes the oplog.\n`);
+   console.log(`[NOTE] autoCompact() is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact() excludes the oplog.\n`);
    console.log(`Executing shell command:\ndb.adminCommand(${EJSON.stringify(cmd, null, 3)});\n`);
    const ts = ISODate();
    let result;
