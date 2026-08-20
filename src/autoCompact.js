@@ -1,14 +1,15 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.10"
+    *  Version: "0.4.11"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Notes:
     *  - mongosh only
-    *  - customise command options "freeSpaceTargetMB" and/or "runOnce" if required
+    *  - colour tags ([red]/[yellow]/[/] …) are expanded on TTY; ANSI is stripped when piped
+    *  - customise command options "freeSpaceTargetMB" (positive integer) and/or "runOnce" if required
     *  - sizeStorer WTCMPCT line is the last file of this pass (skip or compact); ramlog overflow can miss it
     *  - after at least one WTCMPCT line, 2s with no new WTCMPCT treats the first pass as complete only if ramlog overflow was seen or compact is idle (the in-progress banner does not count)
     *  - runOnce=true: after last file, wait for serverStatus idle so recovered bytes include sizeStorer work; idle is also the miss fallback
@@ -38,8 +39,95 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.10" };
-   console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
+   const __script = { "name": "autoCompact.js", "version": "0.4.11" };
+
+   // colour tags + console.log wrapper (copied from mdblib.js; TTY markup, non-TTY ANSI strip)
+   const isMongosh = () => typeof process !== 'undefined';
+   const ansiTags = [
+      { "tag": "\/", "code": 0 },
+      { "tag": "bold", "code": 1 },
+      { "tag": "dim", "code": 2 },
+      { "tag": "italic", "code": 3 },
+      { "tag": "underline", "code": 4 },
+      { "tag": "blink", "code": 5 },
+      { "tag": "reverse", "code": 7 },
+      { "tag": "hide", "code": 8 },
+      { "tag": "strike", "code": 9 },
+      { "tag": "black", "code": 30 },
+      { "tag": "k", "code": 30 },
+      { "tag": "red", "code": 31 },
+      { "tag": "r", "code": 31 },
+      { "tag": "green", "code": 32 },
+      { "tag": "g", "code": 32 },
+      { "tag": "yellow", "code": 33 },
+      { "tag": "y", "code": 33 },
+      { "tag": "blue", "code": 34 },
+      { "tag": "b", "code": 34 },
+      { "tag": "magenta", "code": 35 },
+      { "tag": "m", "code": 35 },
+      { "tag": "cyan", "code": 36 },
+      { "tag": "c", "code": 36 },
+      { "tag": "white", "code": 37 },
+      { "tag": "e", "code": 37 },
+      { "tag": "default", "code": 39 },
+      { "tag": "bg black", "code": 40 },
+      { "tag": "bg red", "code": 41 },
+      { "tag": "bg green", "code": 42 },
+      { "tag": "bg yellow", "code": 43 },
+      { "tag": "bg blue", "code": 44 },
+      { "tag": "bg magenta", "code": 45 },
+      { "tag": "bg cyan", "code": 46 },
+      { "tag": "bg white", "code": 47 },
+      { "tag": "bg default", "code": 49 },
+      { "tag": "bright black", "code": 90 },
+      { "tag": "K", "code": 90 },
+      { "tag": "bright red", "code": 91 },
+      { "tag": "R", "code": 91 },
+      { "tag": "bright green", "code": 92 },
+      { "tag": "G", "code": 92 },
+      { "tag": "bright yellow", "code": 93 },
+      { "tag": "Y", "code": 93 },
+      { "tag": "bright blue", "code": 94 },
+      { "tag": "B", "code": 94 },
+      { "tag": "bright magenta", "code": 95 },
+      { "tag": "M", "code": 95 },
+      { "tag": "bright cyan", "code": 96 },
+      { "tag": "C", "code": 96 },
+      { "tag": "bright white", "code": 97 },
+      { "tag": "W", "code": 97 },
+      { "tag": "bg bright black", "code": 100 },
+      { "tag": "bg bright red", "code": 101 },
+      { "tag": "bg bright green", "code": 102 },
+      { "tag": "bg bright yellow", "code": 103 },
+      { "tag": "bg bright blue", "code": 104 },
+      { "tag": "bg bright magenta", "code": 105 },
+      { "tag": "bg bright cyan", "code": 106 },
+      { "tag": "bg bright white", "code": 107 }
+   ];
+   isMongosh() && (console['log'] = (function() {
+      const method = () => console;
+      const fn = 'log';
+      const _fn = '_' + fn;
+      if (method()[fn].name !== 'modifiedLog') method()[_fn] = method()[fn];
+      function modifiedLog() {
+         const isTTY = process.stdout.isTTY;
+         const markup = text => {
+            ansiTags.forEach(({ tag, code }) => {
+               text = text.replaceAll(new RegExp(`\\[${tag}\\]`, 'gi'), `\x1b[${code}m`);
+            });
+            return text;
+         };
+         const colourise = args => [...args].map(arg => typeof arg === 'string' ? markup(arg) : arg);
+         const noEsc = args => {
+            const ansi = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
+            return [...args].map(arg => typeof arg === 'string' ? arg.replaceAll(ansi, '') : arg);
+         };
+         return method()[_fn].apply(null, isTTY ? colourise(arguments) : noEsc(colourise(arguments)));
+      }
+      return modifiedLog;
+   })());
+
+   console.log(`\n[yellow]#### Running script ${__script.name} v${__script.version} on shell v${version()}[/]\n`);
 
    function serverStatus(serverStatusOptions = {}) {
       /*
@@ -195,22 +283,22 @@
       // autoCompact is mongod 8.0+ / wiredTiger only and errors if already running
       try {
          if (db.hello().msg === 'isdbgrid') {
-            console.log('\x1b[31m[ERROR] autoCompact() is not supported on mongos; connect directly to a mongod\x1b[0m');
+            console.log('[red][ERROR] autoCompact() is not supported on mongos; connect directly to a mongod[/]');
             return false;
          }
       } catch(e) {
-         console.log('\x1b[31m[ERROR] hello() failed:\x1b[0m', e);
+         console.log('[red][ERROR] hello() failed:[/]', e);
          return false;
       }
       let major;
       try {
          major = parseInt(String(db.version()).split('.')[0], 10);
       } catch(e) {
-         console.log('\x1b[31m[ERROR] db.version() failed:\x1b[0m', e);
+         console.log('[red][ERROR] db.version() failed:[/]', e);
          return false;
       }
       if (!Number.isFinite(major) || major < 8) {
-         console.log(`\x1b[31m[ERROR] autoCompact() requires MongoDB 8.0+; detected ${db.version()}\x1b[0m`);
+         console.log(`[red][ERROR] autoCompact() requires MongoDB 8.0+; detected ${db.version()}[/]`);
          return false;
       }
       let engine, running;
@@ -226,15 +314,15 @@
             "wiredTiger": true
          }));
       } catch(e) {
-         console.log('\x1b[31m[ERROR] serverStatus() failed:\x1b[0m', e);
+         console.log('[red][ERROR] serverStatus() failed:[/]', e);
          return false;
       }
       if (engine != null && engine !== 'wiredTiger') {
-         console.log(`\x1b[31m[ERROR] autoCompact() requires wiredTiger; detected storage engine "${engine}"\x1b[0m`);
+         console.log(`[red][ERROR] autoCompact() requires wiredTiger; detected storage engine "${engine}"[/]`);
          return false;
       }
       if (running > 0 || running === true) {
-         console.log('\x1b[31m[ERROR] background compact already enabled; Issue { autoCompact: false } first to disable\x1b[0m');
+         console.log('[red][ERROR] background compact already enabled; Issue { autoCompact: false } first to disable[/]');
          return false;
       }
       return true;
@@ -272,7 +360,7 @@
          });
          ok = true;
       } catch(e) {
-         console.log('\x1b[31m[WARN] $listCatalog() unavailable, WTCMPCT lines will show WT filenames:\x1b[0m', e);
+         console.log('[red][WARN] $listCatalog() unavailable, WTCMPCT lines will show WT filenames:[/]', e);
       }
       return { map, ok };
    };
@@ -286,9 +374,9 @@
    };
    const nsColored = entry => {
       if (!entry) return null;
-      if (entry.kind === 'internal') return `\x1b[31m${entry.ns}\x1b[0m`;
-      if (entry.kind === 'index') return `\x1b[33m${entry.ns}\x1b[0m.\x1b[32m${entry.idx}\x1b[0m`;
-      return `\x1b[33m${entry.ns}\x1b[0m`;
+      if (entry.kind === 'internal') return `[red]${entry.ns}[/]`;
+      if (entry.kind === 'index') return `[yellow]${entry.ns}[/].[green]${entry.idx}[/]`;
+      return `[yellow]${entry.ns}[/]`;
    };
    const wtNameFromMsg = (msg = '', dhandle) => {
       if (dhandle) return dhandle;
@@ -362,7 +450,7 @@
          ({ "log": lines = [], "totalLinesWritten": totalLinesWritten } = db.adminCommand({ "getLog": "global" }));
       } catch(e) {
          if (!getLogWarned) {
-            console.log('\x1b[31m[WARN] getLog() unavailable, relying on serverStatus() for idle detection:\x1b[0m', e);
+            console.log('[red][WARN] getLog() unavailable, relying on serverStatus() for idle detection:[/]', e);
             getLogWarned = true;
          }
          return { "logs": [], "totalLinesWritten": null };
@@ -403,7 +491,7 @@
             && totalLinesWritten - lastTotal >= GETLOG_CAP;
          if (overflow) {
             overflowSeen = true;
-            console.log(`\x1b[31m[WARN] getLog overflow: ${totalLinesWritten - lastTotal} lines since last poll (ramlog ~${GETLOG_CAP}); resetting poll ${pollMS}ms → ${POLL_MS_MIN}ms\x1b[0m`);
+            console.log(`[red][WARN] getLog overflow: ${totalLinesWritten - lastTotal} lines since last poll (ramlog ~${GETLOG_CAP}); resetting poll ${pollMS}ms → ${POLL_MS_MIN}ms[/]`);
          }
          if (Number.isFinite(totalLinesWritten)) lastTotal = totalLinesWritten;
          if (logs.length > 0) {
@@ -463,11 +551,34 @@
    };
 
    // --eval may bind these with const; never reassign, resolve into locals
+   const asPositiveInt = (name, raw) => {
+      if (typeof raw === 'boolean') {
+         console.log(`[red][ERROR] ${name} must be a positive integer; got ${EJSON.stringify(raw)}[/]`);
+         return null;
+      }
+      const n = typeof raw === 'number' ? raw : Number(typeof raw === 'string' ? raw.trim() : raw);
+      if (Number.isInteger(n) && n >= 1) return n;
+      console.log(`[red][ERROR] ${name} must be a positive integer; got ${EJSON.stringify(raw)}[/]`);
+      return null;
+   };
+   const asBool = (name, raw) => {
+      // --eval may bind a string; parse "true"/"false" rather than using the value as a boolean
+      if (typeof raw === 'boolean') return raw;
+      if (raw === 0 || raw === 1) return Boolean(raw);
+      if (typeof raw === 'string') {
+         const s = raw.trim().toLowerCase();
+         if (s === 'true' || s === '1') return true;
+         if (s === 'false' || s === '0') return false;
+      }
+      console.log(`[red][ERROR] ${name} must be a boolean; got ${EJSON.stringify(raw)}[/]`);
+      return null;
+   };
    const options = {
       // we default to 1MB to maximise the effectiveness of the autoCompaction feature, at the cost of extra system load
-      "freeSpaceTargetMB": typeof freeSpaceTargetMB === 'undefined' ? 1 : freeSpaceTargetMB ?? 1,
-      "runOnce": typeof runOnce === 'undefined' ? true : runOnce ?? true
+      "freeSpaceTargetMB": asPositiveInt('freeSpaceTargetMB', typeof freeSpaceTargetMB === 'undefined' ? 1 : freeSpaceTargetMB),
+      "runOnce": asBool('runOnce', typeof runOnce === 'undefined' ? true : runOnce)
    };
+   if (options.freeSpaceTargetMB == null || options.runOnce == null) return;
    if (!preflight()) return;
    const resolveNs = makeNsResolver();
    const cmd = {
@@ -476,18 +587,18 @@
       "runOnce": options.runOnce,
       "comment": `Executed by ${__script.name} v${__script.version}`
    };
-   console.log(`[NOTE] autoCompact() is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact() excludes the oplog.\n`);
+   console.log(`[yellow][NOTE][/] autoCompact() is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact() excludes the oplog.\n`);
    console.log(`Executing shell command:\ndb.adminCommand(${EJSON.stringify(cmd, null, 3)});\n`);
    const ts = ISODate();
    let result;
    try {
       result = db.adminCommand(cmd);
    } catch(e) {
-      console.log('\x1b[31m[ERROR] autoCompact() failed:\x1b[0m', e);
+      console.log('[red][ERROR] autoCompact() failed:[/]', e);
       return;
    }
    if (result?.ok !== 1) {
-      console.log('\x1b[31m[ERROR] autoCompact() failed:\x1b[0m', result);
+      console.log('[red][ERROR] autoCompact() failed:[/]', result);
       return;
    }
    tailLogs(ts, resolveNs, options.runOnce);
