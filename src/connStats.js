@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.1.13"
+    *  Version: "0.1.14"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,11 +18,11 @@
     *  - add support for https://jira.mongodb.org/browse/DRIVERS-3027 when complete
     */
 
-   // Usage: mongosh [connection options] [--quiet] [-f|--file] connStats.js
+   // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>connStats.js
 
    const namespace = db.getSiblingDB('admin'),
       aggOpts = {
-         "comment": "connStats.js v0.1.13"
+         "comment": "connStats.js v0.1.14"
       },
       inprog = [
          { "$currentOp": { "allUsers": true } },
@@ -268,7 +268,7 @@
    }
 
    const scope = allUsers ? "allUsers" : "ownOps";
-   namespace.aggregate( pipeline, aggOpts).forEach(doc => {
+   namespace.aggregate(pipeline, aggOpts).forEach(doc => {
       console.log({ scope, ...doc });
    });
 })();
