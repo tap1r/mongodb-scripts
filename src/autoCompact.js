@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.13"
+    *  Version: "0.4.14"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,7 +13,7 @@
     *  - monitors compaction thread, then reports bytes recovered
     */
 
-   // Usage: mongosh [direct host connection options] [--quiet] [--eval 'let options = { "freeSpaceTargetMB": 1, "runOnce": true };'] [-f|--file] </path/to/>autoCompact.js
+   // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "freeSpaceTargetMB": 1, "runOnce": true };'] [-f|--file] </path/to/>autoCompact.js
 
    /*
     *  Example of basic direct localhost usage:
@@ -22,10 +22,12 @@
     *
     *  Example using custom autoCompact command options:
     *
-    *    mongosh "localhost:27017" --quiet --eval 'let options = { "freeSpaceTargetMB": 64, "runOnce": true };' -f autoCompact.js
+    *    mongosh "localhost:27017" --quiet --eval 'var autoCompactOptions = { "freeSpaceTargetMB": 64, "runOnce": true };' -f autoCompact.js
+    *
+    *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.13" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.14" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -260,7 +262,7 @@
    const scaled = new AutoFactor();
    const reportRecoveredBytes = startBytes => {
       // this-pass delta vs process-lifetime cumulative recovered bytes
-      const { 'bytesRecovered': endBytes } = getBackgroundCompact(true);
+      const { 'bytesRecovered': endBytes = null } = getBackgroundCompact(true) ?? {};
       if (endBytes == null) {
          console.log('\t══════ recovered bytes: unavailable ══════');
          return;
@@ -311,7 +313,7 @@
          return false;
       }
       if (running > 0 || running === true) {
-         console.log('[red][ERROR] background compact already enabled; Issue { autoCompact: false } first to disable[/]');
+         console.log('[red][ERROR] background compact thread already enabled; Issue { autoCompact: false } first to disable[/]');
          return false;
       }
       return true;
@@ -480,7 +482,7 @@
       let pollMS = POLL_MS_MIN;
       let lastTotal = null;
       let lastLogAt = null;
-      const { 'bytesRecovered': startBytes } = getBackgroundCompact();
+      const { 'bytesRecovered': startBytes = null } = getBackgroundCompact() ?? {};
 
       do {
          const { logs, totalLinesWritten } = getLogs(ts, seen);
@@ -524,19 +526,19 @@
          }
          if (firstPassDone && !runOnce) break;
          if (running === false && (seenRunning || (runOnce && firstPassDone))) {
-            console.log('\n\t══════ serverStatus: background compact idle ══════');
+            console.log('\n\t══════ serverStatus: background compact thread idle ══════');
             break;
          }
          if (!seenRunning && !firstPassDone && running === false
                && idleSince != null && Date.now() - idleSince >= NOOP_GRACE_MS) {
-            console.log('\n\t══════ serverStatus: background compact idle (no-op) ══════');
+            console.log('\n\t══════ serverStatus: background compact thread idle (no-op) ══════');
             break;
          }
          pollMS = regulatePollMS(pollMS, { "overflow": overflow, "active": logs.length > 0 });
          sleep(pollMS);
       } while (true);
       if (!runOnce && firstPassDone) {
-         console.log('\n\t══════ first pass complete; background compact left enabled (next walk ~24h) ══════');
+         console.log('\n\t══════ first pass complete; background compact thread left enabled (next walk ~24h) ══════');
          reportRecoveredBytes(startBytes);
          return;
       }
@@ -544,7 +546,7 @@
       reportRecoveredBytes(startBytes);
    };
 
-   // --eval may bind `options` with let/const; never reassign it, merge into locals
+   // --eval may bind `autoCompactOptions` with let/const; never reassign it, merge into locals
    const asPositiveInt = (name, raw) => {
       if (typeof raw === 'boolean') {
          console.log(`[red][ERROR] ${name} must be a positive integer; got ${EJSON.stringify(raw)}[/]`);
@@ -571,7 +573,7 @@
       "freeSpaceTargetMB": 1,
       "runOnce": true
    };
-   const userOptions = typeof options === 'undefined' ? {} : options;
+   const userOptions = typeof autoCompactOptions === 'undefined' ? {} : autoCompactOptions;
    const cmdOptions = {
       "freeSpaceTargetMB": asPositiveInt('freeSpaceTargetMB', userOptions.freeSpaceTargetMB ?? optionDefaults.freeSpaceTargetMB),
       "runOnce": asBool('runOnce', userOptions.runOnce ?? optionDefaults.runOnce)
