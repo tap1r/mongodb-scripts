@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.9"
+    *  Version: "0.4.10"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,6 @@
     *  - runOnce=true: after last file, wait for serverStatus idle so recovered bytes include sizeStorer work; idle is also the miss fallback
     *  - runOnce=false: exit after last file and leave background compact enabled (next walk ~24h); log-quiet (after overflow or idle) and idle are miss fallbacks if sizeStorer was missed
     *  - never-seen-running + still idle for 5s is treated as a no-op complete
-    *  - no wait timeout; interrupt the shell if compact is stuck
     *  - log poll uses a self-regulating backoff, clamped to 50-1000ms (reset to 50ms on new WTCMPCT lines or ramlog overflow; otherwise doubles)
     *  - getLog totalLinesWritten jump >= 1024 warns of missed lines and resets the poll interval to 50ms
     *  - wiredTiger serverStatus is cached and refreshed at most every 1000ms (recovered-bytes report is uncached)
@@ -22,7 +21,7 @@
     *  - WTCMPCT filenames are replaced with the $listCatalog namespace when resolved (WT name is the fallback)
     *  - unknown WT idents re-query $listCatalog at most every 5s
     *  - getLog prefilters /"c"\s*:\s*"WTCMPCT"/ before EJSON.parse; a bad line or getLog failure does not abort the wait
-    *  - log watermark is exclusive at start, then inclusive same-ms with t+msg+dhandle dedup
+    *  - log watermark is exclusive at start, then inclusive same-ms with t+msg+dhandle dedup (seen Set capped at ramlog ~1024, oldest first)
     *  - reports wiredTiger background-compact recovered bytes for this pass
     *  - other WT compact counters (success/failed/skipped/timeout/interrupted) are process-lifetime aggregates and are not reported
     */
@@ -39,7 +38,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.9" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.10" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    function serverStatus(serverStatusOptions = {}) {
@@ -352,6 +351,10 @@
    const WTCMPCT_RE = /"c"\s*:\s*"WTCMPCT"/;
    const logKey = ({ t, 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = {}) =>
       `${+t}\0${session_dhandle_name}\0${msg}`;
+   const rememberLog = (seen, key) => {
+      seen.add(key);
+      while (seen.size > GETLOG_CAP) seen.delete(seen.keys().next().value);
+   };
    const getLogs = (since, seen) => {
       // ramlog is ~1024 raw JSON lines; skip non-WTCMPCT before EJSON.parse
       let lines, totalLinesWritten;
@@ -407,7 +410,7 @@
             lastLogAt = Date.now();
             logs.forEach(entry => {
                const { t = ISODate(), 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = entry;
-               seen.add(logKey(entry));
+               rememberLog(seen, logKey(entry));
                if (t > ts) ts = t;
                if (isSizeStorer(msg, session_dhandle_name)) firstPassDone = true;
                console.log(t.toJSON(), annotateWtMsg(msg, session_dhandle_name, resolveNs));
