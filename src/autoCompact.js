@@ -1,8 +1,8 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.12"
-    *  Description: "autoCompact() with log and serverStatus monitoring"
+    *  Version: "0.4.13"
+    *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
@@ -11,7 +11,6 @@
     *  - operation is per mongod only: not replicated; does not compact the oplog
     *  - if compact is already enabled, disable first with { autoCompact: false }
     *  - monitors compaction thread, then reports bytes recovered
-    
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'let options = { "freeSpaceTargetMB": 1, "runOnce": true };'] [-f|--file] </path/to/>autoCompact.js
@@ -26,7 +25,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'let options = { "freeSpaceTargetMB": 64, "runOnce": true };' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.12" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.13" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -118,9 +117,10 @@
 
    function serverStatus(serverStatusOptions = {}) {
       /*
-      *  opt-in version of db.serverStatus()
-      */
-      const serverStatusOptionsDefaults = { // multiversion compatible
+       *  opt-in version of db.serverStatus()
+       *  command options are multiversion compatible
+       */
+      const serverStatusOptionsDefaults = {
          "none": true, // 8.3 feature: exclude all optional fields, then opt-in
          "activeIndexBuilds": false,
          "asserts": false,
@@ -260,7 +260,7 @@
    const scaled = new AutoFactor();
    const reportRecoveredBytes = startBytes => {
       // this-pass delta vs process-lifetime cumulative recovered bytes
-      const endBytes = getBackgroundCompact(true)?.bytesRecovered;
+      const { 'bytesRecovered': endBytes } = getBackgroundCompact(true);
       if (endBytes == null) {
          console.log('\t══════ recovered bytes: unavailable ══════');
          return;
@@ -272,7 +272,7 @@
       // autoCompact is mongod 8.0+ / wiredTiger only and errors if already running
       try {
          if (db.hello().msg === 'isdbgrid') {
-            console.log('[red][ERROR] autoCompact() is not supported on mongos; connect directly to a mongod[/]');
+            console.log('[red][ERROR] autoCompact is not supported on mongos; connect directly to a mongod[/]');
             return false;
          }
       } catch(e) {
@@ -287,7 +287,7 @@
          return false;
       }
       if (!Number.isFinite(major) || major < 8) {
-         console.log(`[red][ERROR] autoCompact() requires MongoDB 8.0+; detected ${db.version()}[/]`);
+         console.log(`[red][ERROR] autoCompact requires MongoDB 8.0+; detected ${db.version()}[/]`);
          return false;
       }
       let engine, running;
@@ -307,7 +307,7 @@
          return false;
       }
       if (engine != null && engine !== 'wiredTiger') {
-         console.log(`[red][ERROR] autoCompact() requires wiredTiger; detected storage engine "${engine}"[/]`);
+         console.log(`[red][ERROR] autoCompact requires wiredTiger; detected storage engine "${engine}"[/]`);
          return false;
       }
       if (running > 0 || running === true) {
@@ -409,14 +409,14 @@
       return out.replace(/there is no useful work to do -\s*/g, '');
    };
    const isSizeStorer = (msg = '', dhandle = '') => {
-      // last file of the walk (skip or compact); wording varies by verbosity
+      // last expected file of the walk
       return `${dhandle} ${msg}`.includes('sizeStorer');
    };
-   const POLL_MS_MIN = 50;       // after new WTCMPCT lines or ramlog overflow
-   const POLL_MS_MAX = 1000;     // quiet backoff ceiling
-   const LOG_QUIET_MS = 2000;    // no new WTCMPCT: first-pass complete if overflow seen or compact idle
-   const NOOP_GRACE_MS = 5000;   // never-seen-running and still idle
-   const GETLOG_CAP = 1024;      // ramlog size; overflow warn + seen Set cap
+   const POLL_MS_MIN = 50;     // after new WTCMPCT lines or ramlog overflow
+   const POLL_MS_MAX = 1000;   // quiet backoff ceiling
+   const LOG_QUIET_MS = 2000;  // no new WTCMPCT: first-pass complete if overflow seen or compact idle
+   const NOOP_GRACE_MS = 5000; // never-seen-running and still idle
+   const GETLOG_CAP = 1024;    // ramlog size; overflow warn + seen Set cap
    const clampPollMS = ms => {
       const n = +ms;
       if (!Number.isFinite(n) || n <= 0) return POLL_MS_MIN;
@@ -480,7 +480,7 @@
       let pollMS = POLL_MS_MIN;
       let lastTotal = null;
       let lastLogAt = null;
-      const startBytes = getBackgroundCompact()?.bytesRecovered;
+      const { 'bytesRecovered': startBytes } = getBackgroundCompact();
 
       do {
          const { logs, totalLinesWritten } = getLogs(ts, seen);
@@ -585,18 +585,18 @@
       "runOnce": cmdOptions.runOnce,
       "comment": `Executed by ${__script.name} v${__script.version}`
    };
-   console.log(`[yellow][NOTE][/] autoCompact() is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact() excludes the oplog.\n`);
+   console.log(`[yellow][NOTE][/] autoCompact is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact excludes the oplog.\n`);
    console.log(`Executing shell command:\ndb.adminCommand(${EJSON.stringify(cmd, null, 3)});\n`);
    const ts = ISODate();
    let result;
    try {
       result = db.adminCommand(cmd);
    } catch(e) {
-      console.log('[red][ERROR] autoCompact() failed:[/]', e);
+      console.log('[red][ERROR] autoCompact failed:[/]', e);
       return;
    }
    if (result?.ok !== 1) {
-      console.log('[red][ERROR] autoCompact() failed:[/]', result);
+      console.log('[red][ERROR] autoCompact failed:[/]', result);
       return;
    }
    tailLogs(ts, resolveNs, cmdOptions.runOnce);
