@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.8"
+    *  Version: "0.4.9"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -39,7 +39,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.8" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.9" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    function serverStatus(serverStatusOptions = {}) {
@@ -47,6 +47,7 @@
       *  opt-in version of db.serverStatus()
       */
       const serverStatusOptionsDefaults = { // multiversion compatible
+         "none": true, // 8.3 feature: exclude all optional fields, then opt-in
          "activeIndexBuilds": false,
          "asserts": false,
          "batchedDeletes": false,
@@ -63,6 +64,7 @@
          "featureCompatibilityVersion": false,
          "fle": false,
          "flowControl": false,
+         "ftdcCollectionMetrics": false,
          "globalLock": false,
          "health": false,
          "hedgingMetrics": false,
@@ -70,9 +72,9 @@
          "indexBulkBuilder": false,
          "indexStats": false,
          "internalTransactions": false,
-         "Instance Information": false,
          "latchAnalysis": false,
          "locks": false,
+         "lockContentionMetrics": false,
          "logicalSessionRecordCache": false,
          "mem": false,
          "metrics": false,
@@ -90,6 +92,7 @@
          "profiler": false,
          "queryAnalyzers": false,
          "querySettings": false,
+         "queryStats": false,
          "queues": false,
          "readConcernCounters": false,
          "readPreferenceCounters": false,
@@ -101,6 +104,7 @@
          "shardingStatistics": false,
          "shardedIndexConsistency": false,
          "shardSplits": false,
+         "spillWiredTiger": false,
          "storageEngine": false,
          "tcmalloc": false,
          "tenantMigrations": false,

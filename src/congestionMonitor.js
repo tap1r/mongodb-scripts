@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.6"
+    *  Version: "0.2.7"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -55,6 +55,7 @@
           *  opt-in version of db.serverStatus()
           */
          const serverStatusOptionsDefaults = { // multiversion compatible
+            "none": true, // 8.3 feature: exclude all optional fields, then opt-in
             "activeIndexBuilds": false,
             "asserts": false,
             "batchedDeletes": false,
@@ -64,11 +65,14 @@
             "collectionCatalog": false,
             "connections": false,
             "defaultRWConcern": false,
+            "directShardConnections": false,
             "electionMetrics": false,
             "encryptionAtRest": false,
             "extra_info": false,
             "featureCompatibilityVersion": false,
+            "fle": false,
             "flowControl": false,
+            "ftdcCollectionMetrics": false,
             "globalLock": false,
             "health": false,
             "hedgingMetrics": false,
@@ -76,9 +80,9 @@
             "indexBulkBuilder": false,
             "indexStats": false,
             "internalTransactions": false,
-            "Instance Information": false,
             "latchAnalysis": false,
             "locks": false,
+            "lockContentionMetrics": false,
             "logicalSessionRecordCache": false,
             "mem": false,
             "metrics": false,
@@ -91,20 +95,24 @@
             "opcounters": false,
             "opcountersRepl": false,
             "oplogTruncation": false,
+            "oplogTruncationThread": false,
             "planCache": false,
+            "profiler": false,
             "queryAnalyzers": false,
             "querySettings": false,
+            "queryStats": false,
             "queues": false,
             "readConcernCounters": false,
             "readPreferenceCounters": false,
+            "recoveryOplogApplier": false,
             "repl": false,
             "scramCache": false,
             "security": false,
-            "service": false,
             "sharding": false,
             "shardingStatistics": false,
             "shardedIndexConsistency": false,
             "shardSplits": false,
+            "spillWiredTiger": false,
             "storageEngine": false,
             "tcmalloc": false,
             "tenantMigrations": false,

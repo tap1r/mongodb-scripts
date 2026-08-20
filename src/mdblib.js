@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.14.1"
+ *  Version: "0.14.2"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.14.1"
+      "version": "0.14.2"
 });
 
 // Import crypto module for Node.js/mongosh environments
@@ -736,7 +736,8 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
    /*
     *  opt-in version of db.serverStatus()
     */
-   const serverStatusOptionsDefaults = {
+   const serverStatusOptionsDefaults = { // multiversion compatible
+      "none": true, // 8.3 feature: exclude all optional fields, then opt-in
       "activeIndexBuilds": false,
       "asserts": false,
       "batchedDeletes": false,
@@ -746,11 +747,14 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
       "collectionCatalog": false,
       "connections": false,
       "defaultRWConcern": false,
+      "directShardConnections": false,
       "electionMetrics": false,
       "encryptionAtRest": false,
       "extra_info": false,
       "featureCompatibilityVersion": false,
+      "fle": false,
       "flowControl": false,
+      "ftdcCollectionMetrics": false,
       "globalLock": false,
       "health": false,
       "hedgingMetrics": false,
@@ -758,9 +762,9 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
       "indexBulkBuilder": false,
       "indexStats": false,
       "internalTransactions": false,
-      "Instance Information": false,
       "latchAnalysis": false,
       "locks": false,
+      "lockContentionMetrics": false,
       "logicalSessionRecordCache": false,
       "mem": false,
       "metrics": false,
@@ -768,14 +772,21 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
       "network": false,
       "opLatencies": false,
       "opReadConcernCounters": false,
+      "opWorkingTime": false,
       "opWriteConcernCounters": false,
       "opcounters": false,
       "opcountersRepl": false,
       "oplogTruncation": false,
+      "oplogTruncationThread": false,
       "planCache": false,
+      "profiler": false,
       "queryAnalyzers": false,
+      "querySettings": false,
+      "queryStats": false,
+      "queues": false,
       "readConcernCounters": false,
       "readPreferenceCounters": false,
+      "recoveryOplogApplier": false,
       "repl": false,
       "scramCache": false,
       "security": false,
@@ -783,6 +794,7 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
       "shardingStatistics": false,
       "shardedIndexConsistency": false,
       "shardSplits": false,
+      "spillWiredTiger": false,
       "storageEngine": false,
       "tcmalloc": false,
       "tenantMigrations": false,

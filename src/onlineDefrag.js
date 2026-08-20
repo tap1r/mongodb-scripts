@@ -1,12 +1,12 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.2"
+ *  Version: "0.1.3"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "[mongo|mongosh] [connection options] --quiet [-f|--file] onlineDefrag.js"
+// Usage: "[mongo|mongosh] [connection options] [--quiet] [-f|--file] </path/to/>onlineDefrag.js"
 
 /*
  *  Custom parameters:
@@ -20,7 +20,8 @@
    const pageFillRatio = 0.9;
    const concurrentUpdatesRatio = 0.005;
    const totalUpdatesRatio = 2; // 10;
-   const serverStatusOptions = {
+   const serverStatusOptions = { // multiversion compatible
+      "none": true, // 8.3 feature: exclude all optional fields, then opt-in
       "activeIndexBuilds": false,
       "asserts": false,
       "batchedDeletes": false,
@@ -30,11 +31,14 @@
       "collectionCatalog": false,
       "connections": false,
       "defaultRWConcern": false,
+      "directShardConnections": false,
       "electionMetrics": false,
       "encryptionAtRest": false,
       "extra_info": false,
       "featureCompatibilityVersion": false,
+      "fle": false,
       "flowControl": false,
+      "ftdcCollectionMetrics": false,
       "globalLock": false,
       "health": false,
       "hedgingMetrics": false,
@@ -42,23 +46,31 @@
       "indexBulkBuilder": false,
       "indexStats": false,
       "internalTransactions": false,
-      "Instance Information": false,
       "latchAnalysis": false,
       "locks": false,
+      "lockContentionMetrics": false,
       "logicalSessionRecordCache": false,
+      "mem": false,
       "metrics": false,
       "mirroredReads": false,
       "network": false,
       "opLatencies": false,
       "opReadConcernCounters": false,
+      "opWorkingTime": false,
       "opWriteConcernCounters": false,
       "opcounters": false,
       "opcountersRepl": false,
       "oplogTruncation": false,
+      "oplogTruncationThread": false,
       "planCache": false,
+      "profiler": false,
       "queryAnalyzers": false,
+      "querySettings": false,
+      "queryStats": false,
+      "queues": false,
       "readConcernCounters": false,
       "readPreferenceCounters": false,
+      "recoveryOplogApplier": false,
       "repl": false,
       "scramCache": false,
       "security": false,
@@ -66,6 +78,7 @@
       "shardingStatistics": false,
       "shardedIndexConsistency": false,
       "shardSplits": false,
+      "spillWiredTiger": false,
       "storageEngine": false,
       "tcmalloc": false,
       "tenantMigrations": false,

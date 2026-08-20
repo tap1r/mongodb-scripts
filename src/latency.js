@@ -1,12 +1,12 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.4.7"
+ *  Version: "0.4.8"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: [mongo|mongosh] [connection options] --quiet [-f|--file] latency.js
+// Usage: [mongo|mongosh] [connection options] [--quiet] [-f|--file] </path/to/>latency.js
 
 // Example: mongosh --host "replset/localhost" --quiet latency.js
 
@@ -14,7 +14,7 @@
    /*
     *  main
     */
-   const __script = { "name": "latency.js", "version": "0.4.7" };
+   const __script = { "name": "latency.js", "version": "0.4.8" };
    if (typeof console === 'undefined') {
       /*
        *  legacy mongo detected
@@ -28,7 +28,7 @@
       };
       var EJSON = { parse: JSON.parse };
    }
-   console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${this.version()}\x1b[0m`);
+   console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    const spacing = 1;
    const filter = `Synthetic slow operation ${UUID()} from ${Date.now()}`;
@@ -76,6 +76,7 @@
    try {
       var { 'process': procType = 'unknown' } = db.serverStatus(
          { // multiversion compatible
+            "none": true, // 8.3 feature: exclude all optional fields, then opt-in
             "activeIndexBuilds": false,
             "asserts": false,
             "batchedDeletes": false,
@@ -85,11 +86,14 @@
             "collectionCatalog": false,
             "connections": false,
             "defaultRWConcern": false,
+            "directShardConnections": false,
             "electionMetrics": false,
             "encryptionAtRest": false,
             "extra_info": false,
             "featureCompatibilityVersion": false,
+            "fle": false,
             "flowControl": false,
+            "ftdcCollectionMetrics": false,
             "globalLock": false,
             "health": false,
             "hedgingMetrics": false,
@@ -97,9 +101,9 @@
             "indexBulkBuilder": false,
             "indexStats": false,
             "internalTransactions": false,
-            "Instance Information": false,
             "latchAnalysis": false,
             "locks": false,
+            "lockContentionMetrics": false,
             "logicalSessionRecordCache": false,
             "mem": false,
             "metrics": false,
@@ -112,20 +116,24 @@
             "opcounters": false,
             "opcountersRepl": false,
             "oplogTruncation": false,
+            "oplogTruncationThread": false,
             "planCache": false,
+            "profiler": false,
             "queryAnalyzers": false,
             "querySettings": false,
+            "queryStats": false,
             "queues": false,
             "readConcernCounters": false,
             "readPreferenceCounters": false,
+            "recoveryOplogApplier": false,
             "repl": false,
             "scramCache": false,
             "security": false,
-            "service": false,
             "sharding": false,
             "shardingStatistics": false,
             "shardedIndexConsistency": false,
             "shardSplits": false,
+            "spillWiredTiger": false,
             "storageEngine": false,
             "tcmalloc": false,
             "tenantMigrations": false,
