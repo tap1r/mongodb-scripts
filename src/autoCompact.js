@@ -1,33 +1,20 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.11"
+    *  Version: "0.4.12"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Notes:
-    *  - mongosh only
-    *  - colour tags ([red]/[yellow]/[/] …) are expanded on TTY; ANSI is stripped when piped
-    *  - customise command options "freeSpaceTargetMB" (positive integer) and/or "runOnce" if required
-    *  - sizeStorer WTCMPCT line is the last file of this pass (skip or compact); ramlog overflow can miss it
-    *  - after at least one WTCMPCT line, 2s with no new WTCMPCT treats the first pass as complete only if ramlog overflow was seen or compact is idle (the in-progress banner does not count)
-    *  - runOnce=true: after last file, wait for serverStatus idle so recovered bytes include sizeStorer work; idle is also the miss fallback
-    *  - runOnce=false: exit after last file and leave background compact enabled (next walk ~24h); log-quiet (after overflow or idle) and idle are miss fallbacks if sizeStorer was missed
-    *  - never-seen-running + still idle for 5s is treated as a no-op complete
-    *  - log poll uses a self-regulating backoff, clamped to 50-1000ms (reset to 50ms on new WTCMPCT lines or ramlog overflow; otherwise doubles)
-    *  - getLog totalLinesWritten jump >= 1024 warns of missed lines and resets the poll interval to 50ms
-    *  - wiredTiger serverStatus is cached and refreshed at most every 1000ms (recovered-bytes report is uncached)
-    *  - preflight rejects mongos, server < 8.0, non-wiredTiger, and an already-running compact (one-shot: prefer runOnce: true)
-    *  - WTCMPCT filenames are replaced with the $listCatalog namespace when resolved (WT name is the fallback)
-    *  - unknown WT idents re-query $listCatalog at most every 5s
-    *  - getLog prefilters /"c"\s*:\s*"WTCMPCT"/ before EJSON.parse; a bad line or getLog failure does not abort the wait
-    *  - log watermark is exclusive at start, then inclusive same-ms with t+msg+dhandle dedup (seen Set capped at ramlog ~1024, oldest first)
-    *  - reports wiredTiger background-compact recovered bytes for this pass
-    *  - other WT compact counters (success/failed/skipped/timeout/interrupted) are process-lifetime aggregates and are not reported
+    *  - mongosh only; MongoDB 8.0+ WiredTiger mongod (not mongos)
+    *  - operation is per mongod only: not replicated; does not compact the oplog
+    *  - if compact is already enabled, disable first with { autoCompact: false }
+    *  - monitors compaction thread, then reports bytes recovered
+    
     */
 
-   // Usage: mongosh [direct host connection options] [--quiet] [--eval 'const freeSpaceTargetMB = 1, runOnce = true;'] [-f|--file] </path/to/>autoCompact.js
+   // Usage: mongosh [direct host connection options] [--quiet] [--eval 'let options = { "freeSpaceTargetMB": 1, "runOnce": true };'] [-f|--file] </path/to/>autoCompact.js
 
    /*
     *  Example of basic direct localhost usage:
@@ -36,12 +23,12 @@
     *
     *  Example using custom autoCompact command options:
     *
-    *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true;' -f autoCompact.js
+    *    mongosh "localhost:27017" --quiet --eval 'let options = { "freeSpaceTargetMB": 64, "runOnce": true };' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.11" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.12" };
 
-   // colour tags + console.log wrapper (copied from mdblib.js; TTY markup, non-TTY ANSI strip)
+   // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
    const ansiTags = [
       { "tag": "\/", "code": 0 },
@@ -213,7 +200,8 @@
    const SERVERSTATUS_MS = 1000;
    let bcCache = { "at": 0, "value": undefined };
    const getBackgroundCompact = (fresh = false) => {
-      // running + recovered bytes only; success/failed/skipped are lifetime totals, not per-file
+      // running + recovered bytes; cached SERVERSTATUS_MS unless fresh (end-of-pass report)
+      // success/failed/skipped/timeout/interrupted are process-lifetime totals and are not used
       if (!fresh && bcCache.value !== undefined && Date.now() - bcCache.at < SERVERSTATUS_MS) {
          return bcCache.value;
       }
@@ -271,13 +259,14 @@
    }
    const scaled = new AutoFactor();
    const reportRecoveredBytes = startBytes => {
+      // this-pass delta vs process-lifetime cumulative recovered bytes
       const endBytes = getBackgroundCompact(true)?.bytesRecovered;
       if (endBytes == null) {
          console.log('\t══════ recovered bytes: unavailable ══════');
          return;
       }
       const delta = startBytes != null ? endBytes - startBytes : endBytes;
-      console.log(`\n\t══════ recovered ${scaled.format(delta)} this pass (${scaled.format(endBytes)} cumulative) ══════`);
+      console.log(`\n\t══════ recovered ${scaled.format(delta)} this pass (${scaled.format(endBytes)} cumulative runtime) ══════`);
    };
    const preflight = () => {
       // autoCompact is mongod 8.0+ / wiredTiger only and errors if already running
@@ -331,7 +320,7 @@
       .replace(/^(?:file:|table:|statistics:table:)/, '')
       .replace(/\.wt$/, '');
    const buildIdentMap = () => {
-      // ident -> { kind, ns, idx? }; special WT files are internal
+      // ident -> { kind, ns, idx? }; overlay WTCMPCT filenames with $listCatalog (WT name is the fallback)
       const map = new Map([
          ['sizeStorer', { "kind": "internal", "ns": "(sizeStorer)" }],
          ['WiredTigerHS', { "kind": "internal", "ns": "(history store)" }],
@@ -388,13 +377,13 @@
    };
    const IDENT_REFRESH_MS = 5000;
    const makeNsResolver = () => {
+      // unknown ident (collection created this pass): re-query $listCatalog, at most every IDENT_REFRESH_MS
       let { map } = buildIdentMap();
-      let lastRefreshAt = 0; // first unknown refreshes immediately; then at most every IDENT_REFRESH_MS
+      let lastRefreshAt = 0;
       return name => {
          let ns = nsFromWt(name, map);
          if (ns || !name) return ns;
          if (Date.now() - lastRefreshAt >= IDENT_REFRESH_MS) {
-            // unknown ident: collection created during this pass
             ({ map } = buildIdentMap());
             lastRefreshAt = Date.now();
             ns = nsFromWt(name, map);
@@ -423,28 +412,31 @@
       // last file of the walk (skip or compact); wording varies by verbosity
       return `${dhandle} ${msg}`.includes('sizeStorer');
    };
-   const POLL_MS_MIN = 50;
-   const POLL_MS_MAX = 1000;
-   const LOG_QUIET_MS = 2000;
-   const NOOP_GRACE_MS = 5000;
-   const GETLOG_CAP = 1024;
+   const POLL_MS_MIN = 50;       // after new WTCMPCT lines or ramlog overflow
+   const POLL_MS_MAX = 1000;     // quiet backoff ceiling
+   const LOG_QUIET_MS = 2000;    // no new WTCMPCT: first-pass complete if overflow seen or compact idle
+   const NOOP_GRACE_MS = 5000;   // never-seen-running and still idle
+   const GETLOG_CAP = 1024;      // ramlog size; overflow warn + seen Set cap
    const clampPollMS = ms => {
       const n = +ms;
       if (!Number.isFinite(n) || n <= 0) return POLL_MS_MIN;
       return Math.min(POLL_MS_MAX, Math.max(POLL_MS_MIN, n));
    };
    const regulatePollMS = (pollMS, { overflow = false, active = false } = {}) =>
+      // reset to min on new WTCMPCT or overflow; otherwise double toward max
       (overflow || active) ? POLL_MS_MIN : clampPollMS(pollMS * 2);
    let getLogWarned = false;
    const WTCMPCT_RE = /"c"\s*:\s*"WTCMPCT"/;
    const logKey = ({ t, 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = {}) =>
       `${+t}\0${session_dhandle_name}\0${msg}`;
    const rememberLog = (seen, key) => {
+      // insertion-order FIFO; ramlog cannot still hold more unique WTCMPCT keys than GETLOG_CAP
       seen.add(key);
       while (seen.size > GETLOG_CAP) seen.delete(seen.keys().next().value);
    };
    const getLogs = (since, seen) => {
-      // ramlog is ~1024 raw JSON lines; skip non-WTCMPCT before EJSON.parse
+      // ramlog ~1024 raw lines; prefilter WTCMPCT (spacing-tolerant) before EJSON.parse
+      // start watermark exclusive; later same-ms siblings kept if not yet in seen
       let lines, totalLinesWritten;
       try {
          ({ "log": lines = [], "totalLinesWritten": totalLinesWritten } = db.adminCommand({ "getLog": "global" }));
@@ -460,7 +452,6 @@
          if (!WTCMPCT_RE.test(String(line))) continue;
          try {
             const entry = EJSON.parse(line);
-            // start watermark is exclusive; later same-ms siblings are kept if not yet seen
             if (entry.t < since) continue;
             if (+entry.t === +since && seen.size === 0) continue;
             const key = logKey(entry);
@@ -473,6 +464,13 @@
       return { "logs": out, "totalLinesWritten": totalLinesWritten };
    };
    const tailLogs = (ts, resolveNs = () => null, runOnce = true) => {
+      /*
+       *  Follow WTCMPCT until the first catalog walk ends, then report recovered bytes.
+       *  sizeStorer is the last file (skip or compact). runOnce=false returns then (thread stays on).
+       *  runOnce=true waits for serverStatus idle so sizeStorer work is included.
+       *  Missed sizeStorer (ramlog overflow): 2s with no new WTCMPCT if overflow was seen or compact is idle.
+       *  The in-progress banner does not count as a log. Never running and idle for NOOP_GRACE_MS is a no-op.
+       */
       let pause = false;
       let firstPassDone = false;
       let seenRunning = false;
@@ -481,7 +479,7 @@
       const seen = new Set();
       let pollMS = POLL_MS_MIN;
       let lastTotal = null;
-      let lastLogAt = null; // wall clock of last new WTCMPCT batch; in-progress banner does not update this
+      let lastLogAt = null;
       const startBytes = getBackgroundCompact()?.bytesRecovered;
 
       do {
@@ -506,14 +504,12 @@
             pause = false; // reset pause when new log entries are present
          } else if (!pause) {
             if (firstPassDone) {
-               // last file already seen; runOnce=true is waiting for idle, not more logs
                if (runOnce) console.log('\n\t══════ last file done, waiting for background compact idle ══════');
             } else {
                console.log('\t══════ autoCompaction work in progress, waiting for new logs ══════');
             }
-            pause = true; // set pause to prevent repeated messages
+            pause = true;
          }
-         // 1→0 means the thread stopped (runOnce finished, or compact was disabled).
          const running = getAutoCompactRunning();
          if (running === true) {
             seenRunning = true;
@@ -521,13 +517,11 @@
          } else if (running === false && idleSince == null) {
             idleSince = Date.now();
          }
-         // log-quiet is a miss fallback, not a mid-file gap: require overflow (sizeStorer may have been dropped) or idle
          if (!firstPassDone && lastLogAt != null && Date.now() - lastLogAt >= LOG_QUIET_MS
                && (overflowSeen || running === false)) {
             firstPassDone = true;
             console.log(`\n\t══════ no new WTCMPCT logs for ${LOG_QUIET_MS / 1000}s; assuming first pass complete ══════`);
          }
-         // runOnce=false cannot wait for idle (thread stays enabled); last file ends the wait
          if (firstPassDone && !runOnce) break;
          if (running === false && (seenRunning || (runOnce && firstPassDone))) {
             console.log('\n\t══════ serverStatus: background compact idle ══════');
@@ -550,7 +544,7 @@
       reportRecoveredBytes(startBytes);
    };
 
-   // --eval may bind these with const; never reassign, resolve into locals
+   // --eval may bind `options` with let/const; never reassign it, merge into locals
    const asPositiveInt = (name, raw) => {
       if (typeof raw === 'boolean') {
          console.log(`[red][ERROR] ${name} must be a positive integer; got ${EJSON.stringify(raw)}[/]`);
@@ -562,7 +556,6 @@
       return null;
    };
    const asBool = (name, raw) => {
-      // --eval may bind a string; parse "true"/"false" rather than using the value as a boolean
       if (typeof raw === 'boolean') return raw;
       if (raw === 0 || raw === 1) return Boolean(raw);
       if (typeof raw === 'string') {
@@ -573,18 +566,23 @@
       console.log(`[red][ERROR] ${name} must be a boolean; got ${EJSON.stringify(raw)}[/]`);
       return null;
    };
-   const options = {
-      // we default to 1MB to maximise the effectiveness of the autoCompaction feature, at the cost of extra system load
-      "freeSpaceTargetMB": asPositiveInt('freeSpaceTargetMB', typeof freeSpaceTargetMB === 'undefined' ? 1 : freeSpaceTargetMB),
-      "runOnce": asBool('runOnce', typeof runOnce === 'undefined' ? true : runOnce)
+   const optionDefaults = {
+      // 1MB vs server default 20: maximise compaction at the cost of extra load
+      "freeSpaceTargetMB": 1,
+      "runOnce": true
    };
-   if (options.freeSpaceTargetMB == null || options.runOnce == null) return;
+   const userOptions = typeof options === 'undefined' ? {} : options;
+   const cmdOptions = {
+      "freeSpaceTargetMB": asPositiveInt('freeSpaceTargetMB', userOptions.freeSpaceTargetMB ?? optionDefaults.freeSpaceTargetMB),
+      "runOnce": asBool('runOnce', userOptions.runOnce ?? optionDefaults.runOnce)
+   };
+   if (cmdOptions.freeSpaceTargetMB == null || cmdOptions.runOnce == null) return;
    if (!preflight()) return;
    const resolveNs = makeNsResolver();
    const cmd = {
       "autoCompact": true,
-      "freeSpaceTargetMB": options.freeSpaceTargetMB,
-      "runOnce": options.runOnce,
+      "freeSpaceTargetMB": cmdOptions.freeSpaceTargetMB,
+      "runOnce": cmdOptions.runOnce,
       "comment": `Executed by ${__script.name} v${__script.version}`
    };
    console.log(`[yellow][NOTE][/] autoCompact() is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact() excludes the oplog.\n`);
@@ -601,7 +599,7 @@
       console.log('[red][ERROR] autoCompact() failed:[/]', result);
       return;
    }
-   tailLogs(ts, resolveNs, options.runOnce);
+   tailLogs(ts, resolveNs, cmdOptions.runOnce);
 })();
 
 // EOF
