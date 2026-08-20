@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.7"
+    *  Version: "0.4.8"
     *  Description: "autoCompact() with log and serverStatus monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -39,7 +39,7 @@
     *    mongosh "localhost:27017" --quiet --eval 'const freeSpaceTargetMB = 64, runOnce = true;' -f autoCompact.js
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.7" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.8" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`);
 
    function serverStatus(serverStatusOptions = {}) {
@@ -257,7 +257,7 @@
                "ident": 1,
                "idxIdent": 1
             } }],
-            { "comment": `${__script.name} v${__script.version} ident map` }
+            { "comment": `Executed by ${__script.name} v${__script.version} ident map` }
          ).forEach(doc => {
             const ns = doc.ns ?? (doc.db && doc.name ? `${doc.db}.${doc.name}` : null);
             if (typeof doc.ident === 'string' && ns) map.set(doc.ident, { "kind": "collection", "ns": ns });
@@ -412,7 +412,7 @@
          } else if (!pause) {
             if (firstPassDone) {
                // last file already seen; runOnce=true is waiting for idle, not more logs
-               if (runOnce) console.log('\t══════ last file done, waiting for background compact idle ══════');
+               if (runOnce) console.log('\n\t══════ last file done, waiting for background compact idle ══════');
             } else {
                console.log('\t══════ autoCompaction work in progress, waiting for new logs ══════');
             }
@@ -467,7 +467,7 @@
       "autoCompact": true,
       "freeSpaceTargetMB": options.freeSpaceTargetMB,
       "runOnce": options.runOnce,
-      "comment": `${__script.name} v${__script.version}`
+      "comment": `Executed by ${__script.name} v${__script.version}`
    };
    console.log(`[NOTE] autoCompact() is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact() excludes the oplog.\n`);
    console.log(`Executing shell command:\ndb.adminCommand(${EJSON.stringify(cmd, null, 3)});\n`);
