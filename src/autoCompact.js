@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.14"
+    *  Version: "0.4.15"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,6 +11,7 @@
     *  - operation is per mongod only: not replicated; does not compact the oplog
     *  - if compact is already enabled, disable first with { autoCompact: false }
     *  - monitors compaction thread, then reports bytes recovered
+    *  - { autoCompact: false } disables the background thread and exits (no log tail)
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "freeSpaceTargetMB": 1, "runOnce": true };'] [-f|--file] </path/to/>autoCompact.js
@@ -24,10 +25,14 @@
     *
     *    mongosh "localhost:27017" --quiet --eval 'var autoCompactOptions = { "freeSpaceTargetMB": 64, "runOnce": true };' -f autoCompact.js
     *
+    *  Example to disable the background compact thread:
+    *
+    *    mongosh "localhost:27017" --quiet --eval 'var autoCompactOptions = { "autoCompact": false };' -f autoCompact.js
+    *
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.14" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.15" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -270,8 +275,8 @@
       const delta = startBytes != null ? endBytes - startBytes : endBytes;
       console.log(`\n\t══════ recovered ${scaled.format(delta)} this pass (${scaled.format(endBytes)} cumulative runtime) ══════`);
    };
-   const preflight = () => {
-      // autoCompact is mongod 8.0+ / wiredTiger only and errors if already running
+   const preflight = (enable = true) => {
+      // autoCompact is mongod 8.0+ / wiredTiger only; enabling errors if already running
       try {
          if (db.hello().msg === 'isdbgrid') {
             console.log('[red][ERROR] autoCompact is not supported on mongos; connect directly to a mongod[/]');
@@ -312,7 +317,7 @@
          console.log(`[red][ERROR] autoCompact requires wiredTiger; detected storage engine "${engine}"[/]`);
          return false;
       }
-      if (running > 0 || running === true) {
+      if (enable && (running > 0 || running === true)) {
          console.log('[red][ERROR] background compact thread already enabled; Issue { autoCompact: false } first to disable[/]');
          return false;
       }
@@ -546,7 +551,7 @@
       reportRecoveredBytes(startBytes);
    };
 
-   // --eval may bind `autoCompactOptions` with let/const; never reassign it, merge into locals
+   // Caller: var autoCompactOptions = { ... } (--eval or REPL). Do not declare or assign it in this file.
    const asPositiveInt = (name, raw) => {
       if (typeof raw === 'boolean') {
          console.log(`[red][ERROR] ${name} must be a positive integer; got ${EJSON.stringify(raw)}[/]`);
@@ -568,28 +573,49 @@
       console.log(`[red][ERROR] ${name} must be a boolean; got ${EJSON.stringify(raw)}[/]`);
       return null;
    };
+   const isOptionDoc = v => v !== null && typeof v === 'object' && !Array.isArray(v);
    const optionDefaults = {
+      "autoCompact": true,
       // 1MB vs server default 20: maximise compaction at the cost of extra load
       "freeSpaceTargetMB": 1,
       "runOnce": true
    };
-   const userOptions = typeof autoCompactOptions === 'undefined' ? {} : autoCompactOptions;
-   const cmdOptions = {
-      "freeSpaceTargetMB": asPositiveInt('freeSpaceTargetMB', userOptions.freeSpaceTargetMB ?? optionDefaults.freeSpaceTargetMB),
-      "runOnce": asBool('runOnce', userOptions.runOnce ?? optionDefaults.runOnce)
-   };
-   if (cmdOptions.freeSpaceTargetMB == null || cmdOptions.runOnce == null) return;
-   if (!preflight()) return;
-   const resolveNs = makeNsResolver();
-   const cmd = {
-      "autoCompact": true,
-      "freeSpaceTargetMB": cmdOptions.freeSpaceTargetMB,
-      "runOnce": cmdOptions.runOnce,
-      "comment": `Executed by ${__script.name} v${__script.version}`
-   };
-   console.log(`[yellow][NOTE][/] autoCompact is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact excludes the oplog.\n`);
+   const knownOptionKeys = new Set(Object.keys(optionDefaults));
+   const rawOptions = typeof autoCompactOptions === 'undefined' ? {} : autoCompactOptions;
+   if (!isOptionDoc(rawOptions)) {
+      console.log(`[red][ERROR] autoCompactOptions must be a document; got ${EJSON.stringify(rawOptions)}[/]`);
+      return;
+   }
+   const unknownKeys = Object.keys(rawOptions).filter(k => !knownOptionKeys.has(k));
+   if (unknownKeys.length) {
+      console.log(`[red][ERROR] unknown option(s): ${unknownKeys.join(', ')}[/]`);
+      return;
+   }
+   const autoCompact = asBool('autoCompact', rawOptions.autoCompact ?? optionDefaults.autoCompact);
+   if (autoCompact == null) return;
+   let cmd;
+   if (autoCompact === false) {
+      cmd = {
+         "autoCompact": false,
+         "comment": `Executed by ${__script.name} v${__script.version}`
+      };
+   } else {
+      const freeSpaceTargetMB = asPositiveInt('freeSpaceTargetMB', rawOptions.freeSpaceTargetMB ?? optionDefaults.freeSpaceTargetMB);
+      const runOnce = asBool('runOnce', rawOptions.runOnce ?? optionDefaults.runOnce);
+      if (freeSpaceTargetMB == null || runOnce == null) return;
+      cmd = {
+         "autoCompact": true,
+         "freeSpaceTargetMB": freeSpaceTargetMB,
+         "runOnce": runOnce,
+         "comment": `Executed by ${__script.name} v${__script.version}`
+      };
+   }
+   if (!preflight(autoCompact)) return;
+   if (autoCompact) {
+      console.log(`[yellow][NOTE][/] autoCompact is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact excludes the oplog.\n`);
+   }
    console.log(`Executing shell command:\ndb.adminCommand(${EJSON.stringify(cmd, null, 3)});\n`);
-   const ts = ISODate();
+   const ts = autoCompact ? ISODate() : null;
    let result;
    try {
       result = db.adminCommand(cmd);
@@ -601,7 +627,11 @@
       console.log('[red][ERROR] autoCompact failed:[/]', result);
       return;
    }
-   tailLogs(ts, resolveNs, cmdOptions.runOnce);
+   if (!autoCompact) {
+      console.log('\t══════ background compact thread disabled ══════');
+      return;
+   }
+   tailLogs(ts, makeNsResolver(), cmd.runOnce);
 })();
 
 // EOF
