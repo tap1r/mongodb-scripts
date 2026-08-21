@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.16"
+    *  Version: "0.4.17"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,7 +11,8 @@
     *  - operation is per mongod only: not replicated; does not compact the oplog
     *  - if compact is already enabled, disable first with { autoCompact: false }
     *  - monitors compaction thread, then reports bytes recovered
-    *  - { autoCompact: false } disables the background thread and exits (no log tail)
+    *  - freeSpaceTargetMB is passed through only when supplied (server default 20 otherwise)
+    *  - runOnce defaults to true (opposite of the server default); pass { runOnce: false } for continuous compaction
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "freeSpaceTargetMB": 1, "runOnce": true };'] [-f|--file] </path/to/>autoCompact.js
@@ -32,7 +33,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.16" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.17" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -552,16 +553,11 @@
    };
 
    // Caller: var autoCompactOptions = { ... } (--eval or REPL). Do not declare or assign it in this file.
-   // Field types and unknown keys are the server's problem; this script only supplies defaults and comment.
-   const optionDefaults = {
-      "autoCompact": true,
-      // 1MB vs server default 20: maximise compaction at the cost of extra load
-      "freeSpaceTargetMB": 1,
-      "runOnce": true
-   };
+   // Passthrough user fields as-is; default autoCompact: true and runOnce: true on enable, stamp comment.
    const userOptions = typeof autoCompactOptions === 'undefined' ? {} : autoCompactOptions;
    const cmd = {
-      ...(userOptions?.autoCompact === false ? { "autoCompact": false } : optionDefaults),
+      "autoCompact": true,
+      ...(userOptions?.autoCompact === false ? {} : { "runOnce": true }),
       ...userOptions,
       "comment": `Executed by ${__script.name} v${__script.version}`
    };
@@ -587,7 +583,7 @@
       console.log('\t══════ background compact thread disabled ══════');
       return;
    }
-   tailLogs(ts, makeNsResolver(), cmd.runOnce);
+   tailLogs(ts, makeNsResolver(), cmd.runOnce === true);
 })();
 
 // EOF
