@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "rtt.js"
-    *  Version: "0.2.4"
+    *  Version: "0.3.0"
     *  Description: "reports application round trip time latency"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -15,9 +15,9 @@
     *  - TBA
     */
 
-   // Syntax: mongosh [connection options] [--quiet] [-f|--file] rtt.js
+   // Syntax: mongosh [connection options] [--quiet] [-f|--file] </path/to/>rtt.js
 
-   const __script = { "name": "rtt.js", "version": "0.2.4" };
+   const __script = { "name": "rtt.js", "version": "0.3.0" };
    const banner = `\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`;
    console.clear();
    console.log(banner);
@@ -106,7 +106,9 @@
       /*
        *  return the topology object from the mongosh private class
        */
-      return db.getMongo().__serviceProvider.mongoClient.topology.s.description.servers;
+      // return db.getMongo().__serviceProvider.mongoClient.topology.s.description.servers;
+      // updated for the new mongosh private methods
+      return db._mongo._instanceState.initialServiceProvider.getTopologyDescription().servers;
    }
 
    function latency(rtt) {
