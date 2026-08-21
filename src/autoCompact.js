@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.15"
+    *  Version: "0.4.16"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -32,7 +32,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.15" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.16" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -552,70 +552,26 @@
    };
 
    // Caller: var autoCompactOptions = { ... } (--eval or REPL). Do not declare or assign it in this file.
-   const asPositiveInt = (name, raw) => {
-      if (typeof raw === 'boolean') {
-         console.log(`[red][ERROR] ${name} must be a positive integer; got ${EJSON.stringify(raw)}[/]`);
-         return null;
-      }
-      const n = typeof raw === 'number' ? raw : Number(typeof raw === 'string' ? raw.trim() : raw);
-      if (Number.isInteger(n) && n >= 1) return n;
-      console.log(`[red][ERROR] ${name} must be a positive integer; got ${EJSON.stringify(raw)}[/]`);
-      return null;
-   };
-   const asBool = (name, raw) => {
-      if (typeof raw === 'boolean') return raw;
-      if (raw === 0 || raw === 1) return Boolean(raw);
-      if (typeof raw === 'string') {
-         const s = raw.trim().toLowerCase();
-         if (s === 'true' || s === '1') return true;
-         if (s === 'false' || s === '0') return false;
-      }
-      console.log(`[red][ERROR] ${name} must be a boolean; got ${EJSON.stringify(raw)}[/]`);
-      return null;
-   };
-   const isOptionDoc = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+   // Field types and unknown keys are the server's problem; this script only supplies defaults and comment.
    const optionDefaults = {
       "autoCompact": true,
       // 1MB vs server default 20: maximise compaction at the cost of extra load
       "freeSpaceTargetMB": 1,
       "runOnce": true
    };
-   const knownOptionKeys = new Set(Object.keys(optionDefaults));
-   const rawOptions = typeof autoCompactOptions === 'undefined' ? {} : autoCompactOptions;
-   if (!isOptionDoc(rawOptions)) {
-      console.log(`[red][ERROR] autoCompactOptions must be a document; got ${EJSON.stringify(rawOptions)}[/]`);
-      return;
-   }
-   const unknownKeys = Object.keys(rawOptions).filter(k => !knownOptionKeys.has(k));
-   if (unknownKeys.length) {
-      console.log(`[red][ERROR] unknown option(s): ${unknownKeys.join(', ')}[/]`);
-      return;
-   }
-   const autoCompact = asBool('autoCompact', rawOptions.autoCompact ?? optionDefaults.autoCompact);
-   if (autoCompact == null) return;
-   let cmd;
-   if (autoCompact === false) {
-      cmd = {
-         "autoCompact": false,
-         "comment": `Executed by ${__script.name} v${__script.version}`
-      };
-   } else {
-      const freeSpaceTargetMB = asPositiveInt('freeSpaceTargetMB', rawOptions.freeSpaceTargetMB ?? optionDefaults.freeSpaceTargetMB);
-      const runOnce = asBool('runOnce', rawOptions.runOnce ?? optionDefaults.runOnce);
-      if (freeSpaceTargetMB == null || runOnce == null) return;
-      cmd = {
-         "autoCompact": true,
-         "freeSpaceTargetMB": freeSpaceTargetMB,
-         "runOnce": runOnce,
-         "comment": `Executed by ${__script.name} v${__script.version}`
-      };
-   }
-   if (!preflight(autoCompact)) return;
-   if (autoCompact) {
+   const userOptions = typeof autoCompactOptions === 'undefined' ? {} : autoCompactOptions;
+   const cmd = {
+      ...(userOptions?.autoCompact === false ? { "autoCompact": false } : optionDefaults),
+      ...userOptions,
+      "comment": `Executed by ${__script.name} v${__script.version}`
+   };
+   const enable = cmd.autoCompact !== false;
+   if (!preflight(enable)) return;
+   if (enable) {
       console.log(`[yellow][NOTE][/] autoCompact is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact excludes the oplog.\n`);
    }
    console.log(`Executing shell command:\ndb.adminCommand(${EJSON.stringify(cmd, null, 3)});\n`);
-   const ts = autoCompact ? ISODate() : null;
+   const ts = enable ? ISODate() : null;
    let result;
    try {
       result = db.adminCommand(cmd);
@@ -627,7 +583,7 @@
       console.log('[red][ERROR] autoCompact failed:[/]', result);
       return;
    }
-   if (!autoCompact) {
+   if (!enable) {
       console.log('\t══════ background compact thread disabled ══════');
       return;
    }
