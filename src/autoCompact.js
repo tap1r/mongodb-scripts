@@ -1,18 +1,21 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.17"
+    *  Version: "0.4.18"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Notes:
+    *  - automates the autoCompact command with monitoring (https://www.mongodb.com/docs/v8.0/reference/command/autoCompact/)
     *  - mongosh only; MongoDB 8.0+ WiredTiger mongod (not mongos)
     *  - operation is per mongod only: not replicated; does not compact the oplog
-    *  - if compact is already enabled, disable first with { autoCompact: false }
     *  - monitors compaction thread, then reports bytes recovered
+    *  - { autoCompact: false } disables the background thread and exits (no log tail)
     *  - freeSpaceTargetMB is passed through only when supplied (server default 20 otherwise)
     *  - runOnce defaults to true (opposite of the server default); pass { runOnce: false } for continuous compaction
+    *  - runOnce: true (default): if a background thread is already running, the script errors; disable first with { autoCompact: false }
+    *  - runOnce: false: any existing background thread is disabled, then the original command is retried with the new options (runOnce: false is kept) so continuous options replace the running thread
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "freeSpaceTargetMB": 1, "runOnce": true };'] [-f|--file] </path/to/>autoCompact.js
@@ -26,6 +29,10 @@
     *
     *    mongosh "localhost:27017" --quiet --eval 'var autoCompactOptions = { "freeSpaceTargetMB": 64, "runOnce": true };' -f autoCompact.js
     *
+    *  Example to enable continuous compaction (replaces any existing background thread):
+    *
+    *    mongosh "localhost:27017" --quiet --eval 'var autoCompactOptions = { "runOnce": false };' -f autoCompact.js
+    *
     *  Example to disable the background compact thread:
     *
     *    mongosh "localhost:27017" --quiet --eval 'var autoCompactOptions = { "autoCompact": false };' -f autoCompact.js
@@ -33,7 +40,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.17" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.18" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -277,7 +284,9 @@
       console.log(`\n\t══════ recovered ${scaled.format(delta)} this pass (${scaled.format(endBytes)} cumulative runtime) ══════`);
    };
    const preflight = (enable = true) => {
-      // autoCompact is mongod 8.0+ / wiredTiger only; enabling errors if already running
+      // autoCompact is mongod 8.0+ / wiredTiger only.
+      // enable=true (runOnce: true): error if a background thread is already running.
+      // enable=false: skip that check (disable path, or runOnce: false replace-then-retry).
       try {
          if (db.hello().msg === 'isdbgrid') {
             console.log('[red][ERROR] autoCompact is not supported on mongos; connect directly to a mongod[/]');
@@ -562,23 +571,38 @@
       "comment": `Executed by ${__script.name} v${__script.version}`
    };
    const enable = cmd.autoCompact !== false;
-   if (!preflight(enable)) return;
+   // runOnce: false (continuous) replaces any existing thread: disable first, then retry cmd.
+   const replace = enable && cmd.runOnce === false;
+   if (!preflight(enable && !replace)) return;
    if (enable) {
       console.log(`[yellow][NOTE][/] autoCompact is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact excludes the oplog.\n`);
    }
-   console.log(`Executing shell command:\ndb.adminCommand(${EJSON.stringify(cmd, null, 3)});\n`);
+   const runCmd = cmdDoc => {
+      console.log(`Executing shell command:\ndb.adminCommand(${EJSON.stringify(cmdDoc, null, 3)});\n`);
+      try {
+         const result = db.adminCommand(cmdDoc);
+         if (result?.ok !== 1) {
+            console.log('[red][ERROR] autoCompact failed:[/]', result);
+            return null;
+         }
+         return result;
+      } catch(e) {
+         console.log('[red][ERROR] autoCompact failed:[/]', e);
+         return null;
+      }
+   };
+   if (replace) {
+      // mongod rejects autoCompact:true while a thread is already running; disable then
+      // re-issue cmd so new user options take effect. Spread already set runOnce: false; do not drop it.
+      console.log('[yellow][NOTE][/] runOnce is false (continuous); disabling any existing background compact thread, then re-enabling with the requested options (runOnce: false preserved).\n');
+      if (!runCmd({
+         "autoCompact": false,
+         "comment": `Executed by ${__script.name} v${__script.version}`
+      })) return;
+      console.log('\t══════ background compact thread disabled; retrying with updated options ══════\n');
+   }
    const ts = enable ? ISODate() : null;
-   let result;
-   try {
-      result = db.adminCommand(cmd);
-   } catch(e) {
-      console.log('[red][ERROR] autoCompact failed:[/]', e);
-      return;
-   }
-   if (result?.ok !== 1) {
-      console.log('[red][ERROR] autoCompact failed:[/]', result);
-      return;
-   }
+   if (!runCmd(cmd)) return;
    if (!enable) {
       console.log('\t══════ background compact thread disabled ══════');
       return;
