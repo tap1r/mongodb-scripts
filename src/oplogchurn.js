@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.17"
+ *  Version: "0.5.18"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,7 +18,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.5.17" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.18" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -66,11 +66,26 @@
                : 'secondaryPreferred';
    }
 
+   function tsSeconds(ts) {
+      /*
+       *  Extract seconds from a BSON Timestamp (mongosh or legacy)
+       */
+      if (ts == null) return null;
+      if (typeof ts.t === 'number') return ts.t;
+      if (typeof ts.getHighBits === 'function') return ts.getHighBits();
+      return null;
+   }
+
+   function formatHrs(hrs) {
+      const n = +Number(hrs).toFixed(2);
+      return `${n} hr${n === 1 ? '' : 's'}`;
+   }
+
    function main() {
       /*
        *  main
        */
-      let opSize = 0, docs = 0;
+      let opSize = 0, docs = 0, firstTs = null, lastTs = null;
       const date = new Date();
       const scaled = new AutoFactor();
       const t2 = Math.floor(date.getTime() / 1000), // end timestamp
@@ -92,7 +107,9 @@
             "$group": {
                "_id": null,
                "_bsonDataSize": { "$sum": { "$bsonSize": "$$ROOT" } },
-               "_documentCount": { "$sum": 1 }
+               "_documentCount": { "$sum": 1 },
+               "_firstTs": { "$min": "$ts" },
+               "_lastTs": { "$max": "$ts" }
          } },
          // strip synthetic $group _id server-side before returning to the client
          $project = serverVer(4.2)
@@ -105,7 +122,7 @@
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
-         "comment": "Calculating oplog size via oplogchurn.js"
+         "comment": "Calculating oplog size via oplogchurn.js v0.5.18"
       };
 
       // Measure interval statistics
@@ -113,14 +130,33 @@
       const oplog = db.getSiblingDB('local').getCollection('oplog.rs');
 
       if (serverVer(4.4)) {
-         ([{ '_bsonDataSize': opSize = 0, '_documentCount': docs = 0 } = {}] = oplog.aggregate(pipeline, options).toArray());
+         ([{
+            '_bsonDataSize': opSize = 0,
+            '_documentCount': docs = 0,
+            '_firstTs': firstTs = null,
+            '_lastTs': lastTs = null
+         } = {}] = oplog.aggregate(pipeline, options).toArray());
       } else {
          console.log('\n[R]Warning: Using the legacy client side calculation technique[/]');
          oplog.aggregate(pipeline, options).forEach(op => {
             opSize += bsonsize(op);
             docs++;
+            const sec = tsSeconds(op.ts);
+            if (sec == null) return;
+            if (firstTs == null || sec < tsSeconds(firstTs)) firstTs = op.ts;
+            if (lastTs == null || sec > tsSeconds(lastTs)) lastTs = op.ts;
          });
       }
+
+      // Observed window from matched oplog entries (not the requested intervalHrs)
+      const firstSec = tsSeconds(firstTs);
+      const lastSec = tsSeconds(lastTs);
+      const observedSecs = (docs > 0 && firstSec != null && lastSec != null)
+                         ? Math.max(lastSec - firstSec, 1) // same-second batches still count as 1s
+                         : 0;
+      const observedHrs = observedSecs / 3600;
+      const churnHrs = observedHrs > 0 ? observedHrs : intervalHrs;
+      const truncated = docs > 0 && observedHrs < intervalHrs * 0.95;
 
       // Host info & oplog storage stats
       const { 'system': { hostname = 'unknown' } = {} } = hostInfo();
@@ -136,7 +172,7 @@
       const ratio = +((size / (storageSize - blocksFree - overhead)).toFixed(2));
       const intervalDataSize = scaled.format(opSize);
       const intervalStorageSize = scaled.format(opSize / ratio);
-      const oplogChurn = scaled.format(opSize / ratio / intervalHrs);
+      const oplogChurn = scaled.format(opSize / ratio / churnHrs);
 
       // Print results
       console.log('\n');
@@ -146,7 +182,11 @@
       console.log(`[y]${'━'.repeat(termWidth)}[/]`);
       console.log(`[g]${'Start time:'.padEnd(rowHeader)}[/] ${d1.padStart(columnWidth)}`);
       console.log(`[g]${'End time:'.padEnd(rowHeader)}[/] ${d2.padStart(columnWidth)}`);
-      console.log(`[g]${'Interval duration:'.padEnd(rowHeader)}[/] ${`${intervalHrs} hr${(intervalHrs == 1) ? '' : 's'}`.padStart(columnWidth)}`);
+      console.log(`[g]${'Requested interval:'.padEnd(rowHeader)}[/] ${formatHrs(intervalHrs).padStart(columnWidth)}`);
+      console.log(`[g]${'Observed interval:'.padEnd(rowHeader)}[/] ${formatHrs(observedHrs).padStart(columnWidth)}`);
+      if (truncated) {
+         console.log(`[R]Warning: Oplog history shorter than requested interval; churn normalized to observed window[/]`);
+      }
       console.log(`[g]${'Average oplog compression ratio:'.padEnd(rowHeader)}[/] ${`${ratio}:1`.padStart(columnWidth)}`);
       console.log(`[g]${'Interval document count:'.padEnd(rowHeader)}[/] ${docs.toString().padStart(columnWidth)}`);
       console.log(`[g]${'Interval data size:'.padEnd(rowHeader)}[/] ${`${intervalDataSize}`.padStart(columnWidth)}`);
