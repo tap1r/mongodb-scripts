@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.18"
+ *  Version: "0.5.19"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,7 +18,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.5.18" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.19" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -122,7 +122,7 @@
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
-         "comment": "Calculating oplog size via oplogchurn.js v0.5.18"
+         "comment": "Calculating oplog size via oplogchurn.js v0.5.19"
       };
 
       // Measure interval statistics
@@ -156,7 +156,6 @@
                          : 0;
       const observedHrs = observedSecs / 3600;
       const churnHrs = observedHrs > 0 ? observedHrs : intervalHrs;
-      const truncated = docs > 0 && observedHrs < intervalHrs * 0.95;
 
       // Host info & oplog storage stats
       const { 'system': { hostname = 'unknown' } = {} } = hostInfo();
@@ -184,9 +183,6 @@
       console.log(`[g]${'End time:'.padEnd(rowHeader)}[/] ${d2.padStart(columnWidth)}`);
       console.log(`[g]${'Requested interval:'.padEnd(rowHeader)}[/] ${formatHrs(intervalHrs).padStart(columnWidth)}`);
       console.log(`[g]${'Observed interval:'.padEnd(rowHeader)}[/] ${formatHrs(observedHrs).padStart(columnWidth)}`);
-      if (truncated) {
-         console.log(`[R]Warning: Oplog history shorter than requested interval; churn normalized to observed window[/]`);
-      }
       console.log(`[g]${'Average oplog compression ratio:'.padEnd(rowHeader)}[/] ${`${ratio}:1`.padStart(columnWidth)}`);
       console.log(`[g]${'Interval document count:'.padEnd(rowHeader)}[/] ${docs.toString().padStart(columnWidth)}`);
       console.log(`[g]${'Interval data size:'.padEnd(rowHeader)}[/] ${`${intervalDataSize}`.padStart(columnWidth)}`);
