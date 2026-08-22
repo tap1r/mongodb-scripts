@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.14"
+ *  Version: "0.5.15"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,7 +18,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.5.14" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.15" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -52,15 +52,19 @@
     */
 
    // set interval in hours
-   typeof intervalHrs === 'undefined' && (intervalHrs = 1) || intervalHrs;
+   if (typeof intervalHrs === 'undefined') intervalHrs = 1;
 
    // formatting preferences
-   typeof termWidth === 'undefined' && (termWidth = 62) || termWidth;
-   typeof columnWidth === 'undefined' && (columnWidth = 25) || columnWidth;
-   typeof rowHeader === 'undefined' && (rowHeader = 36) || rowHeader;
+   if (typeof termWidth === 'undefined') termWidth = 62;
+   if (typeof columnWidth === 'undefined') columnWidth = 25;
+   if (typeof rowHeader === 'undefined') rowHeader = 36;
 
    // connection preferences
-   (typeof readPref === 'undefined') && !!(readPref = (hello().secondary == false) ? 'primaryPreferred' : 'secondaryPreferred');
+   if (typeof readPref === 'undefined') {
+      readPref = (hello().secondary === false)
+               ? 'primaryPreferred'
+               : 'secondaryPreferred';
+   }
 
    function main() {
       /*
@@ -117,26 +121,19 @@
          });
       }
 
-      // Get host info & oplog stats
-      const { 'system': { hostname = 'unknown' } = {} } = hostInfo(),
-         { 'parsed': { 'storage': { dbPath = 'unknown' } = {} } = {} } = db.serverCmdLineOpts(),
-         // Get oplog collection stats
-         {
-            'storageStats': {
-               'wiredTiger': {
-                  creationString = '',
-                  'block-manager': {
-                     'file bytes available for reuse': blocksFree = 0,
-                     'file size in bytes': storageSize = 0
-                  } = {}
-               } = {},
-               size = 0,
-               internalPageSize = (creationString.match(/internal_page_max=(\d+)/)[1] * 1024)
-            } = {}
-         } = oplog.aggregate([{ "$collStats": { "storageStats": { "scale": 1 } } }]).toArray()[0];
-      const overhead = internalPageSize;
-      const ratio = +((size / (storageSize - blocksFree - overhead)).toFixed(2)),
-         intervalDataSize = scaled.format(opSize);
+      // Host info & oplog storage stats
+      const { 'system': { hostname = 'unknown' } = {} } = hostInfo();
+      const { 'parsed': { 'storage': { dbPath = 'unknown' } = {} } = {} } = db.serverCmdLineOpts();
+      const {
+         dataSize: size = 0,
+         storageSize = 0,
+         freeStorageSize: blocksFree = 0,
+         internalPageSize = 4096
+      } = $collStats('local', 'oplog.rs') || {};
+      // $collStats may report "mixed" on multi-node aggregates; fall back to 4KiB
+      const overhead = (typeof internalPageSize === 'number') ? internalPageSize : 4096;
+      const ratio = +((size / (storageSize - blocksFree - overhead)).toFixed(2));
+      const intervalDataSize = scaled.format(opSize);
       const intervalStorageSize = scaled.format(opSize / ratio);
       const oplogChurn = scaled.format(opSize / ratio / intervalHrs);
 
