@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.15"
+ *  Version: "0.5.16"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,7 +18,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.5.15" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.16" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -104,6 +104,7 @@
       const options = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
+         "readConcern": { "level": "local" },
          "comment": "Calculating oplog size via oplogchurn.js"
       };
 
