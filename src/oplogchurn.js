@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.16"
+ *  Version: "0.5.17"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,7 +18,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.5.16" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.17" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -113,7 +113,7 @@
       const oplog = db.getSiblingDB('local').getCollection('oplog.rs');
 
       if (serverVer(4.4)) {
-         ([{ '_bsonDataSize': opSize, '_documentCount': docs }] = oplog.aggregate(pipeline, options).toArray());
+         ([{ '_bsonDataSize': opSize = 0, '_documentCount': docs = 0 } = {}] = oplog.aggregate(pipeline, options).toArray());
       } else {
          console.log('\n[R]Warning: Using the legacy client side calculation technique[/]');
          oplog.aggregate(pipeline, options).forEach(op => {
