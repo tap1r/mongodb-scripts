@@ -1,16 +1,16 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.13"
+ *  Version: "0.5.14"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "[mongo|mongosh] [connection options] --quiet [-f|--file] </path/to/>oplogchurn.js"
+// Usage: "[mongo|mongosh] [connection options] [--quiet] [-f|--file] </path/to/>oplogchurn.js"
 
 /*
  *  Custom parameters:
- *  [mongo|mongosh] [connection options] --quiet --eval "let intervalHrs = 1;" [-f|--file] </path/to/>oplogchurn.js
+ *  [mongo|mongosh] [connection options] [--quiet] --eval "var intervalHrs = 1;" [-f|--file] </path/to/>oplogchurn.js
  */
 
 (() => {
@@ -18,7 +18,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.5.13" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.14" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -84,18 +84,19 @@
                         "$gt": Timestamp(t1, 0),
                         "$lte": Timestamp(t2, 0)
                   } } },
-         $project = serverVer(4.2)
-                  ? { "$unset": "_id" }
-                  : { "$addFields": { "_id": "$$REMOVE" } },
          $group = {
             "$group": {
                "_id": null,
                "_bsonDataSize": { "$sum": { "$bsonSize": "$$ROOT" } },
                "_documentCount": { "$sum": 1 }
-         } };
+         } },
+         // strip synthetic $group _id server-side before returning to the client
+         $project = serverVer(4.2)
+                  ? { "$unset": "_id" }
+                  : { "$addFields": { "_id": "$$REMOVE" } };
       const pipeline = serverVer(4.4)
-                     ? [$match, $project, $group]
-                     : [$match, $project];
+                     ? [$match, $group, $project]
+                     : [$match];
       const options = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
@@ -112,7 +113,7 @@
          console.log('\n[R]Warning: Using the legacy client side calculation technique[/]');
          oplog.aggregate(pipeline, options).forEach(op => {
             opSize += bsonsize(op);
-            ++docs;
+            docs++;
          });
       }
 
