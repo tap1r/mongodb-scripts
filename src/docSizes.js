@@ -1,6 +1,6 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.32"
+ *  Version: "0.1.33"
  *  Description: "sample document size distribution"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -22,7 +22,7 @@ const options = {
    /*
     *  main
     */
-   const __script = { "name": "docSizes.js", "version": "0.1.32" };
+   const __script = { "name": "docSizes.js", "version": "0.1.33" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
    // connection preferences
    const hello = db.hello();
@@ -99,6 +99,7 @@ const options = {
                "sampledSize": { "$sum": 1 }
             } },
             { "$set": {
+               "sampleSize": sampleSize,
                "avgDocSize": { "$round": [{ "$divide": ["$dataSize", "$sampledSize"] }, 0] },
                "estStorageSize": { "$round": [{ "$divide": ["$dataSize", ratio] }, 0] },
             } },
