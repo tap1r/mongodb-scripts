@@ -1,12 +1,12 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.6"
+ *  Version: "0.12.7"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: [mongo|mongosh] [connection options] --quiet [--eval 'let options = {...};'] [-f|--file] </path/to/>dbstats.js
+// Usage: [mongo|mongosh] [connection options] --quiet [--eval 'var options = {...};'] [-f|--file] </path/to/>dbstats.js
 
 /*
  *  options = {
@@ -21,7 +21,6 @@
  *           storageSize: <1|0|-1>,
  *           freeStorageSize: <1|0|-1>,
  *           idxStorageSize: <1|0|-1>, // TBA
- *           freeStorageSize: <1|0|-1>,
  *           idxFreeStorageSize: <1|0|-1>, // TBA
  *           reuse: <1|0|-1>, // TBA
  *           idxReuse: <1|0|-1>, // TBA
@@ -86,28 +85,29 @@
 /*
  *  Examples of using filters with namespace regex:
  *
- *    mongosh --quiet --eval 'let options = { filter: { db: "^database$" } };' -f dbstats.js
- *    mongosh --quiet --eval 'let options = { filter: { collection: "^c.+" } };' -f dbstats.js
- *    mongosh --quiet --eval 'let options = { filter: { db: /(^(?!(d.+)).+)/i, collection: /collection/i } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { filter: { db: "^database$" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { filter: { collection: "^c.+" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { filter: { db: /(^(?!(d.+)).+)/i, collection: /collection/i } };' -f dbstats.js
  *
  *  Examples of using sorting:
  *
- *    mongosh --quiet --eval 'let options = { sort: { collection: { dataSize: -1 }, index: { idxStorageSize: -1 } } };' -f dbstats.js
- *    mongosh --quiet --eval 'let options = { sort: { collection: { freeStorageSize: -1 }, index: { idxFreeStorageSize: -1 } } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { sort: { collection: { dataSize: -1 }, index: { idxStorageSize: -1 } } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { sort: { collection: { freeStorageSize: -1 }, index: { idxFreeStorageSize: -1 } } };' -f dbstats.js
  *
  *  Examples of using formatting:
  *
- *    mongosh --quiet --eval 'let options = { output: { format: "tabular" } };' -f dbstats.js
- *    mongosh --quiet --eval 'let options = { output: { format: "json" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { output: { format: "tabular" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { output: { format: "json" } };' -f dbstats.js
  */
 
 /*
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
  *  Save libs to the $MDBLIB or other valid search path
+ *  We overwrite options with var due to mongosh sloppy mode processing
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.6" };
+   const __script = { "name": "dbstats.js", "version": "0.12.7" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -124,6 +124,7 @@
          __lib.path = __lib.name;
       }
       load(__lib.path);
+      // Fix: Namespace the library. Instead of global.$stats = ..., use global.mdblib = { $stats: ..., MetaStats: ... } and access via mdblib.$stats
    }
    let __comment = `#### Running script ${__script.name} v${__script.version}`;
    __comment += ` with ${__lib.name} v${__lib.version}`;
@@ -270,10 +271,10 @@
 
       switch (formatOutput) {
          case 'json':
-            // jsonOut(dbStats);
-            return dbStats;
+            jsonOut(dbStats);
+            // return dbStats;
             // dbStats
-            // break;
+            break;
          case 'html':
             htmlOut(dbStats);
             break;
