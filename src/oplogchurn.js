@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.19"
+ *  Version: "0.5.20"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,7 +18,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.5.19" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.20" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -43,7 +43,6 @@
    console.log(`\n\n[yellow]${__comment}[/]`);
    if (shellVer(serverVer()) && !isMongosh()) console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
    if (!shellVer(1.9) && isMongosh()) console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
-   if (!serverVer(4.2)) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
 })();
 
 (() => {
@@ -112,9 +111,7 @@
                "_lastTs": { "$max": "$ts" }
          } },
          // strip synthetic $group _id server-side before returning to the client
-         $project = serverVer(4.2)
-                  ? { "$unset": "_id" }
-                  : { "$addFields": { "_id": "$$REMOVE" } };
+         $project = { "$unset": "_id" };
       const pipeline = serverVer(4.4)
                      ? [$match, $group, $project]
                      : [$match];
@@ -122,7 +119,7 @@
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
-         "comment": "Calculating oplog size via oplogchurn.js v0.5.19"
+         "comment": "Calculating oplog size via oplogchurn.js v0.5.20"
       };
 
       // Measure interval statistics
