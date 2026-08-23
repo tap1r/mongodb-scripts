@@ -1,6 +1,6 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.31"
+ *  Version: "0.1.32"
  *  Description: "sample document size distribution"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -22,7 +22,7 @@ const options = {
    /*
     *  main
     */
-   const __script = { "name": "docSizes.js", "version": "0.1.31" };
+   const __script = { "name": "docSizes.js", "version": "0.1.32" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
    // connection preferences
    const hello = db.hello();
@@ -35,19 +35,6 @@ const options = {
    } catch(e) {
       console.error(`${dbName}.${collName}`, e.errmsg ?? e.message ?? String(e));
    }
-
-   /*
-      function fomatted(bytes) {
-         return Intl.NumberFormat('en', {
-            "minimumIntegerDigits": 1,
-            "minimumFractionDigits": 0,
-            "maximumFractionDigits": 2,
-            "style": "unit",
-            "unit": "byte", // https://tc39.es/proposal-unified-intl-numberformat/section6/locales-currencies-tz_proposed_out.html#sec-issanctionedsimpleunitidentifier
-            "unitDisplay": "narrow" // "short"
-         }).format(bytes);
-      }
-   */
 
    // retrieve collection metadata
    const namespace = db.getSiblingDB(dbName).getCollection(collName);
@@ -103,11 +90,12 @@ const options = {
    // measure document and page size distribution
    const pipeline = [
       { "$sample": { "size": sampleSize } },
+      { "$replaceWith": { "size": { "$bsonSize": "$$ROOT" } } },
       { "$facet": {
          "SampleTotals": [
             { "$group": {
                "_id": null,
-               "dataSize": { "$sum": { "$bsonSize": "$$ROOT" } },
+               "dataSize": { "$sum": "$size" },
                "sampledSize": { "$sum": 1 }
             } },
             { "$set": {
@@ -118,11 +106,11 @@ const options = {
          ],
          "BSONdistribution": [
             { "$bucket": {
-               "groupBy": { "$bsonSize": "$$ROOT" },
+               "groupBy": "$size",
                "boundaries": buckets,
                "default": "Unknown",
                "output": {
-                  "totalDataSize": { "$sum": { "$bsonSize": "$$ROOT" } },
+                  "totalDataSize": { "$sum": "$size" },
                   "count": { "$sum": 1 },
             } } },
             { "$set": { "bucket": "$_id" } },
@@ -130,11 +118,11 @@ const options = {
          ],
          "PageDistribution": [
             { "$bucket": {
-               "groupBy": { "$round": { "$divide": [{ "$bsonSize": "$$ROOT" }, ratio] } },
+               "groupBy": { "$round": { "$divide": ["$size", ratio] } },
                "boundaries": pages,
                "default": "Unknown",
                "output": {
-                  "totalStorageSize": { "$sum": { "$round": { "$divide": [{ "$bsonSize": "$$ROOT" }, ratio] } } },
+                  "totalStorageSize": { "$sum": { "$round": { "$divide": ["$size", ratio] } } },
                   "count": { "$sum": 1 }
             } } },
             { "$set": { "bucket": "$_id" } },
