@@ -1,6 +1,6 @@
 /*
  *  Name: "indexCacheUtil.js"
- *  Version: "0.1.4"
+ *  Version: "0.1.5"
  *  Description: "index cache util"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  *  - add progress meter while accumulating counters
  */
 
-// Usage: mongosh [<connection options>] [--quiet] [-f|--file] indexCacheUtil.js
+// Usage: mongosh [<connection options>] [--quiet] [-f|--file] </path/to/>indexCacheUtil.js
 
 (async() => {
    /*
@@ -133,16 +133,18 @@
       const cacheSize = db.serverStatus().wiredTiger.cache['maximum bytes configured'];
       const cachedPagesBytes = db.serverStatus().wiredTiger.cache['bytes belonging to page images in the cache'];
       const namespaces = await getAllNonSystemNamespaces();
-      const nslist = await Promise.all(namespaces).catch(error => {
-         console.log('Listing one of the namespaces failed:', error);
+      const nslist = (await Promise.allSettled(namespaces)).map(({ status, value, reason }) => {
+         if (status === 'fulfilled') return value;
+         console.log('Listing one of the namespaces failed:', reason);
+         return [];
       });
       await Promise.allSettled(nslist.flat().map(getIndexCacheStats)).then(results => {
-         results.forEach(({ status, value }) => {
-            if (status == 'fulfilled') {
+         results.forEach(({ status, value, reason }) => {
+            if (status === 'fulfilled') {
                sizeInMemory += value.sizeInMemory;
                totalIndexPages += value.totalIndexPages;
-            } else if (status == 'rejected') {
-               console.error('rejected:', value);
+            } else if (status === 'rejected') {
+               console.error('rejected:', reason);
             }
          });
          console.log('\n');
