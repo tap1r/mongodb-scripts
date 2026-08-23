@@ -1,12 +1,12 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.30"
+ *  Version: "0.1.31"
  *  Description: "sample document size distribution"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: mongosh [connection options] --quiet [-f|--file] docSizes.js
+// Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>docSizes.js
 
 /*
  *  User defined parameters
@@ -22,18 +22,18 @@ const options = {
    /*
     *  main
     */
-   const __script = { "name": "docSizes.js", "version": "0.1.30" };
+   const __script = { "name": "docSizes.js", "version": "0.1.31" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
    // connection preferences
    const hello = db.hello();
    if (typeof readPref === 'undefined')
       (readPref = (hello.secondary === false) ? 'primaryPreferred' : 'secondaryPreferred');
    db.getMongo().setReadPref(readPref);
-   try {
-      if (db.getSiblingDB(dbName).getCollectionInfos({ "name": collName }, true)[0]?.name != collName)
+   try { // not direct-shard-friendly
+      if (db.getSiblingDB(dbName).getCollectionInfos({ "name": collName }, true)[0]?.name !== collName)
          throw 'namespace does not exist';
    } catch(e) {
-      console.error(`${dbName}.${collName}`, e);
+      console.error(`${dbName}.${collName}`, e.errmsg ?? e.message ?? String(e));
    }
 
    /*
@@ -91,7 +91,7 @@ const options = {
    // Distribution buckets
    const range = (start, stop, step) => {
       return Array.from(
-         { "length": (stop - start) / (step + 1) },
+         { "length": (stop - start) / step + 1 },
          (_, idx) => start + idx * step
       );
    };
@@ -107,11 +107,11 @@ const options = {
          "SampleTotals": [
             { "$group": {
                "_id": null,
-               "dataSize": { "$sum": { "$bsonSize": "$$ROOT" } }
+               "dataSize": { "$sum": { "$bsonSize": "$$ROOT" } },
+               "sampledSize": { "$sum": 1 }
             } },
             { "$set": {
-               "avgDocSize": { "$round": [{ "$divide": ["$dataSize", sampleSize] }, 0] },
-               "sampleSize": sampleSize,
+               "avgDocSize": { "$round": [{ "$divide": ["$dataSize", "$sampledSize"] }, 0] },
                "estStorageSize": { "$round": [{ "$divide": ["$dataSize", ratio] }, 0] },
             } },
             { "$unset": "_id" }
