@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.14.2"
+ *  Version: "0.14.3"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,8 +9,19 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.14.2"
+      "version": "0.14.3"
 });
+
+/*  Notes:
+ *  - dual mongo / mongosh supprt
+ *  - floor legacy mongo to v4.4
+ *  - floor mongosh to v1.10 & v2.10
+ *  - floor mongod to v4.4
+ */
+
+if (shellVer(serverVer()) && !isMongosh()) console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
+if (!shellVer(1.9) && isMongosh()) console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
+if (!serverVer(4.2)) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
 
 // Import crypto module for Node.js/mongosh environments
 // if (typeof crypto === 'undefined' && isMongosh()) {
@@ -642,20 +653,25 @@ function slaveOk(readPref = 'primaryPreferred') {
 
 function isMaster() {
    /*
-    *  Backward compatibility with db.isMaster()
+    *  One-shot legacy hello ({ isMaster: 1 }).
+    *  SERVER-49989: do not alias this to db.hello() — they are different
+    *  commands and return different field names (ismaster vs isWritablePrimary).
     */
-   return (typeof Object.getPrototypeOf(db).hello === 'undefined')
-        ? db.isMaster()
-        : db.hello();
+   return db.adminCommand({ "isMaster": 1 });
 }
 
 function hello() {
    /*
-    *  Forward compatibility with db.hello()
+    *  One-shot topology probe ({ hello: 1 }).
+    *  SERVER-49989: db.hello() must send hello, not wrap isMaster; replies differ.
+    *  Never pass topologyVersion / maxAwaitTimeMS — that is awaitable hello and
+    *  blocks up to heartbeatFrequencyMS (10s) on a quiet node.
     */
-   return (typeof Object.getPrototypeOf(db).hello !== 'function')
-        ? db.isMaster()
-        : db.hello();
+   try {
+      return db.adminCommand({ "hello": 1 });
+   } catch(error) {
+      return isMaster();
+   }
 }
 
 function hostInfo() {
@@ -824,20 +840,6 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
    }
 
    return serverStatusResults;
-}
-
-if (typeof Object.getPrototypeOf(db).isMaster === 'undefined') {
-   /*
-    *  Backward compatibility with db.isMaster()
-    */
-   Object.getPrototypeOf(db).isMaster = () => this.hello();
-}
-
-if (typeof Object.getPrototypeOf(db).hello === 'undefined') {
-   /*
-    *  Forward compatibility with db.hello()
-    */
-   Object.getPrototypeOf(db).hello = () => this.isMaster();
 }
 
 if (typeof bsonsize === 'undefined') {
