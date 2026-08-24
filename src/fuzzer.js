@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.41"
+ *  Version: "0.6.42"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.41" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.42" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -36,9 +36,6 @@
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    console.log(`\n\n[yellow]${__comment}[/]`);
-   if (shellVer(serverVer()) && !isMongosh()) console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
-   if (!shellVer(1.9) && isMongosh()) console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
-   if (!serverVer(4.2)) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
 })();
 
 (async() => {
@@ -264,7 +261,7 @@
             try {
                res = await cmd();
             } catch(e) {
-               console.log('Resharding attempt:', e.errmsg ?? e.message ?? String(e));
+               console.log('Resharding attempt:', (e.errmsg || e.message || String(e)));
             }
 
             return res;
@@ -347,14 +344,14 @@
             try {
                await reshardPromise;
             } catch(e) {
-               console.log('Resharding attempt:', e.errmsg ?? e.message ?? String(e));
+               console.log('Resharding attempt:', (e.errmsg || e.message || String(e)));
             }
          } else {
             console.log(`\nMonitoring of resharding (via async) operations are not supported in the legacy shell\n`);
             try {
                await resharding();
             } catch(e) {
-               console.log('Resharding attempt:', e.errmsg ?? e.message ?? String(e));
+               console.log('Resharding attempt:', (e.errmsg || e.message || String(e)));
             }
          }
          console.log(`\nResharding complete.`);
@@ -761,7 +758,7 @@
          try {
             db.getSiblingDB(dbName).createCollection(collName, options);
          } catch(e) {
-            console.log('\n[red][ERROR] Namespace creation failed:[/]', e.errmsg ?? e.message ?? String(e));
+            console.log('\n[red][ERROR] Namespace creation failed:[/]', (e.errmsg || e.message || String(e)));
          }
 
          if (sharding && isSharded() && db.getSiblingDB(dbName).getCollection(collName).exists()) {
@@ -786,7 +783,7 @@
                sh.startBalancer();
             }
             catch(e) {
-               console.log('[red][ERROR] Sharding namespace failed:[/]', e.errmsg ?? e.message ?? String(e));
+               console.log('[red][ERROR] Sharding namespace failed:[/]', (e.errmsg || e.message || String(e)));
             }
          }
       }
