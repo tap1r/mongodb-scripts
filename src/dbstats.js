@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.7"
+ *  Version: "0.12.8"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -107,7 +107,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.7" };
+   const __script = { "name": "dbstats.js", "version": "0.12.8" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -131,9 +131,6 @@
    __comment += ` on shell v${version()}`;
    // console.clear();
    console.log(`\n\n[yellow]${__comment}[/]`);
-   if (shellVer(serverVer()) && !isMongosh()) console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
-   if (!shellVer(1.9) && isMongosh()) console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
-   if (!serverVer(4.2)) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
 })();
 
 (() => {
