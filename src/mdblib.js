@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.15.1"
+ *  Version: "0.15.2"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.15.1"
+      "version": "0.15.2"
 });
 
 /*  Notes:
@@ -591,27 +591,16 @@ function slaveOk(readPref = 'primaryPreferred') {
         : rs.slaveOk();
 }
 
-function isMaster() {
-   /*
-    *  One-shot legacy hello ({ isMaster: 1 }).
-    *  SERVER-49989: do not alias this to db.hello() — they are different
-    *  commands and return different field names (ismaster vs isWritablePrimary).
-    */
-   return db.adminCommand({ "isMaster": 1 });
-}
-
 function hello() {
    /*
     *  One-shot topology probe ({ hello: 1 }).
-    *  SERVER-49989: db.hello() must send hello, not wrap isMaster; replies differ.
-    *  Never pass topologyVersion / maxAwaitTimeMS — that is awaitable hello and
-    *  blocks up to heartbeatFrequencyMS (10s) on a quiet node.
+    *  SERVER-49989: send hello, do not wrap isMaster; replies differ
+    *  (isWritablePrimary vs ismaster). hello exists on mongod >= 4.2
+    *  (floor is 4.4), so there is no isMaster fallback.
+    *  Never pass topologyVersion / maxAwaitTimeMS — that is awaitable
+    *  hello and blocks up to heartbeatFrequencyMS (10s) on a quiet node.
     */
-   try {
-      return db.adminCommand({ "hello": 1 });
-   } catch(_) {
-      return isMaster();
-   }
+   return db.adminCommand({ "hello": 1 });
 }
 
 function hostInfo() {
