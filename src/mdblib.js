@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.14.3"
+ *  Version: "0.15.0"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -15,23 +15,18 @@ if (typeof __lib === 'undefined') (
 /*  Notes:
  *  - dual mongo / mongosh supprt
  *  - floor legacy mongo to v4.4
- *  - floor mongosh to v1.10 & v2.10
+ *  - floor mongosh to v1.10 & v2.10 (updated to match GA releases)
  *  - floor mongod to v4.4
  */
 
 if (shellVer(serverVer()) && !isMongosh()) console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
-if (!shellVer(1.9) && isMongosh()) console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
+if (!shellVer(1.10) && isMongosh()) console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
 if (!serverVer(4.2)) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
 
 // Import crypto module for Node.js/mongosh environments
 // if (typeof crypto === 'undefined' && isMongosh()) {
 //    const crypto = require('crypto');
 //    global.crypto = crypto;
-// }
-
-// Import db object from the global scope
-// if (typeof db === 'undefined') {
-//    db = global.db;
 // }
 
 /*
@@ -58,67 +53,8 @@ if (typeof nonce === 'undefined') {
 };
 
 /*
- *  Helper functions, derived from:
- *    https://github.com/uxitten/polyfill/blob/master/string.polyfill.js
- *    https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/padStart
- *    https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/padEnd
- *    https://github.com/tc39/proposal-object-values-entries
+ *  Helper functions
  */
-
-if (typeof Object.getPrototypeOf(String).padStart === 'undefined') {
-   /*
-    *  Add to the legacy mongo shell
-    */
-   Object.getPrototypeOf(String).padStart = (targetLength, padString) => {
-      targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
-      padString = String(typeof padString !== 'undefined' ? padString : ' ');
-      if (this.length >= targetLength)
-         return String(this);
-      else {
-         targetLength = targetLength - this.length;
-         if (targetLength > padString.length)
-            padString += padString.repeat(targetLength / padString.length); // append to original to ensure we are longer than needed
-
-         return padString.slice(0, targetLength) + String(this);
-      }
-   }
-}
-
-if (typeof Object.getPrototypeOf(String).padEnd === 'undefined') {
-   /*
-    *  Add to the legacy mongo shell
-    */
-   Object.getPrototypeOf(String).padEnd = (targetLength, padString) => {
-      targetLength = targetLength >> 0; // truncate if number, or convert non-number to 0
-      padString = String(typeof padString !== 'undefined' ? padString : ' ');
-      if (this.length > targetLength)
-         return String(this);
-      else {
-         targetLength = targetLength - this.length;
-         if (targetLength > padString.length)
-            padString += padString.repeat(targetLength / padString.length); // append to original to ensure we are longer than needed
-
-         return String(this) + padString.slice(0, targetLength);
-      }
-   }
-}
-
-if (typeof Object.getPrototypeOf(Object).entries === 'undefined') {
-   /*
-    *  Add to the legacy mongo shell
-    */
-   Object.getPrototypeOf(Object).entries = obj => {
-      if (obj == null)
-         throw new TypeError('Cannot convert undefined or null to object');
-      const ownProps = Object.keys(obj);
-      let i = ownProps.length;
-      let entries = new Array(i); // preallocate the Array
-      while (i--)
-         entries[i] = [ownProps[i], obj[ownProps[i]]];
-
-      return entries;
-   }
-}
 
 // shell type detection helper
 function isMongosh() {
