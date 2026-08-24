@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.15.0"
+ *  Version: "0.15.1"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,63 +9,23 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.14.3"
+      "version": "0.15.1"
 });
 
 /*  Notes:
- *  - dual mongo / mongosh supprt
- *  - floor legacy mongo to v4.4
- *  - floor mongosh to v1.10 & v2.10 (updated to match GA releases)
+ *  - dual mongo / mongosh support
  *  - floor mongod to v4.4
+ *  - floor legacy mongo shell to v4.4
+ *  - floor mongosh shell to v1.10 & v2.10 (updated to match GA releases)
  */
 
-if (shellVer(serverVer()) && !isMongosh()) console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
-if (!shellVer(1.10) && isMongosh()) console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
-if (!serverVer(4.2)) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
-
-// Import crypto module for Node.js/mongosh environments
-// if (typeof crypto === 'undefined' && isMongosh()) {
-//    const crypto = require('crypto');
-//    global.crypto = crypto;
-// }
-
-/*
- *  Global defaults
- */
-
-if (typeof bsonMax === 'undefined') (bsonMax = (hello().ok) ? hello().maxBsonObjectSize : 16 * Math.pow(1024, 2));
-if (typeof maxWriteBatchSize === 'undefined') (
-   maxWriteBatchSize = (typeof hello().maxWriteBatchSize === 'undefined')
-                     ? 100000
-                     : hello().maxWriteBatchSize
-);
-if (typeof idiomas === 'undefined') (
-   idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', 'pt', 'ro', 'ru', 'es', 'sv', 'tr']
-);
-if (typeof pid === 'undefined') {
-   if (serverStatus().ok)
-      (pid = +serverStatus().pid);
-   else
-      (pid = $getRandInt(0, 99999));
-};
-if (typeof nonce === 'undefined') {
-   (nonce = (+((db.adminCommand({ "features": 1 }).oidMachine).toString() + pid.toString())).toString(16).substring(0, 10));
-};
-
-/*
- *  Helper functions
- */
-
-// shell type detection helper
 function isMongosh() {
    /*
     *  Evaluate the shell type
     */
-
    return typeof process !== 'undefined';
 }
 
-// shell tty colour helper
 const ansiTags = [
    { "tag": "\/", "code": 0 }, // reset
    { "tag": "bold", "code": 1 },
@@ -191,8 +151,8 @@ if (typeof console === 'undefined') {
          const noEsc = arg => { // strip out ANSI escape sequences
             const ansi = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
             return typeof arg === 'string'
-                  ? arg.replace(ansi, '')
-                  : arg;
+               ? arg.replace(ansi, '')
+               : arg;
          };
 
          return print(noEsc(markup(args)));
@@ -203,6 +163,50 @@ if (typeof console === 'undefined') {
       dir: tojson
    };
 }
+
+(() => {
+   /*
+    *  Runtime floors (see Notes). Parse major.minor as integers — shellVer()
+    *  uses +"x.y" so mongosh 2.10 and 2.1 both become 2.1.
+    */
+   const [, maj, min] = String(version()).match(/^(\d+)\.(\d+)/) || [0, 0, 0];
+   const major = +maj, minor = +min;
+   if (!isMongosh() && (major < 4 || (major === 4 && minor < 4)))
+      console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
+   if (isMongosh() && !((major === 1 && minor >= 10) || (major === 2 && minor >= 10) || major >= 3))
+      console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
+   if (!serverVer(4.4))
+      console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
+})();
+
+// Import crypto module for Node.js/mongosh environments
+// if (typeof crypto === 'undefined' && isMongosh()) {
+//    const crypto = require('crypto');
+//    global.crypto = crypto;
+// }
+
+/*
+ *  Global defaults
+ */
+
+if (typeof bsonMax === 'undefined') (bsonMax = (hello().ok) ? hello().maxBsonObjectSize : 16 * Math.pow(1024, 2));
+if (typeof maxWriteBatchSize === 'undefined') (
+   maxWriteBatchSize = (typeof hello().maxWriteBatchSize === 'undefined')
+                     ? 100000
+                     : hello().maxWriteBatchSize
+);
+if (typeof idiomas === 'undefined') (
+   idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', 'pt', 'ro', 'ru', 'es', 'sv', 'tr']
+);
+if (typeof pid === 'undefined') {
+   if (serverStatus().ok)
+      (pid = +serverStatus().pid);
+   else
+      (pid = $getRandInt(0, 99999));
+};
+if (typeof nonce === 'undefined') {
+   (nonce = (+((db.adminCommand({ "features": 1 }).oidMachine).toString() + pid.toString())).toString(16).substring(0, 10));
+};
 
 /*
  *  Helper classes
@@ -424,7 +428,7 @@ function isSharded() {
    let sharded;
    try {
       sharded = db.adminCommand({ "listShards": 1 }).shards;
-   } catch(error) {
+   } catch(_) {
       sharded = false;
    }
 
@@ -547,18 +551,18 @@ function fCV(ver = false) { // updated for shared tier compatibility
    let cmd = {};
    try {
       cmd = db.adminCommand({ "getParameter": 1, "featureCompatibilityVersion": 1 });
-   } catch(error) {
+   } catch(_) {
       // console.error(`\x1b[31m[WARN] cannot obtain fCV from shared tiers or sharded clusters\n${error}\x1b[0m`);
       cmd.ok = 0;
    }
 
    const featureVer = () => {
       return (serverStatus().ok && serverStatus().process == 'mongod' && cmd.ok )
-           ? +db.adminCommand({
-               "getParameter": 1,
-               "featureCompatibilityVersion": 1
-             }).featureCompatibilityVersion.version
-           : serverVer();
+         ? +db.adminCommand({
+            "getParameter": 1,
+            "featureCompatibilityVersion": 1
+            }).featureCompatibilityVersion.version
+         : serverVer();
    }
 
    return (ver && ver <= featureVer()) ? true
@@ -605,7 +609,7 @@ function hello() {
     */
    try {
       return db.adminCommand({ "hello": 1 });
-   } catch(error) {
+   } catch(_) {
       return isMaster();
    }
 }
@@ -618,7 +622,7 @@ function hostInfo() {
    try {
       db.hostInfo(); // required by legacy mongo to capture server exception
       hostInfo = db.hostInfo();
-   } catch(error) {
+   } catch(_) {
       // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.hostInfo()\n${error}\x1b[0m`);
    }
 
@@ -643,7 +647,7 @@ function serverCmdLineOpts() {
    try {
       db.serverCmdLineOpts(); // required by legacy mongo to capture server exception
       serverCmdLineOpts = db.serverCmdLineOpts();
-   } catch(error) {
+   } catch(_) {
       // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.serverCmdLineOpts()\n${error}\x1b[0m`);
       serverCmdLineOpts = { "parsed": { "storage": { "dbPath": "unknown" } } };
    }
@@ -771,7 +775,7 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
          ...{ ...serverStatusOptionsDefaults, ...serverStatusOptions },
          options
       });
-   } catch(error) {
+   } catch(_) {
       serverStatusResults.ok = 0;
    }
 
@@ -1738,8 +1742,8 @@ function $collStats(dbName = db.getName(), collName = '') {
 
    try {
       results = namespace.aggregate(pipeline, options).toArray()[0];
-   } catch(err) {
-      if (err.codeName == 'Unauthorized') {
+   } catch(e) {
+      if (e.codeName == 'Unauthorized') {
          results = {
             "name": `${collName} (unauthorized)`,
             "nodes": 0,
@@ -1765,6 +1769,8 @@ function $collStats(dbName = db.getName(), collName = '') {
 }
 
 // Export for Node.js/mongosh require() usage
+// exports are broken in mongosh, they initialise into a different context where the db global is not available
+// we may still consider this to limited modules/helpers that don't interoperate with shell/REPL globals
 // if (typeof module !== 'undefined' && module.exports) {
 //    module.exports = {
 //       __lib,
