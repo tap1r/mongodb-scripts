@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.7"
+    *  Version: "0.2.8"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,9 +13,7 @@
     *  TODOs:
     *  - re-add naïve timers for mongos/sharding support
     *  - add execution profiler/timers
-    *  - add serverStatus() caching decorator
-    *    - calculate smoothed decay/moving average metrics
-    *    - debouce serverStatus() requests to fixed intervals
+    *  - calculate smoothed decay/moving average (EWMA) metrics
     *  - add progress counters with estimated time remaining
     *  - add congestion meter for admission control
     *  - add more granular/progressive admission control based on dirtyFill
@@ -56,9 +54,14 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.7" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.8" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
+
+   // TTL cache for serverStatus(): at most one refresh per interval (throttle), shared across callers.
+   // Not classical debounce (which waits for a quiet period) — see admission-control notes.
+   const SERVER_STATUS_CACHE_TTL_MS = 100;
+   const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
 
    async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
       // _id curation (employs partial-blocking aggregation operators)
@@ -249,8 +252,20 @@
        */
       async function serverStatus(serverStatusOptions = {}) {
          /*
-          *  opt-in version of db.serverStatus()
+          *  opt-in version of db.serverStatus() with a 100ms TTL cache.
+          *  Concurrent callers with the same options share one in-flight round trip.
           */
+         const key = JSON.stringify(serverStatusOptions);
+         const now = Date.now();
+         if (_serverStatusCache.value !== null &&
+               _serverStatusCache.key === key &&
+               (now - _serverStatusCache.at) < SERVER_STATUS_CACHE_TTL_MS) {
+            return _serverStatusCache.value;
+         }
+         if (_serverStatusCache.inflight !== null && _serverStatusCache.key === key) {
+            return await _serverStatusCache.inflight;
+         }
+
          const serverStatusOptionsDefaults = { // multiversion compatible
             "none": true, // 8.3 feature: exclude all optional fields, then opt-in
             "activeIndexBuilds": false,
@@ -322,10 +337,19 @@
             "writeBacksQueued": false
          };
 
-         return await db.adminCommand({
+         _serverStatusCache.key = key;
+         _serverStatusCache.inflight = db.adminCommand({
             "serverStatus": true,
             ...{ ...serverStatusOptionsDefaults, ...serverStatusOptions }
          });
+         try {
+            const value = await _serverStatusCache.inflight;
+            _serverStatusCache.value = value;
+            _serverStatusCache.at = Date.now();
+            return value;
+         } finally {
+            _serverStatusCache.inflight = null;
+         }
       }
 
       function hostInfo() {
