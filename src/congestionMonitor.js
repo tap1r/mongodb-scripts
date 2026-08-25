@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.7"
+    *  Version: "0.2.8"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,6 +16,10 @@
 
    let vitals = {};
    const pollingIntervalMS = 100;
+   // TTL cache for serverStatus(): at most one refresh per interval (aligned with pollingIntervalMS).
+   // Concurrent callers with the same options share one in-flight round trip.
+   const SERVER_STATUS_CACHE_TTL_MS = pollingIntervalMS;
+   const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
 
    function isSharded() {
       /*
@@ -52,8 +56,20 @@
        */
       async function serverStatus(serverStatusOptions = {}) {
          /*
-          *  opt-in version of db.serverStatus()
+          *  opt-in version of db.serverStatus() with a short TTL cache.
+          *  Concurrent callers with the same options share one in-flight round trip.
           */
+         const key = JSON.stringify(serverStatusOptions);
+         const now = Date.now();
+         if (_serverStatusCache.value !== null &&
+               _serverStatusCache.key === key &&
+               (now - _serverStatusCache.at) < SERVER_STATUS_CACHE_TTL_MS) {
+            return _serverStatusCache.value;
+         }
+         if (_serverStatusCache.inflight !== null && _serverStatusCache.key === key) {
+            return await _serverStatusCache.inflight;
+         }
+
          const serverStatusOptionsDefaults = { // multiversion compatible
             "none": true, // 8.3 feature: exclude all optional fields, then opt-in
             "activeIndexBuilds": false,
@@ -125,10 +141,19 @@
             "writeBacksQueued": false
          };
 
-         return await db.adminCommand({
+         _serverStatusCache.key = key;
+         _serverStatusCache.inflight = db.adminCommand({
             "serverStatus": true,
             ...{ ...serverStatusOptionsDefaults, ...serverStatusOptions }
          });
+         try {
+            const value = await _serverStatusCache.inflight;
+            _serverStatusCache.value = value;
+            _serverStatusCache.at = Date.now();
+            return value;
+         } finally {
+            _serverStatusCache.inflight = null;
+         }
       }
 
       return {
