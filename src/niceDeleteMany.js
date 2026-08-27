@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.8"
+    *  Version: "0.2.9"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -37,14 +37,14 @@
     *  safeguard: <bool>     // (optional) simulates deletes only (via aborted transactions), set false to remove safeguard
     */
 
-   // Example: mongosh --host "replset/localhost" --eval 'let dbName = "database", collName = "collection", filter = { "qty": { "$lte": 100 } }, safeguard = true;' niceDeleteMany.js
+   // Example: mongosh --host "replset/localhost" --eval 'var dbName = "database", collName = "collection", filter = { "qty": { "$lte": 100 } }, safeguard = true;' niceDeleteMany.js
 
    /*
     *  Start user defined options defaults
     */
 
-   typeof dbName !== 'string' && (dbName = '');
-   typeof collName !== 'string' && (collName = '');
+   if (typeof dbName !== 'string' || !dbName) throw new Error('db namespace must be defined');
+   if (typeof collName !== 'string' || !collName) throw new Error('collection namespace must be defined');
    typeof filter !== 'object' && (filter = {});
    typeof hint !== 'object' && (hint = {});
    typeof collation !== 'object' && (collation = {});
@@ -54,14 +54,20 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.8" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.9" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
-   // TTL cache for serverStatus(): at most one refresh per interval (throttle), shared across callers.
-   // Not classical debounce (which waits for a quiet period) — see admission-control notes.
+   // TTL caches: serverStatus is hot-path; hostInfo is near-static; rsStatus is low/medium volatility.
+   // serverStatus uses a Promise wrapper (adminCommand is sync in mongosh) for in-flight coalescing.
    const SERVER_STATUS_CACHE_TTL_MS = 100;
+   const HOST_INFO_CACHE_TTL_MS = 60 * 1000;
+   const RS_STATUS_CACHE_TTL_MS = 10 * 1000;
+   const SLOWMS_CACHE_TTL_MS = 60 * 1000;
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
+   const _hostInfoCache = { "at": 0, "value": null };
+   const _rsStatusCache = { "at": 0, "value": null };
+   const _slowmsCache = { "at": 0, "value": null };
 
    async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
       // _id curation (employs partial-blocking aggregation operators)
@@ -337,11 +343,13 @@
             "writeBacksQueued": false
          };
 
+         // db.adminCommand() is synchronous in mongosh; wrap in a Promise so
+         // await is meaningful and concurrent callers can share one in-flight fetch.
          _serverStatusCache.key = key;
-         _serverStatusCache.inflight = db.adminCommand({
+         _serverStatusCache.inflight = Promise.resolve().then(() => db.adminCommand({
             "serverStatus": true,
             ...{ ...serverStatusOptionsDefaults, ...serverStatusOptions }
-         });
+         }));
          try {
             const value = await _serverStatusCache.inflight;
             _serverStatusCache.value = value;
@@ -353,25 +361,54 @@
       }
 
       function hostInfo() {
+         // Near-static (cores, RAM limits, OS). 60s TTL is plenty; container limit changes are rare.
+         const now = Date.now();
+         if (_hostInfoCache.value !== null && (now - _hostInfoCache.at) < HOST_INFO_CACHE_TTL_MS) {
+            return _hostInfoCache.value;
+         }
          let hostInfo = {};
          try {
             hostInfo = db.hostInfo();
          } catch(error) {
             // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.hostInfo()\n${error}\x1b[0m`);
          }
-
+         _hostInfoCache.value = hostInfo;
+         _hostInfoCache.at = now;
          return hostInfo;
       }
 
       function rsStatus() {
+         // Member set/health changes slowly; optimes move faster. 10s balances lag freshness vs rs.status() cost.
+         const now = Date.now();
+         if (_rsStatusCache.value !== null && (now - _rsStatusCache.at) < RS_STATUS_CACHE_TTL_MS) {
+            return _rsStatusCache.value;
+         }
          let rsStatus = {};
          try {
             rsStatus = rs.status();
-         } catch(error) {
-            // console.debug(`\x1b[31m[WARN] insufficient rights to execute rs.status()\n${error}\x1b[0m`);
+         } catch(e) {
+            // console.debug(`\x1b[31m[WARN] insufficient rights to execute rs.status()\n${e}\x1b[0m`);
          }
-
+         _rsStatusCache.value = rsStatus;
+         _rsStatusCache.at = now;
          return rsStatus;
+      }
+
+      function slowms() {
+         // Profiling threshold rarely changes at runtime.
+         const now = Date.now();
+         if (_slowmsCache.value !== null && (now - _slowmsCache.at) < SLOWMS_CACHE_TTL_MS) {
+            return _slowmsCache.value;
+         }
+         let slowms = null;
+         try {
+            slowms = db.getSiblingDB('admin').getProfilingStatus().slowms;
+         } catch(e) {
+            // console.debug(`\x1b[31m[WARN] insufficient rights to execute getProfilingStatus()\n${e}\x1b[0m`);
+         }
+         _slowmsCache.value = slowms;
+         _slowmsCache.at = now;
+         return slowms;
       }
 
       return {
@@ -405,7 +442,7 @@
             "tcmalloc": true, // 2 for more debugging
             "wiredTiger": true
          }),
-         "slowms": db.getSiblingDB('admin').getProfilingStatus().slowms,
+         "slowms": slowms(),
          wterc(regex) {
             // { "wiredTigerEngineRuntimeConfig": "eviction=(threads_min=8,threads_max=8),eviction_dirty_target=2,eviction_updates_trigger=8,checkpoint=(wait=60,log_size=2GB)" }
             return this.wiredTigerEngineRuntimeConfig.match(regex)?.[1] ?? null;
@@ -652,7 +689,7 @@
    async function admissionControl() {
       /*
        *  dynamic admission controller
-       *  - threads should not compete under these contended conditions
+       *  - tasks should not compete under these contended conditions
        *  - see also https://jira.mongodb.org/browse/SPM-1123
        */
 
@@ -672,29 +709,29 @@
            : 0; // no cache pressure, we can open up the throttle
    }
 
-   async function* asyncThreadPool(method = () => {}, threads = [], poolSize = 1, sessionOpts = {}) {
+   async function* asyncTaskPool(method = () => {}, tasks = [], poolSize = 1, sessionOpts = {}) {
       const executing = new Set();
       async function consume() {
-         const [threadPromise, thread] = await Promise.race(executing);
-         executing.delete(threadPromise);
-         return thread;
+         const [taskPromise, task] = await Promise.race(executing);
+         executing.delete(taskPromise);
+         return task;
       }
 
-      for await (const thread of threads) {
+      for await (const task of tasks) {
          /*
           *  Wrap method() in an async fn to ensure we get a promise.
           *  Then expose such promise, so it's possible to later reference
           *  and remove it from the executing pool.
           */
-         // let msg = `\n\n\tScheduling batch ${thread.bucketId} with ${thread.bucketsRemaining} buckets queued remaining:\n`;
-         let msg = `\n\n\tScheduling batch# ${thread.bucketId}:\n`;
+         // let msg = `\n\n\tScheduling batch ${task.bucketId} with ${task.bucketsRemaining} buckets queued remaining:\n`;
+         let msg = `\n\n\tScheduling task batch# ${task.bucketId}:\n`;
          msg = banner + msg;
          console.clear();
          console.log(msg);
-         const threadPromise = (async() => method(thread, sessionOpts))().then(
-            thread => [threadPromise, thread]
+         const taskPromise = (async() => method(task, sessionOpts))().then(
+            task => [taskPromise, task]
          );
-         executing.add(threadPromise);
+         executing.add(taskPromise);
          if (executing.size >= poolSize) yield await consume();
       }
 
@@ -743,18 +780,19 @@
       } else {
          // initial batch
          // let msg = `\nForking ${initialBatch.bucketsTotal} batches of ${initialBatch.bucketSizeLimit} documents with concurrency execution of ${concurrency} to delete ${initialBatch.IDsTotal} documents`;
-         let msg = `\nForking ${concurrency} threads of ${initialBatch.bucketSizeLimit} batched documents`;
+         let msg = `\nForking ${concurrency} tasks of ${initialBatch.bucketSizeLimit} batched documents`;
          banner += msg;
          console.log(msg);
-         for await (const [bucketId, deletedCount] of asyncThreadPool(deleteManyTask, [initialBatch], concurrency, sessionOpts)) {
+         for await (const [bucketId, deletedCount] of asyncTaskPool(deleteManyTask, [initialBatch], concurrency, sessionOpts)) {
             console.log('\t\t...batch#', bucketId, 'deleted', deletedCount, 'documents');
          }
          // remaining batches
-         for await (const [bucketId, deletedCount] of asyncThreadPool(deleteManyTask, deletionList, concurrency, sessionOpts)) {
+         for await (const [bucketId, deletedCount] of asyncTaskPool(deleteManyTask, deletionList, concurrency, sessionOpts)) {
             console.log('\t\t...batch#', bucketId, 'deleted', deletedCount, 'documents');
          }
       }
       console.log(`\nValidating deletion results ...please wait\n`);
+      console.log('...you may CTRL+C here to exit gracefully if validation is not required\n');
       const finalCount = countIds(filter);
       if (safeguard) {
          console.log('Simulation safeguard is enabled, no deletions were actually performed:\n');
