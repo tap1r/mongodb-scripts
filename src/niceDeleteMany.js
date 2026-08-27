@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.18"
+    *  Version: "0.2.19"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -53,9 +53,10 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.18" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.19" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
+   let vitalsSampling = false;
 
    // TTL caches: serverStatus is hot-path; hostInfo is near-static; rsStatus is low/medium volatility.
    // serverStatus uses a Promise wrapper (adminCommand is sync in mongosh) for in-flight coalescing.
@@ -63,6 +64,7 @@
    const HOST_INFO_CACHE_TTL_MS = 60 * 1000;
    const RS_STATUS_CACHE_TTL_MS = 2 * 1000; // 2s matches the Atlas no-op heartbeat interval
    const SLOWMS_CACHE_TTL_MS = 60 * 1000;
+   const VITALS_SAMPLE_INTERVAL_MS = 100; // aligned for future WMA/EWMA smoothing
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
    const _hostInfoCache = { "at": 0, "value": null };
    const _rsStatusCache = { "at": 0, "value": null };
@@ -700,9 +702,26 @@
       };
    }
 
-   async function admissionControl() {
+   async function vitalsSampler(intervalMs = VITALS_SAMPLE_INTERVAL_MS) {
       /*
-       *  dynamic admission controller
+       *  Vitals are sampled on a background loop (decoupled from task scheduling);
+       *  admissionControl reads the latest snapshot. Sleeps first so the caller's
+       *  initial sample is not immediately repeated.
+       */
+      while (vitalsSampling) {
+         await sleep(intervalMs);
+         if (!vitalsSampling) break;
+         try {
+            vitals = await congestionMonitor();
+         } catch(e) {
+            console.log('\t[WARN] vitals sample failed:', e);
+         }
+      }
+   }
+
+   function admissionControl() {
+      /*
+       *  dynamic admission controller (reads latest vitals snapshot)
        *  - tasks should not compete under these contended conditions
        *  - see also https://jira.mongodb.org/browse/SPM-1123
        */
@@ -714,7 +733,7 @@
          // wtReadTicketsStatus,
          wtWriteTicketsStatus,
          checkpointStatus
-      } = await congestionMonitor();
+      } = vitals;
 
       // heuristics based on write workload pattern
       return (cacheStatus == 'high' || dirtyStatus == 'high' || dirtyUpdatesStatus == 'high') ? 'wait' // WT app threads evicting, we should not contribute to excess cache pressure
@@ -780,7 +799,7 @@
       await fill(1);
 
       while (buf.length || executing.size || !srcDone) {
-         let delay = await admissionControl();
+         let delay = admissionControl();
          while (delay == 'wait') {
             if (typeof onWait === 'function') onWait(buf[0]?.bucketId);
             await fill();
@@ -790,7 +809,7 @@
             } else {
                await sleep(Math.floor(500 + Math.random() * 500));
             }
-            delay = await admissionControl();
+            delay = admissionControl();
          }
          if (delay > 0) await sleep(delay);
 
@@ -816,94 +835,103 @@
    }
 
    async function main() {
-      vitals = await congestionMonitor();
-      const { numCores } = vitals;
-      const concurrency = Math.max(numCores, 32); // admission control throttles; do not chase live write tickets
-      const bucketSizeLimit = 100; // aligns with SPM-2227
-      const readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // support monotonic writes
-      // Curation: prefer secondaries to keep _id bucketing off the primary.
-      const curationReadPreference = {
-         // "mode": "nearest", // offload the bucket generation to a less busy node
-         "mode": "secondaryPreferred",
-         "tags": [ // Atlas friendly defaults
-            { "nodeType": "READ_ONLY", "diskState": "READY" },
-            { "nodeType": "ANALYTICS", "diskState": "READY" },
-            { "workloadType": "OPERATIONAL", "diskState": "READY" },
-            { "diskState": "READY" },
-            {}
-         ]
-      };
-      // Deletes + residual count: primary. Count uses majority RC to observe wc:majority deletes.
-      const writeReadPreference = { "mode": "primary" };
-      const readSessionOpts = {
-         "causalConsistency": true,
-         "readConcern": readConcern,
-         "readPreference": curationReadPreference
-      };
-      const writeSessionOpts = {
-         "causalConsistency": true,
-         "readConcern": readConcern,
-         "readPreference": writeReadPreference,
-         "retryWrites": true,
-         "writeConcern": writeConcern
-      };
-      const countSessionOpts = {
-         "causalConsistency": true,
-         "readConcern": { "level": "majority" },
-         "readPreference": writeReadPreference
-      };
-      banner = `\n\x1b[33m${banner}\x1b[0m`;
-      banner += `\n\nCurating '\x1b[32m_id\x1b[0m' deletion list from namespace:` +
-                `\n\n\t\x1b[32m${dbName}.${collName}\x1b[0m` +
-                `\n\nwith filter:` +
-                `\n\n\t\x1b[32m${JSON.stringify(filter)}\x1b[0m` +
-                `\n\n...please wait\n`;
-      if (safeguard) {
-         banner += '\n\x1b[31mWarning:\x1b[0m \x1b[32mSafeguard is enabled, simulating deletes only (via transaction rollbacks)\n\x1b[0m';
-      }
-      console.clear();
-      console.log(banner);
-      const deletionList = getIds(filter, bucketSizeLimit, readSessionOpts);
-      const { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
-      if (initialEmptyBatch === true) {
-         console.log('\tNo matching documents found to match the filter, double-check the namespace and filter');
-      } else {
-         // initial batch
-         // let msg = `\nForking ${initialBatch.bucketsTotal} batches of ${initialBatch.bucketSizeLimit} documents with concurrency execution of ${concurrency} to delete ${initialBatch.IDsTotal} documents`;
-         let msg = `\nUp to ${concurrency} concurrent deletes of ${initialBatch.bucketSizeLimit} documents`;
-         banner += msg;
-         console.log(msg);
-         for await (const [bucketId, deletedCount] of asyncPool(
-            prepend(initialBatch, deletionList),
-            task => deleteManyTask(task, writeSessionOpts),
-            {
-               "poolSize": concurrency,
-               onSchedule(task) {
-                  // let msg = `\n\n\tScheduling batch ${task.bucketId} with ${task.bucketsRemaining} buckets queued remaining:\n`;
-                  const msg = `\n\n\tScheduling task batch# ${task.bucketId}:\n`;
-                  console.clear();
-                  console.log(banner + msg);
-               },
-               onWait(bucketId) {
-                  console.log('\t\t...batch', bucketId ?? '-', 'is awaiting scheduling due to back pressure');
-               },
-               onLaunch(task, delay) {
-                  console.log('\t\t...batch', task.bucketId, 'executing (buffering:', delay, 'ms)');
-               }
-            }
-         )) {
-            console.log('\t\t...batch#', bucketId, 'deleted', deletedCount, 'documents');
+      vitals = await congestionMonitor(); // initial snapshot before scheduling
+      vitalsSampling = true;
+      const sampler = vitalsSampler();
+      try {
+         const { numCores } = vitals;
+         const concurrency = Math.max((numCores > 4) ? numCores : 4, 32); // admission control throttles; do not chase live write tickets
+         const bucketSizeLimit = 100; // aligns with SPM-2227
+         const readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // support monotonic writes
+         /*
+          *  Curation uses secondaryPreferred; deletes and residual count use
+          *  primary (count: majority RC).
+          */
+         const curationReadPreference = {
+            // "mode": "nearest", // offload the bucket generation to a less busy node
+            "mode": "secondaryPreferred",
+            "tags": [ // Atlas friendly defaults
+               { "nodeType": "READ_ONLY", "diskState": "READY" },
+               { "nodeType": "ANALYTICS", "diskState": "READY" },
+               { "workloadType": "OPERATIONAL", "diskState": "READY" },
+               { "diskState": "READY" },
+               {}
+            ]
+         };
+         const writeReadPreference = { "mode": "primary" };
+         const readSessionOpts = {
+            "causalConsistency": true,
+            "readConcern": readConcern,
+            "readPreference": curationReadPreference
+         };
+         const writeSessionOpts = {
+            "causalConsistency": true,
+            "readConcern": readConcern,
+            "readPreference": writeReadPreference,
+            "retryWrites": true,
+            "writeConcern": writeConcern
+         };
+         const countSessionOpts = {
+            "causalConsistency": true,
+            "readConcern": { "level": "majority" },
+            "readPreference": writeReadPreference
+         };
+         banner = `\n\x1b[33m${banner}\x1b[0m`;
+         banner += `\n\nCurating '\x1b[32m_id\x1b[0m' deletion list from namespace:` +
+                   `\n\n\t\x1b[32m${dbName}.${collName}\x1b[0m` +
+                   `\n\nwith filter:` +
+                   `\n\n\t\x1b[32m${JSON.stringify(filter)}\x1b[0m` +
+                   `\n\n...please wait\n`;
+         if (safeguard) {
+            banner += '\n\x1b[31mWarning:\x1b[0m \x1b[32mSafeguard is enabled, simulating deletes only (via transaction rollbacks)\n\x1b[0m';
          }
+         console.clear();
+         console.log(banner);
+         const deletionList = getIds(filter, bucketSizeLimit, readSessionOpts);
+         const { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
+         if (initialEmptyBatch === true) {
+            console.log('\tNo matching documents found to match the filter, double-check the namespace and filter');
+         } else {
+            // initial batch
+            // let msg = `\nForking ${initialBatch.bucketsTotal} batches of ${initialBatch.bucketSizeLimit} documents with concurrency execution of ${concurrency} to delete ${initialBatch.IDsTotal} documents`;
+            let msg = `\nUp to ${concurrency} concurrent deletes of ${initialBatch.bucketSizeLimit} documents`;
+            banner += msg;
+            console.log(msg);
+            for await (const [bucketId, deletedCount] of asyncPool(
+               prepend(initialBatch, deletionList),
+               task => deleteManyTask(task, writeSessionOpts),
+               {
+                  "poolSize": concurrency,
+                  onSchedule(task) {
+                     // let msg = `\n\n\tScheduling batch ${task.bucketId} with ${task.bucketsRemaining} buckets queued remaining:\n`;
+                     const msg = `\n\n\tScheduling task batch# ${task.bucketId}:\n`;
+                     console.clear();
+                     console.log(banner + msg);
+                  },
+                  onWait(bucketId) {
+                     console.log('\t\t...batch', bucketId ?? '-', 'is awaiting scheduling due to back pressure');
+                  },
+                  onLaunch(task, delay) {
+                     console.log('\t\t...batch', task.bucketId, 'executing (buffering:', delay, 'ms)');
+                  }
+               }
+            )) {
+               console.log('\t\t...batch#', bucketId, 'deleted', deletedCount, 'documents');
+            }
+         }
+         console.log(`\nValidating deletion results ...please wait\n`);
+         console.log('...you may CTRL+C here to exit gracefully if validation is not required\n');
+         const finalCount = countIds(filter, countSessionOpts);
+         if (safeguard) {
+            console.log('Simulation safeguard is enabled, no deletions were actually performed:\n');
+         }
+         // console.log('\tInitial document count matching filter:', (initialEmptyBatch === true) ? 0 : initialBatch.IDsTotal);
+         console.log('\tResidual document count matching filter:', finalCount);
+         console.log('\nDone!');
+      } finally {
+         vitalsSampling = false;
+         await sampler;
       }
-      console.log(`\nValidating deletion results ...please wait\n`);
-      console.log('...you may CTRL+C here to exit gracefully if validation is not required\n');
-      const finalCount = countIds(filter, countSessionOpts);
-      if (safeguard) {
-         console.log('Simulation safeguard is enabled, no deletions were actually performed:\n');
-      }
-      // console.log('\tInitial document count matching filter:', (initialEmptyBatch === true) ? 0 : initialBatch.IDsTotal);
-      console.log('\tResidual document count matching filter:', finalCount);
-      console.log('\nDone!');
    }
 
    await main().finally(console.log);
