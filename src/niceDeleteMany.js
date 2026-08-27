@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.11"
+    *  Version: "0.2.12"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -54,7 +54,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.11" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.12" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -72,108 +72,112 @@
    async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
       // _id curation (employs partial-blocking aggregation operators)
       const session = db.getMongo().startSession(sessionOpts);
-      const namespace = session.getDatabase(dbName).getCollection(collName);
-      // const buckets = Math.pow(2, 31) - 1; // max 32bit Int
-      const aggOpts = {
-         "allowDiskUse": true,
-         "collation": collation,
-         "cursor": { "batchSize": bucketSizeLimit * vitals.numCores }, // multiple of bucketSizeLimit * concurrency
-         "hint": hint,
-         "maxTimeMS": 0, // required to overide potential v8 defaultMaxTimeMS cluster settings
-         "comment": "Bucketing IDs via niceDeleteMany.js",
-         "let": { "bucketSizeLimit": bucketSizeLimit }
-      };
-      const pipeline = [
-         { "$match": filter },
-         /* v1 blocking mode with count estimations
-            // { "$setWindowFields": {
-            //    "sortBy": { "_id": 1 },
-            //    "output": {
-            //       "ordinal": { "$documentNumber": {} },
-            //       "IDsTotal": { "$count": {} }
-            // } } },
-            // { "$bucketAuto": { // fixed height bucketing
-            //    "groupBy": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
-            //    "buckets": buckets,
-            //    "output": {
-            //       "IDs": { "$push": "$_id" },
-            //       "bucketSize": { "$sum": 1 },
-            //       "IDsTotal": { "$max": "$IDsTotal" }
-            // } } },
-            // { "$setWindowFields": {
-            //    "sortBy": { "_id": 1 },
-            //    "output": {
-            //       "bucketId": { "$documentNumber": {} },
-            //       "bucketsTotal": { "$count": {} },
-            //       "IDsCumulative": {
-            //          "$sum": "$bucketSize",
-            //          "window": { "documents": ["unbounded", "current"] }
-            // } } } },
-         */
-         /* v2 reduced non-blocking mode without count estimations
-            // { "$setWindowFields": { // assign ordinal numbers incrementally
-            //    "sortBy": { "_id": 1 },
-            //    "output": { "ordinal": { "$documentNumber": {} } }
-            // } },
-            // { "$set": { // assign bucket IDs based on ordinal, avoiding full grouping
-            //    "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } }
-            // } },
-            // { "$group": { // group into buckets incrementally
-            //    "_id": "$bucketId",
-            //    "IDs": { "$push": "$_id" },
-            //    "bucketSize": { "$sum": 1 }
-            // } },
-            // { "$setWindowFields": { // compute cumulative bucket sizes
-            //    "sortBy": { "_id": 1 },
-            //    "output": {
-            //       "bucketId": { "$documentNumber": {} }, // renumber buckets sequentially
-            //       "IDsCumulative": {
-            //          "$sum": "$bucketSize",
-            //          "window": { "documents": ["unbounded", "current"] }
-            // } } } },
-         */
-         // v3 non-blocking mode
-         { "$setWindowFields": { // assign ordinal numbers
-            "sortBy": { [Object.keys(filter)[0]]: 1 },
-            "output": { "ordinal": { "$documentNumber": {} } }
-         } },
-         { "$set": { // compute bucketId and running cumulative count
-            "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
-            "cardinal": 1 // each document contributes 1 to its bucket
-         } },
-         { "$setWindowFields": { // compute cumulative sum in the bucket
-            "partitionBy": "$bucketId",
-            "sortBy": { [Object.keys(filter)[0]]: 1 },
-            "output": {
-               "IDsCumulative": {
-                  "$sum": "$cardinal",
-                  "window": { "documents": ["unbounded", "current"] }
-               },
-               "IDs": { "$push": "$_id" },
-               "bucketSize": { "$sum": 1 }
-            }
-         } },
-         { "$match": { // reduce to the last bucket of each group
-            "$expr": {
-               "$eq": ["$IDsCumulative", "$bucketSize"]
-            }
-         } },
-         //
-         { "$project": {
-            "_id": 0,
-            "bucketId": 1, // ordinal of current bucket
-            // "bucketsTotal": 1, // total number of buckets
-            // "bucketsRemaining": { "$subtract": ["$bucketsTotal", "$bucketId"] }, // number of buckets remaining
-            "bucketSize": 1, // number of _ids in the current bucket
-            "bucketSizeLimit": "$$bucketSizeLimit", // bucket size limit
-            "IDsCumulative": 1, // cumulative total number of IDs
-            // "IDsRemaining": { "$subtract": ["$IDsTotal", "$IDsCumulative"] }, // total number of IDs remaining
-            "IDsTotal": 1, // total number of IDs
-            "IDs": 1 // IDs in the current bucket
-         } }
-      ];
-      // offload iterator to the server's cursor
-      yield* namespace.aggregate(pipeline, aggOpts);
+      try {
+         const namespace = session.getDatabase(dbName).getCollection(collName);
+         // const buckets = Math.pow(2, 31) - 1; // max 32bit Int
+         const aggOpts = {
+            "allowDiskUse": true,
+            "collation": collation,
+            "cursor": { "batchSize": bucketSizeLimit * vitals.numCores }, // multiple of bucketSizeLimit * concurrency
+            "hint": hint,
+            "maxTimeMS": 0, // required to overide potential v8 defaultMaxTimeMS cluster settings
+            "comment": "Bucketing IDs via niceDeleteMany.js",
+            "let": { "bucketSizeLimit": bucketSizeLimit }
+         };
+         const pipeline = [
+            { "$match": filter },
+            /* v1 blocking mode with count estimations
+               // { "$setWindowFields": {
+               //    "sortBy": { "_id": 1 },
+               //    "output": {
+               //       "ordinal": { "$documentNumber": {} },
+               //       "IDsTotal": { "$count": {} }
+               // } } },
+               // { "$bucketAuto": { // fixed height bucketing
+               //    "groupBy": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
+               //    "buckets": buckets,
+               //    "output": {
+               //       "IDs": { "$push": "$_id" },
+               //       "bucketSize": { "$sum": 1 },
+               //       "IDsTotal": { "$max": "$IDsTotal" }
+               // } } },
+               // { "$setWindowFields": {
+               //    "sortBy": { "_id": 1 },
+               //    "output": {
+               //       "bucketId": { "$documentNumber": {} },
+               //       "bucketsTotal": { "$count": {} },
+               //       "IDsCumulative": {
+               //          "$sum": "$bucketSize",
+               //          "window": { "documents": ["unbounded", "current"] }
+               // } } } },
+            */
+            /* v2 reduced non-blocking mode without count estimations
+               // { "$setWindowFields": { // assign ordinal numbers incrementally
+               //    "sortBy": { "_id": 1 },
+               //    "output": { "ordinal": { "$documentNumber": {} } }
+               // } },
+               // { "$set": { // assign bucket IDs based on ordinal, avoiding full grouping
+               //    "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } }
+               // } },
+               // { "$group": { // group into buckets incrementally
+               //    "_id": "$bucketId",
+               //    "IDs": { "$push": "$_id" },
+               //    "bucketSize": { "$sum": 1 }
+               // } },
+               // { "$setWindowFields": { // compute cumulative bucket sizes
+               //    "sortBy": { "_id": 1 },
+               //    "output": {
+               //       "bucketId": { "$documentNumber": {} }, // renumber buckets sequentially
+               //       "IDsCumulative": {
+               //          "$sum": "$bucketSize",
+               //          "window": { "documents": ["unbounded", "current"] }
+               // } } } },
+            */
+            // v3 non-blocking mode
+            { "$setWindowFields": { // assign ordinal numbers
+               "sortBy": { [Object.keys(filter)[0]]: 1 },
+               "output": { "ordinal": { "$documentNumber": {} } }
+            } },
+            { "$set": { // compute bucketId and running cumulative count
+               "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
+               "cardinal": 1 // each document contributes 1 to its bucket
+            } },
+            { "$setWindowFields": { // compute cumulative sum in the bucket
+               "partitionBy": "$bucketId",
+               "sortBy": { [Object.keys(filter)[0]]: 1 },
+               "output": {
+                  "IDsCumulative": {
+                     "$sum": "$cardinal",
+                     "window": { "documents": ["unbounded", "current"] }
+                  },
+                  "IDs": { "$push": "$_id" },
+                  "bucketSize": { "$sum": 1 }
+               }
+            } },
+            { "$match": { // reduce to the last bucket of each group
+               "$expr": {
+                  "$eq": ["$IDsCumulative", "$bucketSize"]
+               }
+            } },
+            //
+            { "$project": {
+               "_id": 0,
+               "bucketId": 1, // ordinal of current bucket
+               // "bucketsTotal": 1, // total number of buckets
+               // "bucketsRemaining": { "$subtract": ["$bucketsTotal", "$bucketId"] }, // number of buckets remaining
+               "bucketSize": 1, // number of _ids in the current bucket
+               "bucketSizeLimit": "$$bucketSizeLimit", // bucket size limit
+               "IDsCumulative": 1, // cumulative total number of IDs
+               // "IDsRemaining": { "$subtract": ["$IDsTotal", "$IDsCumulative"] }, // total number of IDs remaining
+               "IDsTotal": 1, // total number of IDs
+               "IDs": 1 // IDs in the current bucket
+            } }
+         ];
+         // offload iterator to the server's cursor
+         yield* namespace.aggregate(pipeline, aggOpts);
+      } finally {
+         session.endSession();
+      }
    }
 
    function countIds(filter = {}) {
@@ -183,28 +187,32 @@
          "readConcern": { "level": "local" },
          "mode": "primaryPreferred"
       });
-      const namespace = session.getDatabase(dbName).getCollection(collName);
-      const pipeline = [
-            { "$match": filter },
-            { "$group": {
-               "_id": null,
-               "IDsTotal": { "$count": {} }
-            } },
-            { "$project": {
-               "_id": 0,
-               "IDsTotal": 1 // total number of IDs
-            } }
-         ],
-         aggOpts = {
-            "allowDiskUse": true,
-            "readOnce": true, // may or may not work in aggregation?
-            // "readConcern": readConcern,
-            "readConcern": "local",
-            "collation": collation,
-            "hint": hint,
-            "comment": "Validating IDs via niceDeleteMany.js"
-         };
-      return namespace.aggregate(pipeline, aggOpts).toArray()[0]?.IDsTotal ?? 0;
+      try {
+         const namespace = session.getDatabase(dbName).getCollection(collName);
+         const pipeline = [
+               { "$match": filter },
+               { "$group": {
+                  "_id": null,
+                  "IDsTotal": { "$count": {} }
+               } },
+               { "$project": {
+                  "_id": 0,
+                  "IDsTotal": 1 // total number of IDs
+               } }
+            ],
+            aggOpts = {
+               "allowDiskUse": true,
+               "readOnce": true, // may or may not work in aggregation?
+               // "readConcern": readConcern,
+               "readConcern": "local",
+               "collation": collation,
+               "hint": hint,
+               "comment": "Validating IDs via niceDeleteMany.js"
+            };
+         return namespace.aggregate(pipeline, aggOpts).toArray()[0]?.IDsTotal ?? 0;
+      } finally {
+         session.endSession();
+      }
    }
 
    async function deleteManyTask({ IDs, bucketId } = {}, sessionOpts = {}) {
@@ -217,39 +225,43 @@
       console.log('\t\t...batch', bucketId, 'executing (buffering:', sleepIntervalMS, 'ms)');
       await sleep(sleepIntervalMS);
       const session = db.getMongo().startSession(sessionOpts);
-      const namespace = session.getDatabase(dbName).getCollection(collName);
-      const txnOpts = {
-         // "readConcern": { "level": "local" },
-         // "writeConcern": {
-         //    "w": "majority",
-         //    "j": false
-         // },
-         "comment": `Simulating deleteMany(${JSON.stringify(filter)}) workload via niceDeleteMany.js`
-      };
-      const deleteManyFilter = { "_id": { "$in": IDs } };
-      const deleteManyOpts = { "collation": collation };
-      let deletedCount = 0;
-      const deleteMany = async() => {
-         return await namespace.deleteMany(deleteManyFilter, deleteManyOpts).deletedCount;
-      }
-      if (safeguard) {
-         try {
-            session.startTransaction(txnOpts);
-            deletedCount = await deleteMany();
-         } catch(error) {
-            console.log('txn error:', error);
-         } finally {
-            session.abortTransaction();
+      try {
+         const namespace = session.getDatabase(dbName).getCollection(collName);
+         const txnOpts = {
+            // "readConcern": { "level": "local" },
+            // "writeConcern": {
+            //    "w": "majority",
+            //    "j": false
+            // },
+            "comment": `Simulating deleteMany(${JSON.stringify(filter)}) workload via niceDeleteMany.js`
+         };
+         const deleteManyFilter = { "_id": { "$in": IDs } };
+         const deleteManyOpts = { "collation": collation };
+         let deletedCount = 0;
+         const deleteMany = async() => {
+            return await namespace.deleteMany(deleteManyFilter, deleteManyOpts).deletedCount;
          }
-      } else {
-         try {
-            deletedCount = await deleteMany();
-         } catch(error) {
-            console.log(error);
+         if (safeguard) {
+            try {
+               session.startTransaction(txnOpts);
+               deletedCount = await deleteMany();
+            } catch(error) {
+               console.log('txn error:', error);
+            } finally {
+               session.abortTransaction();
+            }
+         } else {
+            try {
+               deletedCount = await deleteMany();
+            } catch(error) {
+               console.log(error);
+            }
          }
-      }
 
-      return [bucketId, deletedCount];
+         return [bucketId, deletedCount];
+      } finally {
+         session.endSession();
+      }
    }
 
    async function congestionMonitor() {
