@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.10"
+    *  Version: "0.2.11"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -20,9 +20,11 @@
    const SERVER_STATUS_CACHE_TTL_MS = pollingIntervalMS;
    const HOST_INFO_CACHE_TTL_MS = 60 * 1000;
    const RS_STATUS_CACHE_TTL_MS = 10 * 1000;
+   const SLOWMS_CACHE_TTL_MS = 60 * 1000;
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
    const _hostInfoCache = { "at": 0, "value": null };
    const _rsStatusCache = { "at": 0, "value": null };
+   const _slowmsCache = { "at": 0, "value": null };
 
    function isSharded() {
       /*
@@ -63,6 +65,23 @@
       _rsStatusCache.value = rsStatus;
       _rsStatusCache.at = now;
       return rsStatus;
+   }
+
+   function slowms() {
+      // Profiling threshold rarely changes at runtime.
+      const now = Date.now();
+      if (_slowmsCache.value !== null && (now - _slowmsCache.at) < SLOWMS_CACHE_TTL_MS) {
+         return _slowmsCache.value;
+      }
+      let slowms = null;
+      try {
+         slowms = db.getSiblingDB('admin').getProfilingStatus().slowms;
+      } catch(e) {
+         // console.debug(`\x1b[31m[WARN] insufficient rights to execute getProfilingStatus()\n${e}\x1b[0m`);
+      }
+      _slowmsCache.value = slowms;
+      _slowmsCache.at = now;
+      return slowms;
    }
 
    async function congestionMonitor() {
@@ -204,7 +223,7 @@
             "tcmalloc": true, // 2 for more debugging
             "wiredTiger": true
          }),
-         "slowms": db.getSiblingDB('admin').getProfilingStatus().slowms,
+         "slowms": slowms(),
          wterc(regex) {
             // { "wiredTigerEngineRuntimeConfig": "eviction=(threads_min=8,threads_max=8),eviction_dirty_target=2,eviction_updates_trigger=8,checkpoint=(wait=60,log_size=2GB)" }
             return this.wiredTigerEngineRuntimeConfig.match(regex)?.[1] ?? null;
