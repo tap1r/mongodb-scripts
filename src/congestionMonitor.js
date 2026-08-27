@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.8"
+    *  Version: "0.2.9"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -141,11 +141,13 @@
             "writeBacksQueued": false
          };
 
+         // db.adminCommand() is synchronous in mongosh; wrap in a Promise so
+         // await is meaningful and concurrent callers can share one in-flight fetch.
          _serverStatusCache.key = key;
-         _serverStatusCache.inflight = db.adminCommand({
+         _serverStatusCache.inflight = Promise.resolve().then(() => db.adminCommand({
             "serverStatus": true,
             ...{ ...serverStatusOptionsDefaults, ...serverStatusOptions }
-         });
+         }));
          try {
             const value = await _serverStatusCache.inflight;
             _serverStatusCache.value = value;
