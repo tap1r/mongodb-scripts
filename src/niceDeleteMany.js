@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.14"
+    *  Version: "0.2.15"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -54,7 +54,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.14" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.15" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -725,7 +725,7 @@
       yield* rest;
    }
 
-   async function* asyncPool(method = () => {}, tasks = [], poolSize = 1, sessionOpts = {}) {
+   async function* asyncPool(tasks = [], method = () => {}, { poolSize = 1, onSchedule, onWait, onLaunch } = {}) {
       /*
        *  Prefetch up to 4 buckets (capped by poolSize) so getMore overlaps
        *  in-flight deletes. Do not wait for a full prefetch before the first
@@ -766,12 +766,8 @@
           *  and remove it from the executing pool. Both fulfillment and
           *  rejection settle to a tuple so consume() can always delete.
           */
-         // let msg = `\n\n\tScheduling batch ${task.bucketId} with ${task.bucketsRemaining} buckets queued remaining:\n`;
-         let msg = `\n\n\tScheduling task batch# ${task.bucketId}:\n`;
-         msg = banner + msg;
-         console.clear();
-         console.log(msg);
-         const taskPromise = (async() => method(task, sessionOpts))().then(
+         if (typeof onSchedule === 'function') onSchedule(task);
+         const taskPromise = (async() => method(task))().then(
             value => [taskPromise, { "ok": true, "value": value }],
             error => [taskPromise, { "ok": false, "error": error }]
          );
@@ -783,7 +779,7 @@
       while (buf.length || executing.size || !srcDone) {
          let delay = await admissionControl();
          while (delay == 'wait') {
-            console.log('\t\t...batch', buf[0]?.bucketId ?? '-', 'is awaiting scheduling due to back pressure');
+            if (typeof onWait === 'function') onWait(buf[0]?.bucketId);
             await fill();
             if (executing.size) {
                yield await consume();
@@ -811,7 +807,7 @@
          if (executing.size >= poolSize) continue;
 
          const task = buf.shift();
-         console.log('\t\t...batch', task.bucketId, 'executing (buffering:', delay, 'ms)');
+         if (typeof onLaunch === 'function') onLaunch(task, delay);
          schedule(task);
       }
    }
@@ -861,7 +857,25 @@
          let msg = `\nForking ${concurrency} tasks of ${initialBatch.bucketSizeLimit} batched documents`;
          banner += msg;
          console.log(msg);
-         for await (const [bucketId, deletedCount] of asyncPool(deleteManyTask, prepend(initialBatch, deletionList), concurrency, sessionOpts)) {
+         for await (const [bucketId, deletedCount] of asyncPool(
+            prepend(initialBatch, deletionList),
+            task => deleteManyTask(task, sessionOpts),
+            {
+               "poolSize": concurrency,
+               onSchedule(task) {
+                  // let msg = `\n\n\tScheduling batch ${task.bucketId} with ${task.bucketsRemaining} buckets queued remaining:\n`;
+                  const msg = `\n\n\tScheduling task batch# ${task.bucketId}:\n`;
+                  console.clear();
+                  console.log(banner + msg);
+               },
+               onWait(bucketId) {
+                  console.log('\t\t...batch', bucketId ?? '-', 'is awaiting scheduling due to back pressure');
+               },
+               onLaunch(task, delay) {
+                  console.log('\t\t...batch', task.bucketId, 'executing (buffering:', delay, 'ms)');
+               }
+            }
+         )) {
             console.log('\t\t...batch#', bucketId, 'deleted', deletedCount, 'documents');
          }
       }
