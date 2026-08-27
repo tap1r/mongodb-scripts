@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.25"
+    *  Version: "0.2.27"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -15,7 +15,6 @@
     *  - add execution profiler/timers
     *  - add progress counters with estimated time remaining
     *  - add congestion meter for admission control
-    *  - add repl-lag metric for admission control
     *  - add backoff expiry timer
     *  - add better sharding support
     *  - revise lowPriorityAdmissionBypassThreshold for backward compatibility
@@ -51,7 +50,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.25" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.27" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -77,8 +76,16 @@
    const ADMISSION_COOLDOWN_MS = 1000;
    const THROTTLE_DELAY_MIN_MS = 20;
    const THROTTLE_DELAY_MAX_MS = 100; // at *Trigger edge within the soft band
+   // AIMD concurrency: MD on enter CLOSED; AI while sustained OPEN (hold in THROTTLE/COOLDOWN).
+   const AIMD_INCREASE_INTERVAL_MS = 500;
+   // Hybrid repl-lag bands (seconds): soft → THROTTLE; hard → CLOSED. No EWMA (sticky rsStatus).
+   const REPL_LAG_SOFT_SEC = 15;
+   const REPL_LAG_HARD_SEC = 30;
    let admissionState = 'OPEN'; // OPEN | THROTTLE | CLOSED | COOLDOWN
    let admissionCooldownUntil = 0;
+   let maxInFlightCap = 1;
+   let maxInFlight = 1;
+   let aimdLastIncreaseAt = 0;
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
    const _hostInfoCache = { "at": 0, "value": null };
    const _rsStatusCache = { "at": 0, "value": null };
@@ -848,7 +855,8 @@
        *    THROTTLE — admit with progressive delay from dirty/updates fill (target→trigger)
        *    CLOSED   — wait; trip at *Trigger, release only at/under *Target
        *    COOLDOWN — after CLOSED, brief paced resume to avoid thundering herd
-       *  Inputs: EWMA-smoothed utils; checkpointStatus stays raw (sticky ratio).
+       *  Inputs: EWMA-smoothed utils; raw checkpointStatus + activeReplLag (sticky).
+       *  Repl lag (hybrid): >=15s soft → THROTTLE; >=30s hard → CLOSED; leave CLOSED when lag <30s.
        */
 
       const {
@@ -857,7 +865,8 @@
          evictionDirtyTarget = 5,
          evictionDirtyTrigger = 20,
          evictionUpdatesTarget = 2.5,
-         evictionUpdatesTrigger = 10
+         evictionUpdatesTrigger = 10,
+         activeReplLag = 0
       } = vitals;
 
       // Prefer EWMA; fall back to raw vitals until the first successful updateEwma().
@@ -865,19 +874,26 @@
       const dirtyUtil = ewma.dirtyUtil ?? vitals.dirtyUtil;
       const dirtyUpdatesUtil = ewma.dirtyUpdatesUtil ?? vitals.dirtyUpdatesUtil;
       const wtWriteTicketsUtil = ewma.wtWriteTicketsUtil ?? vitals.wtWriteTicketsUtil;
+      const softLag = activeReplLag >= REPL_LAG_SOFT_SEC;
+      const hardLag = activeReplLag >= REPL_LAG_HARD_SEC;
 
       const hardPressure = utilAbove(cacheUtil, evictionTrigger)
          || utilAbove(dirtyUtil, evictionDirtyTrigger)
-         || utilAbove(dirtyUpdatesUtil, evictionUpdatesTrigger);
-      // Soft pressure mirrors prior "medium dirty/updates" throttle (cache medium alone does not throttle).
+         || utilAbove(dirtyUpdatesUtil, evictionUpdatesTrigger)
+         || hardLag;
+      // Soft: medium dirty/updates and/or elevated repl lag (cache medium alone does not throttle).
       const softPressure = utilInBand(dirtyUtil, evictionDirtyTarget, evictionDirtyTrigger)
-         || utilInBand(dirtyUpdatesUtil, evictionUpdatesTarget, evictionUpdatesTrigger);
+         || utilInBand(dirtyUpdatesUtil, evictionUpdatesTarget, evictionUpdatesTrigger)
+         || softLag;
+      // Dirty/cache release at *Target; lag release below hard band (then softLag keeps THROTTLE until < soft).
       const releaseOk = utilAtOrBelow(cacheUtil, evictionTarget)
          && utilAtOrBelow(dirtyUtil, evictionDirtyTarget)
-         && utilAtOrBelow(dirtyUpdatesUtil, evictionUpdatesTarget);
+         && utilAtOrBelow(dirtyUpdatesUtil, evictionUpdatesTarget)
+         && activeReplLag < REPL_LAG_HARD_SEC;
       const clearPressure = releaseOk && !softPressure;
 
       const now = Date.now();
+      const prevState = admissionState;
       switch (admissionState) {
          case 'OPEN':
             if (hardPressure) admissionState = 'CLOSED';
@@ -905,8 +921,20 @@
             admissionState = 'OPEN';
       }
 
+      // AIMD on concurrency: MD once when entering CLOSED; AI only while sustained OPEN and lag is calm.
+      if (admissionState === 'CLOSED' && prevState !== 'CLOSED') {
+         maxInFlight = Math.max(1, Math.floor(maxInFlight / 2));
+      } else if (admissionState === 'OPEN' && !softLag) {
+         if (prevState !== 'OPEN') {
+            aimdLastIncreaseAt = now; // grace period before first +1 after re-entering OPEN
+         } else if ((now - aimdLastIncreaseAt) >= AIMD_INCREASE_INTERVAL_MS && maxInFlight < maxInFlightCap) {
+            maxInFlight += 1;
+            aimdLastIncreaseAt = now;
+         }
+      }
+
       if (admissionState === 'CLOSED') {
-         return { "state": admissionState, "proceed": false, "delayMs": 0 };
+         return { "state": admissionState, "proceed": false, "delayMs": 0, "maxInFlight": maxInFlight, "replLag": activeReplLag };
       }
 
       if (admissionState === 'THROTTLE' || admissionState === 'COOLDOWN') {
@@ -918,7 +946,9 @@
                evictionDirtyTrigger,
                evictionUpdatesTarget,
                evictionUpdatesTrigger
-            })
+            }),
+            "maxInFlight": maxInFlight,
+            "replLag": activeReplLag
          };
       }
 
@@ -928,7 +958,7 @@
       const delayMs = (wtWriteTicketsStatus == 'high' && checkpointStatus == 'high')
          ? Math.floor(100 + Math.random() * 100)
          : 0;
-      return { "state": admissionState, "proceed": true, "delayMs": delayMs };
+      return { "state": admissionState, "proceed": true, "delayMs": delayMs, "maxInFlight": maxInFlight, "replLag": activeReplLag };
    }
 
    async function* prepend(first, rest) {
@@ -942,8 +972,12 @@
        *  in-flight deletes. Do not wait for a full prefetch before the first
        *  slot: schedule as soon as one bucket is available, top up only while
        *  parked or waiting on a slot. Admission parks/paces before a slot is
-       *  taken; executing only holds deleteMany/txn work.
+       *  taken; executing only holds deleteMany/txn work. Effective concurrency
+       *  is min(poolSize, admission.maxInFlight) via AIMD.
        */
+      maxInFlightCap = poolSize;
+      maxInFlight = poolSize;
+      aimdLastIncreaseAt = Date.now();
       const executing = new Set();
       const buf = [];
       const prefetch = Math.min(4, poolSize);
@@ -988,7 +1022,7 @@
       await fill(1);
 
       while (buf.length || executing.size || !srcDone) {
-         let admission = admissionControl(); // { state, proceed, delayMs }
+         let admission = admissionControl(); // { state, proceed, delayMs, maxInFlight }
          while (!admission.proceed) {
             if (typeof onWait === 'function') onWait(buf[0]?.bucketId, admission);
             await fill();
@@ -1002,7 +1036,8 @@
          }
          if (admission.delayMs > 0) await sleep(admission.delayMs);
 
-         if (executing.size >= poolSize) {
+         const inFlightLimit = Math.max(1, Math.min(poolSize, admission.maxInFlight ?? poolSize));
+         if (executing.size >= inFlightLimit) {
             yield await consume();
             await fill(1);
          }
@@ -1015,7 +1050,7 @@
             }
          }
 
-         if (executing.size >= poolSize) continue;
+         if (executing.size >= inFlightLimit) continue;
 
          const task = buf.shift();
          if (typeof onLaunch === 'function') onLaunch(task, admission);
@@ -1100,10 +1135,10 @@
                      console.log(banner + msg);
                   },
                   onWait(bucketId, admission) {
-                     console.log('\t\t...batch', bucketId ?? '-', 'is awaiting scheduling due to back pressure (state:', admission?.state ?? 'CLOSED', ')');
+                     console.log('\t\t...batch', bucketId ?? '-', 'is awaiting scheduling due to back pressure (state:', admission?.state ?? 'CLOSED', 'maxInFlight:', admission?.maxInFlight ?? '-', ')');
                   },
                   onLaunch(task, admission) {
-                     console.log('\t\t...batch', task.bucketId, 'executing (state:', admission.state, 'buffering:', admission.delayMs, 'ms)');
+                     console.log('\t\t...batch', task.bucketId, 'executing (state:', admission.state, 'buffering:', admission.delayMs, 'ms, maxInFlight:', admission.maxInFlight, ')');
                   }
                }
             )) {
