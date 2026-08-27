@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.9"
+    *  Version: "0.2.10"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -54,7 +54,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.9" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.10" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -62,7 +62,7 @@
    // serverStatus uses a Promise wrapper (adminCommand is sync in mongosh) for in-flight coalescing.
    const SERVER_STATUS_CACHE_TTL_MS = 100;
    const HOST_INFO_CACHE_TTL_MS = 60 * 1000;
-   const RS_STATUS_CACHE_TTL_MS = 10 * 1000;
+   const RS_STATUS_CACHE_TTL_MS = 2 * 1000; // 2s matches the Atlas no-op heartbeat interval
    const SLOWMS_CACHE_TTL_MS = 60 * 1000;
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
    const _hostInfoCache = { "at": 0, "value": null };
@@ -709,19 +709,21 @@
            : 0; // no cache pressure, we can open up the throttle
    }
 
-   async function* asyncTaskPool(method = () => {}, tasks = [], poolSize = 1, sessionOpts = {}) {
+   async function* asyncPool(method = () => {}, tasks = [], poolSize = 1, sessionOpts = {}) {
       const executing = new Set();
       async function consume() {
-         const [taskPromise, task] = await Promise.race(executing);
+         const [taskPromise, outcome] = await Promise.race(executing);
          executing.delete(taskPromise);
-         return task;
+         if (outcome.ok === false) throw outcome.error;
+         return outcome.value;
       }
 
       for await (const task of tasks) {
          /*
           *  Wrap method() in an async fn to ensure we get a promise.
           *  Then expose such promise, so it's possible to later reference
-          *  and remove it from the executing pool.
+          *  and remove it from the executing pool. Both fulfillment and
+          *  rejection settle to a tuple so consume() can always delete.
           */
          // let msg = `\n\n\tScheduling batch ${task.bucketId} with ${task.bucketsRemaining} buckets queued remaining:\n`;
          let msg = `\n\n\tScheduling task batch# ${task.bucketId}:\n`;
@@ -729,7 +731,8 @@
          console.clear();
          console.log(msg);
          const taskPromise = (async() => method(task, sessionOpts))().then(
-            task => [taskPromise, task]
+            value => [taskPromise, { "ok": true, "value": value }],
+            error => [taskPromise, { "ok": false, "error": error }]
          );
          executing.add(taskPromise);
          if (executing.size >= poolSize) yield await consume();
@@ -783,11 +786,11 @@
          let msg = `\nForking ${concurrency} tasks of ${initialBatch.bucketSizeLimit} batched documents`;
          banner += msg;
          console.log(msg);
-         for await (const [bucketId, deletedCount] of asyncTaskPool(deleteManyTask, [initialBatch], concurrency, sessionOpts)) {
+         for await (const [bucketId, deletedCount] of asyncPool(deleteManyTask, [initialBatch], concurrency, sessionOpts)) {
             console.log('\t\t...batch#', bucketId, 'deleted', deletedCount, 'documents');
          }
          // remaining batches
-         for await (const [bucketId, deletedCount] of asyncTaskPool(deleteManyTask, deletionList, concurrency, sessionOpts)) {
+         for await (const [bucketId, deletedCount] of asyncPool(deleteManyTask, deletionList, concurrency, sessionOpts)) {
             console.log('\t\t...batch#', bucketId, 'deleted', deletedCount, 'documents');
          }
       }
