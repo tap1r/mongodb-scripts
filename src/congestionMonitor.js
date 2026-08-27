@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.12"
+    *  Version: "0.2.13"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -15,16 +15,118 @@
    // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>congestionMonitor.js
 
    let vitals = {};
+   let vitalsView = null; // singleton congestion snapshot (getters created once)
    const pollingIntervalMS = 100;
    // TTL caches: serverStatus is hot-path; hostInfo is near-static; rsStatus is low/medium volatility.
    const SERVER_STATUS_CACHE_TTL_MS = pollingIntervalMS;
    const HOST_INFO_CACHE_TTL_MS = 60 * 1000;
    const RS_STATUS_CACHE_TTL_MS = 10 * 1000;
    const SLOWMS_CACHE_TTL_MS = 60 * 1000;
+   const GET_PARAMETER_CACHE_TTL_MS = 60 * 1000;
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
    const _hostInfoCache = { "at": 0, "value": null };
    const _rsStatusCache = { "at": 0, "value": null };
    const _slowmsCache = { "at": 0, "value": null };
+   const _getParameterCache = Object.create(null); // name -> { at, value }
+
+   // Hoisted once — avoid rebuilding ~60-key maps on every serverStatus() call.
+   const SERVER_STATUS_OPTIONS_DEFAULTS = { // multiversion compatible
+      "none": true, // 8.3 feature: exclude all optional fields, then opt-in
+      "activeIndexBuilds": false,
+      "asserts": false,
+      "batchedDeletes": false,
+      "bucketCatalog": false,
+      "catalogStats": false,
+      "changeStreamPreImages": false,
+      "collectionCatalog": false,
+      "connections": false,
+      "defaultRWConcern": false,
+      "directShardConnections": false,
+      "electionMetrics": false,
+      "encryptionAtRest": false,
+      "extra_info": false,
+      "featureCompatibilityVersion": false,
+      "fle": false,
+      "flowControl": false,
+      "ftdcCollectionMetrics": false,
+      "globalLock": false,
+      "health": false,
+      "hedgingMetrics": false,
+      "indexBuilds": false,
+      "indexBulkBuilder": false,
+      "indexStats": false,
+      "internalTransactions": false,
+      "latchAnalysis": false,
+      "locks": false,
+      "lockContentionMetrics": false,
+      "logicalSessionRecordCache": false,
+      "mem": false,
+      "metrics": false,
+      "mirroredReads": false,
+      "network": false,
+      "opLatencies": false,
+      "opReadConcernCounters": false,
+      "opWorkingTime": false,
+      "opWriteConcernCounters": false,
+      "opcounters": false,
+      "opcountersRepl": false,
+      "oplogTruncation": false,
+      "oplogTruncationThread": false,
+      "planCache": false,
+      "profiler": false,
+      "queryAnalyzers": false,
+      "querySettings": false,
+      "queryStats": false,
+      "queues": false,
+      "readConcernCounters": false,
+      "readPreferenceCounters": false,
+      "recoveryOplogApplier": false,
+      "repl": false,
+      "scramCache": false,
+      "security": false,
+      "sharding": false,
+      "shardingStatistics": false,
+      "shardedIndexConsistency": false,
+      "shardSplits": false,
+      "spillWiredTiger": false,
+      "storageEngine": false,
+      "tcmalloc": false,
+      "tenantMigrations": false,
+      "trafficRecording": false,
+      "transactions": false,
+      "transportSecurity": false,
+      "twoPhaseCommitCoordinator": false,
+      "watchdog": false,
+      "wiredTiger": false,
+      "writeBacksQueued": false
+   };
+   const SERVER_STATUS_OPT_IN = { // minimal metrics for congestion display
+      "activeIndexBuilds": true,
+      "flowControl": true,
+      "indexBuilds": true,
+      "mem": true,
+      "metrics": true,
+      "queues": true,
+      "storageEngine": true,
+      "tenantMigrations": true,
+      "tcmalloc": true,
+      "wiredTiger": true
+   };
+
+   function getParameter(name, fallback = null) {
+      // Near-static mongod knobs (WT runtime config, ticket limits). 60s TTL + try/catch.
+      const now = Date.now();
+      const hit = _getParameterCache[name];
+      if (hit && (now - hit.at) < GET_PARAMETER_CACHE_TTL_MS) return hit.value;
+      let value = fallback;
+      try {
+         value = db.adminCommand({ "getParameter": 1, [name]: 1 })[name] ?? fallback;
+      } catch(e) {
+         // Flex / restricted roles / unavailable param — keep fallback
+      }
+      _getParameterCache[name] = { "at": now, "value": value };
+      return value;
+   }
 
    function isSharded() {
       /*
@@ -104,83 +206,12 @@
             return await _serverStatusCache.inflight;
          }
 
-         const serverStatusOptionsDefaults = { // multiversion compatible
-            "none": true, // 8.3 feature: exclude all optional fields, then opt-in
-            "activeIndexBuilds": false,
-            "asserts": false,
-            "batchedDeletes": false,
-            "bucketCatalog": false,
-            "catalogStats": false,
-            "changeStreamPreImages": false,
-            "collectionCatalog": false,
-            "connections": false,
-            "defaultRWConcern": false,
-            "directShardConnections": false,
-            "electionMetrics": false,
-            "encryptionAtRest": false,
-            "extra_info": false,
-            "featureCompatibilityVersion": false,
-            "fle": false,
-            "flowControl": false,
-            "ftdcCollectionMetrics": false,
-            "globalLock": false,
-            "health": false,
-            "hedgingMetrics": false,
-            "indexBuilds": false,
-            "indexBulkBuilder": false,
-            "indexStats": false,
-            "internalTransactions": false,
-            "latchAnalysis": false,
-            "locks": false,
-            "lockContentionMetrics": false,
-            "logicalSessionRecordCache": false,
-            "mem": false,
-            "metrics": false,
-            "mirroredReads": false,
-            "network": false,
-            "opLatencies": false,
-            "opReadConcernCounters": false,
-            "opWorkingTime": false,
-            "opWriteConcernCounters": false,
-            "opcounters": false,
-            "opcountersRepl": false,
-            "oplogTruncation": false,
-            "oplogTruncationThread": false,
-            "planCache": false,
-            "profiler": false,
-            "queryAnalyzers": false,
-            "querySettings": false,
-            "queryStats": false,
-            "queues": false,
-            "readConcernCounters": false,
-            "readPreferenceCounters": false,
-            "recoveryOplogApplier": false,
-            "repl": false,
-            "scramCache": false,
-            "security": false,
-            "sharding": false,
-            "shardingStatistics": false,
-            "shardedIndexConsistency": false,
-            "shardSplits": false,
-            "spillWiredTiger": false,
-            "storageEngine": false,
-            "tcmalloc": false,
-            "tenantMigrations": false,
-            "trafficRecording": false,
-            "transactions": false,
-            "transportSecurity": false,
-            "twoPhaseCommitCoordinator": false,
-            "watchdog": false,
-            "wiredTiger": false,
-            "writeBacksQueued": false
-         };
-
          // db.adminCommand() is synchronous in mongosh; wrap in a Promise so
          // await is meaningful and concurrent callers can share one in-flight fetch.
          _serverStatusCache.key = key;
          _serverStatusCache.inflight = Promise.resolve().then(() => db.adminCommand({
             "serverStatus": true,
-            ...{ ...serverStatusOptionsDefaults, ...serverStatusOptions }
+            ...{ ...SERVER_STATUS_OPTIONS_DEFAULTS, ...serverStatusOptions }
          }));
          try {
             const value = await _serverStatusCache.inflight;
@@ -192,38 +223,35 @@
          }
       }
 
-      return {
-         // WT eviction defaults (https://kb.corp.mongodb.com/article/000019073)
-         // evictionThreadsMin,
-         // evictionThreadsMax,
-         // evictionCheckpointTarget,
-         // evictionDirtyTarget,    // operate in a similar way to the overall targets but only apply to dirty data in cache
-         // evictionDirtyTrigger,   // application threads will be throttled if the percentage of dirty data reaches the eviction_dirty_trigger
-         // evictionTarget,         // the level at which WiredTiger attempts to keep the overall cache usage
-         // evictionTrigger,        // the level at which application threads start to perform the eviction
-         // evictionUpdatesTarget,  // eviction in worker threads when the cache contains at least this many bytes of updates
-         // evictionUpdatesTrigger, // application threads to perform eviction when the cache contains at least this many bytes of updates
+      // Refresh dynamic/near-static data fields; create getter-bearing view once.
+      const data = {
          "hostInfo": hostInfo(),
          "rsStatus": rsStatus(),
-         "wiredTigerEngineRuntimeConfig": db.adminCommand({ "getParameter": 1, "wiredTigerEngineRuntimeConfig": 1 }).wiredTigerEngineRuntimeConfig,
-         "storageEngineConcurrentReadTransactions": db.adminCommand({ "getParameter": 1, "wiredTigerConcurrentReadTransactions": 1 }).wiredTigerConcurrentReadTransactions,
-         // db.adminCommand({ "getParameter": 1, "storageEngineConcurrentReadTransactions": 1 })
-         "storageEngineConcurrentWriteTransactions": db.adminCommand({ "getParameter": 1, "wiredTigerConcurrentWriteTransactions": 1 }).wiredTigerConcurrentWriteTransactions,
-         "lowPriorityAdmissionBypassThreshold": db.adminCommand({ "getParameter": 1, "lowPriorityAdmissionBypassThreshold": 1 }).lowPriorityAdmissionBypassThreshold,
+         "wiredTigerEngineRuntimeConfig": getParameter('wiredTigerEngineRuntimeConfig', ''),
+         "storageEngineConcurrentReadTransactions": getParameter('wiredTigerConcurrentReadTransactions', null),
+         // "storageEngineConcurrentReadTransactions": getParameter('storageEngineConcurrentReadTransactions', null),
+         "storageEngineConcurrentWriteTransactions": getParameter('wiredTigerConcurrentWriteTransactions', null),
+         "lowPriorityAdmissionBypassThreshold": getParameter('lowPriorityAdmissionBypassThreshold', null),
          // https://www.mongodb.com/docs/manual/reference/command/serverStatus/#mongodb-serverstatus-serverstatus.wiredTiger.concurrentTransactions
-         "serverStatus": await serverStatus({ // minimal server status metrics to reduce server cost
-            "activeIndexBuilds": true,
-            "flowControl": true,
-            "indexBuilds": true,
-            "mem": true,
-            "metrics": true,
-            "queues": true,
-            "storageEngine": true,
-            "tenantMigrations": true,
-            "tcmalloc": true, // 2 for more debugging
-            "wiredTiger": true
-         }),
-         "slowms": slowms(),
+         "serverStatus": await serverStatus(SERVER_STATUS_OPT_IN),
+         "slowms": slowms()
+      };
+      if (vitalsView !== null) {
+         Object.assign(vitalsView, data);
+         return vitalsView;
+      }
+      // WT eviction defaults (https://kb.corp.mongodb.com/article/000019073)
+      // evictionThreadsMin,
+      // evictionThreadsMax,
+      // evictionCheckpointTarget,
+      // evictionDirtyTarget,    // operate in a similar way to the overall targets but only apply to dirty data in cache
+      // evictionDirtyTrigger,   // application threads will be throttled if the percentage of dirty data reaches the eviction_dirty_trigger
+      // evictionTarget,         // the level at which WiredTiger attempts to keep the overall cache usage
+      // evictionTrigger,        // the level at which application threads start to perform the eviction
+      // evictionUpdatesTarget,  // eviction in worker threads when the cache contains at least this many bytes of updates
+      // evictionUpdatesTrigger, // application threads to perform eviction when the cache contains at least this many bytes of updates
+      vitalsView = {
+         ...data,
          wterc(regex) {
             // { "wiredTigerEngineRuntimeConfig": "eviction=(threads_min=8,threads_max=8),eviction_dirty_target=2,eviction_updates_trigger=8,checkpoint=(wait=60,log_size=2GB)" }
             return this.wiredTigerEngineRuntimeConfig.match(regex)?.[1] ?? null;
@@ -468,6 +496,7 @@
             return this.rsStatus?.heartbeatIntervalMillis ?? 2000;
          }
       };
+      return vitalsView;
    }
 
    class EQ {
