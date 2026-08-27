@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.24"
+    *  Version: "0.2.25"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -51,7 +51,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.24" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.25" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -905,23 +905,30 @@
             admissionState = 'OPEN';
       }
 
-      if (admissionState === 'CLOSED') return 'wait';
+      if (admissionState === 'CLOSED') {
+         return { "state": admissionState, "proceed": false, "delayMs": 0 };
+      }
 
       if (admissionState === 'THROTTLE' || admissionState === 'COOLDOWN') {
-         return progressiveThrottleDelay(dirtyUtil, dirtyUpdatesUtil, {
-            evictionDirtyTarget,
-            evictionDirtyTrigger,
-            evictionUpdatesTarget,
-            evictionUpdatesTrigger
-         });
+         return {
+            "state": admissionState,
+            "proceed": true,
+            "delayMs": progressiveThrottleDelay(dirtyUtil, dirtyUpdatesUtil, {
+               evictionDirtyTarget,
+               evictionDirtyTrigger,
+               evictionUpdatesTarget,
+               evictionUpdatesTrigger
+            })
+         };
       }
 
       // OPEN: light pacing only when write tickets and checkpoint are both hot
       const wtWriteTicketsStatus = bandStatus(wtWriteTicketsUtil, 20, 75);
       const { checkpointStatus } = vitals;
-      return (wtWriteTicketsStatus == 'high' && checkpointStatus == 'high')
+      const delayMs = (wtWriteTicketsStatus == 'high' && checkpointStatus == 'high')
          ? Math.floor(100 + Math.random() * 100)
          : 0;
+      return { "state": admissionState, "proceed": true, "delayMs": delayMs };
    }
 
    async function* prepend(first, rest) {
@@ -981,9 +988,9 @@
       await fill(1);
 
       while (buf.length || executing.size || !srcDone) {
-         let delay = admissionControl();
-         while (delay == 'wait') {
-            if (typeof onWait === 'function') onWait(buf[0]?.bucketId);
+         let admission = admissionControl(); // { state, proceed, delayMs }
+         while (!admission.proceed) {
+            if (typeof onWait === 'function') onWait(buf[0]?.bucketId, admission);
             await fill();
             if (executing.size) {
                yield await consume();
@@ -991,9 +998,9 @@
             } else {
                await sleep(Math.floor(500 + Math.random() * 500));
             }
-            delay = admissionControl();
+            admission = admissionControl();
          }
-         if (delay > 0) await sleep(delay);
+         if (admission.delayMs > 0) await sleep(admission.delayMs);
 
          if (executing.size >= poolSize) {
             yield await consume();
@@ -1011,7 +1018,7 @@
          if (executing.size >= poolSize) continue;
 
          const task = buf.shift();
-         if (typeof onLaunch === 'function') onLaunch(task, delay);
+         if (typeof onLaunch === 'function') onLaunch(task, admission);
          schedule(task);
       }
    }
@@ -1092,11 +1099,11 @@
                      console.clear();
                      console.log(banner + msg);
                   },
-                  onWait(bucketId) {
-                     console.log('\t\t...batch', bucketId ?? '-', 'is awaiting scheduling due to back pressure');
+                  onWait(bucketId, admission) {
+                     console.log('\t\t...batch', bucketId ?? '-', 'is awaiting scheduling due to back pressure (state:', admission?.state ?? 'CLOSED', ')');
                   },
-                  onLaunch(task, delay) {
-                     console.log('\t\t...batch', task.bucketId, 'executing (buffering:', delay, 'ms)');
+                  onLaunch(task, admission) {
+                     console.log('\t\t...batch', task.bucketId, 'executing (state:', admission.state, 'buffering:', admission.delayMs, 'ms)');
                   }
                }
             )) {
