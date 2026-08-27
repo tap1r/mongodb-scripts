@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.12"
+    *  Version: "0.2.13"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -54,7 +54,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.12" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.13" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -245,16 +245,16 @@
             try {
                session.startTransaction(txnOpts);
                deletedCount = await deleteMany();
-            } catch(error) {
-               console.log('txn error:', error);
+            } catch(e) {
+               console.log('transaction error:', e);
             } finally {
                session.abortTransaction();
             }
          } else {
             try {
                deletedCount = await deleteMany();
-            } catch(error) {
-               console.log(error);
+            } catch(e) {
+               console.log(e);
             }
          }
 
@@ -381,8 +381,8 @@
          let hostInfo = {};
          try {
             hostInfo = db.hostInfo();
-         } catch(error) {
-            // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.hostInfo()\n${error}\x1b[0m`);
+         } catch(e) {
+            // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.hostInfo()\n${e}\x1b[0m`);
          }
          _hostInfoCache.value = hostInfo;
          _hostInfoCache.at = now;
@@ -721,6 +721,11 @@
            : 0; // no cache pressure, we can open up the throttle
    }
 
+   async function* prepend(first, rest) {
+      yield first;
+      yield* rest;
+   }
+
    async function* asyncPool(method = () => {}, tasks = [], poolSize = 1, sessionOpts = {}) {
       const executing = new Set();
       async function consume() {
@@ -798,11 +803,7 @@
          let msg = `\nForking ${concurrency} tasks of ${initialBatch.bucketSizeLimit} batched documents`;
          banner += msg;
          console.log(msg);
-         for await (const [bucketId, deletedCount] of asyncPool(deleteManyTask, [initialBatch], concurrency, sessionOpts)) {
-            console.log('\t\t...batch#', bucketId, 'deleted', deletedCount, 'documents');
-         }
-         // remaining batches
-         for await (const [bucketId, deletedCount] of asyncPool(deleteManyTask, deletionList, concurrency, sessionOpts)) {
+         for await (const [bucketId, deletedCount] of asyncPool(deleteManyTask, prepend(initialBatch, deletionList), concurrency, sessionOpts)) {
             console.log('\t\t...batch#', bucketId, 'deleted', deletedCount, 'documents');
          }
       }
