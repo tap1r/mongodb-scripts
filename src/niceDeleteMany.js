@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.13"
+    *  Version: "0.2.14"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -54,7 +54,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.13" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.14" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -78,9 +78,11 @@
          const aggOpts = {
             "allowDiskUse": true,
             "collation": collation,
-            "cursor": { "batchSize": bucketSizeLimit * vitals.numCores }, // multiple of bucketSizeLimit * concurrency
+            // "cursor": { "batchSize": bucketSizeLimit * vitals.numCores }, // multiple of bucketSizeLimit * concurrency
+            "cursor": { "batchSize": 1 }, // optimised for the prefetch concurrency
             "hint": hint,
             "maxTimeMS": 0, // required to overide potential v8 defaultMaxTimeMS cluster settings
+            "noCursorTimeout": true,
             "comment": "Bucketing IDs via niceDeleteMany.js",
             "let": { "bucketSizeLimit": bucketSizeLimit }
          };
@@ -174,7 +176,12 @@
             } }
          ];
          // offload iterator to the server's cursor
-         yield* namespace.aggregate(pipeline, aggOpts);
+         const cursor = namespace.aggregate(pipeline, aggOpts);
+         try {
+            yield* cursor;
+         } finally {
+            try { await cursor.close(); } catch(_) { /* exhausted or already closed */ }
+         }
       } finally {
          session.endSession();
       }
@@ -216,14 +223,6 @@
    }
 
    async function deleteManyTask({ IDs, bucketId } = {}, sessionOpts = {}) {
-      let sleepIntervalMS = await admissionControl();
-      while (sleepIntervalMS == 'wait') {
-         console.log('\t\t...batch', bucketId, 'is awaiting scheduling due to back pressure');
-         await sleep(Math.floor(500 + Math.random() * 500));
-         sleepIntervalMS = await admissionControl();
-      };
-      console.log('\t\t...batch', bucketId, 'executing (buffering:', sleepIntervalMS, 'ms)');
-      await sleep(sleepIntervalMS);
       const session = db.getMongo().startSession(sessionOpts);
       try {
          const namespace = session.getDatabase(dbName).getCollection(collName);
@@ -727,7 +726,32 @@
    }
 
    async function* asyncPool(method = () => {}, tasks = [], poolSize = 1, sessionOpts = {}) {
+      /*
+       *  Prefetch up to 4 buckets (capped by poolSize) so getMore overlaps
+       *  in-flight deletes. Do not wait for a full prefetch before the first
+       *  slot: schedule as soon as one bucket is available, top up only while
+       *  parked or waiting on a slot. Admission parks/paces before a slot is
+       *  taken; executing only holds deleteMany/txn work.
+       */
       const executing = new Set();
+      const buf = [];
+      const prefetch = Math.min(4, poolSize);
+      let srcDone = false;
+      const source = (typeof tasks[Symbol.asyncIterator] === 'function')
+         ? tasks[Symbol.asyncIterator]()
+         : (async function*() { for (const task of tasks) yield task; })();
+
+      async function fill(target = prefetch) {
+         while (buf.length < target && !srcDone) {
+            const { 'value': value, 'done': done } = await source.next();
+            if (done) {
+               srcDone = true;
+               break;
+            }
+            buf.push(value);
+         }
+      }
+
       async function consume() {
          const [taskPromise, outcome] = await Promise.race(executing);
          executing.delete(taskPromise);
@@ -735,7 +759,7 @@
          return outcome.value;
       }
 
-      for await (const task of tasks) {
+      function schedule(task) {
          /*
           *  Wrap method() in an async fn to ensure we get a promise.
           *  Then expose such promise, so it's possible to later reference
@@ -752,10 +776,44 @@
             error => [taskPromise, { "ok": false, "error": error }]
          );
          executing.add(taskPromise);
-         if (executing.size >= poolSize) yield await consume();
       }
 
-      while (executing.size) yield await consume();
+      await fill(1);
+
+      while (buf.length || executing.size || !srcDone) {
+         let delay = await admissionControl();
+         while (delay == 'wait') {
+            console.log('\t\t...batch', buf[0]?.bucketId ?? '-', 'is awaiting scheduling due to back pressure');
+            await fill();
+            if (executing.size) {
+               yield await consume();
+               await fill();
+            } else {
+               await sleep(Math.floor(500 + Math.random() * 500));
+            }
+            delay = await admissionControl();
+         }
+         if (delay > 0) await sleep(delay);
+
+         if (executing.size >= poolSize) {
+            yield await consume();
+            await fill(1);
+         }
+
+         if (!buf.length) {
+            await fill(1);
+            if (!buf.length) {
+               while (executing.size) yield await consume();
+               break;
+            }
+         }
+
+         if (executing.size >= poolSize) continue;
+
+         const task = buf.shift();
+         console.log('\t\t...batch', task.bucketId, 'executing (buffering:', delay, 'ms)');
+         schedule(task);
+      }
    }
 
    async function main() {
