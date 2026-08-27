@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.16"
+    *  Version: "0.2.17"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -54,7 +54,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.16" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.17" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -68,6 +68,15 @@
    const _hostInfoCache = { "at": 0, "value": null };
    const _rsStatusCache = { "at": 0, "value": null };
    const _slowmsCache = { "at": 0, "value": null };
+
+   function isMongos() {
+      /*
+       *  True when connected to a mongos router (sharded cluster).
+       */
+      return db.hello().msg === 'isdbgrid';
+   }
+
+   if (isMongos()) throw new Error('\n[WARN] Sharding not currently supported\n');
 
    async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
       // _id curation (employs partial-blocking aggregation operators)
@@ -713,7 +722,7 @@
          checkpointStatus
       } = await congestionMonitor();
 
-      // heuristics based on write workload pattern (add mongos detection here)
+      // heuristics based on write workload pattern
       return (cacheStatus == 'high' || dirtyStatus == 'high' || dirtyUpdatesStatus == 'high') ? 'wait' // WT app threads evicting, we should not contribute to excess cache pressure
            : (dirtyStatus == 'medium' || dirtyUpdatesStatus == 'medium') ? Math.floor(20 + Math.random() * 80) // moderate write cache pressure, we can pause slightly
            : (wtWriteTicketsStatus == 'high' && checkpointStatus == 'high') ? Math.floor(100 + Math.random() * 100) // tickets highly contended, we should mitigate storage pressure
