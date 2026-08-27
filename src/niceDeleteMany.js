@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.28"
+    *  Version: "0.2.29"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -15,7 +15,6 @@
     *  - add execution profiler/timers
     *  - add progress counters with estimated time remaining
     *  - add congestion meter for admission control
-    *  - add backoff expiry timer
     *  - add better sharding support
     *  - revise lowPriorityAdmissionBypassThreshold for backward compatibility
     *  - improve support for Atlas Flex tiers
@@ -50,7 +49,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.28" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.29" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -81,11 +80,15 @@
    // Hybrid repl-lag bands (seconds): soft → THROTTLE; hard → CLOSED. No EWMA (sticky rsStatus).
    const REPL_LAG_SOFT_SEC = 15;
    const REPL_LAG_HARD_SEC = 30;
+   // Ops warn while parked in CLOSED (repeat every interval while still closed).
+   const CLOSED_WARN_MS = 60 * 1000;
    let admissionState = 'OPEN'; // OPEN | THROTTLE | CLOSED | COOLDOWN
    let admissionCooldownUntil = 0;
    let maxInFlightCap = 1;
    let maxInFlight = 1;
    let aimdLastIncreaseAt = 0;
+   let closedSince = 0;
+   let lastClosedWarnAt = 0;
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
    const _hostInfoCache = { "at": 0, "value": null };
    const _rsStatusCache = { "at": 0, "value": null };
@@ -937,7 +940,13 @@
       // AIMD on concurrency: MD once when entering CLOSED; AI only while sustained OPEN and soft signals calm.
       if (admissionState === 'CLOSED' && prevState !== 'CLOSED') {
          maxInFlight = Math.max(1, Math.floor(maxInFlight / 2));
-      } else if (admissionState === 'OPEN' && !blockAimdIncrease) {
+         closedSince = now;
+         lastClosedWarnAt = 0;
+      } else if (admissionState !== 'CLOSED') {
+         closedSince = 0;
+         lastClosedWarnAt = 0;
+      }
+      if (admissionState === 'OPEN' && !blockAimdIncrease) {
          if (prevState !== 'OPEN') {
             aimdLastIncreaseAt = now; // grace period before first +1 after re-entering OPEN
          } else if ((now - aimdLastIncreaseAt) >= AIMD_INCREASE_INTERVAL_MS && maxInFlight < maxInFlightCap) {
@@ -954,6 +963,21 @@
       };
 
       if (admissionState === 'CLOSED') {
+         const msInClosed = closedSince > 0 ? (now - closedSince) : 0;
+         if (msInClosed >= CLOSED_WARN_MS && (now - lastClosedWarnAt) >= CLOSED_WARN_MS) {
+            lastClosedWarnAt = now;
+            console.log(
+               '\t[WARN] admission CLOSED for', Math.round(msInClosed / 1000), 's;',
+               'maxInFlight:', maxInFlight,
+               'cacheUtil:', cacheUtil,
+               'dirtyUtil:', dirtyUtil,
+               'dirtyUpdatesUtil:', dirtyUpdatesUtil,
+               'replLag:', activeReplLag,
+               'flowControl:', activeFlowControl,
+               'indexBuilds:', activeIndexBuilds,
+               'backupCursor:', backupCursorOpen
+            );
+         }
          return { "state": admissionState, "proceed": false, "delayMs": 0, "maxInFlight": maxInFlight, ...admissionSignals };
       }
 
