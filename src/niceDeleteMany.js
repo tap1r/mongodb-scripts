@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.19"
+    *  Version: "0.2.20"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -53,7 +53,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.19" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.20" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -246,13 +246,21 @@
             return await namespace.deleteMany(deleteManyFilter, deleteManyOpts).deletedCount;
          }
          if (safeguard) {
+            let txnStarted = false;
             try {
                session.startTransaction(txnOpts);
+               txnStarted = true;
                deletedCount = await deleteMany();
             } catch(e) {
                console.log('transaction error:', e);
             } finally {
-               session.abortTransaction();
+               if (txnStarted) {
+                  try {
+                     session.abortTransaction();
+                  } catch(e) {
+                     console.log('abort transaction error:', e);
+                  }
+               }
             }
          } else {
             try {
@@ -673,7 +681,9 @@
                  : 'medium';
          },
          get activeReplLag() { // calculate the highest repl-lag from healthy members
-            const opTimers = this.rsStatus.members.map(({
+            const members = this.rsStatus?.members;
+            if (!Array.isArray(members) || members.length === 0) return 0;
+            const opTimers = members.map(({
                stateStr,
                health,
                optimeDate
@@ -685,7 +695,8 @@
                };
             }).filter(({ health, stateStr }) => {
                return (health && (stateStr === 'PRIMARY' || stateStr === 'SECONDARY'));
-            }).map(({ optimeDate }) => optimeDate);
+            }).map(({ optimeDate }) => optimeDate).filter(optimeDate => optimeDate != null);
+            if (opTimers.length === 0) return 0;
             return +((Math.max(...opTimers) - Math.min(...opTimers)) / 1000).toFixed(0);
          },
          get replLagStatus() {
@@ -697,7 +708,7 @@
             return 30;
          },
          get heartbeatIntervalMillis() {
-            return this.rsStatus.heartbeatIntervalMillis;
+            return this.rsStatus?.heartbeatIntervalMillis ?? 2000;
          }
       };
    }
@@ -885,6 +896,7 @@
          if (safeguard) {
             banner += '\n\x1b[31mWarning:\x1b[0m \x1b[32mSafeguard is enabled, simulating deletes only (via transaction rollbacks)\n\x1b[0m';
          }
+         // eventually replace this with progress meters
          console.clear();
          console.log(banner);
          const deletionList = getIds(filter, bucketSizeLimit, readSessionOpts);
