@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.21"
+    *  Version: "0.2.22"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,7 +13,6 @@
     *  TODOs:
     *  - re-add naïve timers for mongos/sharding support
     *  - add execution profiler/timers
-    *  - calculate smoothed decay/moving average (EWMA) metrics
     *  - add progress counters with estimated time remaining
     *  - add congestion meter for admission control
     *  - add more granular/progressive admission control based on dirtyFill
@@ -53,7 +52,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.21" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.22" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -66,7 +65,15 @@
    const RS_STATUS_CACHE_TTL_MS = 2 * 1000; // 2s matches the Atlas no-op heartbeat interval
    const SLOWMS_CACHE_TTL_MS = 60 * 1000;
    const GET_PARAMETER_CACHE_TTL_MS = 60 * 1000;
-   const VITALS_SAMPLE_INTERVAL_MS = 100; // aligned for future WMA/EWMA smoothing
+   const VITALS_SAMPLE_INTERVAL_MS = 100;
+   // EWMA: α=0.2 ≈ half-life ~0.3s at 100ms samples (reduces single-sample admission chatter).
+   const EWMA_ALPHA = 0.2;
+   const ewma = {
+      "cacheUtil": null,
+      "dirtyUtil": null,
+      "dirtyUpdatesUtil": null,
+      "wtWriteTicketsUtil": null
+   };
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
    const _hostInfoCache = { "at": 0, "value": null };
    const _rsStatusCache = { "at": 0, "value": null };
@@ -742,17 +749,48 @@
       return vitalsView;
    }
 
+   function ewmaStep(prev, sample, alpha = EWMA_ALPHA) {
+      if (sample == null || Number.isNaN(+sample)) return prev;
+      sample = +sample;
+      if (prev == null || Number.isNaN(prev)) return sample;
+      return alpha * sample + (1 - alpha) * prev;
+   }
+
+   function updateEwma(sample) {
+      /*
+       *  Update smoothed util series from a vitals snapshot (called each sample).
+       *  admissionControl bands on these values instead of raw point samples.
+       */
+      if (sample == null || typeof sample !== 'object') return;
+      try {
+         ewma.cacheUtil = ewmaStep(ewma.cacheUtil, sample.cacheUtil);
+         ewma.dirtyUtil = ewmaStep(ewma.dirtyUtil, sample.dirtyUtil);
+         ewma.dirtyUpdatesUtil = ewmaStep(ewma.dirtyUpdatesUtil, sample.dirtyUpdatesUtil);
+         ewma.wtWriteTicketsUtil = ewmaStep(ewma.wtWriteTicketsUtil, sample.wtWriteTicketsUtil);
+      } catch(e) {
+         // getters may throw if serverStatus shape is incomplete; keep prior ewma
+      }
+   }
+
+   function bandStatus(util, lowMax, highMin) {
+      if (util == null || Number.isNaN(util)) return 'medium';
+      return (util < lowMax) ? 'low'
+           : (util > highMin) ? 'high'
+           : 'medium';
+   }
+
    async function vitalsSampler(intervalMs = VITALS_SAMPLE_INTERVAL_MS) {
       /*
        *  Vitals are sampled on a background loop (decoupled from task scheduling);
-       *  admissionControl reads the latest snapshot. Sleeps first so the caller's
-       *  initial sample is not immediately repeated.
+       *  EWMA is updated here; admissionControl reads the smoothed series.
+       *  Sleeps first so the caller's initial sample is not immediately repeated.
        */
       while (vitalsSampling) {
          await sleep(intervalMs);
          if (!vitalsSampling) break;
          try {
             vitals = await congestionMonitor();
+            updateEwma(vitals);
          } catch(e) {
             console.log('\t[WARN] vitals sample failed:', e);
          }
@@ -761,19 +799,32 @@
 
    function admissionControl() {
       /*
-       *  dynamic admission controller (reads latest vitals snapshot)
+       *  dynamic admission controller (reads EWMA-smoothed utils + WT thresholds)
        *  - tasks should not compete under these contended conditions
        *  - see also https://jira.mongodb.org/browse/SPM-1123
        */
 
       const {
-         cacheStatus,
-         dirtyStatus,
-         dirtyUpdatesStatus,
-         // wtReadTicketsStatus,
-         wtWriteTicketsStatus,
-         checkpointStatus
+         evictionTarget = 80,
+         evictionTrigger = 95,
+         evictionDirtyTarget = 5,
+         evictionDirtyTrigger = 20,
+         evictionUpdatesTarget = 2.5,
+         evictionUpdatesTrigger = 10
       } = vitals;
+
+      // Prefer EWMA; fall back to raw vitals until the first successful updateEwma().
+      const cacheUtil = ewma.cacheUtil ?? vitals.cacheUtil;
+      const dirtyUtil = ewma.dirtyUtil ?? vitals.dirtyUtil;
+      const dirtyUpdatesUtil = ewma.dirtyUpdatesUtil ?? vitals.dirtyUpdatesUtil;
+      const wtWriteTicketsUtil = ewma.wtWriteTicketsUtil ?? vitals.wtWriteTicketsUtil;
+
+      const cacheStatus = bandStatus(cacheUtil, evictionTarget, evictionTrigger);
+      const dirtyStatus = bandStatus(dirtyUtil, evictionDirtyTarget, evictionDirtyTrigger);
+      const dirtyUpdatesStatus = bandStatus(dirtyUpdatesUtil, evictionUpdatesTarget, evictionUpdatesTrigger);
+      const wtWriteTicketsStatus = bandStatus(wtWriteTicketsUtil, 20, 75);
+      // checkpointRuntimeRatio is already a sticky "last checkpoint" ratio — do not EWMA it
+      const { checkpointStatus } = vitals;
 
       // heuristics based on write workload pattern
       return (cacheStatus == 'high' || dirtyStatus == 'high' || dirtyUpdatesStatus == 'high') ? 'wait' // WT app threads evicting, we should not contribute to excess cache pressure
@@ -876,6 +927,7 @@
 
    async function main() {
       vitals = await congestionMonitor(); // initial snapshot before scheduling
+      updateEwma(vitals);
       vitalsSampling = true;
       const sampler = vitalsSampler();
       try {
