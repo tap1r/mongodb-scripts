@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.10"
+    *  Version: "0.2.11"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -54,7 +54,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.10" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.11" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -211,11 +211,11 @@
       let sleepIntervalMS = await admissionControl();
       while (sleepIntervalMS == 'wait') {
          console.log('\t\t...batch', bucketId, 'is awaiting scheduling due to back pressure');
-         sleep(Math.floor(500 + Math.random() * 500));
+         await sleep(Math.floor(500 + Math.random() * 500));
          sleepIntervalMS = await admissionControl();
       };
       console.log('\t\t...batch', bucketId, 'executing (buffering:', sleepIntervalMS, 'ms)');
-      sleep(sleepIntervalMS);
+      await sleep(sleepIntervalMS);
       const session = db.getMongo().startSession(sessionOpts);
       const namespace = session.getDatabase(dbName).getCollection(collName);
       const txnOpts = {
