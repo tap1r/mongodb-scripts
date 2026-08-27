@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.17"
+    *  Version: "0.2.18"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,7 +18,6 @@
     *  - add congestion meter for admission control
     *  - add more granular/progressive admission control based on dirtyFill
     *  - add repl-lag metric for admission control
-    *  - fix secondary reads for curation
     *  - add backoff expiry timer
     *  - add better sharding support
     *  - revise lowPriorityAdmissionBypassThreshold for backward compatibility
@@ -54,7 +53,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.17" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.18" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -196,13 +195,9 @@
       }
    }
 
-   function countIds(filter = {}) {
-      // cheaper count for validation purposes
-      const session = db.getMongo().startSession({
-         "causalConsistency": true,
-         "readConcern": { "level": "local" },
-         "mode": "primaryPreferred"
-      });
+   function countIds(filter = {}, sessionOpts = {}) {
+      // residual validation on primary with majority RC (matches wc:majority deletes)
+      const session = db.getMongo().startSession(sessionOpts);
       try {
          const namespace = session.getDatabase(dbName).getCollection(collName);
          const pipeline = [
@@ -219,8 +214,7 @@
             aggOpts = {
                "allowDiskUse": true,
                "readOnce": true, // may or may not work in aggregation?
-               // "readConcern": readConcern,
-               "readConcern": "local",
+               "readConcern": sessionOpts?.readConcern?.level ?? "majority",
                "collation": collation,
                "hint": hint,
                "comment": "Validating IDs via niceDeleteMany.js"
@@ -827,9 +821,10 @@
       const concurrency = Math.max(numCores, 32); // admission control throttles; do not chase live write tickets
       const bucketSizeLimit = 100; // aligns with SPM-2227
       const readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // support monotonic writes
-      const readPreference = {
+      // Curation: prefer secondaries to keep _id bucketing off the primary.
+      const curationReadPreference = {
          // "mode": "nearest", // offload the bucket generation to a less busy node
-         "mode": "secondaryPreferred", // offload the bucket generation to a different node
+         "mode": "secondaryPreferred",
          "tags": [ // Atlas friendly defaults
             { "nodeType": "READ_ONLY", "diskState": "READY" },
             { "nodeType": "ANALYTICS", "diskState": "READY" },
@@ -838,12 +833,24 @@
             {}
          ]
       };
-      const sessionOpts = {
+      // Deletes + residual count: primary. Count uses majority RC to observe wc:majority deletes.
+      const writeReadPreference = { "mode": "primary" };
+      const readSessionOpts = {
          "causalConsistency": true,
          "readConcern": readConcern,
-         "readPreference": readPreference,
+         "readPreference": curationReadPreference
+      };
+      const writeSessionOpts = {
+         "causalConsistency": true,
+         "readConcern": readConcern,
+         "readPreference": writeReadPreference,
          "retryWrites": true,
          "writeConcern": writeConcern
+      };
+      const countSessionOpts = {
+         "causalConsistency": true,
+         "readConcern": { "level": "majority" },
+         "readPreference": writeReadPreference
       };
       banner = `\n\x1b[33m${banner}\x1b[0m`;
       banner += `\n\nCurating '\x1b[32m_id\x1b[0m' deletion list from namespace:` +
@@ -856,7 +863,7 @@
       }
       console.clear();
       console.log(banner);
-      const deletionList = getIds(filter, bucketSizeLimit, sessionOpts);
+      const deletionList = getIds(filter, bucketSizeLimit, readSessionOpts);
       const { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
       if (initialEmptyBatch === true) {
          console.log('\tNo matching documents found to match the filter, double-check the namespace and filter');
@@ -868,7 +875,7 @@
          console.log(msg);
          for await (const [bucketId, deletedCount] of asyncPool(
             prepend(initialBatch, deletionList),
-            task => deleteManyTask(task, sessionOpts),
+            task => deleteManyTask(task, writeSessionOpts),
             {
                "poolSize": concurrency,
                onSchedule(task) {
@@ -890,7 +897,7 @@
       }
       console.log(`\nValidating deletion results ...please wait\n`);
       console.log('...you may CTRL+C here to exit gracefully if validation is not required\n');
-      const finalCount = countIds(filter);
+      const finalCount = countIds(filter, countSessionOpts);
       if (safeguard) {
          console.log('Simulation safeguard is enabled, no deletions were actually performed:\n');
       }
