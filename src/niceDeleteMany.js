@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.15"
+    *  Version: "0.2.16"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -54,7 +54,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.15" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.16" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
 
@@ -815,7 +815,7 @@
    async function main() {
       vitals = await congestionMonitor();
       const { numCores } = vitals;
-      const concurrency = (numCores > 4) ? numCores : 4; // see https://www.mongodb.com/docs/manual/reference/parameters/#mongodb-parameter-param.wiredTigerConcurrentWriteTransactions
+      const concurrency = Math.max(numCores, 32); // admission control throttles; do not chase live write tickets
       const bucketSizeLimit = 100; // aligns with SPM-2227
       const readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // support monotonic writes
       const readPreference = {
@@ -854,7 +854,7 @@
       } else {
          // initial batch
          // let msg = `\nForking ${initialBatch.bucketsTotal} batches of ${initialBatch.bucketSizeLimit} documents with concurrency execution of ${concurrency} to delete ${initialBatch.IDsTotal} documents`;
-         let msg = `\nForking ${concurrency} tasks of ${initialBatch.bucketSizeLimit} batched documents`;
+         let msg = `\nUp to ${concurrency} concurrent deletes of ${initialBatch.bucketSizeLimit} documents`;
          banner += msg;
          console.log(msg);
          for await (const [bucketId, deletedCount] of asyncPool(
