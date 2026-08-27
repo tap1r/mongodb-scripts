@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.15.2"
+ *  Version: "0.15.3"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.15.2"
+      "version": "0.15.3"
 });
 
 /*  Notes:
@@ -1536,7 +1536,7 @@ function $collStats(dbName = db.getName(), collName = '') {
    const namespace = db.getSiblingDB(dbName).getCollection(collName);
    const options = {
       "allowDiskUse": true,
-      "cursor": { "batchSize": 0 },
+      "cursor": { "batchSize": 1 }, // eliminates getMore roundtrip, we expect only a single document
       "readConcern": { "level": "local" },
       "comment": `run by ${__lib.name} sharding compatible $collStats wrapper`
    };
