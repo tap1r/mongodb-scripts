@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.22"
+    *  Version: "0.2.23"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -52,7 +52,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.22" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.23" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -74,6 +74,10 @@
       "dirtyUpdatesUtil": null,
       "wtWriteTicketsUtil": null
    };
+   // Admission FSM: trip CLOSED at *Trigger; release only at/under *Target (hysteresis).
+   const ADMISSION_COOLDOWN_MS = 1000;
+   let admissionState = 'OPEN'; // OPEN | THROTTLE | CLOSED | COOLDOWN
+   let admissionCooldownUntil = 0;
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
    const _hostInfoCache = { "at": 0, "value": null };
    const _rsStatusCache = { "at": 0, "value": null };
@@ -779,6 +783,18 @@
            : 'medium';
    }
 
+   function utilAbove(util, min) {
+      return util != null && !Number.isNaN(util) && util > min;
+   }
+
+   function utilAtOrBelow(util, max) {
+      return util == null || Number.isNaN(util) || util <= max;
+   }
+
+   function utilInBand(util, lo, hi) {
+      return util != null && !Number.isNaN(util) && util >= lo && util <= hi;
+   }
+
    async function vitalsSampler(intervalMs = VITALS_SAMPLE_INTERVAL_MS) {
       /*
        *  Vitals are sampled on a background loop (decoupled from task scheduling);
@@ -799,9 +815,12 @@
 
    function admissionControl() {
       /*
-       *  dynamic admission controller (reads EWMA-smoothed utils + WT thresholds)
-       *  - tasks should not compete under these contended conditions
-       *  - see also https://jira.mongodb.org/browse/SPM-1123
+       *  Admission FSM with hysteresis (see https://jira.mongodb.org/browse/SPM-1123):
+       *    OPEN     — admit freely (optional ticket+checkpoint pacing)
+       *    THROTTLE — admit with short delay (dirty/updates in target..trigger)
+       *    CLOSED   — wait; trip at *Trigger, release only at/under *Target
+       *    COOLDOWN — after CLOSED, brief paced resume to avoid thundering herd
+       *  Inputs: EWMA-smoothed utils; checkpointStatus stays raw (sticky ratio).
        */
 
       const {
@@ -819,18 +838,57 @@
       const dirtyUpdatesUtil = ewma.dirtyUpdatesUtil ?? vitals.dirtyUpdatesUtil;
       const wtWriteTicketsUtil = ewma.wtWriteTicketsUtil ?? vitals.wtWriteTicketsUtil;
 
-      const cacheStatus = bandStatus(cacheUtil, evictionTarget, evictionTrigger);
-      const dirtyStatus = bandStatus(dirtyUtil, evictionDirtyTarget, evictionDirtyTrigger);
-      const dirtyUpdatesStatus = bandStatus(dirtyUpdatesUtil, evictionUpdatesTarget, evictionUpdatesTrigger);
-      const wtWriteTicketsStatus = bandStatus(wtWriteTicketsUtil, 20, 75);
-      // checkpointRuntimeRatio is already a sticky "last checkpoint" ratio — do not EWMA it
-      const { checkpointStatus } = vitals;
+      const hardPressure = utilAbove(cacheUtil, evictionTrigger)
+         || utilAbove(dirtyUtil, evictionDirtyTrigger)
+         || utilAbove(dirtyUpdatesUtil, evictionUpdatesTrigger);
+      // Soft pressure mirrors prior "medium dirty/updates" throttle (cache medium alone does not throttle).
+      const softPressure = utilInBand(dirtyUtil, evictionDirtyTarget, evictionDirtyTrigger)
+         || utilInBand(dirtyUpdatesUtil, evictionUpdatesTarget, evictionUpdatesTrigger);
+      const releaseOk = utilAtOrBelow(cacheUtil, evictionTarget)
+         && utilAtOrBelow(dirtyUtil, evictionDirtyTarget)
+         && utilAtOrBelow(dirtyUpdatesUtil, evictionUpdatesTarget);
+      const clearPressure = releaseOk && !softPressure;
 
-      // heuristics based on write workload pattern
-      return (cacheStatus == 'high' || dirtyStatus == 'high' || dirtyUpdatesStatus == 'high') ? 'wait' // WT app threads evicting, we should not contribute to excess cache pressure
-           : (dirtyStatus == 'medium' || dirtyUpdatesStatus == 'medium') ? Math.floor(20 + Math.random() * 80) // moderate write cache pressure, we can pause slightly
-           : (wtWriteTicketsStatus == 'high' && checkpointStatus == 'high') ? Math.floor(100 + Math.random() * 100) // tickets highly contended, we should mitigate storage pressure
-           : 0; // no cache pressure, we can open up the throttle
+      const now = Date.now();
+      switch (admissionState) {
+         case 'OPEN':
+            if (hardPressure) admissionState = 'CLOSED';
+            else if (softPressure) admissionState = 'THROTTLE';
+            break;
+         case 'THROTTLE':
+            if (hardPressure) admissionState = 'CLOSED';
+            else if (clearPressure) admissionState = 'OPEN';
+            break;
+         case 'CLOSED':
+            // Hysteresis: do not reopen at the trigger line — wait until at/under targets.
+            if (releaseOk) {
+               admissionState = 'COOLDOWN';
+               admissionCooldownUntil = now + ADMISSION_COOLDOWN_MS;
+            }
+            break;
+         case 'COOLDOWN':
+            if (hardPressure) {
+               admissionState = 'CLOSED';
+            } else if (now >= admissionCooldownUntil) {
+               admissionState = softPressure ? 'THROTTLE' : 'OPEN';
+            }
+            break;
+         default:
+            admissionState = 'OPEN';
+      }
+
+      if (admissionState === 'CLOSED') return 'wait';
+
+      if (admissionState === 'THROTTLE' || admissionState === 'COOLDOWN') {
+         return Math.floor(20 + Math.random() * 80);
+      }
+
+      // OPEN: light pacing only when write tickets and checkpoint are both hot
+      const wtWriteTicketsStatus = bandStatus(wtWriteTicketsUtil, 20, 75);
+      const { checkpointStatus } = vitals;
+      return (wtWriteTicketsStatus == 'high' && checkpointStatus == 'high')
+         ? Math.floor(100 + Math.random() * 100)
+         : 0;
    }
 
    async function* prepend(first, rest) {
