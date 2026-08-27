@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.9"
+    *  Version: "0.2.10"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,10 +16,13 @@
 
    let vitals = {};
    const pollingIntervalMS = 100;
-   // TTL cache for serverStatus(): at most one refresh per interval (aligned with pollingIntervalMS).
-   // Concurrent callers with the same options share one in-flight round trip.
+   // TTL caches: serverStatus is hot-path; hostInfo is near-static; rsStatus is low/medium volatility.
    const SERVER_STATUS_CACHE_TTL_MS = pollingIntervalMS;
+   const HOST_INFO_CACHE_TTL_MS = 60 * 1000;
+   const RS_STATUS_CACHE_TTL_MS = 10 * 1000;
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
+   const _hostInfoCache = { "at": 0, "value": null };
+   const _rsStatusCache = { "at": 0, "value": null };
 
    function isSharded() {
       /*
@@ -29,24 +32,36 @@
    }
 
    function hostInfo() {
+      // Near-static (cores, RAM limits, OS). 60s TTL is plenty; container limit changes are rare.
+      const now = Date.now();
+      if (_hostInfoCache.value !== null && (now - _hostInfoCache.at) < HOST_INFO_CACHE_TTL_MS) {
+         return _hostInfoCache.value;
+      }
       let hostInfo = {};
       try {
          hostInfo = db.hostInfo();
       } catch(e) {
          // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.hostInfo()\n${error}\x1b[0m`);
       }
-
+      _hostInfoCache.value = hostInfo;
+      _hostInfoCache.at = now;
       return hostInfo;
    }
 
    function rsStatus() {
+      // Member set/health changes slowly; optimes move faster. 10s balances lag freshness vs rs.status() cost.
+      const now = Date.now();
+      if (_rsStatusCache.value !== null && (now - _rsStatusCache.at) < RS_STATUS_CACHE_TTL_MS) {
+         return _rsStatusCache.value;
+      }
       let rsStatus = {};
       try {
          rsStatus = rs.status();
       } catch(e) {
          // console.debug(`\x1b[31m[WARN] insufficient rights to execute rs.status()\n${error}\x1b[0m`);
       }
-
+      _rsStatusCache.value = rsStatus;
+      _rsStatusCache.at = now;
       return rsStatus;
    }
 
