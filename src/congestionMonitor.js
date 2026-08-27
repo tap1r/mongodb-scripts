@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.11"
+    *  Version: "0.2.12"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -438,7 +438,9 @@
                  : 'medium';
          },
          get activeReplLag() { // calculate the highest repl-lag from healthy members
-            const opTimers = this.rsStatus.members.map(({
+            const members = this.rsStatus?.members;
+            if (!Array.isArray(members) || members.length === 0) return 0;
+            const opTimers = members.map(({
                stateStr,
                health,
                optimeDate
@@ -450,7 +452,8 @@
                };
             }).filter(({ health, stateStr }) => {
                return (health && (stateStr === 'PRIMARY' || stateStr === 'SECONDARY'));
-            }).map(({ optimeDate }) => optimeDate);
+            }).map(({ optimeDate }) => optimeDate).filter(optimeDate => optimeDate != null);
+            if (opTimers.length === 0) return 0;
             return +((Math.max(...opTimers) - Math.min(...opTimers)) / 1000).toFixed(0);
          },
          get replLagStatus() {
@@ -462,7 +465,7 @@
             return 30;
          },
          get heartbeatIntervalMillis() {
-            return this.rsStatus.heartbeatIntervalMillis;
+            return this.rsStatus?.heartbeatIntervalMillis ?? 2000;
          }
       };
    }
