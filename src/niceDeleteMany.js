@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.27"
+    *  Version: "0.2.28"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -50,7 +50,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.27" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.28" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -857,6 +857,7 @@
        *    COOLDOWN — after CLOSED, brief paced resume to avoid thundering herd
        *  Inputs: EWMA-smoothed utils; raw checkpointStatus + activeReplLag (sticky).
        *  Repl lag (hybrid): >=15s soft → THROTTLE; >=30s hard → CLOSED; leave CLOSED when lag <30s.
+       *  Booleans: flowControl + backupCursor → CLOSED; activeIndexBuilds → THROTTLE.
        */
 
       const {
@@ -877,20 +878,32 @@
       const softLag = activeReplLag >= REPL_LAG_SOFT_SEC;
       const hardLag = activeReplLag >= REPL_LAG_HARD_SEC;
 
+      // Boolean vitals getters may throw if serverStatus sections are missing.
+      let activeFlowControl = false, activeIndexBuilds = false, backupCursorOpen = false;
+      try { activeFlowControl = !!vitals.activeFlowControl; } catch(_) { /* ignore */ }
+      try { activeIndexBuilds = !!vitals.activeIndexBuilds; } catch(_) { /* ignore */ }
+      try { backupCursorOpen = !!vitals.backupCursorOpen; } catch(_) { /* ignore */ }
+
       const hardPressure = utilAbove(cacheUtil, evictionTrigger)
          || utilAbove(dirtyUtil, evictionDirtyTrigger)
          || utilAbove(dirtyUpdatesUtil, evictionUpdatesTrigger)
-         || hardLag;
-      // Soft: medium dirty/updates and/or elevated repl lag (cache medium alone does not throttle).
+         || hardLag
+         || activeFlowControl
+         || backupCursorOpen;
+      // Soft: medium dirty/updates, elevated repl lag, and/or active index builds.
       const softPressure = utilInBand(dirtyUtil, evictionDirtyTarget, evictionDirtyTrigger)
          || utilInBand(dirtyUpdatesUtil, evictionUpdatesTarget, evictionUpdatesTrigger)
-         || softLag;
-      // Dirty/cache release at *Target; lag release below hard band (then softLag keeps THROTTLE until < soft).
+         || softLag
+         || activeIndexBuilds;
+      // Dirty/cache release at *Target; lag < hard; flow control / backup cursor must be clear.
       const releaseOk = utilAtOrBelow(cacheUtil, evictionTarget)
          && utilAtOrBelow(dirtyUtil, evictionDirtyTarget)
          && utilAtOrBelow(dirtyUpdatesUtil, evictionUpdatesTarget)
-         && activeReplLag < REPL_LAG_HARD_SEC;
+         && activeReplLag < REPL_LAG_HARD_SEC
+         && !activeFlowControl
+         && !backupCursorOpen;
       const clearPressure = releaseOk && !softPressure;
+      const blockAimdIncrease = softLag || activeIndexBuilds;
 
       const now = Date.now();
       const prevState = admissionState;
@@ -921,10 +934,10 @@
             admissionState = 'OPEN';
       }
 
-      // AIMD on concurrency: MD once when entering CLOSED; AI only while sustained OPEN and lag is calm.
+      // AIMD on concurrency: MD once when entering CLOSED; AI only while sustained OPEN and soft signals calm.
       if (admissionState === 'CLOSED' && prevState !== 'CLOSED') {
          maxInFlight = Math.max(1, Math.floor(maxInFlight / 2));
-      } else if (admissionState === 'OPEN' && !softLag) {
+      } else if (admissionState === 'OPEN' && !blockAimdIncrease) {
          if (prevState !== 'OPEN') {
             aimdLastIncreaseAt = now; // grace period before first +1 after re-entering OPEN
          } else if ((now - aimdLastIncreaseAt) >= AIMD_INCREASE_INTERVAL_MS && maxInFlight < maxInFlightCap) {
@@ -933,8 +946,15 @@
          }
       }
 
+      const admissionSignals = {
+         "replLag": activeReplLag,
+         "flowControl": activeFlowControl,
+         "indexBuilds": activeIndexBuilds,
+         "backupCursor": backupCursorOpen
+      };
+
       if (admissionState === 'CLOSED') {
-         return { "state": admissionState, "proceed": false, "delayMs": 0, "maxInFlight": maxInFlight, "replLag": activeReplLag };
+         return { "state": admissionState, "proceed": false, "delayMs": 0, "maxInFlight": maxInFlight, ...admissionSignals };
       }
 
       if (admissionState === 'THROTTLE' || admissionState === 'COOLDOWN') {
@@ -948,7 +968,7 @@
                evictionUpdatesTrigger
             }),
             "maxInFlight": maxInFlight,
-            "replLag": activeReplLag
+            ...admissionSignals
          };
       }
 
@@ -958,7 +978,7 @@
       const delayMs = (wtWriteTicketsStatus == 'high' && checkpointStatus == 'high')
          ? Math.floor(100 + Math.random() * 100)
          : 0;
-      return { "state": admissionState, "proceed": true, "delayMs": delayMs, "maxInFlight": maxInFlight, "replLag": activeReplLag };
+      return { "state": admissionState, "proceed": true, "delayMs": delayMs, "maxInFlight": maxInFlight, ...admissionSignals };
    }
 
    async function* prepend(first, rest) {
