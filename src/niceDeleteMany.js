@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.23"
+    *  Version: "0.2.24"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -15,7 +15,6 @@
     *  - add execution profiler/timers
     *  - add progress counters with estimated time remaining
     *  - add congestion meter for admission control
-    *  - add more granular/progressive admission control based on dirtyFill
     *  - add repl-lag metric for admission control
     *  - add backoff expiry timer
     *  - add better sharding support
@@ -52,7 +51,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.23" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.2.24" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -76,6 +75,8 @@
    };
    // Admission FSM: trip CLOSED at *Trigger; release only at/under *Target (hysteresis).
    const ADMISSION_COOLDOWN_MS = 1000;
+   const THROTTLE_DELAY_MIN_MS = 20;
+   const THROTTLE_DELAY_MAX_MS = 100; // at *Trigger edge within the soft band
    let admissionState = 'OPEN'; // OPEN | THROTTLE | CLOSED | COOLDOWN
    let admissionCooldownUntil = 0;
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
@@ -795,6 +796,33 @@
       return util != null && !Number.isNaN(util) && util >= lo && util <= hi;
    }
 
+   function fillProgress(util, target, trigger) {
+      // 0 at target (or below), 1 at/above trigger — fraction through the soft band.
+      if (util == null || Number.isNaN(+util)) return 0;
+      const span = trigger - target;
+      if (!(span > 0)) return (+util > trigger) ? 1 : 0;
+      return Math.min(1, Math.max(0, (+util - target) / span));
+   }
+
+   function progressiveThrottleDelay(dirtyUtil, dirtyUpdatesUtil, {
+      evictionDirtyTarget,
+      evictionDirtyTrigger,
+      evictionUpdatesTarget,
+      evictionUpdatesTrigger
+   } = {}) {
+      /*
+       *  Map EWMA dirty/updates fill through [target, trigger] → [min, max] ms.
+       *  Uses the more stressed of the two signals; light ±20% jitter for desync.
+       */
+      const t = Math.max(
+         fillProgress(dirtyUtil, evictionDirtyTarget, evictionDirtyTrigger),
+         fillProgress(dirtyUpdatesUtil, evictionUpdatesTarget, evictionUpdatesTrigger)
+      );
+      const delay = THROTTLE_DELAY_MIN_MS + (THROTTLE_DELAY_MAX_MS - THROTTLE_DELAY_MIN_MS) * t;
+      const jitter = 0.8 + Math.random() * 0.4;
+      return Math.floor(delay * jitter);
+   }
+
    async function vitalsSampler(intervalMs = VITALS_SAMPLE_INTERVAL_MS) {
       /*
        *  Vitals are sampled on a background loop (decoupled from task scheduling);
@@ -817,7 +845,7 @@
       /*
        *  Admission FSM with hysteresis (see https://jira.mongodb.org/browse/SPM-1123):
        *    OPEN     — admit freely (optional ticket+checkpoint pacing)
-       *    THROTTLE — admit with short delay (dirty/updates in target..trigger)
+       *    THROTTLE — admit with progressive delay from dirty/updates fill (target→trigger)
        *    CLOSED   — wait; trip at *Trigger, release only at/under *Target
        *    COOLDOWN — after CLOSED, brief paced resume to avoid thundering herd
        *  Inputs: EWMA-smoothed utils; checkpointStatus stays raw (sticky ratio).
@@ -880,7 +908,12 @@
       if (admissionState === 'CLOSED') return 'wait';
 
       if (admissionState === 'THROTTLE' || admissionState === 'COOLDOWN') {
-         return Math.floor(20 + Math.random() * 80);
+         return progressiveThrottleDelay(dirtyUtil, dirtyUpdatesUtil, {
+            evictionDirtyTarget,
+            evictionDirtyTrigger,
+            evictionUpdatesTarget,
+            evictionUpdatesTrigger
+         });
       }
 
       // OPEN: light pacing only when write tickets and checkpoint are both hot
