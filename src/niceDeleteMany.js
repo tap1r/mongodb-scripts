@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.3.0"
+    *  Version: "0.3.1"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -51,7 +51,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.3.0" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.3.1" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -203,7 +203,7 @@
       return db.hello().msg === 'isdbgrid';
    }
 
-   if (isMongos()) throw new Error('\n[WARN] Sharding not currently supported\n');
+   if (isMongos()) throw new Error('\n\x1b[31m[WARN]\x1b[0m \x1b[33mSharding not currently supported\n\x1b[0m');
 
    function sortKeyFromFilter(filter = {}) {
       /*
@@ -277,10 +277,10 @@
                { ...explainOpts, "hint": userHint }
             );
             if (planHasCollScanOrBlockingSort(expl)) {
-               console.log('\t[WARN] curation plan may use COLLSCAN/blocking SORT despite user hint; sortBy:', JSON.stringify(sortBy));
+               console.log('\t\x1b[31m[WARN]\x1b[0m \x1b[33mcuration plan may use COLLSCAN/blocking SORT despite user hint\x1b[0m; sortBy:', JSON.stringify(sortBy));
             }
          } catch(e) {
-            console.log('\t[WARN] curation explain failed (user hint):', e?.message ?? e);
+            console.log('\t\x1b[31m[WARN]\x1b[0m \x1b[33mcuration explain failed (user hint)\x1b[0m:', e?.message ?? e);
          }
          return { "sortBy": sortBy, "hint": userHint };
       }
@@ -291,10 +291,10 @@
             return { "sortBy": sortBy, "hint": {} }; // trust winning plan; no forced hint
          }
       } catch(e) {
-         console.log('\t[WARN] curation explain failed:', e?.message ?? e);
+         console.log('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration explain failed\x1b[0m:', e?.message ?? e);
       }
 
-      console.log('\t[WARN] curation falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)');
+      console.log('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)\x1b[0m');
       return { "sortBy": idSort, "hint": idHint };
    }
 
@@ -542,7 +542,7 @@
          try {
             hostInfo = db.hostInfo();
          } catch(e) {
-            // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.hostInfo()\n${e}\x1b[0m`);
+            // console.debug(`\x1b[31m[WARN]\x1b[0m \x1b[33minsufficient rights to execute db.hostInfo()\n${e}\x1b[0m`);
          }
          _hostInfoCache.value = hostInfo;
          _hostInfoCache.at = now;
@@ -559,7 +559,7 @@
          try {
             rsStatus = rs.status();
          } catch(e) {
-            // console.debug(`\x1b[31m[WARN] insufficient rights to execute rs.status()\n${e}\x1b[0m`);
+            // console.debug(`\x1b[31m[WARN]\x1b[0m \x1b[33minsufficient rights to execute rs.status()\n${e}\x1b[0m`);
          }
          _rsStatusCache.value = rsStatus;
          _rsStatusCache.at = now;
@@ -576,7 +576,7 @@
          try {
             slowms = db.getSiblingDB('admin').getProfilingStatus().slowms;
          } catch(e) {
-            // console.debug(`\x1b[31m[WARN] insufficient rights to execute getProfilingStatus()\n${e}\x1b[0m`);
+            // console.debug(`\x1b[31m[WARN]\x1b[0m \x1b[33minsufficient rights to execute getProfilingStatus()\n${e}\x1b[0m`);
          }
          _slowmsCache.value = slowms;
          _slowmsCache.at = now;
@@ -941,7 +941,7 @@
             vitals = await congestionMonitor();
             updateEwma(vitals);
          } catch(e) {
-            console.log('\t[WARN] vitals sample failed:', e);
+            console.log('\x1b[31m[WARN]\x1b[0m \x1b[33mvitals sample failed\x1b[0m:', e);
          }
       }
    }
@@ -1062,7 +1062,7 @@
          if (msInClosed >= CLOSED_WARN_MS && (now - lastClosedWarnAt) >= CLOSED_WARN_MS) {
             lastClosedWarnAt = now;
             console.log(
-               '\t[WARN] admission CLOSED for', Math.round(msInClosed / 1000), 's;',
+               '\x1b[31m[WARN]\x1b[0m \x1b[33madmission CLOSED for\x1b[0m', Math.round(msInClosed / 1000), 's;',
                'maxInFlight:', maxInFlight,
                'cacheUtil:', cacheUtil,
                'dirtyUtil:', dirtyUtil,
@@ -1246,7 +1246,7 @@
                 `\n\n\t\x1b[32m${JSON.stringify(filter)}\x1b[0m` +
                 `\n\n...please wait\n`;
       if (safeguard) {
-         banner += '\n\x1b[31mWarning:\x1b[0m \x1b[32mSafeguard is enabled, simulating deletes only (via transaction rollbacks)\n\x1b[0m';
+         banner += '\n\x1b[31m[WARN]\x1b[0m \x1b[33mSafeguard is enabled, simulating deletes only (via transaction rollbacks)\n\x1b[0m';
       }
 
       // Sampler only needs to run for the delete pool; try/finally guarantees teardown.
