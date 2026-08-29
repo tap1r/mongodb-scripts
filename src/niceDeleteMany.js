@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.3.3"
+    *  Version: "0.3.4"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -51,7 +51,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.3.3" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.3.4" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -230,21 +230,51 @@
       visit(node);
       for (const key of [
          'inputStage', 'inputStages', 'thenStage', 'elseStage', 'innerStage', 'outerStage',
-         'shards', 'queryPlanner', 'winningPlan', 'queryPlan', 'executionStages', 'stage',
-         'stages', '$cursor', 'plannerVersion'
+         'shards', 'queryPlan', 'executionStages'
       ]) {
          if (node[key] != null) walkPlanNodes(node[key], visit, seen);
       }
    }
 
    function planHasCollScanOrBlockingSort(explainResult) {
+      /*
+       *  Inspect winningPlan physical stages only. Do NOT walk the full explain doc —
+       *  it can echo the command pipeline (including $sort), which falsely looks like
+       *  a blocking SORT. A separate agg-stage $sort after $cursor is blocking only
+       *  when that $sort was not absorbed into the $cursor query plan.
+       */
       let collScan = false, blockingSort = false;
-      walkPlanNodes(explainResult, (node) => {
-         const stage = node.stage || node.nodeType;
-         if (stage === 'COLLSCAN') collScan = true;
-         if (stage === 'SORT' || stage === 'SORT_KEY_GENERATOR') blockingSort = true;
-         if (Object.prototype.hasOwnProperty.call(node, '$sort')) blockingSort = true;
-      });
+      const roots = [];
+      const takeRoot = (obj) => {
+         if (!obj || typeof obj !== 'object') return;
+         if (obj.queryPlanner?.winningPlan) roots.push(obj.queryPlanner.winningPlan);
+         if (obj.winningPlan) roots.push(obj.winningPlan);
+         if (Array.isArray(obj.stages)) {
+            for (const st of obj.stages) {
+               if (st?.$cursor?.queryPlanner?.winningPlan) {
+                  roots.push(st.$cursor.queryPlanner.winningPlan);
+               } else if (
+                  st && typeof st === 'object' &&
+                  Object.prototype.hasOwnProperty.call(st, '$sort') &&
+                  // Explain $sort stages carry sortPattern; bare pipeline echoes do not.
+                  st.$sort?.sortPattern != null
+               ) {
+                  blockingSort = true;
+               }
+            }
+         }
+         if (obj.shards && typeof obj.shards === 'object') {
+            for (const shardExpl of Object.values(obj.shards)) takeRoot(shardExpl);
+         }
+      };
+      takeRoot(explainResult);
+      for (const root of roots) {
+         walkPlanNodes(root, (node) => {
+            const stage = node.stage || node.nodeType;
+            if (stage === 'COLLSCAN') collScan = true;
+            if (stage === 'SORT' || stage === 'SORT_KEY_GENERATOR') blockingSort = true;
+         });
+      }
       return collScan || blockingSort;
    }
 
@@ -252,59 +282,47 @@
       return h != null && typeof h === 'object' && !Array.isArray(h) && Object.keys(h).length > 0;
    }
 
-   function resolveCurationOrder(namespace, filter = {}, userHint = {}) {
-      /*
-       *  Curation order (Policy A):
-       *  - Derive sortBy from the filter ({} / non-field predicates → _id).
-       *  - Explain $match+$sort (queryPlanner). If the winning plan is index-ordered
-       *    (no COLLSCAN / blocking SORT), trust it and do not force a hint.
-       *  - Otherwise fall back to sortBy {_id:1} + hint {_id:1} so bucketing stays
-       *    non-blocking (filter selectivity may suffer — WARN).
-       *  - Non-empty user hint is always honored; we only WARN if explain still looks
-       *    blocking. Auto-hint of alternate indexes / compound sort probes = Policy B.
-       */
-      const idSort = { "_id": 1 };
-      const idHint = { "_id": 1 };
-      const sortField = sortKeyFromFilter(filter);
-      const sortBy = { [sortField]: 1 };
-      const explainPipeline = [{ "$match": filter }, { "$sort": sortBy }];
-      const explainOpts = { "collation": collation };
-
-      if (hasUserHint(userHint)) {
-         try {
-            const expl = namespace.explain('queryPlanner').aggregate(
-               explainPipeline,
-               { ...explainOpts, "hint": userHint }
-            );
-            if (planHasCollScanOrBlockingSort(expl)) {
-               console.log('\t\x1b[31m[WARN]\x1b[0m \x1b[33mcuration plan may use COLLSCAN/blocking SORT despite user hint\x1b[0m; sortBy:', JSON.stringify(sortBy));
-            }
-         } catch(e) {
-            console.log('\t\x1b[31m[WARN]\x1b[0m \x1b[33mcuration explain failed (user hint)\x1b[0m:', e?.message ?? e);
-         }
-         return { "sortBy": sortBy, "hint": userHint };
-      }
-
-      try {
-         const expl = namespace.explain('queryPlanner').aggregate(explainPipeline, explainOpts);
-         if (!planHasCollScanOrBlockingSort(expl)) {
-            return { "sortBy": sortBy, "hint": {} }; // trust winning plan; no forced hint
-         }
-      } catch(e) {
-         console.log('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration explain failed\x1b[0m:', e?.message ?? e);
-      }
-
-      console.log('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)\x1b[0m');
-      return { "sortBy": idSort, "hint": idHint };
+   function hasUserCollation(c) {
+      return c != null && typeof c === 'object' && !Array.isArray(c) && Object.keys(c).length > 0;
    }
 
-   function curationLandingNode(session) {
+   // mongosh setReadPref() reconnects the client (resetConnectionOptions → close).
+   // Call only while idle — never from the vitals sampler during an open curation cursor.
+   // adminCommand (serverStatus/getParameter) already targets the primary regardless of RP.
+   let connectionReadPreference = { "mode": "primary", "tags": [] };
+
+   async function setConnectionReadPref(readPreference = { "mode": "primary" }) {
       /*
-       *  Resolve which replica-set member this session's readPreference selected
-       *  (secondaryPreferred + tags). Same session as curation when possible.
+       *  Session readPreference alone does not reliably route mongosh aggregate/hello
+       *  to secondaries. Use connection setReadPref(mode, tagSet) instead.
+       *  Skip no-ops: mongosh setReadPref reconnects (closes checked-out connections).
+       *  Await the reconnect before issuing follow-up commands.
+       */
+      const mode = readPreference?.mode ?? 'primary';
+      const tagSet = Array.isArray(readPreference?.tags) ? readPreference.tags : [];
+      const prev = connectionReadPreference;
+      if (prev.mode === mode && JSON.stringify(prev.tags ?? []) === JSON.stringify(tagSet)) {
+         return;
+      }
+      connectionReadPreference = { "mode": mode, "tags": tagSet };
+      const mongo = db.getMongo();
+      if (mode === 'primary') await mongo.setReadPref('primary');
+      else await mongo.setReadPref(mode, tagSet);
+   }
+
+   function curationLandingNode(readPreference = { "mode": "primary" }) {
+      /*
+       *  Resolve curation target via runCommand + readPreference (see discovery.js).
+       *  mongosh: runCommand(cmd, { readPreference: '<mode>' }) — mode string, not a
+       *  document. Tag sets are applied via setConnectionReadPref() beforehand.
+       *  Do not use adminCommand — that always targets the primary in mongosh.
        */
       try {
-         const hello = session.getDatabase('admin').runCommand({ "hello": 1 });
+         const mode = readPreference?.mode ?? 'primary';
+         const hello = db.getSiblingDB(dbName).runCommand(
+            { "hello": 1 },
+            { "readPreference": mode }
+         );
          const host = hello.me ?? hello.primary ?? hello.host ?? 'unknown';
          const tags = hello.tags ?? {};
          const role = (hello.isWritablePrimary || hello.ismaster) ? 'PRIMARY'
@@ -317,27 +335,85 @@
       }
    }
 
-   async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
-      // _id curation (employs partial-blocking aggregation operators)
-      const session = db.getMongo().startSession(sessionOpts);
+   function resolveCurationOrder(namespace, filter = {}, userHint = {}) {
+      /*
+       *  Curation order (Policy A):
+       *  - Derive sortBy from the filter ({} / non-field predicates → _id).
+       *  - Explain $match+$sort (queryPlanner). If the winning plan is index-ordered
+       *    (no COLLSCAN / blocking SORT), trust it and do not force a hint.
+       *  - Otherwise fall back to sortBy {_id:1} + hint {_id:1} so bucketing stays
+       *    non-blocking (filter selectivity may suffer — WARN).
+       *  - Non-empty user hint is always honored; we only WARN if explain still looks
+       *    blocking. Auto-hint of alternate indexes / compound sort probes = Policy B.
+       *  - Caller must already have setConnectionReadPref so explain + aggregate share
+       *    the same secondary (and plan cache) via connection RP — not per-command RP.
+       */
+      const idSort = { "_id": 1 };
+      const idHint = { "_id": 1 };
+      const sortField = sortKeyFromFilter(filter);
+      const sortBy = { [sortField]: 1 };
+      const explainPipeline = [{ "$match": filter }, { "$sort": sortBy }];
+      const explainOpts = {};
+      if (hasUserCollation(collation)) explainOpts.collation = collation;
+
+      const runExplain = (opts) => namespace.explain('queryPlanner').aggregate(explainPipeline, opts);
+
+      if (hasUserHint(userHint)) {
+         try {
+            const expl = runExplain({ ...explainOpts, "hint": userHint });
+            if (planHasCollScanOrBlockingSort(expl)) {
+               console.log('\t\x1b[31m[WARN]\x1b[0m \x1b[33mcuration plan may use COLLSCAN/blocking SORT despite user hint\x1b[0m; sortBy:', JSON.stringify(sortBy));
+            }
+         } catch(e) {
+            console.log('\t\x1b[31m[WARN]\x1b[0m \x1b[33mcuration explain failed (user hint)\x1b[0m:', e?.message ?? e);
+         }
+         return { "sortBy": sortBy, "hint": userHint };
+      }
+
       try {
-         const { host, role, tags } = curationLandingNode(session);
-         // Fold into banner so later console.clear() redraws still show the landing node.
+         const expl = runExplain(explainOpts);
+         if (!planHasCollScanOrBlockingSort(expl)) {
+            return { "sortBy": sortBy, "hint": {} }; // trust winning plan; no forced hint
+         }
+      } catch(e) {
+         console.log('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration explain failed\x1b[0m:', e?.message ?? e);
+      }
+
+      console.log('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)\x1b[0m');
+      return { "sortBy": idSort, "hint": idHint };
+   }
+
+   async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
+      /*
+       *  Curation under one connection readPreference (setReadPref once, then idle):
+       *  landing hello, Policy A explain, and bucketing aggregate share that RP so the
+       *  selected secondary can reuse its plan cache. No DriverSession (mongosh explain
+       *  on a session can expire it before the long cursor runs). Do not call setReadPref
+       *  again until this generator finishes — mongosh reconnects and aborts the cursor.
+       */
+      const readPreference = sessionOpts.readPreference ?? { "mode": "primary" };
+      await setConnectionReadPref(readPreference);
+      try {
+         const { host, role, tags } = curationLandingNode(readPreference);
          const landingLine = `\x1b[34m[INFO]\x1b[0m Curation query target: \x1b[33m${host} (${role})\x1b[0m tags: \x1b[33m${JSON.stringify(tags)}\x1b[0m`;
          banner += `\n${landingLine}\n`;
          console.log(landingLine);
-         const namespace = session.getDatabase(dbName).getCollection(collName);
+         if (role === 'PRIMARY' && readPreference.mode && readPreference.mode !== 'primary') {
+            console.log('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration expected a secondary but landed on PRIMARY — connect via replica-set/SRV seed list (not directConnection to primary), and ensure eligible secondaries exist\x1b[0m');
+         }
+
+         const namespace = db.getSiblingDB(dbName).getCollection(collName);
          const { "sortBy": curationSortBy, "hint": curationHint } = resolveCurationOrder(namespace, filter, hint);
          // const buckets = Math.pow(2, 31) - 1; // max 32bit Int
          const aggOpts = {
             "allowDiskUse": true,
-            "collation": collation,
             "cursor": { "batchSize": 1 }, // optimised for the prefetch concurrency
             "maxTimeMS": 0, // required to overide potential v8 defaultMaxTimeMS cluster settings
             "noCursorTimeout": true,
             "comment": "Bucketing IDs via niceDeleteMany.js",
             "let": { "bucketSizeLimit": bucketSizeLimit }
          };
+         if (hasUserCollation(collation)) aggOpts.collation = collation;
          if (hasUserHint(curationHint)) aggOpts.hint = curationHint;
          const pipeline = [
             { "$match": filter },
@@ -428,7 +504,7 @@
                "IDs": 1 // IDs in the current bucket
             } }
          ];
-         // offload iterator to the server's cursor
+         // offload iterator to the server's cursor (same pinned node as Policy A explain)
          const cursor = namespace.aggregate(pipeline, aggOpts);
          try {
             yield* cursor;
@@ -436,7 +512,7 @@
             try { await cursor.close(); } catch(_) { /* exhausted or already closed */ }
          }
       } finally {
-         session.endSession();
+         await setConnectionReadPref({ "mode": "primary" });
       }
    }
 
@@ -460,10 +536,10 @@
                "allowDiskUse": true,
                "readOnce": true, // may or may not work in aggregation?
                "readConcern": sessionOpts?.readConcern?.level ?? "majority",
-               "collation": collation,
                "hint": hint,
                "comment": "Validating IDs via niceDeleteMany.js"
             };
+         if (hasUserCollation(collation)) aggOpts.collation = collation;
          return namespace.aggregate(pipeline, aggOpts).toArray()[0]?.IDsTotal ?? 0;
       } finally {
          session.endSession();
@@ -964,6 +1040,8 @@
          await sleep(intervalMs);
          if (!vitalsSampling) break;
          try {
+            // Do not setReadPref here — mongosh reconnects the client and aborts
+            // in-flight curation cursors (MongoClientClosedError). adminCommand → primary.
             vitals = await congestionMonitor();
             updateEwma(vitals);
          } catch(e) {
@@ -1224,7 +1302,7 @@
    }
 
    async function main() {
-      vitals = await congestionMonitor(); // initial snapshot before scheduling
+      vitals = await congestionMonitor(); // initial snapshot before scheduling (adminCommand → primary)
       updateEwma(vitals);
 
       const { numCores } = vitals;
@@ -1316,6 +1394,7 @@
          }
          console.log(`\nValidating deletion results ...please wait\n`);
          console.log('...you may CTRL+C here to exit gracefully if validation is not required\n');
+         await setConnectionReadPref({ "mode": "primary" }); // countIds: majority on primary
          const finalCount = countIds(filter, countSessionOpts);
          if (safeguard) {
             console.log('Simulation safeguard is enabled, no deletions were actually performed:\n');
