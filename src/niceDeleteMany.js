@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.2.29"
+    *  Version: "0.3.0"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,6 +9,8 @@
     *  Notes:
     *  - Curation relies on a semi-blocking operator for bucket estimations
     *  - Good for matching up to 2,147,483,647,000 documents
+    *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
+    *  - Prefers index-ordered curation (avoids blocking sorts); optional user hint supported
     *
     *  TODOs:
     *  - re-add naïve timers for mongos/sharding support
@@ -18,7 +20,7 @@
     *  - add better sharding support
     *  - revise lowPriorityAdmissionBypassThreshold for backward compatibility
     *  - improve support for Atlas Flex tiers
-    *  - build-in IXSCAN check to support the supplied filter
+    *  - refine curation order (Policy B: compound equality→trailing sort probes)
     */
 
    // Syntax: mongosh [connection options] [--quiet] [--eval 'let dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>;'] [-f|--file] </path/to/>niceDeleteMany.js
@@ -49,7 +51,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.2.29" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.3.0" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -203,23 +205,116 @@
 
    if (isMongos()) throw new Error('\n[WARN] Sharding not currently supported\n');
 
+   function sortKeyFromFilter(filter = {}) {
+      /*
+       *  Derive a field path for window/sort order. Empty / operator-shaped filters → _id.
+       */
+      if (filter == null || typeof filter !== 'object' || Array.isArray(filter)) return '_id';
+      const keys = Object.keys(filter);
+      if (keys.length === 0) return '_id';
+      const field = keys.find(k => !k.startsWith('$'));
+      if (field) return field;
+      if (Array.isArray(filter.$and) && filter.$and.length) return sortKeyFromFilter(filter.$and[0]);
+      if (Array.isArray(filter.$or) && filter.$or.length) return sortKeyFromFilter(filter.$or[0]);
+      return '_id';
+   }
+
+   function walkPlanNodes(node, visit, seen = new Set()) {
+      if (node == null || typeof node !== 'object') return;
+      if (seen.has(node)) return;
+      seen.add(node);
+      if (Array.isArray(node)) {
+         for (const el of node) walkPlanNodes(el, visit, seen);
+         return;
+      }
+      visit(node);
+      for (const key of [
+         'inputStage', 'inputStages', 'thenStage', 'elseStage', 'innerStage', 'outerStage',
+         'shards', 'queryPlanner', 'winningPlan', 'queryPlan', 'executionStages', 'stage',
+         'stages', '$cursor', 'plannerVersion'
+      ]) {
+         if (node[key] != null) walkPlanNodes(node[key], visit, seen);
+      }
+   }
+
+   function planHasCollScanOrBlockingSort(explainResult) {
+      let collScan = false, blockingSort = false;
+      walkPlanNodes(explainResult, (node) => {
+         const stage = node.stage || node.nodeType;
+         if (stage === 'COLLSCAN') collScan = true;
+         if (stage === 'SORT' || stage === 'SORT_KEY_GENERATOR') blockingSort = true;
+         if (Object.prototype.hasOwnProperty.call(node, '$sort')) blockingSort = true;
+      });
+      return collScan || blockingSort;
+   }
+
+   function hasUserHint(h) {
+      return h != null && typeof h === 'object' && !Array.isArray(h) && Object.keys(h).length > 0;
+   }
+
+   function resolveCurationOrder(namespace, filter = {}, userHint = {}) {
+      /*
+       *  Curation order (Policy A):
+       *  - Derive sortBy from the filter ({} / non-field predicates → _id).
+       *  - Explain $match+$sort (queryPlanner). If the winning plan is index-ordered
+       *    (no COLLSCAN / blocking SORT), trust it and do not force a hint.
+       *  - Otherwise fall back to sortBy {_id:1} + hint {_id:1} so bucketing stays
+       *    non-blocking (filter selectivity may suffer — WARN).
+       *  - Non-empty user hint is always honored; we only WARN if explain still looks
+       *    blocking. Auto-hint of alternate indexes / compound sort probes = Policy B.
+       */
+      const idSort = { "_id": 1 };
+      const idHint = { "_id": 1 };
+      const sortField = sortKeyFromFilter(filter);
+      const sortBy = { [sortField]: 1 };
+      const explainPipeline = [{ "$match": filter }, { "$sort": sortBy }];
+      const explainOpts = { "collation": collation };
+
+      if (hasUserHint(userHint)) {
+         try {
+            const expl = namespace.explain('queryPlanner').aggregate(
+               explainPipeline,
+               { ...explainOpts, "hint": userHint }
+            );
+            if (planHasCollScanOrBlockingSort(expl)) {
+               console.log('\t[WARN] curation plan may use COLLSCAN/blocking SORT despite user hint; sortBy:', JSON.stringify(sortBy));
+            }
+         } catch(e) {
+            console.log('\t[WARN] curation explain failed (user hint):', e?.message ?? e);
+         }
+         return { "sortBy": sortBy, "hint": userHint };
+      }
+
+      try {
+         const expl = namespace.explain('queryPlanner').aggregate(explainPipeline, explainOpts);
+         if (!planHasCollScanOrBlockingSort(expl)) {
+            return { "sortBy": sortBy, "hint": {} }; // trust winning plan; no forced hint
+         }
+      } catch(e) {
+         console.log('\t[WARN] curation explain failed:', e?.message ?? e);
+      }
+
+      console.log('\t[WARN] curation falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)');
+      return { "sortBy": idSort, "hint": idHint };
+   }
+
    async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
       // _id curation (employs partial-blocking aggregation operators)
       const session = db.getMongo().startSession(sessionOpts);
       try {
          const namespace = session.getDatabase(dbName).getCollection(collName);
+         const { "sortBy": curationSortBy, "hint": curationHint } = resolveCurationOrder(namespace, filter, hint);
          // const buckets = Math.pow(2, 31) - 1; // max 32bit Int
          const aggOpts = {
             "allowDiskUse": true,
             "collation": collation,
-            // "cursor": { "batchSize": bucketSizeLimit * vitals.numCores }, // multiple of bucketSizeLimit * concurrency
             "cursor": { "batchSize": 1 }, // optimised for the prefetch concurrency
-            "hint": hint,
             "maxTimeMS": 0, // required to overide potential v8 defaultMaxTimeMS cluster settings
             "noCursorTimeout": true,
             "comment": "Bucketing IDs via niceDeleteMany.js",
             "let": { "bucketSizeLimit": bucketSizeLimit }
          };
+         if (hasUserHint(curationHint)) aggOpts.hint = curationHint;
          const pipeline = [
             { "$match": filter },
             /* v1 blocking mode with count estimations
@@ -269,9 +364,9 @@
                //          "window": { "documents": ["unbounded", "current"] }
                // } } } },
             */
-            // v3 non-blocking mode
+            // v3 non-blocking mode (sortBy from Policy A resolveCurationOrder)
             { "$setWindowFields": { // assign ordinal numbers
-               "sortBy": { [Object.keys(filter)[0]]: 1 },
+               "sortBy": curationSortBy,
                "output": { "ordinal": { "$documentNumber": {} } }
             } },
             { "$set": { // compute bucketId and running cumulative count
@@ -280,7 +375,7 @@
             } },
             { "$setWindowFields": { // compute cumulative sum in the bucket
                "partitionBy": "$bucketId",
-               "sortBy": { [Object.keys(filter)[0]]: 1 },
+               "sortBy": curationSortBy,
                "output": {
                   "IDsCumulative": {
                      "$sum": "$cardinal",
@@ -1105,55 +1200,59 @@
    async function main() {
       vitals = await congestionMonitor(); // initial snapshot before scheduling
       updateEwma(vitals);
+
+      const { numCores } = vitals;
+      const concurrency = Math.max((numCores > 4) ? numCores : 4, 32); // admission control throttles; do not chase live write tickets
+      const bucketSizeLimit = 100; // aligns with SPM-2227
+      const readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // support monotonic writes
+      /*
+       *  Curation uses secondaryPreferred; deletes and residual count use
+       *  primary (count: majority RC).
+       */
+      const curationReadPreference = {
+         // "mode": "nearest", // offload the bucket generation to a less busy node
+         "mode": "secondaryPreferred",
+         "tags": [ // Atlas friendly defaults
+            { "nodeType": "READ_ONLY", "diskState": "READY" },
+            { "nodeType": "ANALYTICS", "diskState": "READY" },
+            { "workloadType": "OPERATIONAL", "diskState": "READY" },
+            { "diskState": "READY" },
+            {}
+         ]
+      };
+      const writeReadPreference = { "mode": "primary" };
+      const readSessionOpts = {
+         "causalConsistency": true,
+         "readConcern": readConcern,
+         "readPreference": curationReadPreference
+      };
+      const writeSessionOpts = {
+         "causalConsistency": true,
+         "readConcern": readConcern,
+         "readPreference": writeReadPreference,
+         "retryWrites": true,
+         "writeConcern": writeConcern
+      };
+      const countSessionOpts = {
+         "causalConsistency": true,
+         "readConcern": { "level": "majority" },
+         "readPreference": writeReadPreference
+      };
+
+      banner = `\n\x1b[33m${banner}\x1b[0m`;
+      banner += `\n\nCurating '\x1b[32m_id\x1b[0m' deletion list from namespace:` +
+                `\n\n\t\x1b[32m${dbName}.${collName}\x1b[0m` +
+                `\n\nwith filter:` +
+                `\n\n\t\x1b[32m${JSON.stringify(filter)}\x1b[0m` +
+                `\n\n...please wait\n`;
+      if (safeguard) {
+         banner += '\n\x1b[31mWarning:\x1b[0m \x1b[32mSafeguard is enabled, simulating deletes only (via transaction rollbacks)\n\x1b[0m';
+      }
+
+      // Sampler only needs to run for the delete pool; try/finally guarantees teardown.
       vitalsSampling = true;
       const sampler = vitalsSampler();
       try {
-         const { numCores } = vitals;
-         const concurrency = Math.max((numCores > 4) ? numCores : 4, 32); // admission control throttles; do not chase live write tickets
-         const bucketSizeLimit = 100; // aligns with SPM-2227
-         const readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // support monotonic writes
-         /*
-          *  Curation uses secondaryPreferred; deletes and residual count use
-          *  primary (count: majority RC).
-          */
-         const curationReadPreference = {
-            // "mode": "nearest", // offload the bucket generation to a less busy node
-            "mode": "secondaryPreferred",
-            "tags": [ // Atlas friendly defaults
-               { "nodeType": "READ_ONLY", "diskState": "READY" },
-               { "nodeType": "ANALYTICS", "diskState": "READY" },
-               { "workloadType": "OPERATIONAL", "diskState": "READY" },
-               { "diskState": "READY" },
-               {}
-            ]
-         };
-         const writeReadPreference = { "mode": "primary" };
-         const readSessionOpts = {
-            "causalConsistency": true,
-            "readConcern": readConcern,
-            "readPreference": curationReadPreference
-         };
-         const writeSessionOpts = {
-            "causalConsistency": true,
-            "readConcern": readConcern,
-            "readPreference": writeReadPreference,
-            "retryWrites": true,
-            "writeConcern": writeConcern
-         };
-         const countSessionOpts = {
-            "causalConsistency": true,
-            "readConcern": { "level": "majority" },
-            "readPreference": writeReadPreference
-         };
-         banner = `\n\x1b[33m${banner}\x1b[0m`;
-         banner += `\n\nCurating '\x1b[32m_id\x1b[0m' deletion list from namespace:` +
-                   `\n\n\t\x1b[32m${dbName}.${collName}\x1b[0m` +
-                   `\n\nwith filter:` +
-                   `\n\n\t\x1b[32m${JSON.stringify(filter)}\x1b[0m` +
-                   `\n\n...please wait\n`;
-         if (safeguard) {
-            banner += '\n\x1b[31mWarning:\x1b[0m \x1b[32mSafeguard is enabled, simulating deletes only (via transaction rollbacks)\n\x1b[0m';
-         }
          // eventually replace this with progress meters
          console.clear();
          console.log(banner);
