@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.3.2"
+    *  Version: "0.3.3"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,8 +11,6 @@
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
     *  - Prefers index-ordered curation (avoids blocking sorts); optional user hint supported
-    *  - User collation must apply to curation/explain/count (match+sort paths); not to
-    *    deleteMany (_id equality only)
     *
     *  TODOs:
     *  - re-add naïve timers for mongos/sharding support
@@ -53,7 +51,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.3.2" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.3.3" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -300,10 +298,34 @@
       return { "sortBy": idSort, "hint": idHint };
    }
 
+   function curationLandingNode(session) {
+      /*
+       *  Resolve which replica-set member this session's readPreference selected
+       *  (secondaryPreferred + tags). Same session as curation when possible.
+       */
+      try {
+         const hello = session.getDatabase('admin').runCommand({ "hello": 1 });
+         const host = hello.me ?? hello.primary ?? hello.host ?? 'unknown';
+         const tags = hello.tags ?? {};
+         const role = (hello.isWritablePrimary || hello.ismaster) ? 'PRIMARY'
+            : hello.secondary ? 'SECONDARY'
+            : hello.arbiterOnly ? 'ARBITER'
+            : 'UNKNOWN';
+         return { "host": host, "role": role, "tags": tags };
+      } catch(e) {
+         return { "host": `unknown (${e?.message ?? e})`, "role": 'UNKNOWN', "tags": {} };
+      }
+   }
+
    async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
       // _id curation (employs partial-blocking aggregation operators)
       const session = db.getMongo().startSession(sessionOpts);
       try {
+         const { host, role, tags } = curationLandingNode(session);
+         // Fold into banner so later console.clear() redraws still show the landing node.
+         const landingLine = `\x1b[34m[INFO]\x1b[0m Curation query target: \x1b[33m${host} (${role})\x1b[0m tags: \x1b[33m${JSON.stringify(tags)}\x1b[0m`;
+         banner += `\n${landingLine}\n`;
+         console.log(landingLine);
          const namespace = session.getDatabase(dbName).getCollection(collName);
          const { "sortBy": curationSortBy, "hint": curationHint } = resolveCurationOrder(namespace, filter, hint);
          // const buckets = Math.pow(2, 31) - 1; // max 32bit Int
