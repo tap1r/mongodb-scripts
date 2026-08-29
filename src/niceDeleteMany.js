@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.3.4"
+    *  Version: "0.4.0"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,13 +11,13 @@
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
     *  - Prefers index-ordered curation (avoids blocking sorts); optional user hint supported
+    *  - mongos: naïve time-based admission (no WT cache vitals) + half maxInFlight
     *
     *  TODOs:
-    *  - re-add naïve timers for mongos/sharding support
     *  - add execution profiler/timers
     *  - add progress counters with estimated time remaining
     *  - add congestion meter for admission control
-    *  - add better sharding support
+    *  - better sharding (per-shard WT vitals via listShards / discovery)
     *  - revise lowPriorityAdmissionBypassThreshold for backward compatibility
     *  - improve support for Atlas Flex tiers
     *  - refine curation order (Policy B: compound equality→trailing sort probes)
@@ -51,7 +51,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.3.4" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.0" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -77,6 +77,9 @@
    const ADMISSION_COOLDOWN_MS = 1000;
    const THROTTLE_DELAY_MIN_MS = 20;
    const THROTTLE_DELAY_MAX_MS = 100; // at *Trigger edge within the soft band
+   // mongos has no WT cache vitals — light jittered pace + half concurrency (naïve mode).
+   const NAIVE_DELAY_MIN_MS = 20;
+   const NAIVE_DELAY_MAX_MS = 50;
    // AIMD concurrency: MD on enter CLOSED; AI while sustained OPEN (hold in THROTTLE/COOLDOWN).
    const AIMD_INCREASE_INTERVAL_MS = 500;
    // Hybrid repl-lag bands (seconds): soft → THROTTLE; hard → CLOSED. No EWMA (sticky rsStatus).
@@ -84,13 +87,15 @@
    const REPL_LAG_HARD_SEC = 30;
    // Ops warn while parked in CLOSED (repeat every interval while still closed).
    const CLOSED_WARN_MS = 60 * 1000;
-   let admissionState = 'OPEN'; // OPEN | THROTTLE | CLOSED | COOLDOWN
+   let admissionState = 'OPEN'; // OPEN | THROTTLE | CLOSED | COOLDOWN | NAIVE
    let admissionCooldownUntil = 0;
    let maxInFlightCap = 1;
    let maxInFlight = 1;
    let aimdLastIncreaseAt = 0;
    let closedSince = 0;
    let lastClosedWarnAt = 0;
+   // 'wt' = WiredTiger FSM on mongod; 'naive' = time-based pace on mongos (no cache vitals).
+   let admissionMode = 'wt';
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
    const _hostInfoCache = { "at": 0, "value": null };
    const _rsStatusCache = { "at": 0, "value": null };
@@ -203,7 +208,13 @@
       return db.hello().msg === 'isdbgrid';
    }
 
-   if (isMongos()) throw new Error('\n\x1b[31m[WARN]\x1b[0m \x1b[33mSharding not currently supported\n\x1b[0m');
+   const onMongos = isMongos();
+   admissionMode = onMongos ? 'naive' : 'wt';
+   if (onMongos) {
+      const mongosWarn = '\x1b[31m[WARN]\x1b[0m \x1b[33mmongos detected — using naïve time-based admission (no WT cache vitals); maxInFlight capped at half pool\x1b[0m';
+      banner += `\n${mongosWarn}`;
+      console.log(mongosWarn);
+   }
 
    function sortKeyFromFilter(filter = {}) {
       /*
@@ -325,7 +336,8 @@
          );
          const host = hello.me ?? hello.primary ?? hello.host ?? 'unknown';
          const tags = hello.tags ?? {};
-         const role = (hello.isWritablePrimary || hello.ismaster) ? 'PRIMARY'
+         const role = (hello.msg === 'isdbgrid') ? 'MONGOS'
+            : (hello.isWritablePrimary || hello.ismaster) ? 'PRIMARY'
             : hello.secondary ? 'SECONDARY'
             : hello.arbiterOnly ? 'ARBITER'
             : 'UNKNOWN';
@@ -398,7 +410,12 @@
          const landingLine = `\x1b[34m[INFO]\x1b[0m Curation query target: \x1b[33m${host} (${role})\x1b[0m tags: \x1b[33m${JSON.stringify(tags)}\x1b[0m`;
          banner += `\n${landingLine}\n`;
          console.log(landingLine);
-         if (role === 'PRIMARY' && readPreference.mode && readPreference.mode !== 'primary') {
+         if (
+            role === 'PRIMARY' &&
+            !onMongos &&
+            readPreference.mode &&
+            readPreference.mode !== 'primary'
+         ) {
             console.log('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration expected a secondary but landed on PRIMARY — connect via replica-set/SRV seed list (not directConnection to primary), and ensure eligible secondaries exist\x1b[0m');
          }
 
@@ -1050,6 +1067,10 @@
       }
    }
 
+   function naiveAdmissionDelay() {
+      return Math.floor(NAIVE_DELAY_MIN_MS + Math.random() * (NAIVE_DELAY_MAX_MS - NAIVE_DELAY_MIN_MS));
+   }
+
    function admissionControl() {
       /*
        *  Admission FSM with hysteresis (see https://jira.mongodb.org/browse/SPM-1123):
@@ -1057,10 +1078,25 @@
        *    THROTTLE — admit with progressive delay from dirty/updates fill (target→trigger)
        *    CLOSED   — wait; trip at *Trigger, release only at/under *Target
        *    COOLDOWN — after CLOSED, brief paced resume to avoid thundering herd
+       *    NAIVE    — mongos: jittered time-based pace (no WT cache vitals)
        *  Inputs: EWMA-smoothed utils; raw checkpointStatus + activeReplLag (sticky).
        *  Repl lag (hybrid): >=15s soft → THROTTLE; >=30s hard → CLOSED; leave CLOSED when lag <30s.
        *  Booleans: flowControl + backupCursor → CLOSED; activeIndexBuilds → THROTTLE.
        */
+
+      if (admissionMode === 'naive') {
+         admissionState = 'NAIVE';
+         return {
+            "state": admissionState,
+            "proceed": true,
+            "delayMs": naiveAdmissionDelay(),
+            "maxInFlight": maxInFlight,
+            "replLag": 0,
+            "flowControl": false,
+            "indexBuilds": false,
+            "backupCursor": false
+         };
+      }
 
       const {
          evictionTarget = 80,
@@ -1218,8 +1254,11 @@
        *  taken; executing only holds deleteMany/txn work. Effective concurrency
        *  is min(poolSize, admission.maxInFlight) via AIMD.
        */
-      maxInFlightCap = poolSize;
-      maxInFlight = poolSize;
+      // mongos naïve mode: half concurrency (no WT AIMD signal to cut further under load).
+      maxInFlightCap = (admissionMode === 'naive')
+         ? Math.max(1, Math.floor(poolSize / 2))
+         : poolSize;
+      maxInFlight = maxInFlightCap;
       aimdLastIncreaseAt = Date.now();
       const executing = new Set();
       const buf = [];
@@ -1302,16 +1341,23 @@
    }
 
    async function main() {
-      vitals = await congestionMonitor(); // initial snapshot before scheduling (adminCommand → primary)
-      updateEwma(vitals);
+      // One-shot vitals for concurrency sizing; WT sampler runs only in 'wt' mode.
+      try {
+         vitals = await congestionMonitor();
+         if (admissionMode === 'wt') updateEwma(vitals);
+      } catch(e) {
+         console.log('\x1b[31m[WARN]\x1b[0m \x1b[33minitial congestionMonitor failed\x1b[0m:', e?.message ?? e);
+         vitals = {};
+      }
 
-      const { numCores } = vitals;
+      const numCores = vitals?.numCores;
       const concurrency = Math.max((numCores > 4) ? numCores : 4, 32); // admission control throttles; do not chase live write tickets
       const bucketSizeLimit = 100; // aligns with SPM-2227
       const readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // support monotonic writes
       /*
        *  Curation uses secondaryPreferred; deletes and residual count use
-       *  primary (count: majority RC).
+       *  primary (count: majority RC). On mongos, secondaryPreferred selects
+       *  eligible shard secondaries via the router.
        */
       const curationReadPreference = {
          // "mode": "nearest", // offload the bucket generation to a less busy node
@@ -1353,9 +1399,10 @@
          banner += '\n\x1b[31m[WARN]\x1b[0m \x1b[33mSafeguard is enabled, simulating deletes only (via transaction rollbacks)\n\x1b[0m';
       }
 
-      // Sampler only needs to run for the delete pool; try/finally guarantees teardown.
-      vitalsSampling = true;
-      const sampler = vitalsSampler();
+      // WT sampler only for mongod admission; mongos uses naïve timers (no cache vitals).
+      const useVitalsSampler = admissionMode === 'wt';
+      vitalsSampling = useVitalsSampler;
+      const sampler = useVitalsSampler ? vitalsSampler() : Promise.resolve();
       try {
          // eventually replace this with progress meters
          console.clear();
@@ -1367,7 +1414,11 @@
          } else {
             // initial batch
             // let msg = `\nForking ${initialBatch.bucketsTotal} batches of ${initialBatch.bucketSizeLimit} documents with concurrency execution of ${concurrency} to delete ${initialBatch.IDsTotal} documents`;
-            let msg = `\nUp to ${concurrency} concurrent deletes of ${initialBatch.bucketSizeLimit} documents`;
+            const effectiveCap = (admissionMode === 'naive')
+               ? Math.max(1, Math.floor(concurrency / 2))
+               : concurrency;
+            let msg = `\nUp to ${effectiveCap} concurrent deletes of ${initialBatch.bucketSizeLimit} documents` +
+               (admissionMode === 'naive' ? ' (naïve mongos admission)' : '');
             banner += msg;
             console.log(msg);
             for await (const [bucketId, deletedCount] of asyncPool(
