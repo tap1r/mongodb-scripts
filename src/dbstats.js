@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.8"
+ *  Version: "0.12.9"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -107,7 +107,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.8" };
+   const __script = { "name": "dbstats.js", "version": "0.12.9" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -353,11 +353,19 @@
          }
          dbPath.dataSize += database.dataSize;
          dbPath.storageSize += database.storageSize;
-         dbPath.freeStorageSize += database.freeStorageSize;
          dbPath.objects += database.objects;
          dbPath.orphans += database.orphans;
          dbPath.totalIndexSize += database.totalIndexSize;
-         dbPath.totalIndexBytesReusable += database.totalIndexBytesReusable;
+         if (!dbPath._freeRolled) {
+            dbPath.freeStorageSize = database.freeStorageSize;
+            dbPath.totalIndexBytesReusable = database.totalIndexBytesReusable;
+            dbPath._freeRolled = true;
+         } else {
+            dbPath.freeStorageSize = (dbPath.freeStorageSize == null || database.freeStorageSize == null)
+               ? null : dbPath.freeStorageSize + database.freeStorageSize;
+            dbPath.totalIndexBytesReusable = (dbPath.totalIndexBytesReusable == null || database.totalIndexBytesReusable == null)
+               ? null : dbPath.totalIndexBytesReusable + database.totalIndexBytesReusable;
+         }
 
          return database;
       });
@@ -469,6 +477,24 @@
       dbPath.databases = (shellVer(2.0) && isMongosh())
          ? dbPath.databases.toSorted(sortBy('db')) // mongosh v2 optimised
          : dbPath.databases.sort(sortBy('db'));    // legacy shell(s) method
+
+      // If every namespace hid WT free-space, don't keep a db.stats() 0 as an empty free list.
+      dbPath.databases.forEach(database => {
+         if (database.collections.length && database.collections.every(c => c.freeStorageSize == null)) {
+            database.freeStorageSize = null;
+         }
+         if (database.collections.length && database.collections.every(c =>
+               c.totalIndexBytesReusable == null && (c.indexes || []).every(i => i.freeStorageSize == null))) {
+            database.totalIndexBytesReusable = null;
+         }
+      });
+      if (dbPath.databases.length && dbPath.databases.every(d => d.freeStorageSize == null)) {
+         dbPath.freeStorageSize = null;
+      }
+      if (dbPath.databases.length && dbPath.databases.every(d => d.totalIndexBytesReusable == null)) {
+         dbPath.totalIndexBytesReusable = null;
+      }
+      delete dbPath._freeRolled;
 
       return dbPath;
    }
@@ -767,6 +793,36 @@
       return `${Number.parseFloat(((numerator / denominator) * 100).toFixed(1))}%`;
    }
 
+   function freeStorageKnown(bytes) {
+      return bytes != null && !Number.isNaN(+bytes);
+   }
+
+   function formatFree(bytes, storageSize) {
+      /*
+       *  Free blocks │ reuse. Hidden WT free-space (Atlas M0/Flex) → n/a, not 0.
+       */
+      if (!freeStorageKnown(bytes)) {
+         return (`n/a │${'n/a'.padStart(6)}`).padStart(columnWidth + 8);
+      }
+      return (formatUnit(bytes) + ' │' + formatPct(bytes, storageSize).padStart(6)).padStart(columnWidth + 8);
+   }
+
+   function formatCompaction(kind, storageSize, freeStorageSize, { oplog = false, idIndex = false } = {}) {
+      if (!freeStorageKnown(freeStorageSize)) return 'n/a';
+      if (kind === 'collection') {
+         if (oplog && compactionHelper('collection', storageSize, freeStorageSize)) return 'wait';
+         return compactionHelper('collection', storageSize, freeStorageSize) ? 'compact' : '———— ';
+      }
+      if (kind === 'index') {
+         if (idIndex && compactionHelper('index', storageSize, freeStorageSize)) return 'compact';
+         return compactionHelper('index', storageSize, freeStorageSize) ? 'rebuild' : '———— ';
+      }
+      if (kind === 'dbPath') {
+         return compactionHelper('dbPath', storageSize, freeStorageSize) ? 'resync' : '———— ';
+      }
+      return '———— ';
+   }
+
    function formatRatio(metric) {
       /*
        *  Pretty format ratio
@@ -801,12 +857,10 @@
        */
       compressor = (compressor == 'snappy') ? 'snpy' : compressor;
       const collWidth = rowHeader - 4;
-      const compaction = (name == 'oplog.rs' && compactionHelper('collection', storageSize, freeStorageSize)) ? 'wait'
-                     : compactionHelper('collection', storageSize, freeStorageSize) ? 'compact'
-                     : '———— ';
+      const compaction = formatCompaction('collection', storageSize, freeStorageSize, { "oplog": name == 'oplog.rs' });
       console.log(`[yellow]${'━'.repeat(termWidth)}[/]`);
       if (name.length > 45) name = `${name.substring(0, collWidth)}~`;
-      console.log(`╰>[cyan]${(' ' + name).padEnd(rowHeader - 2)}[/] ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' │' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} [cyan]${compaction.padStart(columnWidth - 2)}[/]`);
+      console.log(`╰>[cyan]${(' ' + name).padEnd(rowHeader - 2)}[/] ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize)} ${objects.toString().padStart(columnWidth)} [cyan]${compaction.padStart(columnWidth - 2)}[/]`);
 
       return;
    }
@@ -817,12 +871,10 @@
        */
       compressor = (compressor == 'snappy') ? 'snpy' : compressor;
       const collWidth = rowHeader - 4;
-      const compaction = (namespace == 'local.oplog.rs' && compactionHelper('collection', storageSize, freeStorageSize)) ? 'wait'
-                       : compactionHelper('collection', storageSize, freeStorageSize) ? 'compact'
-                       : '———— ';
+      const compaction = formatCompaction('collection', storageSize, freeStorageSize, { "oplog": namespace == 'local.oplog.rs' });
       console.log(`[yellow]${'━'.repeat(termWidth)}[/]`);
       if (namespace.length > 45) namespace = `${namespace.substring(0, collWidth)}~`;
-      console.log(`╰>[cyan]${(' ' + namespace).padEnd(rowHeader - 2)}[/] ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' │' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} [cyan]${compaction.padStart(columnWidth - 2)}[/]`);
+      console.log(`╰>[cyan]${(' ' + namespace).padEnd(rowHeader - 2)}[/] ${formatUnit(dataSize).padStart(columnWidth)} ${(formatRatio(compression) + (compressor).padStart(compressor.length + 1)).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize)} ${objects.toString().padStart(columnWidth)} [cyan]${compaction.padStart(columnWidth - 2)}[/]`);
 
       return;
    }
@@ -852,12 +904,10 @@
        *  Print index level stats
        */
       const indexWidth = rowHeader + columnWidth * 2;
-      const compaction = (name == '_id_' && compactionHelper('index', storageSize, freeStorageSize)) ? 'compact'
-                     : compactionHelper('index', storageSize, freeStorageSize) ? 'rebuild'
-                     : '———— ';
+      const compaction = formatCompaction('index', storageSize, freeStorageSize, { "idIndex": name == '_id_' });
       console.log(`  [yellow]${'━'.repeat(termWidth - 2)}[/]`);
       if (name.length > 64) name = `${name.substring(0, indexWidth)}~`;
-      console.log(`  ╰» [red]${name.padEnd(indexWidth - 2)}[/] ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' │' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${''.toString().padStart(columnWidth)} [cyan]${compaction.padStart(columnWidth - 2)}[/]`);
+      console.log(`  ╰» [red]${name.padEnd(indexWidth - 2)}[/] ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize)} ${''.toString().padStart(columnWidth)} [cyan]${compaction.padStart(columnWidth - 2)}[/]`);
 
       return;
    }
@@ -879,11 +929,11 @@
       /*
        *  Print DB level rollup stats
        */
-      const dbCompaction = compactionHelper('collection', storageSize, freeStorageSize) ? 'compact' : '———— ';
-      const dbIdxCompaction = compactionHelper('index', totalIndexSize, totalIndexBytesReusable) ? 'rebuild' : '———— ';
+      const dbCompaction = formatCompaction('collection', storageSize, freeStorageSize);
+      const dbIdxCompaction = formatCompaction('index', totalIndexSize, totalIndexBytesReusable);
       console.log(`[yellow]${'━'.repeat(termWidth)}[/]`);
       if (shards.length > 0) {
-         console.log(`[bold][green]${`Namespaces subtotal:[/]`.padEnd(rowHeader + 4)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize).padStart(columnWidth) + ' │' + `${formatPct(freeStorageSize, storageSize)}`.padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} [cyan]${dbCompaction.padStart(columnWidth - 2)}[/]`);
+         console.log(`[bold][green]${`Namespaces subtotal:[/]`.padEnd(rowHeader + 4)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize)} ${objects.toString().padStart(columnWidth)} [cyan]${dbCompaction.padStart(columnWidth - 2)}[/]`);
          namespaces = JSON.stringify(
             shards.map((shard, _i) => {
                return { [shard]: namespaces[_i] }
@@ -891,7 +941,7 @@
          // ).replace(/(?<![\[])(?:\n\s+)/g, ' '); // legacy shell doesn't support this
          ).replace(/(?:\n\s+)|(?:\n)/g, ' ');
          console.log(namespaces);
-         console.log(`[bold][green]${`Indexes subtotal:[/]`.padEnd(rowHeader + 4)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${`${formatUnit(totalIndexBytesReusable).padStart(columnWidth)} │${`${formatPct(totalIndexBytesReusable, totalIndexSize)}`.padStart(6)}`.padStart(columnWidth + 8)} ${''.toString().padStart(columnWidth)} [cyan]${dbIdxCompaction.padStart(columnWidth - 2)}[/]`);
+         console.log(`[bold][green]${`Indexes subtotal:[/]`.padEnd(rowHeader + 4)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${formatFree(totalIndexBytesReusable, totalIndexSize)} ${''.toString().padStart(columnWidth)} [cyan]${dbIdxCompaction.padStart(columnWidth - 2)}[/]`);
          nindexes = JSON.stringify(
             shards.map((shard, _i) => {
                return { [shard]: nindexes[_i] }
@@ -900,8 +950,8 @@
          ).replace(/(?:\n\s+)|(?:\n)/g, ' ');
          console.log(nindexes);
       } else {
-         console.log(`[bold][green]${`Namespaces subtotal:[/] ${JSON.stringify(namespaces)}`.padEnd(rowHeader + 4)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize).padStart(columnWidth) + ' │' + `${formatPct(freeStorageSize, storageSize)}`.padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} [cyan]${dbCompaction.padStart(columnWidth - 2)}[/]`);
-         console.log(`[bold][green]${`Indexes subtotal:[/]    ${JSON.stringify(nindexes)}`.padEnd(rowHeader + 4)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${`${formatUnit(totalIndexBytesReusable).padStart(columnWidth)} │${`${formatPct(totalIndexBytesReusable, totalIndexSize)}`.padStart(6)}`.padStart(columnWidth + 8)} ${''.toString().padStart(columnWidth)} [cyan]${dbIdxCompaction.padStart(columnWidth - 2)}[/]`);
+         console.log(`[bold][green]${`Namespaces subtotal:[/] ${JSON.stringify(namespaces)}`.padEnd(rowHeader + 4)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize)} ${objects.toString().padStart(columnWidth)} [cyan]${dbCompaction.padStart(columnWidth - 2)}[/]`);
+         console.log(`[bold][green]${`Indexes subtotal:[/]    ${JSON.stringify(nindexes)}`.padEnd(rowHeader + 4)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${formatFree(totalIndexBytesReusable, totalIndexSize)} ${''.toString().padStart(columnWidth)} [cyan]${dbIdxCompaction.padStart(columnWidth - 2)}[/]`);
       }
       console.log(`[yellow]${'═'.repeat(termWidth)}[/]`);
 
@@ -914,14 +964,14 @@
       /*
        *  Print total dbPath rollup stats
        */
-      const dbPathCompaction = compactionHelper('dbPath', storageSize, freeStorageSize) ? 'resync' : '———— ';
-      const dbPathIdxCompaction = compactionHelper('index', totalIndexSize, totalIndexBytesReusable) ? 'rebuild' : '———— ';
+      const dbPathCompaction = formatCompaction('dbPath', storageSize, freeStorageSize);
+      const dbPathIdxCompaction = formatCompaction('index', totalIndexSize, totalIndexBytesReusable);
       console.log('');
       console.log(`[yellow]${'═'.repeat(termWidth)}[/]`);
       console.log(`[bold][green]${'dbPath totals'.padEnd(rowHeader)} ${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks │ reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Compaction'.padStart(columnWidth - 1)}[/]`);
       console.log(`[yellow]${'━'.repeat(termWidth)}[/]`);
       if (shards.length > 0) {
-         console.log(`[bold][green]${`All namespaces:[/]`.padEnd(rowHeader + 4)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' │' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} [cyan]${dbPathCompaction.padStart(columnWidth - 2)}[/]`);
+         console.log(`[bold][green]${`All namespaces:[/]`.padEnd(rowHeader + 4)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize)} ${objects.toString().padStart(columnWidth)} [cyan]${dbPathCompaction.padStart(columnWidth - 2)}[/]`);
          namespaces = JSON.stringify(
             shards.map((shard, _i) => {
                return { [shard]: namespaces[_i] }
@@ -929,7 +979,7 @@
          // ).replace(/(?<![\[])(?:\n\s+)/g, ' '); // legacy shell doesn't support this
          ).replace(/(?:\n\s+)|(?:\n)/g, ' ');
          console.log(namespaces);
-         console.log(`[bold][green]${`All indexes:[/]`.padEnd(rowHeader + 4)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ' │' + (formatPct(totalIndexBytesReusable, totalIndexSize)).padStart(6)).padStart(columnWidth + 8)} ${''.padStart(columnWidth)} [cyan]${dbPathIdxCompaction.padStart(columnWidth - 2)}[/]`);
+         console.log(`[bold][green]${`All indexes:[/]`.padEnd(rowHeader + 4)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${formatFree(totalIndexBytesReusable, totalIndexSize)} ${''.padStart(columnWidth)} [cyan]${dbPathIdxCompaction.padStart(columnWidth - 2)}[/]`);
          nindexes = JSON.stringify(
             shards.map((shard, _i) => {
                return { [shard]: nindexes[_i] }
@@ -938,13 +988,16 @@
          ).replace(/(?:\n\s+)|(?:\n)/g, ' ');
          console.log(nindexes);
       } else {
-         console.log(`[bold][green]${`All namespaces:[/] ${JSON.stringify(namespaces)}`.padEnd(rowHeader + 4)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${(formatUnit(freeStorageSize) + ' │' + (formatPct(freeStorageSize, storageSize)).padStart(6)).padStart(columnWidth + 8)} ${objects.toString().padStart(columnWidth)} [cyan]${dbPathCompaction.padStart(columnWidth - 2)}[/]`);
-         console.log(`[bold][green]${`All indexes:[/]    ${JSON.stringify(nindexes)}`.padEnd(rowHeader + 4)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${(formatUnit(totalIndexBytesReusable) + ' │' + (formatPct(totalIndexBytesReusable, totalIndexSize)).padStart(6)).padStart(columnWidth + 8)} ${''.padStart(columnWidth)} [cyan]${dbPathIdxCompaction.padStart(columnWidth - 2)}[/]`);
+         console.log(`[bold][green]${`All namespaces:[/] ${JSON.stringify(namespaces)}`.padEnd(rowHeader + 4)}${formatUnit(dataSize).padStart(columnWidth)} ${formatRatio(compression).padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize)} ${objects.toString().padStart(columnWidth)} [cyan]${dbPathCompaction.padStart(columnWidth - 2)}[/]`);
+         console.log(`[bold][green]${`All indexes:[/]    ${JSON.stringify(nindexes)}`.padEnd(rowHeader + 4)}${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(totalIndexSize).padStart(columnWidth)} ${formatFree(totalIndexBytesReusable, totalIndexSize)} ${''.padStart(columnWidth)} [cyan]${dbPathIdxCompaction.padStart(columnWidth - 2)}[/]`);
       }
       console.log(`[yellow]${'═'.repeat(termWidth)}[/]`);
       console.log(`[bold][green]Hostname:[/] [cyan]${hostname}[/]   [bold][green]Type:[/] [cyan]${proc}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]   [bold][green]dbPath:[/] [cyan]${dbPath}[/]`);
       if (shards.length > 0) {
          console.log(`[bold][green]Shards:[/] ${JSON.stringify(shards)}`);
+      }
+      if (!freeStorageKnown(freeStorageSize) || !freeStorageKnown(totalIndexBytesReusable)) {
+         console.log('[yellow][WARN] Free blocks │ reuse unavailable (WiredTiger free-space stats hidden on this tier)[/]');
       }
       console.log(`[yellow]${'═'.repeat(termWidth)}[/]`);
       console.log('');

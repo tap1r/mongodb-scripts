@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.15.3"
+ *  Version: "0.15.4"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,7 +9,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.15.3"
+      "version": "0.15.4"
 });
 
 /*  Notes:
@@ -820,6 +820,8 @@ const WIREDTIGER_MIN_RECLAIM_SIZE_V8 = 1048576;     // 1 MiB as WT ignores anyth
 const WIREDTIGER_MIN_RECLAIM_SIZE_LEGACY = 2097152; // 2 MiB as WT ignores anything smaller
 
 function compactionHelper(type = 'collection', storageSize = 4096, freeStorageSize = 0) {
+   // Unknown/hidden free-space (Atlas M0/Flex) is not an empty free list.
+   if (freeStorageSize == null || Number.isNaN(+freeStorageSize) || !(+storageSize > 0)) return false;
    const compactCollectionThreshold = 0.2; // 20% reusable collection bytes
    const compactIndexThreshold = 0.5;      // 50% reusable index bytes
    const minSizeBytes = serverVer(8)
@@ -1485,38 +1487,53 @@ function $stats(dbName = db.getName()) {
    );
    stats.name = dbName;
    delete stats.db;
+   // Atlas M0/Flex hide WT free-space; a 0 here is not an empty free list.
+   const hideFree = isAtlasPlatform('sharedTier') || isAtlasPlatform('serverless');
    if (stats.hasOwnProperty('raw')) { // detect sharded db.stats()
       stats.collections = [];
       stats.views = [];
       stats.namespaces = [];
       stats.indexes = [];
       stats.nindexes = stats.indexes;
-      stats.freeStorageSize = 0;
-      stats.indexFreeStorageSize = 0;
+      let freeSum = 0, idxFreeSum = 0, sawFree = false, sawIdxFree = false;
       for (const shard in stats.raw) {
          if (stats.raw.hasOwnProperty(shard)) {
             stats.collections.push(+stats.raw[shard].collections);
             stats.views.push(+stats.raw[shard].views);
             stats.indexes.push(+stats.raw[shard].indexes);
             stats.namespaces.push(+stats.raw[shard].collections + +stats.raw[shard].views);
-            stats.freeStorageSize += (typeof stats.raw[shard].freeStorageSize === 'undefined') ? 0 : +stats.raw[shard].freeStorageSize;
-            stats.indexFreeStorageSize += (typeof stats.raw[shard].indexFreeStorageSize === 'undefined') ? 0 : +stats.raw[shard].indexFreeStorageSize;
+            if (typeof stats.raw[shard].freeStorageSize !== 'undefined') {
+               freeSum += +stats.raw[shard].freeStorageSize;
+               sawFree = true;
+            }
+            if (typeof stats.raw[shard].indexFreeStorageSize !== 'undefined') {
+               idxFreeSum += +stats.raw[shard].indexFreeStorageSize;
+               sawIdxFree = true;
+            }
          }
       }
+      stats.freeStorageSize = hideFree ? null : (sawFree ? freeSum : 0);
+      stats.indexFreeStorageSize = hideFree ? null : (sawIdxFree ? idxFreeSum : 0);
    } else { // detect unsharded db.stats()
       stats.collections = +stats.collections;
       stats.indexes = +stats.indexes;
       stats.views = +stats.views;
       stats.nviews = stats.views;
       stats.namespaces = stats.collections + stats.views;
+      if (hideFree) {
+         stats.freeStorageSize = null;
+         stats.indexFreeStorageSize = null;
+      } else {
+         stats.freeStorageSize = (typeof stats.freeStorageSize === 'undefined') ? 0 : +stats.freeStorageSize;
+         stats.indexFreeStorageSize = (typeof stats.indexFreeStorageSize === 'undefined') ? 0 : +stats.indexFreeStorageSize;
+      }
    }
 
    stats.objects = +stats.objects;
    stats.dataSize = +stats.dataSize;
    stats.storageSize = +stats.storageSize;
    stats.indexSize = +stats.indexSize;
-   stats.indexFreeStorageSize = (typeof stats.indexFreeStorageSize === 'undefined') ? 0 : +stats.indexFreeStorageSize;
-   stats.totalIndexBytesReusable = +stats.indexFreeStorageSize;
+   stats.totalIndexBytesReusable = stats.indexFreeStorageSize;
    stats.scaleFactor = +stats.scaleFactor;
    delete stats.fileSize;
    delete stats.totalSize;
@@ -1541,17 +1558,17 @@ function $collStats(dbName = db.getName(), collName = '') {
       "comment": `run by ${__lib.name} sharding compatible $collStats wrapper`
    };
    const pipeline = [
-      { "$collStats": { "storageStats": { "scale": 1 } } },
+      { "$collStats": { "storageStats": { "scale": 1, "freeStorage": 1 } } },
       { "$set": {
          "storageStats.wiredTiger.creationStrings": {
             "$arrayElemAt": [{
                "$regexFindAll": {
-                  "input": "$storageStats.wiredTiger.creationString",
+                  "input": { "$ifNull": ["$storageStats.wiredTiger.creationString", ""] },
                   "regex": /block_compressor=(\w+).+internal_page_max=(\d+).+leaf_page_max=(\d+)/
                } },
                0
          ] },
-         "storageStats.indexStats": { "$objectToArray": "$storageStats.indexDetails" }
+         "storageStats.indexStats": { "$objectToArray": { "$ifNull": ["$storageStats.indexDetails", {}] } }
       } },
       { "$set": {
          "storageStats.wiredTiger.compressor": {
@@ -1569,6 +1586,29 @@ function $collStats(dbName = db.getName(), collName = '') {
                   "$ifNull": [{ "$arrayElemAt": ["$storageStats.wiredTiger.creationStrings.captures", 2] }, 32]
                } }, 1024
          ] },
+         // WT block-manager present (even with reuse omitted as 0) is a real measurement.
+         // Missing block-manager (Atlas M0/Flex) is unavailable unless official freeStorageSize > 0.
+         "storageStats.reuseKnown": {
+            "$or": [
+               { "$ne": [{ "$type": "$storageStats.wiredTiger.block-manager" }, "missing"] },
+               { "$gt": [{ "$ifNull": ["$storageStats.freeStorageSize", 0] }, 0] }
+            ]
+         },
+         "storageStats.reuseBytes": {
+            "$cond": [
+               { "$ne": [{ "$type": "$storageStats.wiredTiger.block-manager.file bytes available for reuse" }, "missing"] },
+               "$storageStats.wiredTiger.block-manager.file bytes available for reuse",
+               { "$cond": [
+                  { "$ne": [{ "$type": "$storageStats.wiredTiger.block-manager" }, "missing"] },
+                  0,
+                  { "$cond": [
+                     { "$gt": [{ "$ifNull": ["$storageStats.freeStorageSize", 0] }, 0] },
+                     "$storageStats.freeStorageSize",
+                     null
+                  ] }
+               ] }
+            ]
+         },
          "storageStats.indexes": {
             "$map": {
                "input": "$storageStats.indexStats",
@@ -1578,21 +1618,42 @@ function $collStats(dbName = db.getName(), collName = '') {
                      { "k": "name", "v": "$$indexes.k" },
                      { "k": "uri", "v": { "$ifNull": ["$$indexes.v.uri", "statistics:table:index-0-0000000000000000000"] } },
                      { "k": "file size in bytes", "v": { "$ifNull": ["$$indexes.v.block-manager.file size in bytes", 4096] } },
-                     { "k": "file bytes available for reuse", "v": { "$ifNull": ["$$indexes.v.block-manager.file bytes available for reuse", 0] } },
+                     { "k": "file bytes available for reuse", "v": {
+                        "$cond": [
+                           { "$ne": [{ "$type": "$$indexes.v.block-manager.file bytes available for reuse" }, "missing"] },
+                           "$$indexes.v.block-manager.file bytes available for reuse",
+                           { "$cond": [
+                              { "$ne": [{ "$type": "$$indexes.v.block-manager" }, "missing"] },
+                              0,
+                              null
+                           ] }
+                        ]
+                     } },
                      { "k": "file allocation unit size", "v": { "$ifNull": ["$$indexes.v.block-manager.file allocation unit size", 4096] } }
          ]] } } },
          "storageStats.indexDetails.file size in bytes": {
             "$reduce": {
                "input": "$storageStats.indexStats",
                "initialValue": 0,
-               "in": { "$sum": ["$$value", "$$this.v.block-manager.file size in bytes"] }
+               "in": { "$sum": ["$$value", { "$ifNull": ["$$this.v.block-manager.file size in bytes", 0] }] }
          } },
          "storageStats.indexDetails.file bytes available for reuse": {
             "$reduce": {
                "input": "$storageStats.indexStats",
                "initialValue": 0,
-               "in": { "$sum": ["$$value", "$$this.v.block-manager.file bytes available for reuse"] }
-         } }
+               "in": { "$sum": ["$$value", { "$ifNull": ["$$this.v.block-manager.file bytes available for reuse", 0] }] }
+         } },
+         "storageStats.indexDetails.reuseKnown": {
+            "$cond": [
+               { "$eq": [{ "$size": { "$ifNull": ["$storageStats.indexStats", []] } }, 0] },
+               { "$eq": [{ "$ifNull": ["$storageStats.nindexes", 0] }, 0] },
+               { "$reduce": {
+                  "input": "$storageStats.indexStats",
+                  "initialValue": true,
+                  "in": { "$and": ["$$value", { "$ne": [{ "$type": "$$this.v.block-manager" }, "missing"] }] }
+               } }
+            ]
+         }
       } },
       { "$group": {
          "_id": null,
@@ -1604,18 +1665,20 @@ function $collStats(dbName = db.getName(), collName = '') {
          "avgObjSize": { "$avg": "$storageStats.avgObjSize" },
          "orphans": { "$sum": "$storageStats.numOrphanDocs" }, // Available starting in MongoDB 6.0
          "storageSize": { "$sum": "$storageStats.storageSize" },
-         "freeStorageSize": { "$sum": "$storageStats.wiredTiger.block-manager.file bytes available for reuse" },
+         "freeStorageSize": { "$sum": { "$cond": ["$storageStats.reuseKnown", { "$ifNull": ["$storageStats.reuseBytes", 0] }, 0] } },
+         "freeStorageKnown": { "$min": { "$cond": ["$storageStats.reuseKnown", 1, 0] } },
          "compressor": { "$push": "$storageStats.wiredTiger.compressor" },
          "internalPageSize": { "$push": "$storageStats.wiredTiger.internalPageSize" },
          "dataPageSize": { "$push": "$storageStats.wiredTiger.dataPageSize" },
          "uri": { "$push": "$storageStats.wiredTiger.uri" },
          "file allocation unit size": { "$push": { "$ifNull": ["$storageStats.wiredTiger.block-manager.file allocation unit size", "$storageStats.wiredTiger.internalPageSize"] } },
-         "file bytes available for reuse": { "$push": { "$ifNull": ["$storageStats.wiredTiger.block-manager.file bytes available for reuse", "$storageStats.freeStorageSize"] } },
+         "file bytes available for reuse": { "$push": "$storageStats.reuseBytes" },
          "file size in bytes": { "$push": { "$ifNull": ["$storageStats.wiredTiger.block-manager.file size in bytes", { "$sum": "$storageStats.storageSize" }] } },
          "nindexes": { "$sum": "$storageStats.nindexes" },
          "indexes": { "$push": "$storageStats.indexes" },
          "indexes size in bytes": { "$sum": "$storageStats.indexDetails.file size in bytes" },
-         "indexes bytes available for reuse": { "$sum": "$storageStats.indexDetails.file bytes available for reuse" }
+         "indexes bytes available for reuse": { "$sum": { "$cond": ["$storageStats.indexDetails.reuseKnown", { "$ifNull": ["$storageStats.indexDetails.file bytes available for reuse", 0] }, 0] } },
+         "indexReuseKnown": { "$min": { "$cond": ["$storageStats.indexDetails.reuseKnown", 1, 0] } }
       } },
       { "$set": {
          "name": { 
@@ -1636,7 +1699,12 @@ function $collStats(dbName = db.getName(), collName = '') {
             "indexes": "$indexes"
          },
          "totalIndexSize": "$indexes size in bytes",
-         "totalIndexBytesReusable": "$indexes bytes available for reuse"
+         "totalIndexBytesReusable": {
+            "$cond": [{ "$eq": ["$indexReuseKnown", 1] }, "$indexes bytes available for reuse", null]
+         },
+         "freeStorageSize": {
+            "$cond": [{ "$eq": ["$freeStorageKnown", 1] }, "$freeStorageSize", null]
+         }
       } },
       { "$set": {
          "name": { "$arrayElemAt": ["$name.captures", 0] },
@@ -1702,7 +1770,21 @@ function $collStats(dbName = db.getName(), collName = '') {
                            [{
                               "name": "$$this.name",
                               "storageSize": { "$sum": [{ "$arrayElemAt": ["$$value.file size in bytes", -1] }, "$$this.file size in bytes"] },
-                              "freeStorageSize": { "$sum": [{ "$arrayElemAt": ["$$value.file bytes available for reuse", -1] }, "$$this.file bytes available for reuse"] }
+                              "freeStorageSize": {
+                                 "$let": {
+                                    "vars": {
+                                       "prev": { "$ifNull": [{ "$arrayElemAt": ["$$value.freeStorageSize", -1] }, { "$arrayElemAt": ["$$value.file bytes available for reuse", -1] }] },
+                                       "cur": "$$this.file bytes available for reuse"
+                                    },
+                                    "in": {
+                                       "$cond": [
+                                          { "$or": [{ "$eq": ["$$prev", null] }, { "$eq": ["$$cur", null] }] },
+                                          null,
+                                          { "$sum": ["$$prev", "$$cur"] }
+                                       ]
+                                    }
+                                 }
+                              }
                      }]] },
                      "else": {
                         "$concatArrays": [
@@ -1724,7 +1806,9 @@ function $collStats(dbName = db.getName(), collName = '') {
          "indexes bytes available for reuse",
          "indexes size in bytes",
          "uri",
-         "wiredTiger"
+         "wiredTiger",
+         "freeStorageKnown",
+         "indexReuseKnown"
       ] }
    ];
    let results;
@@ -1742,14 +1826,14 @@ function $collStats(dbName = db.getName(), collName = '') {
             "avgObjSize": 0,
             "orphans": 0,
             "storageSize": 0,
-            "freeStorageSize": 0,
+            "freeStorageSize": null,
             "compressor": "",
             "internalPageSize": 0,
             "dataPageSize": 0,
             "nindexes": 0,
             "indexes": [],
             "totalIndexSize": 0,
-            "totalIndexBytesReusable": 0
+            "totalIndexBytesReusable": null
          };
       }
    }
