@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.3.1"
+    *  Version: "0.3.2"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,6 +11,8 @@
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
     *  - Prefers index-ordered curation (avoids blocking sorts); optional user hint supported
+    *  - User collation must apply to curation/explain/count (match+sort paths); not to
+    *    deleteMany (_id equality only)
     *
     *  TODOs:
     *  - re-add naïve timers for mongos/sharding support
@@ -30,8 +32,8 @@
     *  collName: <string>    // (required) collection name
     *  filter: <document>    // (optional) query filter
     *  hint: <document>      // (optional) query hint
-    *  collation: <document> // (optional) query collation
-    *  safeguard: <bool>     // (optional) simulates deletes only (via aborted transactions), set false to remove safeguard
+    *  collation: <document> // (optional) for curation/explain/count only (not deleteMany/_id)
+    *  safeguard: <bool>     // (optional) simulates deletes only, set false to remove safeguard
     */
 
    // Example: mongosh --host "replset/localhost" --eval 'var dbName = "database", collName = "collection", filter = { "qty": { "$lte": 100 } }, safeguard = true;' niceDeleteMany.js
@@ -40,8 +42,8 @@
     *  Start user defined options defaults
     */
 
-   if (typeof dbName !== 'string' || !dbName) throw new Error('db namespace must be defined');
-   if (typeof collName !== 'string' || !collName) throw new Error('collection namespace must be defined');
+   if (typeof dbName !== 'string' || !dbName) throw new Error('db name must be defined');
+   if (typeof collName !== 'string' || !collName) throw new Error('collection name must be defined');
    typeof filter !== 'object' && (filter = {});
    typeof hint !== 'object' && (hint = {});
    typeof collation !== 'object' && (collation = {});
@@ -51,7 +53,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.3.1" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.3.2" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -459,7 +461,8 @@
             "comment": `Simulating deleteMany(${JSON.stringify(filter)}) workload via niceDeleteMany.js`
          };
          const deleteManyFilter = { "_id": { "$in": IDs } };
-         const deleteManyOpts = { "collation": collation };
+         // Collation intentionally omitted: deletes are _id equality only (binary compare).
+         const deleteManyOpts = {};
          let deletedCount = 0;
          const deleteMany = async() => {
             return await namespace.deleteMany(deleteManyFilter, deleteManyOpts).deletedCount;
@@ -646,17 +649,18 @@
          get checkpointIntervalMS() { // checkpoint=(wait=60
             return 1000 * (this.wterc(/checkpoint=\(.*wait=(\d+).*\)/) ?? 60);
          },
+         // Atlas M0/Flex omit serverStatus.wiredTiger; missing metrics become NaN and admission treats them as unknown (stay OPEN).
          get updatesDirtyBytes() {
-            return this.serverStatus.wiredTiger.cache['bytes allocated for updates'];
+            return this.serverStatus.wiredTiger?.cache?.['bytes allocated for updates'];
          },
          get dirtyBytes() {
-            return +this.serverStatus.wiredTiger.cache['tracked dirty bytes in the cache'];
+            return +this.serverStatus.wiredTiger?.cache?.['tracked dirty bytes in the cache'];
          },
          get cacheSizeBytes() {
-            return +this.serverStatus.wiredTiger.cache['maximum bytes configured'];
+            return +this.serverStatus.wiredTiger?.cache?.['maximum bytes configured'];
          },
          get cachedBytes() {
-            return this.serverStatus.wiredTiger.cache['bytes currently in the cache'];
+            return this.serverStatus.wiredTiger?.cache?.['bytes currently in the cache'];
          },
          get cacheUtil() {
             return Number.parseFloat(((this.cachedBytes / this.cacheSizeBytes) * 100).toFixed(2));
@@ -695,8 +699,8 @@
             return (this.cacheEvictions || this.dirtyCacheEvictions || this.dirtyUpdatesCacheEvictions);
          },
          get cacheHitRatio() {
-            const hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
-            const missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
+            const hitBytes = this.serverStatus.wiredTiger?.cache?.['pages requested from the cache'];
+            const missBytes = this.serverStatus.wiredTiger?.cache?.['pages read into cache'];
             return Number.parseFloat((100 * (hitBytes - missBytes) / hitBytes).toFixed(2));
          },
          get cacheHitStatus() {
@@ -705,8 +709,8 @@
                  : 'medium';
          },
          get cacheMissRatio() {
-            const hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
-            const missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
+            const hitBytes = this.serverStatus.wiredTiger?.cache?.['pages requested from the cache'];
+            const missBytes = this.serverStatus.wiredTiger?.cache?.['pages read into cache'];
             return Number.parseFloat((100 * (1 - (hitBytes - missBytes) / hitBytes)).toFixed(2));
          },
          get cacheMissStatus() {
@@ -751,7 +755,7 @@
                  : 'medium';
          },
          get backupCursorOpen() {
-            return this.serverStatus.storageEngine.backupCursorOpen;
+            return this.serverStatus.storageEngine?.backupCursorOpen;
          },
          // WT tickets available
          // v6.0 (and older)
@@ -776,19 +780,19 @@
          //    }
          // v8.0 see db.serverStats().queues.execution
          get wtReadTicketsUtil() {
-            const { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
+            const { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read ?? {};
             return Number.parseFloat(((out / totalTickets) * 100).toFixed(2));
          },
          get wtReadTicketsAvail() {
-            const { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
+            const { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read ?? {};
             return Number.parseFloat(((available / totalTickets) * 100).toFixed(2));
          },
          get wtWriteTicketsUtil() {
-            const { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
+            const { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write ?? {};
             return Number.parseFloat(((out / totalTickets) * 100).toFixed(2));
          },
          get wtWriteTicketsAvail() {
-            const { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
+            const { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write ?? {};
             return Number.parseFloat(((available / totalTickets) * 100).toFixed(2));
          },
          get wtReadTicketsStatus() {
@@ -802,23 +806,23 @@
                  : 'medium';
          },
          get activeShardMigrations() {
-            const { currentMigrationsDonating, currentMigrationsReceiving } = this.serverStatus.tenantMigrations;
+            const { currentMigrationsDonating, currentMigrationsReceiving } = this.serverStatus.tenantMigrations ?? {};
             return (currentMigrationsDonating > 0 || currentMigrationsReceiving > 0);
          },
          get activeFlowControl() {
-            return (this.serverStatus.flowControl.isLagged === true && this.serverStatus.flowControl.enabled === true);
+            return (this.serverStatus.flowControl?.isLagged === true && this.serverStatus.flowControl?.enabled === true);
          },
          get activeIndexBuilds() {
             return (this.serverStatus?.indexBuilds?.total ?? 0) > (this.serverStatus?.indexBuilds?.phases?.commit ?? 0) || (this.serverStatus?.activeIndexBuilds?.total ?? 0) > 0;
          },
          get activeCheckpoint() {
-            return !!(this.serverStatus.wiredTiger.transaction?.['transaction checkpoint currently running'] || this.serverStatus.wiredTiger?.checkpoint?.['progress state']);
+            return !!(this.serverStatus.wiredTiger?.transaction?.['transaction checkpoint currently running'] || this.serverStatus.wiredTiger?.checkpoint?.['progress state']);
          },
          get slowRecentCheckpoint() {
-            return (this.serverStatus.wiredTiger.transaction['transaction checkpoint most recent time (msecs)'] > 60000);
+            return (this.serverStatus.wiredTiger?.transaction?.['transaction checkpoint most recent time (msecs)'] > 60000);
          },
          get checkpointRuntimeRatio() {
-            return Number.parseFloat((((this.serverStatus.wiredTiger.transaction?.['transaction checkpoint most recent time (msecs)'] ?? this.serverStatus.wiredTiger.checkpoint?.['most recent time (msecs)']) / this.checkpointIntervalMS) * 100).toFixed(2));
+            return Number.parseFloat((((this.serverStatus.wiredTiger?.transaction?.['transaction checkpoint most recent time (msecs)'] ?? this.serverStatus.wiredTiger?.checkpoint?.['most recent time (msecs)']) / this.checkpointIntervalMS) * 100).toFixed(2));
          },
          get checkpointStatus() {
             return (this.checkpointRuntimeRatio < 50) ? 'low'
