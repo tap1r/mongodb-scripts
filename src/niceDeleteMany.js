@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.0"
+    *  Version: "0.4.1"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,15 +11,15 @@
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
     *  - Prefers index-ordered curation (avoids blocking sorts); optional user hint supported
-    *  - mongos: naïve time-based admission (no WT cache vitals) + half maxInFlight
+    *  - Naïve admission (half maxInFlight + jittered delay) when WT cache vitals are
+    *    unavailable — mongos, or Atlas M0/Flex (and similar) tiers that omit wiredTiger
+    *  - Progress HUD shows congestion, admission, and pool utilization only — not % complete
+    *    or ETA (no cheap total without re-executing the filter)
     *
     *  TODOs:
     *  - add execution profiler/timers
-    *  - add progress counters with estimated time remaining
-    *  - add congestion meter for admission control
     *  - better sharding (per-shard WT vitals via listShards / discovery)
     *  - revise lowPriorityAdmissionBypassThreshold for backward compatibility
-    *  - improve support for Atlas Flex tiers
     *  - refine curation order (Policy B: compound equality→trailing sort probes)
     */
 
@@ -51,7 +51,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.0" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.1" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -85,17 +85,28 @@
    // Hybrid repl-lag bands (seconds): soft → THROTTLE; hard → CLOSED. No EWMA (sticky rsStatus).
    const REPL_LAG_SOFT_SEC = 15;
    const REPL_LAG_HARD_SEC = 30;
-   // Ops warn while parked in CLOSED (repeat every interval while still closed).
-   const CLOSED_WARN_MS = 60 * 1000;
    let admissionState = 'OPEN'; // OPEN | THROTTLE | CLOSED | COOLDOWN | NAIVE
    let admissionCooldownUntil = 0;
    let maxInFlightCap = 1;
    let maxInFlight = 1;
    let aimdLastIncreaseAt = 0;
    let closedSince = 0;
-   let lastClosedWarnAt = 0;
-   // 'wt' = WiredTiger FSM on mongod; 'naive' = time-based pace on mongos (no cache vitals).
+   // 'wt' = WiredTiger FSM on mongod; 'naive' = time-based pace when WT vitals unavailable.
    let admissionMode = 'wt';
+   let naiveReason = null; // 'mongos' | 'no-wt' | null
+   // Live HUD (clear+reprint); no % complete / ETA.
+   const HUD_BAR_WIDTH = 28;
+   const HUD_POOL_DISPLAY_MAX = 40;
+   const HUD_MIN_REDRAW_MS = 100;
+   const HUD_MARK = {
+      "bg": '\u2591',
+      "fill": '\u2593',
+      "run": '\u25A0',
+      "buf": '\u25A1',
+      "free": '\u2591',
+      "cap": '\u00B7'
+   };
+   let lastHudAt = 0;
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
    const _hostInfoCache = { "at": 0, "value": null };
    const _rsStatusCache = { "at": 0, "value": null };
@@ -208,12 +219,35 @@
       return db.hello().msg === 'isdbgrid';
    }
 
+   function enableNaiveAdmission(reason, detail) {
+      admissionMode = 'naive';
+      naiveReason = reason;
+      const line = `\x1b[31m[WARN]\x1b[0m \x1b[33m${detail}\x1b[0m`;
+      banner += `\n${line}`;
+      console.log(line);
+   }
+
+   function hasWiredTigerVitals(sample = vitals) {
+      /*
+       *  Atlas M0/Flex (and some restricted roles) omit serverStatus.wiredTiger.
+       *  Without cache size / dirty bytes the WT admission FSM cannot pace safely.
+       */
+      try {
+         const cacheSize = sample?.cacheSizeBytes;
+         const dirty = sample?.dirtyBytes ?? sample?.dirtyUtil;
+         return cacheSize != null && !Number.isNaN(+cacheSize) && +cacheSize > 0
+            && dirty != null && !Number.isNaN(+dirty);
+      } catch(_) {
+         return false;
+      }
+   }
+
    const onMongos = isMongos();
-   admissionMode = onMongos ? 'naive' : 'wt';
    if (onMongos) {
-      const mongosWarn = '\x1b[31m[WARN]\x1b[0m \x1b[33mmongos detected — using naïve time-based admission (no WT cache vitals); maxInFlight capped at half pool\x1b[0m';
-      banner += `\n${mongosWarn}`;
-      console.log(mongosWarn);
+      enableNaiveAdmission(
+         'mongos',
+         'mongos detected — using naïve time-based admission (no WT cache vitals); maxInFlight capped at half pool'
+      );
    }
 
    function sortKeyFromFilter(filter = {}) {
@@ -321,12 +355,30 @@
       else await mongo.setReadPref(mode, tagSet);
    }
 
+   function connectionHostsLabel() {
+      /*
+       *  Host label from the mongosh connection URI (credentials stripped).
+       *  mongos hello often omits me/host — fall back here for landing INFO.
+       */
+      try {
+         const mongo = db.getMongo();
+         const uri = (typeof mongo.getURI === 'function' ? mongo.getURI() : null) ?? mongo._uri;
+         if (!uri || typeof uri !== 'string') return null;
+         const noAuth = uri.replace(/\/\/[^@/]+@/, '//');
+         const m = noAuth.match(/^mongodb(?:\+srv)?:\/\/([^/?]+)/i);
+         return m?.[1] || null;
+      } catch(_) {
+         return null;
+      }
+   }
+
    function curationLandingNode(readPreference = { "mode": "primary" }) {
       /*
        *  Resolve curation target via runCommand + readPreference (see discovery.js).
        *  mongosh: runCommand(cmd, { readPreference: '<mode>' }) — mode string, not a
        *  document. Tag sets are applied via setConnectionReadPref() beforehand.
        *  Do not use adminCommand — that always targets the primary in mongosh.
+       *  mongos hello typically has no me/host; use connection URI hosts as fallback.
        */
       try {
          const mode = readPreference?.mode ?? 'primary';
@@ -334,16 +386,24 @@
             { "hello": 1 },
             { "readPreference": mode }
          );
-         const host = hello.me ?? hello.primary ?? hello.host ?? 'unknown';
-         const tags = hello.tags ?? {};
          const role = (hello.msg === 'isdbgrid') ? 'MONGOS'
             : (hello.isWritablePrimary || hello.ismaster) ? 'PRIMARY'
             : hello.secondary ? 'SECONDARY'
             : hello.arbiterOnly ? 'ARBITER'
             : 'UNKNOWN';
+         const host = hello.me
+            ?? hello.host
+            ?? (role === 'MONGOS' ? null : hello.primary)
+            ?? connectionHostsLabel()
+            ?? 'unknown';
+         const tags = hello.tags ?? {};
          return { "host": host, "role": role, "tags": tags };
       } catch(e) {
-         return { "host": `unknown (${e?.message ?? e})`, "role": 'UNKNOWN', "tags": {} };
+         return {
+            "host": connectionHostsLabel() ?? `unknown (${e?.message ?? e})`,
+            "role": 'UNKNOWN',
+            "tags": {}
+         };
       }
    }
 
@@ -764,7 +824,7 @@
          get checkpointIntervalMS() { // checkpoint=(wait=60
             return 1000 * (this.wterc(/checkpoint=\(.*wait=(\d+).*\)/) ?? 60);
          },
-         // Atlas M0/Flex omit serverStatus.wiredTiger; missing metrics become NaN and admission treats them as unknown (stay OPEN).
+         // Atlas M0/Flex omit serverStatus.wiredTiger; main() probes and switches to naïve admission.
          get updatesDirtyBytes() {
             return this.serverStatus.wiredTiger?.cache?.['bytes allocated for updates'];
          },
@@ -1047,6 +1107,173 @@
       return Math.floor(delay * jitter);
    }
 
+   function fmtElapsed(ms) {
+      const s = Math.max(0, Math.floor(ms / 1000));
+      const hh = Math.floor(s / 3600);
+      const mm = Math.floor((s % 3600) / 60);
+      const ss = s % 60;
+      const p = n => String(n).padStart(2, '0');
+      return hh > 0 ? `${p(hh)}:${p(mm)}:${p(ss)}` : `${p(mm)}:${p(ss)}`;
+   }
+
+   function fmtNum(n) {
+      return Number(n || 0).toLocaleString('en-US');
+   }
+
+   function ansiFill(ch, status) {
+      // Match congestionMonitor EQ colours: low=green, medium=yellow, high=red.
+      const colour = status === 'high' ? '\x1b[91m'
+         : status === 'medium' ? '\x1b[93m'
+         : status === 'low' ? '\x1b[92m'
+         : '\x1b[37m';
+      return colour + ch + '\x1b[0m';
+   }
+
+   function renderMeterBar(fill01, width = HUD_BAR_WIDTH, status = 'low') {
+      const t = Math.min(1, Math.max(0, +fill01 || 0));
+      const filled = Math.round(t * width);
+      let out = '[';
+      for (let i = 0; i < width; i++) {
+         out += i < filled ? ansiFill(HUD_MARK.fill, status) : HUD_MARK.bg;
+      }
+      return out + ']';
+   }
+
+   function admitStateStatus(state) {
+      if (state === 'CLOSED') return 'high';
+      if (state === 'OPEN') return 'low';
+      return 'medium'; // THROTTLE | COOLDOWN | NAIVE
+   }
+
+   function renderAdmitBand(state, width = HUD_BAR_WIDTH) {
+      const status = admitStateStatus(state);
+      const label = ` ${state} `;
+      const pad = Math.max(0, width - label.length);
+      const left = Math.floor(pad / 2);
+      const right = pad - left;
+      const cell = ansiFill(HUD_MARK.fill, status);
+      return '[' + cell.repeat(left) + ansiFill(label, status) + cell.repeat(right) + ']';
+   }
+
+   function renderPoolBar(poolSize, executing, buffered, inFlightLimit, admitStatus) {
+      const run = Math.max(0, Math.min(poolSize, executing|0));
+      const buf = Math.max(0, Math.min(poolSize - run, buffered|0));
+      const free = Math.max(0, Math.min(poolSize - run - buf, Math.max(0, inFlightLimit - run - buf)));
+      const cap = Math.max(0, poolSize - run - buf - free);
+      const slots = [];
+      for (let i = 0; i < run; i++) slots.push(ansiFill(HUD_MARK.run, admitStatus));
+      for (let i = 0; i < buf; i++) slots.push('\x1b[36m' + HUD_MARK.buf + '\x1b[0m');
+      for (let i = 0; i < free; i++) slots.push(HUD_MARK.free);
+      for (let i = 0; i < cap; i++) slots.push('\x1b[90m' + HUD_MARK.cap + '\x1b[0m');
+
+      let display = slots;
+      if (poolSize > HUD_POOL_DISPLAY_MAX) {
+         const scale = HUD_POOL_DISPLAY_MAX / poolSize;
+         const counts = [
+            Math.round(run * scale),
+            Math.round(buf * scale),
+            Math.round(free * scale),
+            Math.round(cap * scale)
+         ];
+         // Fix rounding so display width is exact.
+         let sum = counts.reduce((a, b) => a + b, 0);
+         while (sum > HUD_POOL_DISPLAY_MAX) {
+            const idx = counts.indexOf(Math.max(...counts));
+            counts[idx]--;
+            sum--;
+         }
+         while (sum < HUD_POOL_DISPLAY_MAX) {
+            counts[3]++; // grow cap visually
+            sum++;
+         }
+         display = [];
+         for (let i = 0; i < counts[0]; i++) display.push(ansiFill(HUD_MARK.run, admitStatus));
+         for (let i = 0; i < counts[1]; i++) display.push('\x1b[36m' + HUD_MARK.buf + '\x1b[0m');
+         for (let i = 0; i < counts[2]; i++) display.push(HUD_MARK.free);
+         for (let i = 0; i < counts[3]; i++) display.push('\x1b[90m' + HUD_MARK.cap + '\x1b[0m');
+      }
+      return {
+         "bar": '[' + display.join('') + ']',
+         "run": run,
+         "buf": buf,
+         "free": free,
+         "cap": cap
+      };
+   }
+
+   function renderHud({
+      startedAt,
+      batchesDone = 0,
+      docsDeleted = 0,
+      admission = {},
+      poolSize = 1,
+      executing = 0,
+      buffered = 0
+   } = {}) {
+      const elapsed = fmtElapsed(Date.now() - (startedAt || Date.now()));
+      const state = admission.state ?? admissionState;
+      const delayMs = admission.delayMs ?? 0;
+      const mif = admission.maxInFlight ?? maxInFlight;
+      const mifCap = maxInFlightCap;
+      const inFlightLimit = Math.max(1, Math.min(poolSize, mif));
+      const admitStatus = admitStateStatus(state);
+
+      // Congestion: max(dirty, updates) soft-band fill (reuse fillProgress).
+      let congLine;
+      if (admissionMode === 'naive') {
+         const why = naiveReason === 'mongos' ? 'naïve mongos'
+            : naiveReason === 'no-wt' ? 'no WT (M0/Flex?)'
+            : 'naïve';
+         congLine = `cong     ${renderMeterBar(0, HUD_BAR_WIDTH, 'low')}  n/a (${why})`;
+      } else {
+         const dirtyTarget = vitals.evictionDirtyTarget ?? 5;
+         const dirtyTrigger = vitals.evictionDirtyTrigger ?? 20;
+         const updatesTarget = vitals.evictionUpdatesTarget ?? 2.5;
+         const updatesTrigger = vitals.evictionUpdatesTrigger ?? 10;
+         const dirtyUtil = ewma.dirtyUtil ?? vitals.dirtyUtil;
+         const dirtyUpdatesUtil = ewma.dirtyUpdatesUtil ?? vitals.dirtyUpdatesUtil;
+         const dirtyFill = fillProgress(dirtyUtil, dirtyTarget, dirtyTrigger);
+         const updatesFill = fillProgress(dirtyUpdatesUtil, updatesTarget, updatesTrigger);
+         const peakIsUpdates = updatesFill > dirtyFill;
+         const fill = Math.max(dirtyFill, updatesFill);
+         const peakUtil = peakIsUpdates ? dirtyUpdatesUtil : dirtyUtil;
+         const peakLabel = peakIsUpdates ? 'updates' : 'dirty';
+         const tgt = peakIsUpdates ? updatesTarget : dirtyTarget;
+         const trig = peakIsUpdates ? updatesTrigger : dirtyTrigger;
+         const status = utilAbove(peakUtil, trig) ? 'high'
+            : utilInBand(peakUtil, tgt, trig) ? 'medium'
+            : (peakUtil == null || Number.isNaN(+peakUtil)) ? 'low'
+            : 'low';
+         const utilTxt = (peakUtil == null || Number.isNaN(+peakUtil))
+            ? 'n/a'
+            : `${Number(peakUtil).toFixed(1)}%`;
+         const flags = [];
+         try { if (vitals.checkpointStatus === 'high' || vitals.activeCheckpoint) flags.push('ckpt'); } catch(_) { /* ignore */ }
+         if (admission.flowControl) flags.push('flow');
+         if (admission.indexBuilds) flags.push('idx');
+         if (admission.backupCursor) flags.push('backup');
+         const lag = admission.replLag ?? vitals.activeReplLag ?? 0;
+         if (lag > 0) flags.push(`lag ${Math.round(lag)}s`);
+         const flagTxt = flags.length ? `  ${flags.join(' ')}` : '';
+         if (peakUtil == null || Number.isNaN(+peakUtil)) {
+            congLine = `cong     ${renderMeterBar(0, HUD_BAR_WIDTH, 'low')}  n/a (no WT)`;
+         } else {
+            congLine = `cong     ${renderMeterBar(fill, HUD_BAR_WIDTH, status)}  ${peakLabel} ${utilTxt}  (tgt ${tgt} → trig ${trig})${flagTxt}`;
+         }
+      }
+
+      const closedSec = (state === 'CLOSED' && closedSince > 0)
+         ? `  closed ${Math.round((Date.now() - closedSince) / 1000)}s`
+         : '';
+      const admitLine = `admit    ${renderAdmitBand(state, HUD_BAR_WIDTH)}  delay ${delayMs}ms  maxInFlight ${mif}/${mifCap}${closedSec}`;
+
+      const pool = renderPoolBar(poolSize, executing, buffered, inFlightLimit, admitStatus);
+      const poolLine = `pool     ${pool.bar}  run ${pool.run}  buf ${pool.buf}  free ${pool.free}  cap ${pool.cap}  pool ${poolSize}`;
+
+      const statsLine = `elapsed  ${elapsed}   batches  ${fmtNum(batchesDone)}   deleted  ${fmtNum(docsDeleted)}`;
+      return `${statsLine}\n${congLine}\n${admitLine}\n${poolLine}`;
+   }
+
    async function vitalsSampler(intervalMs = VITALS_SAMPLE_INTERVAL_MS) {
       /*
        *  Vitals are sampled on a background loop (decoupled from task scheduling);
@@ -1078,7 +1305,7 @@
        *    THROTTLE — admit with progressive delay from dirty/updates fill (target→trigger)
        *    CLOSED   — wait; trip at *Trigger, release only at/under *Target
        *    COOLDOWN — after CLOSED, brief paced resume to avoid thundering herd
-       *    NAIVE    — mongos: jittered time-based pace (no WT cache vitals)
+       *    NAIVE    — no WT vitals (mongos / M0/Flex): jittered time-based pace
        *  Inputs: EWMA-smoothed utils; raw checkpointStatus + activeReplLag (sticky).
        *  Repl lag (hybrid): >=15s soft → THROTTLE; >=30s hard → CLOSED; leave CLOSED when lag <30s.
        *  Booleans: flowControl + backupCursor → CLOSED; activeIndexBuilds → THROTTLE.
@@ -1176,10 +1403,8 @@
       if (admissionState === 'CLOSED' && prevState !== 'CLOSED') {
          maxInFlight = Math.max(1, Math.floor(maxInFlight / 2));
          closedSince = now;
-         lastClosedWarnAt = 0;
       } else if (admissionState !== 'CLOSED') {
          closedSince = 0;
-         lastClosedWarnAt = 0;
       }
       if (admissionState === 'OPEN' && !blockAimdIncrease) {
          if (prevState !== 'OPEN') {
@@ -1198,21 +1423,6 @@
       };
 
       if (admissionState === 'CLOSED') {
-         const msInClosed = closedSince > 0 ? (now - closedSince) : 0;
-         if (msInClosed >= CLOSED_WARN_MS && (now - lastClosedWarnAt) >= CLOSED_WARN_MS) {
-            lastClosedWarnAt = now;
-            console.log(
-               '\x1b[31m[WARN]\x1b[0m \x1b[33madmission CLOSED for\x1b[0m', Math.round(msInClosed / 1000), 's;',
-               'maxInFlight:', maxInFlight,
-               'cacheUtil:', cacheUtil,
-               'dirtyUtil:', dirtyUtil,
-               'dirtyUpdatesUtil:', dirtyUpdatesUtil,
-               'replLag:', activeReplLag,
-               'flowControl:', activeFlowControl,
-               'indexBuilds:', activeIndexBuilds,
-               'backupCursor:', backupCursorOpen
-            );
-         }
          return { "state": admissionState, "proceed": false, "delayMs": 0, "maxInFlight": maxInFlight, ...admissionSignals };
       }
 
@@ -1245,7 +1455,7 @@
       yield* rest;
    }
 
-   async function* asyncPool(tasks = [], method = () => {}, { poolSize = 1, onSchedule, onWait, onLaunch } = {}) {
+   async function* asyncPool(tasks = [], method = () => {}, { poolSize = 1, onHud } = {}) {
       /*
        *  Prefetch up to 4 buckets (capped by poolSize) so getMore overlaps
        *  in-flight deletes. Do not wait for a full prefetch before the first
@@ -1253,6 +1463,7 @@
        *  parked or waiting on a slot. Admission parks/paces before a slot is
        *  taken; executing only holds deleteMany/txn work. Effective concurrency
        *  is min(poolSize, admission.maxInFlight) via AIMD.
+       *  onHud({ admission, poolSize, executing, buffered }) drives the live HUD.
        */
       // mongos naïve mode: half concurrency (no WT AIMD signal to cut further under load).
       maxInFlightCap = (admissionMode === 'naive')
@@ -1267,6 +1478,16 @@
       const source = (typeof tasks[Symbol.asyncIterator] === 'function')
          ? tasks[Symbol.asyncIterator]()
          : (async function*() { for (const task of tasks) yield task; })();
+
+      function emitHud(admission) {
+         if (typeof onHud !== 'function') return;
+         onHud({
+            "admission": admission,
+            "poolSize": poolSize,
+            "executing": executing.size,
+            "buffered": buf.length
+         });
+      }
 
       async function fill(target = prefetch) {
          while (buf.length < target && !srcDone) {
@@ -1293,7 +1514,6 @@
           *  and remove it from the executing pool. Both fulfillment and
           *  rejection settle to a tuple so consume() can always delete.
           */
-         if (typeof onSchedule === 'function') onSchedule(task);
          const taskPromise = (async() => method(task))().then(
             value => [taskPromise, { "ok": true, "value": value }],
             error => [taskPromise, { "ok": false, "error": error }]
@@ -1306,7 +1526,7 @@
       while (buf.length || executing.size || !srcDone) {
          let admission = admissionControl(); // { state, proceed, delayMs, maxInFlight }
          while (!admission.proceed) {
-            if (typeof onWait === 'function') onWait(buf[0]?.bucketId, admission);
+            emitHud(admission);
             await fill();
             if (executing.size) {
                yield await consume();
@@ -1335,19 +1555,33 @@
          if (executing.size >= inFlightLimit) continue;
 
          const task = buf.shift();
-         if (typeof onLaunch === 'function') onLaunch(task, admission);
+         emitHud(admission);
          schedule(task);
       }
+      emitHud(admissionControl());
    }
 
    async function main() {
-      // One-shot vitals for concurrency sizing; WT sampler runs only in 'wt' mode.
+      // One-shot vitals for concurrency sizing + WT probe; sampler runs only in 'wt' mode.
       try {
          vitals = await congestionMonitor();
-         if (admissionMode === 'wt') updateEwma(vitals);
+         if (admissionMode === 'wt' && !hasWiredTigerVitals(vitals)) {
+            enableNaiveAdmission(
+               'no-wt',
+               'WiredTiger cache vitals unavailable — using naïve time-based admission (Atlas M0/Flex or restricted serverStatus); maxInFlight capped at half pool'
+            );
+         } else if (admissionMode === 'wt') {
+            updateEwma(vitals);
+         }
       } catch(e) {
          console.log('\x1b[31m[WARN]\x1b[0m \x1b[33minitial congestionMonitor failed\x1b[0m:', e?.message ?? e);
          vitals = {};
+         if (admissionMode === 'wt') {
+            enableNaiveAdmission(
+               'no-wt',
+               'congestionMonitor failed — using naïve time-based admission; maxInFlight capped at half pool'
+            );
+         }
       }
 
       const numCores = vitals?.numCores;
@@ -1403,8 +1637,31 @@
       const useVitalsSampler = admissionMode === 'wt';
       vitalsSampling = useVitalsSampler;
       const sampler = useVitalsSampler ? vitalsSampler() : Promise.resolve();
+      const startedAt = Date.now();
+      let batchesDone = 0;
+      let docsDeleted = 0;
+      let hudSnap = {
+         "admission": { "state": admissionState, "delayMs": 0, "maxInFlight": maxInFlight },
+         "poolSize": concurrency,
+         "executing": 0,
+         "buffered": 0
+      };
+
+      function redrawHud(force = false) {
+         const now = Date.now();
+         if (!force && (now - lastHudAt) < HUD_MIN_REDRAW_MS) return;
+         lastHudAt = now;
+         console.clear();
+         console.log(banner);
+         console.log(renderHud({
+            "startedAt": startedAt,
+            "batchesDone": batchesDone,
+            "docsDeleted": docsDeleted,
+            ...hudSnap
+         }));
+      }
+
       try {
-         // eventually replace this with progress meters
          console.clear();
          console.log(banner);
          const deletionList = getIds(filter, bucketSizeLimit, readSessionOpts);
@@ -1412,36 +1669,29 @@
          if (initialEmptyBatch === true) {
             console.log('\tNo matching documents found to match the filter, double-check the namespace and filter');
          } else {
-            // initial batch
-            // let msg = `\nForking ${initialBatch.bucketsTotal} batches of ${initialBatch.bucketSizeLimit} documents with concurrency execution of ${concurrency} to delete ${initialBatch.IDsTotal} documents`;
             const effectiveCap = (admissionMode === 'naive')
                ? Math.max(1, Math.floor(concurrency / 2))
                : concurrency;
-            let msg = `\nUp to ${effectiveCap} concurrent deletes of ${initialBatch.bucketSizeLimit} documents` +
-               (admissionMode === 'naive' ? ' (naïve mongos admission)' : '');
-            banner += msg;
-            console.log(msg);
-            for await (const [bucketId, deletedCount] of asyncPool(
+            banner += `\nUp to ${effectiveCap} concurrent deletes of ${initialBatch.bucketSizeLimit} documents` +
+               (admissionMode === 'naive' ? ' (naïve mongos admission)' : '') +
+               `\n\x1b[34m[INFO]\x1b[0m HUD: congestion / admission / pool — no % complete or ETA\n`;
+            redrawHud(true);
+            for await (const [, deletedCount] of asyncPool(
                prepend(initialBatch, deletionList),
                task => deleteManyTask(task, writeSessionOpts),
                {
                   "poolSize": concurrency,
-                  onSchedule(task) {
-                     // let msg = `\n\n\tScheduling batch ${task.bucketId} with ${task.bucketsRemaining} buckets queued remaining:\n`;
-                     const msg = `\n\n\tScheduling task batch# ${task.bucketId}:\n`;
-                     console.clear();
-                     console.log(banner + msg);
-                  },
-                  onWait(bucketId, admission) {
-                     console.log('\t\t...batch', bucketId ?? '-', 'is awaiting scheduling due to back pressure (state:', admission?.state ?? 'CLOSED', 'maxInFlight:', admission?.maxInFlight ?? '-', ')');
-                  },
-                  onLaunch(task, admission) {
-                     console.log('\t\t...batch', task.bucketId, 'executing (state:', admission.state, 'buffering:', admission.delayMs, 'ms, maxInFlight:', admission.maxInFlight, ')');
+                  onHud(snap) {
+                     hudSnap = snap;
+                     redrawHud(false);
                   }
                }
             )) {
-               console.log('\t\t...batch#', bucketId, 'deleted', deletedCount, 'documents');
+               batchesDone += 1;
+               docsDeleted += deletedCount ?? 0;
+               redrawHud(true);
             }
+            redrawHud(true);
          }
          console.log(`\nValidating deletion results ...please wait\n`);
          console.log('...you may CTRL+C here to exit gracefully if validation is not required\n');
@@ -1450,7 +1700,9 @@
          if (safeguard) {
             console.log('Simulation safeguard is enabled, no deletions were actually performed:\n');
          }
-         // console.log('\tInitial document count matching filter:', (initialEmptyBatch === true) ? 0 : initialBatch.IDsTotal);
+         console.log('\tBatches completed:', fmtNum(batchesDone));
+         console.log('\tDocuments deleted (reported):', fmtNum(docsDeleted));
+         console.log('\tElapsed:', fmtElapsed(Date.now() - startedAt));
          console.log('\tResidual document count matching filter:', finalCount);
          console.log('\nDone!');
       } finally {
