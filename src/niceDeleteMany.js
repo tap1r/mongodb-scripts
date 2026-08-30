@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.6"
+    *  Version: "0.4.7"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -12,16 +12,10 @@
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
     *  - Prefers index-ordered curation (avoids blocking sorts); optional user hint supported
-    *  - Naïve admission (half maxInFlight + jittered delay) when WT cache vitals are
-    *    unavailable — mongos, or Atlas M0/Flex (and similar) tiers that omit wiredTiger
-    *  - Progress HUD shows congestion, admission, and pool utilization only — not % complete
-    *    or ETA (no cheap total without re-executing the filter)
-    *  - interactive (TTY) HUD: coloured bars + console.clear; non-interactive: plain status
-    *    lines, ANSI stripped (mdblib-style), bars omitted — better for logs/CI
-    *  - TTY HUD tracks process.stdout columns / resize and reflows bar widths on resize
+    *  - Naïve admission when WT cache vitals are unavailable (mongos/Atlas M0/Flex)
+    *  - Progress HUD shows congestion, admission, and pool utilization only — ETA is not cheap
     *
     *  TODOs:
-    *  - add execution profiler/timers
     *  - better sharding (per-shard WT vitals via listShards / discovery)
     *  - revise lowPriorityAdmissionBypassThreshold for backward compatibility
     *  - refine curation order (Policy B: compound equality→trailing sort probes)
@@ -57,7 +51,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.6" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.7" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -745,6 +739,7 @@
       batchesDone = 0,
       docsDeleted = 0,
       batchesFailed = 0,
+      bucketSizeLimit = 100,
       elapsedMs = 0
    } = {}) {
       /*
@@ -752,12 +747,14 @@
        *  safeguard (simulated) vs real deletes; drift can come from failed batches
        *  or concurrent writers matching the same filter.
        */
+      const rate = estimatedDeleteRate({
+         batchesDone, batchesFailed, bucketSizeLimit, elapsedMs
+      });
       emit('\tBatches completed:', fmtNum(batchesDone));
-      if (batchesFailed > 0) {
-         emit('\tBatches with errors:', fmtNum(batchesFailed));
-      }
+      emit('\tBatches with errors:', fmtNum(batchesFailed));
       emit('\tDocuments deleted (reported by deleteMany):', fmtNum(docsDeleted));
       emit('\tElapsed:', fmtElapsed(elapsedMs));
+      emit('\tEst. delete rate ((ok batches)×batch size / elapsed):', fmtRate(rate));
       emit('\tResidual document count matching filter:', fmtNum(residual));
 
       if (safeguard) {
@@ -1320,24 +1317,56 @@
       };
    }
 
+   function fmtRate(docsPerSec) {
+      if (docsPerSec == null || !Number.isFinite(docsPerSec) || docsPerSec < 0) return 'n/a';
+      if (docsPerSec >= 100) return `${Math.round(docsPerSec)}/s`;
+      if (docsPerSec >= 10) return `${docsPerSec.toFixed(1)}/s`;
+      return `${docsPerSec.toFixed(2)}/s`;
+   }
+
+   function estimatedDeleteRate({
+      batchesDone = 0,
+      batchesFailed = 0,
+      bucketSizeLimit = 100,
+      elapsedMs = 0
+   } = {}) {
+      /*
+       *  (completed − failed) × bucketSizeLimit / elapsed.
+       *  Approximate throughput from successful batch slots (last batch may be smaller).
+       */
+      const okBatches = Math.max(0, (batchesDone|0) - (batchesFailed|0));
+      const elapsedSec = Math.max(0, elapsedMs) / 1000;
+      if (elapsedSec <= 0 || okBatches <= 0) return null;
+      return (okBatches * (bucketSizeLimit|0)) / elapsedSec;
+   }
+
    function renderHud({
       startedAt,
       batchesDone = 0,
+      batchesFailed = 0,
       docsDeleted = 0,
+      bucketSizeLimit = 100,
       admission = {},
       poolSize = 1,
       executing = 0,
       buffered = 0,
       bars = interactive
    } = {}) {
-      const elapsed = fmtElapsed(Date.now() - (startedAt || Date.now()));
+      const elapsedMs = Date.now() - (startedAt || Date.now());
+      const elapsed = fmtElapsed(elapsedMs);
       const state = admission.state ?? admissionState;
       const delayMs = admission.delayMs ?? 0;
       const mif = admission.maxInFlight ?? maxInFlight;
       const mifCap = maxInFlightCap;
       const inFlightLimit = Math.max(1, Math.min(poolSize, mif));
       const admitStatus = admitStateStatus(state);
-      const statsLine = `elapsed  ${elapsed}   batches  ${fmtNum(batchesDone)}   deleted  ${fmtNum(docsDeleted)}`;
+      const rate = estimatedDeleteRate({
+         batchesDone, batchesFailed, bucketSizeLimit, elapsedMs
+      });
+      const statsLine = `elapsed  ${elapsed}   batches  ${fmtNum(batchesDone)}` +
+         `   failed  ${fmtNum(batchesFailed)}` +
+         `   deleted  ${fmtNum(docsDeleted)}` +
+         `   rate  ${fmtRate(rate)}`;
 
       // Congestion: max(dirty, updates) soft-band fill (reuse fillProgress).
       let congMetric = 'n/a';
@@ -1827,7 +1856,9 @@
          const hud = renderHud({
             "startedAt": startedAt,
             "batchesDone": batchesDone,
+            "batchesFailed": batchesFailed,
             "docsDeleted": docsDeleted,
+            "bucketSizeLimit": bucketSizeLimit,
             "bars": interactive,
             ...hudSnap
          });
@@ -1883,6 +1914,7 @@
             "batchesDone": batchesDone,
             "docsDeleted": docsDeleted,
             "batchesFailed": batchesFailed,
+            "bucketSizeLimit": bucketSizeLimit,
             "elapsedMs": Date.now() - startedAt
          });
          emit('\nDone!');
