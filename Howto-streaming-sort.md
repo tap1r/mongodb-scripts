@@ -1,4 +1,4 @@
-# Howto: streaming sort - a non-blocking $group implementation
+# Howto: streaming sort
 
 How to keep an ordered aggregation **streaming** (non-blocking) when you need a stable sort key for windowed or bucketed work — as used by `src/niceDeleteMany.js` to emit fixed-size `_id` buckets for concurrent deletes.
 
