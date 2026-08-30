@@ -4,6 +4,7 @@
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+ *  Guide: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/mongosh-scripting-guide.md
  */
 
 if (typeof __lib === 'undefined') (
