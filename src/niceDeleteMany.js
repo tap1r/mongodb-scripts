@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.1"
+    *  Version: "0.4.2"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -51,7 +51,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.1" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.2" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -77,6 +77,11 @@
    const ADMISSION_COOLDOWN_MS = 1000;
    const THROTTLE_DELAY_MIN_MS = 20;
    const THROTTLE_DELAY_MAX_MS = 100; // at *Trigger edge within the soft band
+   // Soft-band split (fillProgress 0 at *Target → 1 at *Trigger):
+   //   below ENTER → stay OPEN with light progressive delay
+   //   at/above ENTER → THROTTLE; leave only below LEAVE (hysteresis)
+   const THROTTLE_ENTER_FRAC = 0.5; // midpoint of soft band (~12.5% if tgt 5 / trig 20)
+   const THROTTLE_LEAVE_FRAC = 0.4;
    // mongos has no WT cache vitals — light jittered pace + half concurrency (naïve mode).
    const NAIVE_DELAY_MIN_MS = 20;
    const NAIVE_DELAY_MAX_MS = 50;
@@ -98,13 +103,21 @@
    const HUD_BAR_WIDTH = 28;
    const HUD_POOL_DISPLAY_MAX = 40;
    const HUD_MIN_REDRAW_MS = 100;
+   // Same vocabulary as congestionMonitor EQ: literal glyphs + \x1b colours (JS \xNN is
+   // Latin-1 only — multi-byte UTF-8 via \xe2\x96… would not render as ░/▓).
    const HUD_MARK = {
-      "bg": '\u2591',
-      "fill": '\u2593',
-      "run": '\u25A0',
-      "buf": '\u25A1',
-      "free": '\u2591',
-      "cap": '\u00B7'
+      "bg": '░',
+      "low": '\x1b[92m▓\x1b[0m',       // green
+      "medium": '\x1b[93m▓\x1b[0m',    // yellow
+      "high": '\x1b[91m▓\x1b[0m',      // red
+      "run": {
+         "low": '\x1b[92m■\x1b[0m',
+         "medium": '\x1b[93m■\x1b[0m',
+         "high": '\x1b[91m■\x1b[0m'
+      },
+      "buf": '\x1b[36m□\x1b[0m',       // cyan prefetch
+      "free": '░',                     // available within maxInFlight
+      "cap": '\x1b[90m·\x1b[0m'        // dim AIMD-reserved
    };
    let lastHudAt = 0;
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
@@ -1120,21 +1133,24 @@
       return Number(n || 0).toLocaleString('en-US');
    }
 
-   function ansiFill(ch, status) {
-      // Match congestionMonitor EQ colours: low=green, medium=yellow, high=red.
-      const colour = status === 'high' ? '\x1b[91m'
+   function hudStatusColour(status) {
+      // Match congestionMonitor EQ: low=green, medium=yellow, high=red.
+      return status === 'high' ? '\x1b[91m'
          : status === 'medium' ? '\x1b[93m'
-         : status === 'low' ? '\x1b[92m'
-         : '\x1b[37m';
-      return colour + ch + '\x1b[0m';
+         : '\x1b[92m';
+   }
+
+   function hudFillMark(status = 'low') {
+      return HUD_MARK[status] ?? HUD_MARK.low;
    }
 
    function renderMeterBar(fill01, width = HUD_BAR_WIDTH, status = 'low') {
       const t = Math.min(1, Math.max(0, +fill01 || 0));
       const filled = Math.round(t * width);
+      const mark = hudFillMark(status);
       let out = '[';
       for (let i = 0; i < width; i++) {
-         out += i < filled ? ansiFill(HUD_MARK.fill, status) : HUD_MARK.bg;
+         out += i < filled ? mark : HUD_MARK.bg;
       }
       return out + ']';
    }
@@ -1151,8 +1167,17 @@
       const pad = Math.max(0, width - label.length);
       const left = Math.floor(pad / 2);
       const right = pad - left;
-      const cell = ansiFill(HUD_MARK.fill, status);
-      return '[' + cell.repeat(left) + ansiFill(label, status) + cell.repeat(right) + ']';
+      const mark = hudFillMark(status);
+      const colouredLabel = hudStatusColour(status) + label + '\x1b[0m';
+      return '[' + mark.repeat(left) + colouredLabel + mark.repeat(right) + ']';
+   }
+
+   function pushPoolSlots(target, run, buf, free, cap, admitStatus) {
+      const runMark = HUD_MARK.run[admitStatus] ?? HUD_MARK.run.low;
+      for (let i = 0; i < run; i++) target.push(runMark);
+      for (let i = 0; i < buf; i++) target.push(HUD_MARK.buf);
+      for (let i = 0; i < free; i++) target.push(HUD_MARK.free);
+      for (let i = 0; i < cap; i++) target.push(HUD_MARK.cap);
    }
 
    function renderPoolBar(poolSize, executing, buffered, inFlightLimit, admitStatus) {
@@ -1161,10 +1186,7 @@
       const free = Math.max(0, Math.min(poolSize - run - buf, Math.max(0, inFlightLimit - run - buf)));
       const cap = Math.max(0, poolSize - run - buf - free);
       const slots = [];
-      for (let i = 0; i < run; i++) slots.push(ansiFill(HUD_MARK.run, admitStatus));
-      for (let i = 0; i < buf; i++) slots.push('\x1b[36m' + HUD_MARK.buf + '\x1b[0m');
-      for (let i = 0; i < free; i++) slots.push(HUD_MARK.free);
-      for (let i = 0; i < cap; i++) slots.push('\x1b[90m' + HUD_MARK.cap + '\x1b[0m');
+      pushPoolSlots(slots, run, buf, free, cap, admitStatus);
 
       let display = slots;
       if (poolSize > HUD_POOL_DISPLAY_MAX) {
@@ -1187,10 +1209,7 @@
             sum++;
          }
          display = [];
-         for (let i = 0; i < counts[0]; i++) display.push(ansiFill(HUD_MARK.run, admitStatus));
-         for (let i = 0; i < counts[1]; i++) display.push('\x1b[36m' + HUD_MARK.buf + '\x1b[0m');
-         for (let i = 0; i < counts[2]; i++) display.push(HUD_MARK.free);
-         for (let i = 0; i < counts[3]; i++) display.push('\x1b[90m' + HUD_MARK.cap + '\x1b[0m');
+         pushPoolSlots(display, counts[0], counts[1], counts[2], counts[3], admitStatus);
       }
       return {
          "bar": '[' + display.join('') + ']',
@@ -1224,7 +1243,7 @@
          const why = naiveReason === 'mongos' ? 'naïve mongos'
             : naiveReason === 'no-wt' ? 'no WT (M0/Flex?)'
             : 'naïve';
-         congLine = `cong     ${renderMeterBar(0, HUD_BAR_WIDTH, 'low')}  n/a (${why})`;
+         congLine = `congestion     ${renderMeterBar(0, HUD_BAR_WIDTH, 'low')}  n/a (${why})`;
       } else {
          const dirtyTarget = vitals.evictionDirtyTarget ?? 5;
          const dirtyTrigger = vitals.evictionDirtyTrigger ?? 20;
@@ -1240,9 +1259,10 @@
          const peakLabel = peakIsUpdates ? 'updates' : 'dirty';
          const tgt = peakIsUpdates ? updatesTarget : dirtyTarget;
          const trig = peakIsUpdates ? updatesTrigger : dirtyTrigger;
-         const status = utilAbove(peakUtil, trig) ? 'high'
-            : utilInBand(peakUtil, tgt, trig) ? 'medium'
-            : (peakUtil == null || Number.isNaN(+peakUtil)) ? 'low'
+         // Colour tracks soft-band split: lower=green, upper=yellow, ≥trigger=red.
+         const peakFill = fillProgress(peakUtil, tgt, trig);
+         const status = utilAbove(peakUtil, trig) || peakFill >= 1 ? 'high'
+            : peakFill >= THROTTLE_ENTER_FRAC ? 'medium'
             : 'low';
          const utilTxt = (peakUtil == null || Number.isNaN(+peakUtil))
             ? 'n/a'
@@ -1256,19 +1276,19 @@
          if (lag > 0) flags.push(`lag ${Math.round(lag)}s`);
          const flagTxt = flags.length ? `  ${flags.join(' ')}` : '';
          if (peakUtil == null || Number.isNaN(+peakUtil)) {
-            congLine = `cong     ${renderMeterBar(0, HUD_BAR_WIDTH, 'low')}  n/a (no WT)`;
+            congLine = `congestion ${renderMeterBar(0, HUD_BAR_WIDTH, 'low')}  n/a (no WT)`;
          } else {
-            congLine = `cong     ${renderMeterBar(fill, HUD_BAR_WIDTH, status)}  ${peakLabel} ${utilTxt}  (tgt ${tgt} → trig ${trig})${flagTxt}`;
+            congLine = `congestion ${renderMeterBar(fill, HUD_BAR_WIDTH, status)}  ${peakLabel} ${utilTxt}  (tgt ${tgt} → trig ${trig})${flagTxt}`;
          }
       }
 
       const closedSec = (state === 'CLOSED' && closedSince > 0)
          ? `  closed ${Math.round((Date.now() - closedSince) / 1000)}s`
          : '';
-      const admitLine = `admit    ${renderAdmitBand(state, HUD_BAR_WIDTH)}  delay ${delayMs}ms  maxInFlight ${mif}/${mifCap}${closedSec}`;
+      const admitLine = `admission  ${renderAdmitBand(state, HUD_BAR_WIDTH)}  delay ${delayMs}ms  maxInFlight ${mif}/${mifCap}${closedSec}`;
 
       const pool = renderPoolBar(poolSize, executing, buffered, inFlightLimit, admitStatus);
-      const poolLine = `pool     ${pool.bar}  run ${pool.run}  buf ${pool.buf}  free ${pool.free}  cap ${pool.cap}  pool ${poolSize}`;
+      const poolLine = `task pool  ${pool.bar}  run ${pool.run}  buf ${pool.buf}  free ${pool.free}  cap ${pool.cap}  pool ${poolSize}`;
 
       const statsLine = `elapsed  ${elapsed}   batches  ${fmtNum(batchesDone)}   deleted  ${fmtNum(docsDeleted)}`;
       return `${statsLine}\n${congLine}\n${admitLine}\n${poolLine}`;
@@ -1301,13 +1321,14 @@
    function admissionControl() {
       /*
        *  Admission FSM with hysteresis (see https://jira.mongodb.org/browse/SPM-1123):
-       *    OPEN     — admit freely (optional ticket+checkpoint pacing)
-       *    THROTTLE — admit with progressive delay from dirty/updates fill (target→trigger)
+       *    OPEN     — admit; light progressive delay in the *lower* soft band only
+       *    THROTTLE — upper soft band (fill ≥ ENTER); progressive delay; leave below LEAVE
        *    CLOSED   — wait; trip at *Trigger, release only at/under *Target
        *    COOLDOWN — after CLOSED, brief paced resume to avoid thundering herd
        *    NAIVE    — no WT vitals (mongos / M0/Flex): jittered time-based pace
-       *  Inputs: EWMA-smoothed utils; raw checkpointStatus + activeReplLag (sticky).
-       *  Repl lag (hybrid): >=15s soft → THROTTLE; >=30s hard → CLOSED; leave CLOSED when lag <30s.
+       *  Soft-band fill: 0 at *Target → 1 at *Trigger (dirty/updates). Steady ~8–14%
+       *  with tgt 5 / trig 20 stays OPEN (below midpoint) instead of sticky THROTTLE.
+       *  Repl lag: >=15s soft → THROTTLE; >=30s hard → CLOSED.
        *  Booleans: flowControl + backupCursor → CLOSED; activeIndexBuilds → THROTTLE.
        */
 
@@ -1349,37 +1370,52 @@
       try { activeIndexBuilds = !!vitals.activeIndexBuilds; } catch(_) { /* ignore */ }
       try { backupCursorOpen = !!vitals.backupCursorOpen; } catch(_) { /* ignore */ }
 
+      const dirtySoftFill = fillProgress(dirtyUtil, evictionDirtyTarget, evictionDirtyTrigger);
+      const updatesSoftFill = fillProgress(dirtyUpdatesUtil, evictionUpdatesTarget, evictionUpdatesTrigger);
+      const softFill = Math.max(dirtySoftFill, updatesSoftFill);
+
       const hardPressure = utilAbove(cacheUtil, evictionTrigger)
          || utilAbove(dirtyUtil, evictionDirtyTrigger)
          || utilAbove(dirtyUpdatesUtil, evictionUpdatesTrigger)
          || hardLag
          || activeFlowControl
          || backupCursorOpen;
-      // Soft: medium dirty/updates, elevated repl lag, and/or active index builds.
-      const softPressure = utilInBand(dirtyUtil, evictionDirtyTarget, evictionDirtyTrigger)
-         || utilInBand(dirtyUpdatesUtil, evictionUpdatesTarget, evictionUpdatesTrigger)
+      // Upper soft band (or lag / index builds) → yellow THROTTLE.
+      const upperSoftPressure = softFill >= THROTTLE_ENTER_FRAC
          || softLag
          || activeIndexBuilds;
-      // Dirty/cache release at *Target; lag < hard; flow control / backup cursor must be clear.
+      // Leave THROTTLE once below leave frac (hysteresis) and lag/index clear.
+      const leaveThrottleOk = softFill < THROTTLE_LEAVE_FRAC
+         && !softLag
+         && !activeIndexBuilds;
+      // Lower soft band: stay OPEN but apply light progressive delay.
+      const lowerSoftPace = softFill > 0 && softFill < THROTTLE_ENTER_FRAC;
+      // CLOSED release still requires at/under *Target (full hysteresis to trigger).
       const releaseOk = utilAtOrBelow(cacheUtil, evictionTarget)
          && utilAtOrBelow(dirtyUtil, evictionDirtyTarget)
          && utilAtOrBelow(dirtyUpdatesUtil, evictionUpdatesTarget)
          && activeReplLag < REPL_LAG_HARD_SEC
          && !activeFlowControl
          && !backupCursorOpen;
-      const clearPressure = releaseOk && !softPressure;
-      const blockAimdIncrease = softLag || activeIndexBuilds;
+      const blockAimdIncrease = softLag || activeIndexBuilds || softFill >= THROTTLE_ENTER_FRAC;
+
+      const bandDelayOpts = {
+         evictionDirtyTarget,
+         evictionDirtyTrigger,
+         evictionUpdatesTarget,
+         evictionUpdatesTrigger
+      };
 
       const now = Date.now();
       const prevState = admissionState;
       switch (admissionState) {
          case 'OPEN':
             if (hardPressure) admissionState = 'CLOSED';
-            else if (softPressure) admissionState = 'THROTTLE';
+            else if (upperSoftPressure) admissionState = 'THROTTLE';
             break;
          case 'THROTTLE':
             if (hardPressure) admissionState = 'CLOSED';
-            else if (clearPressure) admissionState = 'OPEN';
+            else if (leaveThrottleOk) admissionState = 'OPEN';
             break;
          case 'CLOSED':
             // Hysteresis: do not reopen at the trigger line — wait until at/under targets.
@@ -1392,7 +1428,7 @@
             if (hardPressure) {
                admissionState = 'CLOSED';
             } else if (now >= admissionCooldownUntil) {
-               admissionState = softPressure ? 'THROTTLE' : 'OPEN';
+               admissionState = upperSoftPressure ? 'THROTTLE' : 'OPEN';
             }
             break;
          default:
@@ -1430,24 +1466,28 @@
          return {
             "state": admissionState,
             "proceed": true,
-            "delayMs": progressiveThrottleDelay(dirtyUtil, dirtyUpdatesUtil, {
-               evictionDirtyTarget,
-               evictionDirtyTrigger,
-               evictionUpdatesTarget,
-               evictionUpdatesTrigger
-            }),
+            "delayMs": progressiveThrottleDelay(dirtyUtil, dirtyUpdatesUtil, bandDelayOpts),
             "maxInFlight": maxInFlight,
             ...admissionSignals
          };
       }
 
-      // OPEN: light pacing only when write tickets and checkpoint are both hot
+      // OPEN: light soft-band pace and/or ticket+checkpoint pacing
       const wtWriteTicketsStatus = bandStatus(wtWriteTicketsUtil, 20, 75);
       const { checkpointStatus } = vitals;
-      const delayMs = (wtWriteTicketsStatus == 'high' && checkpointStatus == 'high')
+      const ticketDelay = (wtWriteTicketsStatus == 'high' && checkpointStatus == 'high')
          ? Math.floor(100 + Math.random() * 100)
          : 0;
-      return { "state": admissionState, "proceed": true, "delayMs": delayMs, "maxInFlight": maxInFlight, ...admissionSignals };
+      const softDelay = lowerSoftPace
+         ? progressiveThrottleDelay(dirtyUtil, dirtyUpdatesUtil, bandDelayOpts)
+         : 0;
+      return {
+         "state": admissionState,
+         "proceed": true,
+         "delayMs": Math.max(ticketDelay, softDelay),
+         "maxInFlight": maxInFlight,
+         ...admissionSignals
+      };
    }
 
    async function* prepend(first, rest) {
@@ -1669,12 +1709,7 @@
          if (initialEmptyBatch === true) {
             console.log('\tNo matching documents found to match the filter, double-check the namespace and filter');
          } else {
-            const effectiveCap = (admissionMode === 'naive')
-               ? Math.max(1, Math.floor(concurrency / 2))
-               : concurrency;
-            banner += `\nUp to ${effectiveCap} concurrent deletes of ${initialBatch.bucketSizeLimit} documents` +
-               (admissionMode === 'naive' ? ' (naïve mongos admission)' : '') +
-               `\n\x1b[34m[INFO]\x1b[0m HUD: congestion / admission / pool — no % complete or ETA\n`;
+            banner += `\n\x1b[34m[INFO]\x1b[0m HUD: congestion / admission / pool — no % complete or ETA\n`;
             redrawHud(true);
             for await (const [, deletedCount] of asyncPool(
                prepend(initialBatch, deletionList),
