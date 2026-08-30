@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.3"
+    *  Version: "0.4.4"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -55,7 +55,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.3" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.4" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -362,28 +362,17 @@
       return c != null && typeof c === 'object' && !Array.isArray(c) && Object.keys(c).length > 0;
    }
 
-   // mongosh setReadPref() reconnects the client (resetConnectionOptions → close).
-   // Call only while idle — never from the vitals sampler during an open curation cursor.
-   // adminCommand (serverStatus/getParameter) already targets the primary regardless of RP.
-   let connectionReadPreference = { "mode": "primary", "tags": [] };
-
-   async function setConnectionReadPref(readPreference = { "mode": "primary" }) {
+   // Per-command readPreference only — mongosh Mongo.setReadPref() reconnects the client
+   // (resetConnectionOptions → close) and runCommand ignores connection RP (mongosh 2.0+).
+   // adminCommand (serverStatus/getParameter) always targets the primary.
+   function commandReadPreference(readPreference = { "mode": "primary" }) {
       /*
-       *  Session readPreference alone does not reliably route mongosh aggregate/hello
-       *  to secondaries. Use connection setReadPref(mode, tagSet) instead.
-       *  Skip no-ops: mongosh setReadPref reconnects (closes checked-out connections).
-       *  Await the reconnect before issuing follow-up commands.
+       *  Shape for runCommand / aggregate / explain options. Document form carries
+       *  mode + tags (probed on Atlas); empty tags still fine.
        */
       const mode = readPreference?.mode ?? 'primary';
-      const tagSet = Array.isArray(readPreference?.tags) ? readPreference.tags : [];
-      const prev = connectionReadPreference;
-      if (prev.mode === mode && JSON.stringify(prev.tags ?? []) === JSON.stringify(tagSet)) {
-         return;
-      }
-      connectionReadPreference = { "mode": mode, "tags": tagSet };
-      const mongo = db.getMongo();
-      if (mode === 'primary') await mongo.setReadPref('primary');
-      else await mongo.setReadPref(mode, tagSet);
+      const tags = Array.isArray(readPreference?.tags) ? readPreference.tags : [];
+      return { "mode": mode, "tags": tags };
    }
 
    function connectionHostsLabel() {
@@ -405,17 +394,15 @@
 
    function curationLandingNode(readPreference = { "mode": "primary" }) {
       /*
-       *  Resolve curation target via runCommand + readPreference (see discovery.js).
-       *  mongosh: runCommand(cmd, { readPreference: '<mode>' }) — mode string, not a
-       *  document. Tag sets are applied via setConnectionReadPref() beforehand.
+       *  Resolve curation target via runCommand + per-command readPreference.
        *  Do not use adminCommand — that always targets the primary in mongosh.
+       *  Do not use Mongo.setReadPref — reconnects client; runCommand ignores it anyway.
        *  mongos hello typically has no me/host; use connection URI hosts as fallback.
        */
       try {
-         const mode = readPreference?.mode ?? 'primary';
          const hello = db.getSiblingDB(dbName).runCommand(
             { "hello": 1 },
-            { "readPreference": mode }
+            { "readPreference": commandReadPreference(readPreference) }
          );
          const role = (hello.msg === 'isdbgrid') ? 'MONGOS'
             : (hello.isWritablePrimary || hello.ismaster) ? 'PRIMARY'
@@ -438,7 +425,7 @@
       }
    }
 
-   function resolveCurationOrder(namespace, filter = {}, userHint = {}) {
+   function resolveCurationOrder(namespace, filter = {}, userHint = {}, readPreference = null) {
       /*
        *  Curation order (Policy A):
        *  - Derive sortBy from the filter ({} / non-field predicates → _id).
@@ -448,8 +435,8 @@
        *    non-blocking (filter selectivity may suffer — WARN).
        *  - Non-empty user hint is always honored; we only WARN if explain still looks
        *    blocking. Auto-hint of alternate indexes / compound sort probes = Policy B.
-       *  - Caller must already have setConnectionReadPref so explain + aggregate share
-       *    the same secondary (and plan cache) via connection RP — not per-command RP.
+       *  - Pass the same per-command readPreference as the follow-up aggregate so
+       *    server selection (and plan cache) can stay on that node.
        */
       const idSort = { "_id": 1 };
       const idHint = { "_id": 1 };
@@ -458,6 +445,7 @@
       const explainPipeline = [{ "$match": filter }, { "$sort": sortBy }];
       const explainOpts = {};
       if (hasUserCollation(collation)) explainOpts.collation = collation;
+      if (readPreference?.mode) explainOpts.readPreference = commandReadPreference(readPreference);
 
       const runExplain = (opts) => namespace.explain('queryPlanner').aggregate(explainPipeline, opts);
 
@@ -488,139 +476,135 @@
 
    async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
       /*
-       *  Curation under one connection readPreference (setReadPref once, then idle):
-       *  landing hello, Policy A explain, and bucketing aggregate share that RP so the
-       *  selected secondary can reuse its plan cache. No DriverSession (mongosh explain
-       *  on a session can expire it before the long cursor runs). Do not call setReadPref
-       *  again until this generator finishes — mongosh reconnects and aborts the cursor.
+       *  Curation via per-command readPreference (no Mongo.setReadPref):
+       *  landing hello, Policy A explain, and bucketing aggregate share the same RP
+       *  document so server selection can stay on one secondary / plan cache.
+       *  No DriverSession (mongosh explain on a session can expire before the cursor).
        */
       const readPreference = sessionOpts.readPreference ?? { "mode": "primary" };
-      await setConnectionReadPref(readPreference);
-      try {
-         const { host, role, tags } = curationLandingNode(readPreference);
-         const landingLine = `\x1b[34m[INFO]\x1b[0m Curation query target: \x1b[33m${host} (${role})\x1b[0m tags: \x1b[33m${JSON.stringify(tags)}\x1b[0m`;
-         banner += `\n${landingLine}\n`;
-         emit(landingLine);
-         if (
-            role === 'PRIMARY' &&
-            !onMongos &&
-            readPreference.mode &&
-            readPreference.mode !== 'primary'
-         ) {
-            emit('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration expected a secondary but landed on PRIMARY — connect via replica-set/SRV seed list (not directConnection to primary), and ensure eligible secondaries exist\x1b[0m');
-         }
+      const cmdRP = commandReadPreference(readPreference);
+      const { host, role, tags } = curationLandingNode(readPreference);
+      const landingLine = `\x1b[34m[INFO]\x1b[0m Curation query target: \x1b[33m${host} (${role})\x1b[0m tags: \x1b[33m${JSON.stringify(tags)}\x1b[0m`;
+      banner += `\n${landingLine}\n`;
+      emit(landingLine);
+      if (
+         role === 'PRIMARY' &&
+         !onMongos &&
+         readPreference.mode &&
+         readPreference.mode !== 'primary'
+      ) {
+         emit('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration expected a secondary but landed on PRIMARY — connect via replica-set/SRV seed list (not directConnection to primary), and ensure eligible secondaries exist\x1b[0m');
+      }
 
-         const namespace = db.getSiblingDB(dbName).getCollection(collName);
-         const { "sortBy": curationSortBy, "hint": curationHint } = resolveCurationOrder(namespace, filter, hint);
-         // const buckets = Math.pow(2, 31) - 1; // max 32bit Int
-         const aggOpts = {
-            "allowDiskUse": true,
-            "cursor": { "batchSize": 1 }, // optimised for the prefetch concurrency
-            "maxTimeMS": 0, // required to overide potential v8 defaultMaxTimeMS cluster settings
-            "noCursorTimeout": true,
-            "comment": "Bucketing IDs via niceDeleteMany.js",
-            "let": { "bucketSizeLimit": bucketSizeLimit }
-         };
-         if (hasUserCollation(collation)) aggOpts.collation = collation;
-         if (hasUserHint(curationHint)) aggOpts.hint = curationHint;
-         const pipeline = [
-            { "$match": filter },
-            /* v1 blocking mode with count estimations
-               // { "$setWindowFields": {
-               //    "sortBy": { "_id": 1 },
-               //    "output": {
-               //       "ordinal": { "$documentNumber": {} },
-               //       "IDsTotal": { "$count": {} }
-               // } } },
-               // { "$bucketAuto": { // fixed height bucketing
-               //    "groupBy": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
-               //    "buckets": buckets,
-               //    "output": {
-               //       "IDs": { "$push": "$_id" },
-               //       "bucketSize": { "$sum": 1 },
-               //       "IDsTotal": { "$max": "$IDsTotal" }
-               // } } },
-               // { "$setWindowFields": {
-               //    "sortBy": { "_id": 1 },
-               //    "output": {
-               //       "bucketId": { "$documentNumber": {} },
-               //       "bucketsTotal": { "$count": {} },
-               //       "IDsCumulative": {
-               //          "$sum": "$bucketSize",
-               //          "window": { "documents": ["unbounded", "current"] }
-               // } } } },
-            */
-            /* v2 reduced non-blocking mode without count estimations
-               // { "$setWindowFields": { // assign ordinal numbers incrementally
-               //    "sortBy": { "_id": 1 },
-               //    "output": { "ordinal": { "$documentNumber": {} } }
-               // } },
-               // { "$set": { // assign bucket IDs based on ordinal, avoiding full grouping
-               //    "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } }
-               // } },
-               // { "$group": { // group into buckets incrementally
-               //    "_id": "$bucketId",
-               //    "IDs": { "$push": "$_id" },
-               //    "bucketSize": { "$sum": 1 }
-               // } },
-               // { "$setWindowFields": { // compute cumulative bucket sizes
-               //    "sortBy": { "_id": 1 },
-               //    "output": {
-               //       "bucketId": { "$documentNumber": {} }, // renumber buckets sequentially
-               //       "IDsCumulative": {
-               //          "$sum": "$bucketSize",
-               //          "window": { "documents": ["unbounded", "current"] }
-               // } } } },
-            */
-            // v3 non-blocking mode (sortBy from Policy A resolveCurationOrder)
-            { "$setWindowFields": { // assign ordinal numbers
-               "sortBy": curationSortBy,
-               "output": { "ordinal": { "$documentNumber": {} } }
-            } },
-            { "$set": { // compute bucketId and running cumulative count
-               "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
-               "cardinal": 1 // each document contributes 1 to its bucket
-            } },
-            { "$setWindowFields": { // compute cumulative sum in the bucket
-               "partitionBy": "$bucketId",
-               "sortBy": curationSortBy,
-               "output": {
-                  "IDsCumulative": {
-                     "$sum": "$cardinal",
-                     "window": { "documents": ["unbounded", "current"] }
-                  },
-                  "IDs": { "$push": "$_id" },
-                  "bucketSize": { "$sum": 1 }
-               }
-            } },
-            { "$match": { // reduce to the last bucket of each group
-               "$expr": {
-                  "$eq": ["$IDsCumulative", "$bucketSize"]
-               }
-            } },
-            //
-            { "$project": {
-               "_id": 0,
-               "bucketId": 1, // ordinal of current bucket
-               // "bucketsTotal": 1, // total number of buckets
-               // "bucketsRemaining": { "$subtract": ["$bucketsTotal", "$bucketId"] }, // number of buckets remaining
-               "bucketSize": 1, // number of _ids in the current bucket
-               "bucketSizeLimit": "$$bucketSizeLimit", // bucket size limit
-               "IDsCumulative": 1, // cumulative total number of IDs
-               // "IDsRemaining": { "$subtract": ["$IDsTotal", "$IDsCumulative"] }, // total number of IDs remaining
-               "IDsTotal": 1, // total number of IDs
-               "IDs": 1 // IDs in the current bucket
-            } }
-         ];
-         // offload iterator to the server's cursor (same pinned node as Policy A explain)
-         const cursor = namespace.aggregate(pipeline, aggOpts);
-         try {
-            yield* cursor;
-         } finally {
-            try { await cursor.close(); } catch(_) { /* exhausted or already closed */ }
-         }
+      const namespace = db.getSiblingDB(dbName).getCollection(collName);
+      const { "sortBy": curationSortBy, "hint": curationHint } = resolveCurationOrder(namespace, filter, hint, readPreference);
+      // const buckets = Math.pow(2, 31) - 1; // max 32bit Int
+      const aggOpts = {
+         "allowDiskUse": true,
+         "cursor": { "batchSize": 1 }, // optimised for the prefetch concurrency
+         "maxTimeMS": 0, // required to overide potential v8 defaultMaxTimeMS cluster settings
+         "noCursorTimeout": true,
+         "comment": "Bucketing IDs via niceDeleteMany.js",
+         "let": { "bucketSizeLimit": bucketSizeLimit },
+         "readPreference": cmdRP
+      };
+      if (hasUserCollation(collation)) aggOpts.collation = collation;
+      if (hasUserHint(curationHint)) aggOpts.hint = curationHint;
+      const pipeline = [
+         { "$match": filter },
+         /* v1 blocking mode with count estimations
+            // { "$setWindowFields": {
+            //    "sortBy": { "_id": 1 },
+            //    "output": {
+            //       "ordinal": { "$documentNumber": {} },
+            //       "IDsTotal": { "$count": {} }
+            // } } },
+            // { "$bucketAuto": { // fixed height bucketing
+            //    "groupBy": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
+            //    "buckets": buckets,
+            //    "output": {
+            //       "IDs": { "$push": "$_id" },
+            //       "bucketSize": { "$sum": 1 },
+            //       "IDsTotal": { "$max": "$IDsTotal" }
+            // } } },
+            // { "$setWindowFields": {
+            //    "sortBy": { "_id": 1 },
+            //    "output": {
+            //       "bucketId": { "$documentNumber": {} },
+            //       "bucketsTotal": { "$count": {} },
+            //       "IDsCumulative": {
+            //          "$sum": "$bucketSize",
+            //          "window": { "documents": ["unbounded", "current"] }
+            // } } } },
+         */
+         /* v2 reduced non-blocking mode without count estimations
+            // { "$setWindowFields": { // assign ordinal numbers incrementally
+            //    "sortBy": { "_id": 1 },
+            //    "output": { "ordinal": { "$documentNumber": {} } }
+            // } },
+            // { "$set": { // assign bucket IDs based on ordinal, avoiding full grouping
+            //    "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } }
+            // } },
+            // { "$group": { // group into buckets incrementally
+            //    "_id": "$bucketId",
+            //    "IDs": { "$push": "$_id" },
+            //    "bucketSize": { "$sum": 1 }
+            // } },
+            // { "$setWindowFields": { // compute cumulative bucket sizes
+            //    "sortBy": { "_id": 1 },
+            //    "output": {
+            //       "bucketId": { "$documentNumber": {} }, // renumber buckets sequentially
+            //       "IDsCumulative": {
+            //          "$sum": "$bucketSize",
+            //          "window": { "documents": ["unbounded", "current"] }
+            // } } } },
+         */
+         // v3 non-blocking mode (sortBy from Policy A resolveCurationOrder)
+         { "$setWindowFields": { // assign ordinal numbers
+            "sortBy": curationSortBy,
+            "output": { "ordinal": { "$documentNumber": {} } }
+         } },
+         { "$set": { // compute bucketId and running cumulative count
+            "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
+            "cardinal": 1 // each document contributes 1 to its bucket
+         } },
+         { "$setWindowFields": { // compute cumulative sum in the bucket
+            "partitionBy": "$bucketId",
+            "sortBy": curationSortBy,
+            "output": {
+               "IDsCumulative": {
+                  "$sum": "$cardinal",
+                  "window": { "documents": ["unbounded", "current"] }
+               },
+               "IDs": { "$push": "$_id" },
+               "bucketSize": { "$sum": 1 }
+            }
+         } },
+         { "$match": { // reduce to the last bucket of each group
+            "$expr": {
+               "$eq": ["$IDsCumulative", "$bucketSize"]
+            }
+         } },
+         //
+         { "$project": {
+            "_id": 0,
+            "bucketId": 1, // ordinal of current bucket
+            // "bucketsTotal": 1, // total number of buckets
+            // "bucketsRemaining": { "$subtract": ["$bucketsTotal", "$bucketId"] }, // number of buckets remaining
+            "bucketSize": 1, // number of _ids in the current bucket
+            "bucketSizeLimit": "$$bucketSizeLimit", // bucket size limit
+            "IDsCumulative": 1, // cumulative total number of IDs
+            // "IDsRemaining": { "$subtract": ["$IDsTotal", "$IDsCumulative"] }, // total number of IDs remaining
+            "IDsTotal": 1, // total number of IDs
+            "IDs": 1 // IDs in the current bucket
+         } }
+      ];
+      // offload iterator to the server's cursor (same RP as Policy A explain)
+      const cursor = namespace.aggregate(pipeline, aggOpts);
+      try {
+         yield* cursor;
       } finally {
-         await setConnectionReadPref({ "mode": "primary" });
+         try { await cursor.close(); } catch(_) { /* exhausted or already closed */ }
       }
    }
 
@@ -1346,8 +1330,7 @@
          await sleep(intervalMs);
          if (!vitalsSampling) break;
          try {
-            // Do not setReadPref here — mongosh reconnects the client and aborts
-            // in-flight curation cursors (MongoClientClosedError). adminCommand → primary.
+            // adminCommand → primary; no connection readPreference involved.
             vitals = await congestionMonitor();
             updateEwma(vitals);
          } catch(e) {
@@ -1790,7 +1773,7 @@
          }
          emit(`\nValidating deletion results ...please wait\n`);
          emit('...you may CTRL+C here to exit gracefully if validation is not required\n');
-         await setConnectionReadPref({ "mode": "primary" }); // countIds: majority on primary
+         // countIds uses a primary-oriented session; no connection setReadPref.
          const finalCount = countIds(filter, countSessionOpts);
          if (safeguard) {
             emit('Simulation safeguard is enabled, no deletions were actually performed:\n');
