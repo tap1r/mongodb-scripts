@@ -1,4 +1,4 @@
-# Howto: streaming sort
+# Howto: streaming sort - a non-blocking $group implementation
 
 How to keep an ordered aggregation **streaming** (non-blocking) when you need a stable sort key for windowed or bucketed work — as used by `src/niceDeleteMany.js` to emit fixed-size `_id` buckets for concurrent deletes.
 
@@ -226,7 +226,7 @@ db.collection
   .aggregate([{ $match: filter }, { $sort: sortBy }]);
 ```
 
-**Keep `sortBy` only if** the winning plan has no `COLLSCAN` and no blocking `SORT` / `SORT_KEY_GENERATOR`. Otherwise fall back to `{ _id: 1 }` (+ hint).
+**Keep `sortBy` only if** the winning plan has no `COLLSCAN` and no blocking `SORT` / `SORT_KEY_GENERATOR`. Otherwise fall back to `{ "_id": 1 }` (+ hint).
 
 Inspect **`queryPlanner.winningPlan`** (or `$cursor.queryPlanner.winningPlan`). Do not treat a `$sort` merely echoed from the command pipeline as proof of a blocking sort.
 
@@ -243,7 +243,7 @@ Inspect **`queryPlanner.winningPlan`** (or `$cursor.queryPlanner.winningPlan`). 
 db.collection
   .explain("queryPlanner")
   .aggregate([{ $match: { qty: { $gte: 10 } } }, { $sort: { _id: 1 } }]);
-// Typical: FETCH → IXSCAN { _id: 1 }  (no SORT stage)
+// Typical: FETCH → IXSCAN { "_id": 1 }  (no SORT stage)
 ```
 
 ### Example B — sort key without a supporting index (blocking)
@@ -256,7 +256,7 @@ db.collection
 // Observed shape: planStages [ 'SORT', 'COLLSCAN' ]
 ```
 
-Fall back to `_id` (or create `{ qty: 1 }` / a suitable compound index).
+Fall back to `{ "_id": 1 }` (or create `{ qty: 1 }` / a suitable compound index).
 
 ### Example C — filter-aligned index (good)
 
@@ -265,15 +265,15 @@ db.collection.createIndex({ qty: 1 });
 db.collection
   .explain("queryPlanner")
   .aggregate([{ $match: { qty: { $gte: 10 } } }, { $sort: { qty: 1 } }]);
-// Typical: FETCH → IXSCAN { qty: 1 }  (no SORT)
+// Typical: FETCH → IXSCAN { "qty": 1 }  (no SORT)
 ```
 
-Then v3 may use `curationSortBy: { qty: 1 }` end-to-end.
+Then v3 may use `"curationSortBy": { "qty": 1 }` end-to-end.
 
 ### Example D — compound equality → trailing sort
 
 ```javascript
-// Index: { status: 1, region: 1, createdAt: 1 }
+// Index: { "status": 1, "region": 1, "createdAt": 1 }
 db.collection
   .explain("queryPlanner")
   .aggregate([
