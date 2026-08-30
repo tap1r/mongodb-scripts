@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.4"
+    *  Version: "0.4.5"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,6 +18,7 @@
     *    or ETA (no cheap total without re-executing the filter)
     *  - interactive (TTY) HUD: coloured bars + console.clear; non-interactive: plain status
     *    lines, ANSI stripped (mdblib-style), bars omitted — better for logs/CI
+    *  - TTY HUD tracks process.stdout columns / resize and reflows bar widths on resize
     *
     *  TODOs:
     *  - add execution profiler/timers
@@ -56,7 +57,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.4" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.5" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -105,10 +106,32 @@
    let admissionMode = 'wt';
    let naiveReason = null; // 'mongos' | 'no-wt' | null
    // Live HUD; no % complete / ETA. Interactive: clear+bars; non-interactive: plain log lines.
-   const HUD_BAR_WIDTH = 28;
-   const HUD_POOL_DISPLAY_MAX = 40;
+   const HUD_BAR_WIDTH_MIN = 12;
+   const HUD_BAR_WIDTH_MAX = 48;
+   const HUD_POOL_DISPLAY_MIN = 16;
+   const HUD_POOL_DISPLAY_MAX_CAP = 64;
    const HUD_MIN_REDRAW_MS = 100;       // TTY refresh throttle
    const HUD_LOG_REDRAW_MS = 1000;      // non-TTY append throttle (avoid log floods)
+   let lastTermCols = 0;
+   let hudResizePending = false;
+
+   function termColumns() {
+      try {
+         const cols = (typeof process !== 'undefined' && process.stdout && process.stdout.columns) || 80;
+         return Math.max(40, cols|0);
+      } catch(_) {
+         return 80;
+      }
+   }
+
+   function hudBarWidth() {
+      // Leave room for labels + metric text; grow/shrink with the terminal.
+      return Math.min(HUD_BAR_WIDTH_MAX, Math.max(HUD_BAR_WIDTH_MIN, termColumns() - 52));
+   }
+
+   function hudPoolDisplayMax() {
+      return Math.min(HUD_POOL_DISPLAY_MAX_CAP, Math.max(HUD_POOL_DISPLAY_MIN, termColumns() - 40));
+   }
 
    function stripAnsi(text) {
       // Same idea as mdblib.js console.log wrapper (non-TTY strips escapes).
@@ -121,6 +144,30 @@
          return;
       }
       console.log(...args.map(a => (typeof a === 'string' ? stripAnsi(a) : a)));
+   }
+
+   function installHudResizeWatch(onResize) {
+      /*
+       *  Node/mongosh expose process.stdout.columns and a 'resize' event.
+       *  On resize: recompute bar widths and force a full clear+repaint.
+       */
+      if (!interactive || typeof process === 'undefined' || !process.stdout || typeof process.stdout.on !== 'function') {
+         return () => {};
+      }
+      lastTermCols = termColumns();
+      const handler = () => {
+         const cols = termColumns();
+         if (cols === lastTermCols && !hudResizePending) return;
+         lastTermCols = cols;
+         hudResizePending = true;
+         try { onResize(); } finally { hudResizePending = false; }
+      };
+      process.stdout.on('resize', handler);
+      return () => {
+         try { process.stdout.off('resize', handler); } catch(_) {
+            try { process.stdout.removeListener('resize', handler); } catch(__) { /* ignore */ }
+         }
+      };
    }
    // Same vocabulary as congestionMonitor EQ: literal glyphs + \x1b colours (JS \xNN is
    // Latin-1 only — multi-byte UTF-8 via \xe2\x96… would not render as ░/▓).
@@ -1147,7 +1194,7 @@
       return HUD_MARK[status] ?? HUD_MARK.low;
    }
 
-   function renderMeterBar(fill01, width = HUD_BAR_WIDTH, status = 'low') {
+   function renderMeterBar(fill01, width = hudBarWidth(), status = 'low') {
       const t = Math.min(1, Math.max(0, +fill01 || 0));
       const filled = Math.round(t * width);
       const mark = hudFillMark(status);
@@ -1164,7 +1211,7 @@
       return 'medium'; // THROTTLE | COOLDOWN | NAIVE
    }
 
-   function renderAdmitBand(state, width = HUD_BAR_WIDTH) {
+   function renderAdmitBand(state, width = hudBarWidth()) {
       const status = admitStateStatus(state);
       const label = ` ${state} `;
       const pad = Math.max(0, width - label.length);
@@ -1192,8 +1239,9 @@
       pushPoolSlots(slots, run, buf, free, cap, admitStatus);
 
       let display = slots;
-      if (poolSize > HUD_POOL_DISPLAY_MAX) {
-         const scale = HUD_POOL_DISPLAY_MAX / poolSize;
+      const poolDisplayMax = hudPoolDisplayMax();
+      if (poolSize > poolDisplayMax) {
+         const scale = poolDisplayMax / poolSize;
          const counts = [
             Math.round(run * scale),
             Math.round(buf * scale),
@@ -1202,12 +1250,12 @@
          ];
          // Fix rounding so display width is exact.
          let sum = counts.reduce((a, b) => a + b, 0);
-         while (sum > HUD_POOL_DISPLAY_MAX) {
+         while (sum > poolDisplayMax) {
             const idx = counts.indexOf(Math.max(...counts));
             counts[idx]--;
             sum--;
          }
-         while (sum < HUD_POOL_DISPLAY_MAX) {
+         while (sum < poolDisplayMax) {
             counts[3]++; // grow cap visually
             sum++;
          }
@@ -1312,10 +1360,11 @@
          ].join('\n');
       }
 
+      const barW = hudBarWidth();
       const congLine = admissionMode === 'naive' || congMetric === 'n/a'
-         ? `congestion ${renderMeterBar(0, HUD_BAR_WIDTH, 'low')}  n/a ${congDetail}`.trimEnd()
-         : `congestion ${renderMeterBar(congFill, HUD_BAR_WIDTH, congStatus)}  ${congMetric}  ${congDetail}`.trimEnd();
-      const admitLine = `admission  ${renderAdmitBand(state, HUD_BAR_WIDTH)}  delay ${delayMs}ms  maxInFlight ${mif}/${mifCap}${closedSec}`;
+         ? `congestion ${renderMeterBar(0, barW, 'low')}  n/a ${congDetail}`.trimEnd()
+         : `congestion ${renderMeterBar(congFill, barW, congStatus)}  ${congMetric}  ${congDetail}`.trimEnd();
+      const admitLine = `admission  ${renderAdmitBand(state, barW)}  delay ${delayMs}ms  maxInFlight ${mif}/${mifCap}${closedSec}`;
       const pooled = renderPoolBar(poolSize, executing, buffered, inFlightLimit, admitStatus);
       const poolLine = `task pool  ${pooled.bar}  run ${pooled.run}  buf ${pooled.buf}  free ${pooled.free}  cap ${pooled.cap}  pool ${poolSize}`;
       return `${statsLine}\n${congLine}\n${admitLine}\n${poolLine}`;
@@ -1742,6 +1791,8 @@
          }
       }
 
+      // TTY resize → recompute bar widths and force clear+repaint.
+      const uninstallResize = installHudResizeWatch(() => redrawHud({ "force": true }));
       try {
          if (interactive) console.clear();
          emit(banner);
@@ -1785,6 +1836,7 @@
          emit('\tResidual document count matching filter:', finalCount);
          emit('\nDone!');
       } finally {
+         uninstallResize();
          vitalsSampling = false;
          await sampler;
       }
