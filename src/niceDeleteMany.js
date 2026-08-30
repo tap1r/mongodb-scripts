@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.8"
+    *  Version: "0.4.9"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,7 +13,7 @@
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
     *  - Prefers index-ordered curation (avoids blocking sorts); optional user hint supported
-    *  - Naïve admission when WT cache vitals are unavailable (mongos/Atlas M0/Flex)
+    *  - "pace" admission mode when WT cache vitals are unavailable (mongos/Atlas M0/Flex)
     *  - Progress HUD shows congestion, admission, and pool utilization only — ETA is not cheap
     *
     *  TODOs:
@@ -52,7 +52,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.8" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.9" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -83,23 +83,50 @@
    //   at/above ENTER → THROTTLE; leave only below LEAVE (hysteresis)
    const THROTTLE_ENTER_FRAC = 0.5; // midpoint of soft band (~12.5% if tgt 5 / trig 20)
    const THROTTLE_LEAVE_FRAC = 0.4;
-   // mongos has no WT cache vitals — light jittered pace + half concurrency (naïve mode).
-   const NAIVE_DELAY_MIN_MS = 20;
-   const NAIVE_DELAY_MAX_MS = 50;
+   // mongos / no-WT: paceMaker replaces fixed jitter (see paceMaker* below).
+   const PACE_WARMUP_DELAY_MIN_MS = 20; // warm-up only until pace EWMA exists
+   const PACE_WARMUP_DELAY_MAX_MS = 50;
    // AIMD concurrency: MD on enter CLOSED; AI while sustained OPEN (hold in THROTTLE/COOLDOWN).
    const AIMD_INCREASE_INTERVAL_MS = 500;
    // Hybrid repl-lag bands (seconds): soft → THROTTLE; hard → CLOSED. No EWMA (sticky rsStatus).
    const REPL_LAG_SOFT_SEC = 15;
    const REPL_LAG_HARD_SEC = 30;
-   let admissionState = 'OPEN'; // OPEN | THROTTLE | CLOSED | COOLDOWN | NAIVE
+   // paceMaker (pace / no-WT only): EWMA clear-rate → AIMD maxInFlight + light delay.
+   // Rate samples use wall-clock windows + actual deletedCount (not drain-time clustering).
+   const PACE_EWMA_ALPHA = 0.2;
+   const PACE_AIMD_INCREASE_INTERVAL_MS = 1000; // slower probes — prefer mild stalls over peak rate
+   const PACE_MD_COOLDOWN_MS = 2000;            // longer settle after MD
+   const PACE_AI_GRACE_MS = 2000;              // longer settle after +1 before judging / next probe
+   const PACE_AI_MIN_IMPROVE = 0.05; // probe must raise EWMA ≥5% or hold (harder climb)
+   const PACE_DROP_FRAC = 0.75;     // slightly earlier MD when goodput softens
+   const PACE_MD_STRIKES = 2;       // consecutive bad windows before MD
+   const PACE_DELAY_MIN_MS = 12;    // light pacing floor (15 was a touch heavy)
+   const PACE_DELAY_MAX_MS = 80;
+   const PACE_DELAY_JITTER = 0.10;  // ±10% desync (was ±15% — slightly tighter cadence)
+   const PACE_MIN_SAMPLE_MS = 500;  // wall-clock window — absorbs clustered consumer notes
+   const PACE_INSTANT_CAP_MULT = 2.0; // clamp instant vs max(ewma, peak)
+   const PACE_PEAK_DECAY = 0.99;    // per accepted sample — forget stale spikes
+   const PACE_MAX_IN_FLIGHT_CAP = 4; // hard ceiling for pace mode — half-pool oversubscribed M0
+   let admissionState = 'OPEN'; // OPEN | THROTTLE | CLOSED | COOLDOWN | PACE
    let admissionCooldownUntil = 0;
    let maxInFlightCap = 1;
    let maxInFlight = 1;
    let aimdLastIncreaseAt = 0;
    let closedSince = 0;
-   // 'wt' = WiredTiger FSM on mongod; 'naive' = time-based pace when WT vitals unavailable.
+   // 'wt' = WiredTiger FSM on mongod; 'pace' = paceMaker when WT vitals unavailable.
    let admissionMode = 'wt';
-   let naiveReason = null; // 'mongos' | 'no-wt' | null
+   let paceReason = null; // 'mongos' | 'no-wt' | null
+   let paceEwmaRate = null;       // docs/sec EWMA of successful clear rate
+   let pacePeakRate = null;       // best EWMA observed (goodput high-water)
+   let paceLastSampleAt = 0;
+   let pacePendingDocs = 0;       // deleted docs accumulated since last rate sample
+   let paceDropStrikes = 0;       // consecutive below-drop windows
+   let paceInWall = false;
+   let paceAimdLastIncreaseAt = 0;
+   let paceLastMdAt = 0;          // cooldown gate after multiplicative decrease
+   let paceAiGraceUntil = 0;      // post-AI grace — suppress MD while probe settles
+   let paceRateBeforeAi = null;   // EWMA snapshot at last +1 (benefit check)
+   let paceClimbExhausted = false; // probe didn't help — stop AI until MD
    // Live HUD; no % complete / ETA. Interactive: clear+bars; non-interactive: plain log lines.
    const HUD_BAR_WIDTH_MIN = 12;
    const HUD_BAR_WIDTH_MAX = 48;
@@ -293,10 +320,10 @@
       return db.hello().msg === 'isdbgrid';
    }
 
-   function enableNaiveAdmission(reason, detail) {
-      admissionMode = 'naive';
-      naiveReason = reason;
-      const line = `\x1b[31m[WARN]\x1b[0m \x1b[33m${detail}\x1b[0m`;
+   function enablePaceAdmission(reason, detail) {
+      admissionMode = 'pace';
+      paceReason = reason;
+      const line = `\n\x1b[31m[WARN]\x1b[0m \x1b[33m${detail}\x1b[0m`;
       banner += `\n${line}`;
       emit(line);
    }
@@ -318,9 +345,9 @@
 
    const onMongos = isMongos();
    if (onMongos) {
-      enableNaiveAdmission(
+      enablePaceAdmission(
          'mongos',
-         'mongos detected — using naïve time-based admission (no WT cache vitals); maxInFlight capped at half pool'
+         'mongos detected — using paceMaker admission (no WT cache vitals); maxInFlight capped'
       );
    }
 
@@ -496,10 +523,10 @@
          try {
             const expl = runExplain({ ...explainOpts, "hint": userHint });
             if (planHasCollScanOrBlockingSort(expl)) {
-               emit('\t\x1b[31m[WARN]\x1b[0m \x1b[33mcuration plan may use COLLSCAN/blocking SORT despite user hint\x1b[0m; sortBy:', JSON.stringify(sortBy));
+               emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mcuration plan may use COLLSCAN/blocking SORT despite user hint\x1b[0m; sortBy:', JSON.stringify(sortBy));
             }
          } catch(e) {
-            emit('\t\x1b[31m[WARN]\x1b[0m \x1b[33mcuration explain failed (user hint)\x1b[0m:', e?.message ?? e);
+            emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mcuration explain failed (user hint)\x1b[0m:', e?.message ?? e);
          }
          return { "sortBy": sortBy, "hint": userHint };
       }
@@ -510,10 +537,10 @@
             return { "sortBy": sortBy, "hint": {} }; // trust winning plan; no forced hint
          }
       } catch(e) {
-         emit('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration explain failed\x1b[0m:', e?.message ?? e);
+         emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration explain failed\x1b[0m:', e?.message ?? e);
       }
 
-      emit('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)\x1b[0m');
+      emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)\x1b[0m');
       return { "sortBy": idSort, "hint": idHint };
    }
 
@@ -881,7 +908,7 @@
          get checkpointIntervalMS() { // checkpoint=(wait=60
             return 1000 * (this.wterc(/checkpoint=\(.*wait=(\d+).*\)/) ?? 60);
          },
-         // Atlas M0/Flex omit serverStatus.wiredTiger; main() probes and switches to naïve admission.
+         // Atlas M0/Flex omit serverStatus.wiredTiger; main() probes and switches to pace admission.
          get updatesDirtyBytes() {
             return this.serverStatus.wiredTiger?.cache?.['bytes allocated for updates'];
          },
@@ -1184,6 +1211,18 @@
          : '\x1b[92m';
    }
 
+   // HUD text: metric names green, values yellow (bars keep their own colours).
+   // Non-TTY log mode still builds these; emit() strips ANSI via stripAnsi().
+   const HUD_LABEL_COLOUR = '\x1b[92m';
+   const HUD_VALUE_COLOUR = '\x1b[93m';
+   const HUD_TEXT_RESET = '\x1b[0m';
+   function hudLabel(text) {
+      return `${HUD_LABEL_COLOUR}${text}${HUD_TEXT_RESET}`;
+   }
+   function hudValue(text) {
+      return `${HUD_VALUE_COLOUR}${text}${HUD_TEXT_RESET}`;
+   }
+
    function hudFillMark(status = 'low') {
       return HUD_MARK[status] ?? HUD_MARK.low;
    }
@@ -1202,7 +1241,7 @@
    function admitStateStatus(state) {
       if (state === 'CLOSED') return 'high';
       if (state === 'OPEN') return 'low';
-      return 'medium'; // THROTTLE | COOLDOWN | NAIVE
+      return 'medium'; // THROTTLE | COOLDOWN | PACE
    }
 
    function renderAdmitBand(state, width = hudBarWidth()) {
@@ -1311,21 +1350,29 @@
       const rate = estimatedDeleteRate({
          batchesDone, batchesFailed, bucketSizeLimit, elapsedMs
       });
-      const statsLine = `elapsed  ${elapsed}   batches  ${fmtNum(batchesDone)}` +
-         `   failed  ${fmtNum(batchesFailed)}` +
-         `   deleted  ${fmtNum(docsDeleted)}` +
-         `   rate  ${fmtRate(rate)}`;
+      const paceBit = (admissionMode === 'pace' && paceEwmaRate != null)
+         ? `   ${hudLabel('pace')}  ${hudValue(fmtRate(paceEwmaRate))}` +
+            (pacePeakRate != null
+               ? ` (${hudLabel('peak')} ${hudValue(fmtRate(pacePeakRate))})`
+               : '') +
+            (paceInWall ? ` ${hudValue('WALL')}` : '')
+         : '';
+      const statsLine = `${hudLabel('elapsed')}  ${hudValue(elapsed)}` +
+         `   ${hudLabel('batches')}  ${hudValue(fmtNum(batchesDone))}` +
+         `   ${hudLabel('failed')}  ${hudValue(fmtNum(batchesFailed))}` +
+         `   ${hudLabel('deleted')}  ${hudValue(fmtNum(docsDeleted))}` +
+         `   ${hudLabel('rate')}  ${hudValue(fmtRate(rate))}` + paceBit;
 
       // Congestion: max(dirty, updates) soft-band fill (reuse fillProgress).
       let congMetric = 'n/a';
       let congDetail = '';
       let congStatus = 'low';
       let congFill = 0;
-      if (admissionMode === 'naive') {
-         const why = naiveReason === 'mongos' ? 'naïve mongos'
-            : naiveReason === 'no-wt' ? 'no WT (M0/Flex?)'
-            : 'naïve';
-         congDetail = `(${why})`;
+      if (admissionMode === 'pace') {
+         const why = paceReason === 'mongos' ? 'pace mongos'
+            : paceReason === 'no-wt' ? 'no WT (M0/Flex?)'
+            : 'pace';
+         congDetail = `(${why}; paceMaker)`;
       } else {
          const dirtyTarget = vitals.evictionDirtyTarget ?? 5;
          const dirtyTrigger = vitals.evictionDirtyTrigger ?? 20;
@@ -1363,7 +1410,7 @@
       }
 
       const closedSec = (state === 'CLOSED' && closedSince > 0)
-         ? `  closed ${Math.round((Date.now() - closedSince) / 1000)}s`
+         ? `  ${hudLabel('closed')} ${hudValue(`${Math.round((Date.now() - closedSince) / 1000)}s`)}`
          : '';
       const pool = {
          "run": Math.max(0, Math.min(poolSize, executing|0)),
@@ -1376,23 +1423,37 @@
       pool.free = Math.max(0, Math.min(poolSize - pool.run - pool.buf, Math.max(0, inFlightLimit - pool.run - pool.buf)));
       pool.cap = Math.max(0, poolSize - pool.run - pool.buf - pool.free);
 
+      // Coloured labels/values for both modes; emit() strips ANSI when non-TTY.
+      // Glyph bars only when bars=true (interactive).
+      const congText = admissionMode === 'pace' || congMetric === 'n/a'
+         ? `${hudValue('n/a')} ${hudValue(congDetail)}`.trimEnd()
+         : `${hudValue(congMetric)}  ${hudValue(congDetail)}`.trimEnd();
+      const admitText = `${hudLabel('delay')} ${hudValue(`${delayMs}ms`)}` +
+         `  ${hudLabel('maxInFlight')} ${hudValue(`${mif}/${mifCap}`)}${closedSec}`;
+      const poolText = `${hudLabel('run')} ${hudValue(String(pool.run))}` +
+         `  ${hudLabel('buf')} ${hudValue(String(pool.buf))}` +
+         `  ${hudLabel('free')} ${hudValue(String(pool.free))}` +
+         `  ${hudLabel('cap')} ${hudValue(String(pool.cap))}` +
+         `  ${hudLabel('pool')} ${hudValue(String(poolSize))}`;
+
       if (!bars) {
-         // Non-interactive / log mode: counters + state only (no glyph bars).
          return [
             statsLine,
-            `congestion  ${congMetric}  ${congDetail}`.trimEnd(),
-            `admission   ${state}  delay ${delayMs}ms  maxInFlight ${mif}/${mifCap}${closedSec}`,
-            `task pool   run ${pool.run}  buf ${pool.buf}  free ${pool.free}  cap ${pool.cap}  pool ${poolSize}`
+            `${hudLabel('congestion')}  ${congText}`,
+            `${hudLabel('admission')}   ${hudValue(state)}  ${admitText}`,
+            `${hudLabel('task pool')}   ${poolText}`
          ].join('\n');
       }
 
       const barW = hudBarWidth();
-      const congLine = admissionMode === 'naive' || congMetric === 'n/a'
-         ? `congestion ${renderMeterBar(0, barW, 'low')}  n/a ${congDetail}`.trimEnd()
-         : `congestion ${renderMeterBar(congFill, barW, congStatus)}  ${congMetric}  ${congDetail}`.trimEnd();
-      const admitLine = `admission  ${renderAdmitBand(state, barW)}  delay ${delayMs}ms  maxInFlight ${mif}/${mifCap}${closedSec}`;
+      const congLine = `${hudLabel('congestion')} ${
+         admissionMode === 'pace' || congMetric === 'n/a'
+            ? renderMeterBar(0, barW, 'low')
+            : renderMeterBar(congFill, barW, congStatus)
+      }  ${congText}`;
+      const admitLine = `${hudLabel('admission')}  ${renderAdmitBand(state, barW)}  ${admitText}`;
       const pooled = renderPoolBar(poolSize, executing, buffered, inFlightLimit, admitStatus);
-      const poolLine = `task pool  ${pooled.bar}  run ${pooled.run}  buf ${pooled.buf}  free ${pooled.free}  cap ${pooled.cap}  pool ${poolSize}`;
+      const poolLine = `${hudLabel('task pool')}  ${pooled.bar}  ${poolText}`;
       return `${statsLine}\n${congLine}\n${admitLine}\n${poolLine}`;
    }
 
@@ -1415,8 +1476,156 @@
       }
    }
 
-   function naiveAdmissionDelay() {
-      return Math.floor(NAIVE_DELAY_MIN_MS + Math.random() * (NAIVE_DELAY_MAX_MS - NAIVE_DELAY_MIN_MS));
+   function paceWarmupDelay() {
+      return Math.floor(PACE_WARMUP_DELAY_MIN_MS + Math.random() * (PACE_WARMUP_DELAY_MAX_MS - PACE_WARMUP_DELAY_MIN_MS));
+   }
+
+   function paceMakerReset() {
+      paceEwmaRate = null;
+      pacePeakRate = null;
+      paceLastSampleAt = 0;
+      pacePendingDocs = 0;
+      paceDropStrikes = 0;
+      paceInWall = false;
+      const now = Date.now();
+      paceAimdLastIncreaseAt = now;
+      paceLastMdAt = 0;
+      paceAiGraceUntil = 0;
+      paceRateBeforeAi = null;
+      paceClimbExhausted = false;
+   }
+
+   function paceMakerAimd(now = Date.now(), { fromSample = false } = {}) {
+      /*
+       *  Probe +1 on a timer while healthy; MD after sustained clear-rate drop.
+       *  After each +1, require ≥ PACE_AI_MIN_IMPROVE goodput gain once grace
+       *  ends — otherwise hold (no step-back cliff; that made stalls longer).
+       *  Drop strikes advance only on rate samples (not every admit tick).
+       */
+      if (paceEwmaRate == null || pacePeakRate == null || !(pacePeakRate > 0)) return;
+      const ratio = paceEwmaRate / pacePeakRate;
+      const inAiGrace = now < paceAiGraceUntil;
+      const dropping = ratio < PACE_DROP_FRAC && !inAiGrace;
+
+      // Evaluate last concurrency probe after settle window.
+      if (fromSample && !inAiGrace && paceRateBeforeAi != null) {
+         const baseline = paceRateBeforeAi;
+         paceRateBeforeAi = null;
+         const improved = paceEwmaRate >= baseline * (1 + PACE_AI_MIN_IMPROVE);
+         if (!improved) {
+            // Keep current mif; just stop climbing. Stepping back caused concurrency cliffs.
+            paceClimbExhausted = true;
+            paceAimdLastIncreaseAt = now;
+            return;
+         }
+      }
+
+      if (dropping) {
+         if (fromSample) {
+            paceDropStrikes += 1;
+            if (paceDropStrikes >= PACE_MD_STRIKES && !paceInWall) {
+               maxInFlight = Math.max(1, Math.floor(maxInFlight / 2));
+               pacePeakRate = paceEwmaRate;
+               paceInWall = true;
+               paceLastMdAt = now;
+               paceAimdLastIncreaseAt = now;
+               paceDropStrikes = 0;
+               paceRateBeforeAi = null;
+               paceClimbExhausted = false; // allow re-climb after congestion clears
+            }
+         }
+         return; // hold AI while below drop threshold (outside grace)
+      }
+      paceDropStrikes = 0;
+      paceInWall = false;
+      if (inAiGrace || paceClimbExhausted) return;
+      const cooledDown = paceLastMdAt === 0 || (now - paceLastMdAt) >= PACE_MD_COOLDOWN_MS;
+      if (cooledDown
+            && (now - paceAimdLastIncreaseAt) >= PACE_AIMD_INCREASE_INTERVAL_MS
+            && maxInFlight < maxInFlightCap) {
+         paceRateBeforeAi = paceEwmaRate;
+         maxInFlight += 1;
+         paceAimdLastIncreaseAt = now;
+         paceAiGraceUntil = now + PACE_AI_GRACE_MS;
+         paceDropStrikes = 0;
+      }
+   }
+
+   function paceMakerNoteBatchOk({ deletedCount = 0, at = Date.now() } = {}) {
+      /*
+       *  Wall-clock goodput: accumulate actual deletedCount until ≥ MIN_SAMPLE_MS
+       *  of real time elapses, then sample docs/sec. Consumer drain clustering no
+       *  longer inflates instant rate (that was false-WALL → MD thrash to mif=1).
+       */
+      if (admissionMode !== 'pace') return;
+      const docs = Math.max(0, deletedCount|0);
+      pacePendingDocs += docs;
+      const prevAt = paceLastSampleAt;
+      if (prevAt <= 0) {
+         // Arm clock only — do not credit docs against a zero-width window.
+         paceLastSampleAt = at;
+         pacePendingDocs = docs; // keep this batch for the first real window
+         return;
+      }
+      const elapsedMs = at - prevAt;
+      if (elapsedMs < PACE_MIN_SAMPLE_MS) return; // keep prevAt + pending docs
+      const pending = pacePendingDocs;
+      pacePendingDocs = 0;
+      paceLastSampleAt = at;
+      const elapsedSec = elapsedMs / 1000;
+      let instant = pending / elapsedSec;
+      if (!(instant > 0) || !Number.isFinite(instant)) {
+         paceMakerAimd(at, { "fromSample": true });
+         return;
+      }
+      const capRef = Math.max(paceEwmaRate ?? 0, pacePeakRate ?? 0);
+      if (capRef > 0) {
+         instant = Math.min(instant, capRef * PACE_INSTANT_CAP_MULT);
+      }
+      paceEwmaRate = ewmaStep(paceEwmaRate, instant, PACE_EWMA_ALPHA);
+      if (pacePeakRate == null) {
+         pacePeakRate = paceEwmaRate;
+      } else {
+         pacePeakRate = Math.max(paceEwmaRate, pacePeakRate * PACE_PEAK_DECAY);
+      }
+      paceMakerAimd(at, { "fromSample": true });
+   }
+
+   function paceMakerControl() {
+      /*
+       *  pace / no-WT admit gate: shortfall-scaled delay + light jitter.
+       *  Zero delay → burst/choke; fully deterministic delay → synchronized
+       *  longer M0 stalls. ±PACE_DELAY_JITTER desyncs admits. maxInFlight
+       *  owned by paceMakerAimd.
+       */
+      admissionState = 'PACE';
+      const now = Date.now();
+      paceMakerAimd(now);
+
+      let delayMs;
+      if (paceEwmaRate == null || pacePeakRate == null || !(pacePeakRate > 0)) {
+         delayMs = paceWarmupDelay(); // warm-up
+      } else {
+         const shortfall = Math.max(0, 1 - (paceEwmaRate / pacePeakRate));
+         delayMs = PACE_DELAY_MIN_MS
+            + shortfall * (PACE_DELAY_MAX_MS - PACE_DELAY_MIN_MS);
+         const j = PACE_DELAY_JITTER;
+         delayMs = Math.floor(delayMs * ((1 - j) + Math.random() * (2 * j)));
+      }
+
+      return {
+         "state": admissionState,
+         "proceed": true,
+         "delayMs": delayMs,
+         "maxInFlight": maxInFlight,
+         "paceRate": paceEwmaRate,
+         "pacePeak": pacePeakRate,
+         "paceWall": paceInWall,
+         "replLag": 0,
+         "flowControl": false,
+         "indexBuilds": false,
+         "backupCursor": false
+      };
    }
 
    function admissionControl() {
@@ -1426,25 +1635,15 @@
        *    THROTTLE — upper soft band (fill ≥ ENTER); progressive delay; leave below LEAVE
        *    CLOSED   — wait; trip at *Trigger, release only at/under *Target
        *    COOLDOWN — after CLOSED, brief paced resume to avoid thundering herd
-       *    NAIVE    — no WT vitals (mongos / M0/Flex): jittered time-based pace
+       *    PACE     — no WT vitals: paceMaker (EWMA clear-rate AIMD + light delay)
        *  Soft-band fill: 0 at *Target → 1 at *Trigger (dirty/updates). Steady ~8–14%
        *  with tgt 5 / trig 20 stays OPEN (below midpoint) instead of sticky THROTTLE.
        *  Repl lag: >=15s soft → THROTTLE; >=30s hard → CLOSED.
        *  Booleans: flowControl + backupCursor → CLOSED; activeIndexBuilds → THROTTLE.
        */
 
-      if (admissionMode === 'naive') {
-         admissionState = 'NAIVE';
-         return {
-            "state": admissionState,
-            "proceed": true,
-            "delayMs": naiveAdmissionDelay(),
-            "maxInFlight": maxInFlight,
-            "replLag": 0,
-            "flowControl": false,
-            "indexBuilds": false,
-            "backupCursor": false
-         };
+      if (admissionMode === 'pace') {
+         return paceMakerControl();
       }
 
       const {
@@ -1606,12 +1805,14 @@
        *  is min(poolSize, admission.maxInFlight) via AIMD.
        *  onHud({ admission, poolSize, executing, buffered }) drives the live HUD.
        */
-      // mongos naïve mode: half concurrency (no WT AIMD signal to cut further under load).
-      maxInFlightCap = (admissionMode === 'naive')
-         ? Math.max(1, Math.floor(poolSize / 2))
+      // pace / paceMaker: hard cap PACE_MAX_IN_FLIGHT_CAP (not half pool — that
+      // oversubscribed M0). Start at 1 and climb only while probes improve goodput.
+      maxInFlightCap = (admissionMode === 'pace')
+         ? Math.max(1, Math.min(PACE_MAX_IN_FLIGHT_CAP, Math.floor(poolSize / 2)))
          : poolSize;
-      maxInFlight = maxInFlightCap;
+      maxInFlight = (admissionMode === 'pace') ? 1 : maxInFlightCap;
       aimdLastIncreaseAt = Date.now();
+      if (admissionMode === 'pace') paceMakerReset();
       const executing = new Set();
       const buf = [];
       const prefetch = Math.min(4, poolSize);
@@ -1707,9 +1908,9 @@
       try {
          vitals = await congestionMonitor();
          if (admissionMode === 'wt' && !hasWiredTigerVitals(vitals)) {
-            enableNaiveAdmission(
+            enablePaceAdmission(
                'no-wt',
-               'WiredTiger cache vitals unavailable — using naïve time-based admission (Atlas M0/Flex or restricted serverStatus); maxInFlight capped at half pool'
+               'WiredTiger cache vitals unavailable — using paceMaker admission (Atlas M0/Flex or restricted serverStatus); maxInFlight capped'
             );
          } else if (admissionMode === 'wt') {
             updateEwma(vitals);
@@ -1718,9 +1919,9 @@
          emit('\x1b[31m[WARN]\x1b[0m \x1b[33minitial congestionMonitor failed\x1b[0m:', e?.message ?? e);
          vitals = {};
          if (admissionMode === 'wt') {
-            enableNaiveAdmission(
+            enablePaceAdmission(
                'no-wt',
-               'congestionMonitor failed — using naïve time-based admission; maxInFlight capped at half pool'
+               'congestionMonitor failed — using paceMaker admission; maxInFlight capped'
             );
          }
       }
@@ -1774,7 +1975,7 @@
          banner += '\n\x1b[31m[WARN]\x1b[0m \x1b[33mSafeguard is enabled, simulating deletes only (via transaction rollbacks)\n\x1b[0m';
       }
 
-      // WT sampler only for mongod admission; mongos uses naïve timers (no cache vitals).
+      // WT sampler only for mongod admission; mongos uses paceMaker (no cache vitals).
       const useVitalsSampler = admissionMode === 'wt';
       vitalsSampling = useVitalsSampler;
       const sampler = useVitalsSampler ? vitalsSampler() : Promise.resolve();
@@ -1848,7 +2049,11 @@
             )) {
                batchesDone += 1;
                docsDeleted += deletedCount ?? 0;
-               if (batchOk === false) batchesFailed += 1;
+               if (batchOk === false) {
+                  batchesFailed += 1;
+               } else {
+                  paceMakerNoteBatchOk({ "deletedCount": deletedCount ?? 0 });
+               }
                if (interactive) redrawHud({ "force": true });
             }
             redrawHud({ "final": true });
