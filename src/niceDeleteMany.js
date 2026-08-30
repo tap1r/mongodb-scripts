@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.5"
+    *  Version: "0.4.6"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -57,7 +57,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.5" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.6" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -702,6 +702,7 @@
          // Collation intentionally omitted: deletes are _id equality only (binary compare).
          const deleteManyOpts = {};
          let deletedCount = 0;
+         let batchOk = true;
          const deleteMany = async() => {
             return await namespace.deleteMany(deleteManyFilter, deleteManyOpts).deletedCount;
          }
@@ -712,13 +713,15 @@
                txnStarted = true;
                deletedCount = await deleteMany();
             } catch(e) {
-               console.log('transaction error:', e);
+               batchOk = false;
+               emit('\x1b[31m[WARN]\x1b[0m \x1b[33mtransaction error (batch', bucketId, ')\x1b[0m:', e?.message ?? e);
             } finally {
                if (txnStarted) {
                   try {
                      session.abortTransaction();
                   } catch(e) {
-                     console.log('abort transaction error:', e);
+                     batchOk = false;
+                     emit('\x1b[31m[WARN]\x1b[0m \x1b[33mabort transaction error (batch', bucketId, ')\x1b[0m:', e?.message ?? e);
                   }
                }
             }
@@ -726,13 +729,59 @@
             try {
                deletedCount = await deleteMany();
             } catch(e) {
-               console.log(e);
+               batchOk = false;
+               emit('\x1b[31m[WARN]\x1b[0m \x1b[33mdeleteMany error (batch', bucketId, ')\x1b[0m:', e?.message ?? e);
             }
          }
 
-         return [bucketId, deletedCount];
+         return [bucketId, deletedCount, batchOk];
       } finally {
          session.endSession();
+      }
+   }
+
+   function reportResidualValidation({
+      residual = 0,
+      batchesDone = 0,
+      docsDeleted = 0,
+      batchesFailed = 0,
+      elapsedMs = 0
+   } = {}) {
+      /*
+       *  Residual count is majority-RC on primary. Interpretation differs for
+       *  safeguard (simulated) vs real deletes; drift can come from failed batches
+       *  or concurrent writers matching the same filter.
+       */
+      emit('\tBatches completed:', fmtNum(batchesDone));
+      if (batchesFailed > 0) {
+         emit('\tBatches with errors:', fmtNum(batchesFailed));
+      }
+      emit('\tDocuments deleted (reported by deleteMany):', fmtNum(docsDeleted));
+      emit('\tElapsed:', fmtElapsed(elapsedMs));
+      emit('\tResidual document count matching filter:', fmtNum(residual));
+
+      if (safeguard) {
+         emit('\n\x1b[34m[INFO]\x1b[0m Safeguard was enabled — deletes ran in transactions that were rolled back.');
+         emit('\tResidual matching documents are \x1b[33mexpected\x1b[0m (this run should not have removed data).');
+         emit('\tTo actually remove matches, re-run with \x1b[33msafeguard = false\x1b[0m.');
+         return;
+      }
+
+      if (batchesFailed > 0) {
+         emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mSome batches failed\x1b[0m — residual may include IDs that were not deleted.');
+      }
+
+      if (residual > 0) {
+         emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mResidual documents still match the filter.\x1b[0m');
+         emit('\tPossible causes: failed batches, concurrent inserts/updates that match the filter,');
+         emit('\tor documents that appeared after the curation cursor passed.');
+         emit('\x1b[34m[INFO]\x1b[0m Recommendation: re-run this script with the \x1b[33msame filter\x1b[0m');
+         emit('\tand \x1b[33msafeguard = false\x1b[0m to clear remaining matches (or investigate concurrent writers).');
+      } else {
+         emit('\n\x1b[34m[INFO]\x1b[0m No residual documents match the filter.');
+         if (batchesFailed > 0) {
+            emit('\t(Reported delete counts may still be incomplete due to batch errors.)');
+         }
       }
    }
 
@@ -1755,6 +1804,7 @@
       const startedAt = Date.now();
       let batchesDone = 0;
       let docsDeleted = 0;
+      let batchesFailed = 0;
       let hudSnap = {
          "admission": { "state": admissionState, "delayMs": 0, "maxInFlight": maxInFlight },
          "poolSize": concurrency,
@@ -1806,7 +1856,7 @@
                : `\n[INFO] status: elapsed / congestion / admission / pool (plain, no bars) — no % complete or ETA\n`;
             if (!interactive) emit(banner);
             redrawHud({ "force": true });
-            for await (const [, deletedCount] of asyncPool(
+            for await (const [, deletedCount, batchOk] of asyncPool(
                prepend(initialBatch, deletionList),
                task => deleteManyTask(task, writeSessionOpts),
                {
@@ -1819,6 +1869,7 @@
             )) {
                batchesDone += 1;
                docsDeleted += deletedCount ?? 0;
+               if (batchOk === false) batchesFailed += 1;
                if (interactive) redrawHud({ "force": true });
             }
             redrawHud({ "final": true });
@@ -1827,13 +1878,13 @@
          emit('...you may CTRL+C here to exit gracefully if validation is not required\n');
          // countIds uses a primary-oriented session; no connection setReadPref.
          const finalCount = countIds(filter, countSessionOpts);
-         if (safeguard) {
-            emit('Simulation safeguard is enabled, no deletions were actually performed:\n');
-         }
-         emit('\tBatches completed:', fmtNum(batchesDone));
-         emit('\tDocuments deleted (reported):', fmtNum(docsDeleted));
-         emit('\tElapsed:', fmtElapsed(Date.now() - startedAt));
-         emit('\tResidual document count matching filter:', finalCount);
+         reportResidualValidation({
+            "residual": finalCount,
+            "batchesDone": batchesDone,
+            "docsDeleted": docsDeleted,
+            "batchesFailed": batchesFailed,
+            "elapsedMs": Date.now() - startedAt
+         });
          emit('\nDone!');
       } finally {
          uninstallResize();
