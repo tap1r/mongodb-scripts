@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.2"
+    *  Version: "0.4.3"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -15,6 +15,8 @@
     *    unavailable — mongos, or Atlas M0/Flex (and similar) tiers that omit wiredTiger
     *  - Progress HUD shows congestion, admission, and pool utilization only — not % complete
     *    or ETA (no cheap total without re-executing the filter)
+    *  - interactive (TTY) HUD: coloured bars + console.clear; non-interactive: plain status
+    *    lines, ANSI stripped (mdblib-style), bars omitted — better for logs/CI
     *
     *  TODOs:
     *  - add execution profiler/timers
@@ -23,15 +25,16 @@
     *  - refine curation order (Policy B: compound equality→trailing sort probes)
     */
 
-   // Syntax: mongosh [connection options] [--quiet] [--eval 'let dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>;'] [-f|--file] </path/to/>niceDeleteMany.js
+   // Syntax: mongosh [connection options] [--quiet] [--eval 'let dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>, interactive = <bool>;'] [-f|--file] </path/to/>niceDeleteMany.js
 
    /*
-    *  dbName: <string>      // (required) database name
-    *  collName: <string>    // (required) collection name
-    *  filter: <document>    // (optional) query filter
-    *  hint: <document>      // (optional) query hint
-    *  collation: <document> // (optional) for curation/explain/count only (not deleteMany/_id)
-    *  safeguard: <bool>     // (optional) simulates deletes only, set false to remove safeguard
+    *  dbName: <string>       // (required) database name
+    *  collName: <string>     // (required) collection name
+    *  filter: <document>     // (optional) query filter
+    *  hint: <document>       // (optional) query hint
+    *  collation: <document>  // (optional) for curation/explain/count only (not deleteMany/_id)
+    *  safeguard: <bool>      // (optional) simulates deletes only, set false to remove safeguard
+    *  interactive: <bool>    // (optional) HUD mode; default process.stdout.isTTY
     */
 
    // Example: mongosh --host "replset/localhost" --eval 'var dbName = "database", collName = "collection", filter = { "qty": { "$lte": 100 } }, safeguard = true;' niceDeleteMany.js
@@ -46,12 +49,13 @@
    typeof hint !== 'object' && (hint = {});
    typeof collation !== 'object' && (collation = {});
    typeof safeguard !== 'boolean' && (safeguard = true);
+   typeof interactive !== 'boolean' && (interactive = !!(typeof process !== 'undefined' && process.stdout && process.stdout.isTTY));
 
    /*
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.2" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.3" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -99,10 +103,24 @@
    // 'wt' = WiredTiger FSM on mongod; 'naive' = time-based pace when WT vitals unavailable.
    let admissionMode = 'wt';
    let naiveReason = null; // 'mongos' | 'no-wt' | null
-   // Live HUD (clear+reprint); no % complete / ETA.
+   // Live HUD; no % complete / ETA. Interactive: clear+bars; non-interactive: plain log lines.
    const HUD_BAR_WIDTH = 28;
    const HUD_POOL_DISPLAY_MAX = 40;
-   const HUD_MIN_REDRAW_MS = 100;
+   const HUD_MIN_REDRAW_MS = 100;       // TTY refresh throttle
+   const HUD_LOG_REDRAW_MS = 1000;      // non-TTY append throttle (avoid log floods)
+
+   function stripAnsi(text) {
+      // Same idea as mdblib.js console.log wrapper (non-TTY strips escapes).
+      return String(text).replace(/(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi, '');
+   }
+
+   function emit(...args) {
+      if (interactive) {
+         console.log(...args);
+         return;
+      }
+      console.log(...args.map(a => (typeof a === 'string' ? stripAnsi(a) : a)));
+   }
    // Same vocabulary as congestionMonitor EQ: literal glyphs + \x1b colours (JS \xNN is
    // Latin-1 only — multi-byte UTF-8 via \xe2\x96… would not render as ░/▓).
    const HUD_MARK = {
@@ -237,7 +255,7 @@
       naiveReason = reason;
       const line = `\x1b[31m[WARN]\x1b[0m \x1b[33m${detail}\x1b[0m`;
       banner += `\n${line}`;
-      console.log(line);
+      emit(line);
    }
 
    function hasWiredTigerVitals(sample = vitals) {
@@ -447,10 +465,10 @@
          try {
             const expl = runExplain({ ...explainOpts, "hint": userHint });
             if (planHasCollScanOrBlockingSort(expl)) {
-               console.log('\t\x1b[31m[WARN]\x1b[0m \x1b[33mcuration plan may use COLLSCAN/blocking SORT despite user hint\x1b[0m; sortBy:', JSON.stringify(sortBy));
+               emit('\t\x1b[31m[WARN]\x1b[0m \x1b[33mcuration plan may use COLLSCAN/blocking SORT despite user hint\x1b[0m; sortBy:', JSON.stringify(sortBy));
             }
          } catch(e) {
-            console.log('\t\x1b[31m[WARN]\x1b[0m \x1b[33mcuration explain failed (user hint)\x1b[0m:', e?.message ?? e);
+            emit('\t\x1b[31m[WARN]\x1b[0m \x1b[33mcuration explain failed (user hint)\x1b[0m:', e?.message ?? e);
          }
          return { "sortBy": sortBy, "hint": userHint };
       }
@@ -461,10 +479,10 @@
             return { "sortBy": sortBy, "hint": {} }; // trust winning plan; no forced hint
          }
       } catch(e) {
-         console.log('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration explain failed\x1b[0m:', e?.message ?? e);
+         emit('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration explain failed\x1b[0m:', e?.message ?? e);
       }
 
-      console.log('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)\x1b[0m');
+      emit('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)\x1b[0m');
       return { "sortBy": idSort, "hint": idHint };
    }
 
@@ -482,14 +500,14 @@
          const { host, role, tags } = curationLandingNode(readPreference);
          const landingLine = `\x1b[34m[INFO]\x1b[0m Curation query target: \x1b[33m${host} (${role})\x1b[0m tags: \x1b[33m${JSON.stringify(tags)}\x1b[0m`;
          banner += `\n${landingLine}\n`;
-         console.log(landingLine);
+         emit(landingLine);
          if (
             role === 'PRIMARY' &&
             !onMongos &&
             readPreference.mode &&
             readPreference.mode !== 'primary'
          ) {
-            console.log('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration expected a secondary but landed on PRIMARY — connect via replica-set/SRV seed list (not directConnection to primary), and ensure eligible secondaries exist\x1b[0m');
+            emit('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration expected a secondary but landed on PRIMARY — connect via replica-set/SRV seed list (not directConnection to primary), and ensure eligible secondaries exist\x1b[0m');
          }
 
          const namespace = db.getSiblingDB(dbName).getCollection(collName);
@@ -1227,7 +1245,8 @@
       admission = {},
       poolSize = 1,
       executing = 0,
-      buffered = 0
+      buffered = 0,
+      bars = interactive
    } = {}) {
       const elapsed = fmtElapsed(Date.now() - (startedAt || Date.now()));
       const state = admission.state ?? admissionState;
@@ -1236,14 +1255,18 @@
       const mifCap = maxInFlightCap;
       const inFlightLimit = Math.max(1, Math.min(poolSize, mif));
       const admitStatus = admitStateStatus(state);
+      const statsLine = `elapsed  ${elapsed}   batches  ${fmtNum(batchesDone)}   deleted  ${fmtNum(docsDeleted)}`;
 
       // Congestion: max(dirty, updates) soft-band fill (reuse fillProgress).
-      let congLine;
+      let congMetric = 'n/a';
+      let congDetail = '';
+      let congStatus = 'low';
+      let congFill = 0;
       if (admissionMode === 'naive') {
          const why = naiveReason === 'mongos' ? 'naïve mongos'
             : naiveReason === 'no-wt' ? 'no WT (M0/Flex?)'
             : 'naïve';
-         congLine = `congestion     ${renderMeterBar(0, HUD_BAR_WIDTH, 'low')}  n/a (${why})`;
+         congDetail = `(${why})`;
       } else {
          const dirtyTarget = vitals.evictionDirtyTarget ?? 5;
          const dirtyTrigger = vitals.evictionDirtyTrigger ?? 20;
@@ -1254,19 +1277,16 @@
          const dirtyFill = fillProgress(dirtyUtil, dirtyTarget, dirtyTrigger);
          const updatesFill = fillProgress(dirtyUpdatesUtil, updatesTarget, updatesTrigger);
          const peakIsUpdates = updatesFill > dirtyFill;
-         const fill = Math.max(dirtyFill, updatesFill);
+         congFill = Math.max(dirtyFill, updatesFill);
          const peakUtil = peakIsUpdates ? dirtyUpdatesUtil : dirtyUtil;
          const peakLabel = peakIsUpdates ? 'updates' : 'dirty';
          const tgt = peakIsUpdates ? updatesTarget : dirtyTarget;
          const trig = peakIsUpdates ? updatesTrigger : dirtyTrigger;
          // Colour tracks soft-band split: lower=green, upper=yellow, ≥trigger=red.
          const peakFill = fillProgress(peakUtil, tgt, trig);
-         const status = utilAbove(peakUtil, trig) || peakFill >= 1 ? 'high'
+         congStatus = utilAbove(peakUtil, trig) || peakFill >= 1 ? 'high'
             : peakFill >= THROTTLE_ENTER_FRAC ? 'medium'
             : 'low';
-         const utilTxt = (peakUtil == null || Number.isNaN(+peakUtil))
-            ? 'n/a'
-            : `${Number(peakUtil).toFixed(1)}%`;
          const flags = [];
          try { if (vitals.checkpointStatus === 'high' || vitals.activeCheckpoint) flags.push('ckpt'); } catch(_) { /* ignore */ }
          if (admission.flowControl) flags.push('flow');
@@ -1276,21 +1296,43 @@
          if (lag > 0) flags.push(`lag ${Math.round(lag)}s`);
          const flagTxt = flags.length ? `  ${flags.join(' ')}` : '';
          if (peakUtil == null || Number.isNaN(+peakUtil)) {
-            congLine = `congestion ${renderMeterBar(0, HUD_BAR_WIDTH, 'low')}  n/a (no WT)`;
+            congDetail = '(no WT)';
          } else {
-            congLine = `congestion ${renderMeterBar(fill, HUD_BAR_WIDTH, status)}  ${peakLabel} ${utilTxt}  (tgt ${tgt} → trig ${trig})${flagTxt}`;
+            congMetric = `${peakLabel} ${Number(peakUtil).toFixed(1)}%`;
+            congDetail = `(tgt ${tgt} → trig ${trig})${flagTxt}`;
          }
       }
 
       const closedSec = (state === 'CLOSED' && closedSince > 0)
          ? `  closed ${Math.round((Date.now() - closedSince) / 1000)}s`
          : '';
+      const pool = {
+         "run": Math.max(0, Math.min(poolSize, executing|0)),
+         "buf": 0,
+         "free": 0,
+         "cap": 0,
+         "bar": ''
+      };
+      pool.buf = Math.max(0, Math.min(poolSize - pool.run, buffered|0));
+      pool.free = Math.max(0, Math.min(poolSize - pool.run - pool.buf, Math.max(0, inFlightLimit - pool.run - pool.buf)));
+      pool.cap = Math.max(0, poolSize - pool.run - pool.buf - pool.free);
+
+      if (!bars) {
+         // Non-interactive / log mode: counters + state only (no glyph bars).
+         return [
+            statsLine,
+            `congestion  ${congMetric}  ${congDetail}`.trimEnd(),
+            `admission   ${state}  delay ${delayMs}ms  maxInFlight ${mif}/${mifCap}${closedSec}`,
+            `task pool   run ${pool.run}  buf ${pool.buf}  free ${pool.free}  cap ${pool.cap}  pool ${poolSize}`
+         ].join('\n');
+      }
+
+      const congLine = admissionMode === 'naive' || congMetric === 'n/a'
+         ? `congestion ${renderMeterBar(0, HUD_BAR_WIDTH, 'low')}  n/a ${congDetail}`.trimEnd()
+         : `congestion ${renderMeterBar(congFill, HUD_BAR_WIDTH, congStatus)}  ${congMetric}  ${congDetail}`.trimEnd();
       const admitLine = `admission  ${renderAdmitBand(state, HUD_BAR_WIDTH)}  delay ${delayMs}ms  maxInFlight ${mif}/${mifCap}${closedSec}`;
-
-      const pool = renderPoolBar(poolSize, executing, buffered, inFlightLimit, admitStatus);
-      const poolLine = `task pool  ${pool.bar}  run ${pool.run}  buf ${pool.buf}  free ${pool.free}  cap ${pool.cap}  pool ${poolSize}`;
-
-      const statsLine = `elapsed  ${elapsed}   batches  ${fmtNum(batchesDone)}   deleted  ${fmtNum(docsDeleted)}`;
+      const pooled = renderPoolBar(poolSize, executing, buffered, inFlightLimit, admitStatus);
+      const poolLine = `task pool  ${pooled.bar}  run ${pooled.run}  buf ${pooled.buf}  free ${pooled.free}  cap ${pooled.cap}  pool ${poolSize}`;
       return `${statsLine}\n${congLine}\n${admitLine}\n${poolLine}`;
    }
 
@@ -1309,7 +1351,7 @@
             vitals = await congestionMonitor();
             updateEwma(vitals);
          } catch(e) {
-            console.log('\x1b[31m[WARN]\x1b[0m \x1b[33mvitals sample failed\x1b[0m:', e);
+            emit('\x1b[31m[WARN]\x1b[0m \x1b[33mvitals sample failed\x1b[0m:', e);
          }
       }
    }
@@ -1614,7 +1656,7 @@
             updateEwma(vitals);
          }
       } catch(e) {
-         console.log('\x1b[31m[WARN]\x1b[0m \x1b[33minitial congestionMonitor failed\x1b[0m:', e?.message ?? e);
+         emit('\x1b[31m[WARN]\x1b[0m \x1b[33minitial congestionMonitor failed\x1b[0m:', e?.message ?? e);
          vitals = {};
          if (admissionMode === 'wt') {
             enableNaiveAdmission(
@@ -1687,30 +1729,48 @@
          "buffered": 0
       };
 
-      function redrawHud(force = false) {
+      function redrawHud({ force = false, final = false } = {}) {
          const now = Date.now();
-         if (!force && (now - lastHudAt) < HUD_MIN_REDRAW_MS) return;
+         const minMs = interactive ? HUD_MIN_REDRAW_MS : HUD_LOG_REDRAW_MS;
+         // TTY: force refreshes immediately. Log mode: throttle always except first/final.
+         if (!final && lastHudAt !== 0) {
+            if (interactive) {
+               if (!force && (now - lastHudAt) < minMs) return;
+            } else if ((now - lastHudAt) < minMs) {
+               return;
+            }
+         }
          lastHudAt = now;
-         console.clear();
-         console.log(banner);
-         console.log(renderHud({
+         const hud = renderHud({
             "startedAt": startedAt,
             "batchesDone": batchesDone,
             "docsDeleted": docsDeleted,
+            "bars": interactive,
             ...hudSnap
-         }));
+         });
+         if (interactive) {
+            console.clear();
+            console.log(banner);
+            console.log(hud);
+         } else {
+            // Append-only plain status (ANSI stripped via emit); no bars / no clear.
+            emit(hud);
+         }
       }
 
       try {
-         console.clear();
-         console.log(banner);
+         if (interactive) console.clear();
+         emit(banner);
          const deletionList = getIds(filter, bucketSizeLimit, readSessionOpts);
          const { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
          if (initialEmptyBatch === true) {
-            console.log('\tNo matching documents found to match the filter, double-check the namespace and filter');
+            emit('\tNo matching documents found to match the filter, double-check the namespace and filter');
          } else {
-            banner += `\n\x1b[34m[INFO]\x1b[0m HUD: congestion / admission / pool — no % complete or ETA\n`;
-            redrawHud(true);
+            banner += interactive
+               ? `\n\x1b[34m[INFO]\x1b[0m HUD: congestion / admission / pool — no % complete or ETA\n`
+               : `\n[INFO] status: elapsed / congestion / admission / pool (plain, no bars) — no % complete or ETA\n`;
+            if (!interactive) emit(banner);
+            redrawHud({ "force": true });
             for await (const [, deletedCount] of asyncPool(
                prepend(initialBatch, deletionList),
                task => deleteManyTask(task, writeSessionOpts),
@@ -1718,28 +1778,28 @@
                   "poolSize": concurrency,
                   onHud(snap) {
                      hudSnap = snap;
-                     redrawHud(false);
+                     redrawHud();
                   }
                }
             )) {
                batchesDone += 1;
                docsDeleted += deletedCount ?? 0;
-               redrawHud(true);
+               if (interactive) redrawHud({ "force": true });
             }
-            redrawHud(true);
+            redrawHud({ "final": true });
          }
-         console.log(`\nValidating deletion results ...please wait\n`);
-         console.log('...you may CTRL+C here to exit gracefully if validation is not required\n');
+         emit(`\nValidating deletion results ...please wait\n`);
+         emit('...you may CTRL+C here to exit gracefully if validation is not required\n');
          await setConnectionReadPref({ "mode": "primary" }); // countIds: majority on primary
          const finalCount = countIds(filter, countSessionOpts);
          if (safeguard) {
-            console.log('Simulation safeguard is enabled, no deletions were actually performed:\n');
+            emit('Simulation safeguard is enabled, no deletions were actually performed:\n');
          }
-         console.log('\tBatches completed:', fmtNum(batchesDone));
-         console.log('\tDocuments deleted (reported):', fmtNum(docsDeleted));
-         console.log('\tElapsed:', fmtElapsed(Date.now() - startedAt));
-         console.log('\tResidual document count matching filter:', finalCount);
-         console.log('\nDone!');
+         emit('\tBatches completed:', fmtNum(batchesDone));
+         emit('\tDocuments deleted (reported):', fmtNum(docsDeleted));
+         emit('\tElapsed:', fmtElapsed(Date.now() - startedAt));
+         emit('\tResidual document count matching filter:', finalCount);
+         emit('\nDone!');
       } finally {
          vitalsSampling = false;
          await sampler;
