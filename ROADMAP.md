@@ -62,7 +62,7 @@ Direct-to-mongod only (same constraint as autoCompact). Prefer secondaries first
 Hardening of the executor auto-trim will call. Keep the file standalone.
 
 - **Completion from `serverStatus`, not ramlog.** `getLog` WTCMPCT is display. Stop on `wiredTiger['background-compact']` running bit plus the unused successful/skipped/failed counters. Today `runOnce: false` can hang if `sizeStorer` is missed or `getLog` is denied.
-- **Watermark at `runCmd`, from the server.** `ISODate()` is client clock and currently sits before the ident-map wait (up to 5s of pre-command ramlog). Use `hello().localTime` or `getLog.totalLinesWritten` immediately before enable.
+- **Watermark at `runCmd`, from `serverStatus.localTime`.** (Done in v0.4.23: snapshot after the ident wait, immediately before enable. Core `localTime` field, same clock as `getLog` `t`. Client `ISODate()` only if `serverStatus` omits it.)
 - **Topology / engine preflight only.** Mongos, FCV/binary &lt; 8, non-WT, missing WT `serverStatus` (null engine today continues and the poll never exits). Not option validation. Atlas M0/Flex: inlined `mdblib.js` `isAtlasPlatform('sharedTier')` — `hostInfo()` fallbacks + `db.hostInfo().ok` / `AtlasError` + `atlasVersion` / `*.mongodb.net`. `serverless` is still a platform string (Atlas Serverless is deprecated/gone; keep the branch). Dedicated still bounces a denied `autoCompact` if the user lacks the role.
 - **Ident pump lifetime.** Background `$listCatalog` must not outlive disable-only or a finished tail; close the cursor on the way out. Keep `await delay()` (not blocking `sleep()`) so the pump can run during waits.
 - Later: optional disable-wait cap and `quit(1)` for cron; JSON one-liner (`ok`, recovered bytes) for auto-trim to parse.
