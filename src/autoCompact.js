@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.20"
+    *  Version: "0.4.21"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,27 +11,27 @@
     *  - mongosh only; MongoDB 8.0+ WiredTiger mongod (not mongos)
     *  - operation is per mongod only: not replicated; does not compact the oplog
     *  - monitors compaction thread, then reports bytes recovered
-    *  - { autoCompact: false } disables the background thread and exits (no log tail)
+    *  - { autoCompact: true } (default) enables; { autoCompact: false } disables and exits (no log tail)
     *  - freeSpaceTargetMB is passed through only when supplied (server default 20 otherwise)
     *  - runOnce defaults to true (opposite of the server default); pass { runOnce: false } for continuous compaction
-    *  - runOnce: true (default): if a background thread is already running, the script errors; disable first with { autoCompact: false }
-    *  - runOnce: false: always send { autoCompact: false }, wait until serverStatus reports background compact running is false, then retry the original command (runOnce: false is kept) so new options replace the previous thread
+    *  - if enabling while background compact is already on, send { autoCompact: false }, wait until serverStatus running is false, then retry the original command (user options including runOnce are kept)
+    *  - that wait is unbounded; status is printed every 30s. CTRL+C aborts; you must re-run later so the new command options are applied
     */
 
-   // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "freeSpaceTargetMB": 1, "runOnce": true };'] [-f|--file] </path/to/>autoCompact.js
+   // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "autoCompact": true };'] [-f|--file] </path/to/>autoCompact.js
 
    /*
-    *  Example of basic direct localhost usage:
+    *  Example of basic direct localhost usage (autoCompact: true, runOnce: true):
     *
     *    mongosh "localhost:27017" autoCompact.js
     *
-    *  Example using custom autoCompact command options:
+    *  Example to enable with custom command options:
     *
-    *    mongosh "localhost:27017" --quiet --eval 'var autoCompactOptions = { "freeSpaceTargetMB": 64, "runOnce": true };' -f autoCompact.js
+    *    mongosh "localhost:27017" --quiet --eval 'var autoCompactOptions = { "autoCompact": true, "freeSpaceTargetMB": 64, "runOnce": true };' -f autoCompact.js
     *
-    *  Example to enable continuous compaction (replaces any existing background thread):
+    *  Example to enable continuous compaction:
     *
-    *    mongosh "localhost:27017" --quiet --eval 'var autoCompactOptions = { "runOnce": false };' -f autoCompact.js
+    *    mongosh "localhost:27017" --quiet --eval 'var autoCompactOptions = { "autoCompact": true, "runOnce": false };' -f autoCompact.js
     *
     *  Example to disable the background compact thread:
     *
@@ -40,7 +40,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.20" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.21" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -213,8 +213,8 @@
    }
 
    const SERVERSTATUS_MS = 1000;
-   const DISABLE_POLL_MS = 200;     // poll interval while waiting for disable to settle
-   const DISABLE_WAIT_MS = 60000;   // give up if WT never clears 'background compact running'
+   const DISABLE_POLL_MS = 200;      // poll interval while waiting for disable to settle
+   const DISABLE_STATUS_MS = 30000;  // progress note while waiting indefinitely
    let bcCache = { "at": 0, "value": undefined };
    const getBackgroundCompact = (fresh = false) => {
       // running + recovered bytes; cached SERVERSTATUS_MS unless fresh (end-of-pass report)
@@ -286,10 +286,9 @@
       const delta = startBytes != null ? endBytes - startBytes : endBytes;
       console.log(`\n══════ [yellow]recovered ${scaled.format(delta)} this pass (${scaled.format(endBytes)} cumulative runtime)[/] ══════`);
    };
-   const preflight = (enable = true) => {
+   const preflight = () => {
       // autoCompact is mongod 8.0+ / wiredTiger only.
-      // enable=true (runOnce: true): error if a background thread is already running.
-      // enable=false: skip that check (disable path, or runOnce: false replace-then-retry).
+      // Already-enabled is handled by the disable-wait-retry loop, not an error here.
       try {
          if (db.hello().msg === 'isdbgrid') {
             console.log('[red][ERROR] autoCompact is not supported on mongos; connect directly to a mongod[/]');
@@ -310,17 +309,10 @@
          console.log(`[red][ERROR] autoCompact requires MongoDB 8.0+; detected ${db.version()}[/]`);
          return false;
       }
-      let engine, running;
+      let engine;
       try {
-         ({ 'storageEngine': { 'name': engine } = {},
-            'wiredTiger': {
-               'background-compact': {
-                  'background compact running': running
-               } = {}
-            } = {}
-         } = serverStatus({
-            "storageEngine": true,
-            "wiredTiger": true
+         ({ 'storageEngine': { 'name': engine } = {} } = serverStatus({
+            "storageEngine": true
          }));
       } catch(e) {
          console.log('[red][ERROR] serverStatus() failed:[/]', e);
@@ -328,10 +320,6 @@
       }
       if (engine != null && engine !== 'wiredTiger') {
          console.log(`[red][ERROR] autoCompact requires wiredTiger; detected storage engine "${engine}"[/]`);
-         return false;
-      }
-      if (enable && (running > 0 || running === true)) {
-         console.log('[red][ERROR] background compact thread already enabled; Issue { autoCompact: false } first to disable[/]');
          return false;
       }
       return true;
@@ -574,11 +562,11 @@
       "comment": `Executed by ${__script.name} v${__script.version}`
    };
    const enable = cmd.autoCompact !== false;
-   // runOnce: false (continuous) replaces any existing thread: disable first, then retry cmd.
-   const replace = enable && cmd.runOnce === false;
-   if (!preflight(enable && !replace)) return;
+   if (!preflight()) return;
+   // mongod rejects autoCompact:true while WT still has background compact enabled.
+   const replace = enable && getBackgroundCompact(true).running === true;
    if (enable) {
-      console.log(`[yellow][NOTE][/] autoCompact is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact excludes the '[yellow]local.oplog.rs[/]' collection.\n`);
+      console.log(`[yellow][NOTE][/] [blue]autoCompact[/] is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact excludes the '[yellow]local.oplog.rs[/]' collection.\n`);
    }
    const runCmd = cmdDoc => {
       console.log(`[yellow]Executing shell command:[/]\n[blue]db.adminCommand(${EJSON.stringify(cmdDoc, null, 3)});[/]\n`);
@@ -595,24 +583,27 @@
       }
    };
    if (replace) {
-      // mongod rejects autoCompact:true while WT still has background compact enabled.
-      // Always send autoCompact:false (even if already idle), then wait for the enable bit
-      // ('background compact running') to clear — not WTCMPCT quiet, not currentOp.
-      // Disable is queued; WT flips the stat after the compact-server processes it.
-      // cmd already has runOnce: false from the user spread; do not drop it on retry.
-      console.log('[yellow][NOTE][/] runOnce is false (continuous); sending { autoCompact: false }, waiting for serverStatus background compact running to clear, then re-enabling with the requested options (runOnce: false preserved).\n');
+      // Already enabled: send autoCompact:false, wait for the enable bit to clear, then
+      // re-issue cmd so new user options take effect (runOnce and the rest of cmd are kept).
+      // Wait is serverStatus 'background compact running' — not WTCMPCT quiet, not currentOp.
+      console.log('[yellow][NOTE][/] background compact already enabled; sending [blue]{ "autoCompact": false }[/], waiting for [blue]serverStatus[/] background compact running to clear, then re-enabling with the requested options.\n');
       if (!runCmd({
          "autoCompact": false,
          "comment": `Executed by ${__script.name} v${__script.version}`
       })) return;
-      const deadline = Date.now() + DISABLE_WAIT_MS;
       let running = getBackgroundCompact(true).running;
+      if (running === true) {
+         // disable is queued; WT flips the enable bit after the current file compact is safe to stop
+         console.log('[yellow][NOTE][/] existing autoCompaction still in progress; waiting indefinitely for serverStatus background compact running to clear. CTRL+C to abort — if you do, re-run later so the new command options are applied.\n');
+      }
+      const startedAt = Date.now();
+      let lastStatusAt = startedAt;
       while (running === true) {
-         if (Date.now() >= deadline) {
-            console.log(`[red][ERROR] timed out after ${DISABLE_WAIT_MS / 1000}s waiting for background compact to disable (serverStatus still running)[/]`);
-            return;
-         }
          sleep(DISABLE_POLL_MS);
+         if (Date.now() - lastStatusAt >= DISABLE_STATUS_MS) {
+            console.log(`[yellow][NOTE][/] still waiting after ${Math.round((Date.now() - startedAt) / 1000)}s (background compact running). CTRL+C to abort — you will need to re-run later to apply the new command options.`);
+            lastStatusAt = Date.now();
+         }
          running = getBackgroundCompact(true).running;
       }
       if (running !== false) {
