@@ -94,12 +94,13 @@ Pin down in the implementation:
 
 ### `autoCompact.js`
 
-Executor auto-trim will call. Keep the file standalone. HEAD **0.4.24**; working **0.4.25**.
+Executor auto-trim will call. Keep the file standalone. HEAD **0.4.25**; working **0.4.26**.
 
 **Shipped**
 
 - Async IIFE (no outer `await`); `await delay()` in poll loops so `$listCatalog` can pump.
 - Atlas M0/Flex fail-fast via inlined `mdblib.js` `isAtlasPlatform('sharedTier')`. `serverless` platform string kept (product is deprecated/gone). Dedicated still bounces a role-denied `autoCompact`.
+- FCV 8.0+ via `serverStatus.featureCompatibilityVersion` (same round trip as `storageEngine`). Binary 8.x with FCV 7.0 fails. If FCV is not in the document, effective FCV equals the binary version (already ≥ 8).
 - Log watermark: `serverStatus.localTime` after the ident wait, immediately before enable. Client `ISODate()` only if `localTime` is missing.
 - First-pass latch (not ramlog, not `$currentOp` — the WT thread never reports there):
   - `visits` = success + skipped* + timeout + interrupted + failed, snapshotted at enable.
@@ -112,9 +113,10 @@ Executor auto-trim will call. Keep the file standalone. HEAD **0.4.24**; working
 
 **Remaining**
 
-- Ident pump lifetime: close/stop the `$listCatalog` cursor on disable-only or when `tailLogs` returns so it cannot keep the process alive.
-- Preflight leftovers: FCV vs binary major; `storageEngine == null` still continues; direct-to-member is only a mongos check.
-- Later: disable-wait `maxWaitMs` and `quit(1)` for cron; JSON recovered-bytes line for auto-trim.
+- **Ident pump lifetime.** `startNsResolver()` fires `pump()` and never exposes `stop()`. Disable-only does not start it (`nsResolver` is null unless enabling). Enable path starts the cursor **before** replace-wait / `runCmd` / `tailLogs`. If `runCmd` fails, `preflight` already passed, or `tailLogs` returns while `$listCatalog` is still `for await` (dense catalog) or `resolveNs` re-pumps after `IDENT_REFRESH_MS`, mongosh can stay alive on that cursor. Need `stop()` that sets a cancelled flag, `cursor.close()`, and is called in a `finally` on every enable exit (command error, idle, first-pass complete, CTRL+C if we can). Keep `await delay()` — do not go back to blocking `sleep()`.
+- **`storageEngine == null`.** The check is `engine != null && engine !== 'wiredTiger'`, so a stripped `serverStatus` (privileges, odd platform, not M0 — M0 already failed `sharedTier`) continues. Then `visits` / `running` are null and the latch no-ops after `NOOP_GRACE_MS` or waits on nothing useful. Fail fast: opted-in `storageEngine` with no `name` → error, same class as non-WT.
+- **Direct-to-member.** Mongos is rejected; a replica-set URI without `directConnection=true` still lands on the **primary** and only compacts that node (command is not replicated). Warn when `hello().me` does not match the connected host, or when `isWritablePrimary` and the seed list looks like a set. Do not try to walk secondaries from this file (discovery later).
+- **Later, for cron / auto-trim:** peel script-only keys (`maxWaitMs`, output format) out of the command document before `adminCommand` so mongod never sees them. Cap the unbounded disable-wait. `quit(1)` on hard errors (`killAgedSessions.js` already notes mongosh `-f` may not surface the code). One JSON line (`ok`, `recoveredBytes`, `runOnce`, `visits`) after the round so auto-trim does not scrape banners.
 
 ### `dbstats.js`
 
