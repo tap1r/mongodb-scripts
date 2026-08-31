@@ -59,13 +59,27 @@ Direct-to-mongod only (same constraint as autoCompact). Prefer secondaries first
 
 ### `autoCompact.js`
 
-Hardening of the executor auto-trim will call. Keep the file standalone.
+Executor auto-trim will call. Keep the file standalone. HEAD **0.4.24**; working **0.4.25**.
 
-- **Completion from `serverStatus`, not ramlog.** `getLog` WTCMPCT is display. Stop on `wiredTiger['background-compact']` running bit plus the unused successful/skipped/failed counters. Today `runOnce: false` can hang if `sizeStorer` is missed or `getLog` is denied.
-- **Watermark at `runCmd`, from `serverStatus.localTime`.** (Done in v0.4.23: snapshot after the ident wait, immediately before enable. Core `localTime` field, same clock as `getLog` `t`. Client `ISODate()` only if `serverStatus` omits it.)
-- **Topology / engine preflight only.** Mongos, FCV/binary &lt; 8, non-WT, missing WT `serverStatus` (null engine today continues and the poll never exits). Not option validation. Atlas M0/Flex: inlined `mdblib.js` `isAtlasPlatform('sharedTier')` — `hostInfo()` fallbacks + `db.hostInfo().ok` / `AtlasError` + `atlasVersion` / `*.mongodb.net`. `serverless` is still a platform string (Atlas Serverless is deprecated/gone; keep the branch). Dedicated still bounces a denied `autoCompact` if the user lacks the role.
-- **Ident pump lifetime.** Background `$listCatalog` must not outlive disable-only or a finished tail; close the cursor on the way out. Keep `await delay()` (not blocking `sleep()`) so the pump can run during waits.
-- Later: optional disable-wait cap and `quit(1)` for cron; JSON one-liner (`ok`, recovered bytes) for auto-trim to parse.
+**Shipped**
+
+- Async IIFE (no outer `await`); `await delay()` in poll loops so `$listCatalog` can pump.
+- Atlas M0/Flex fail-fast via inlined `mdblib.js` `isAtlasPlatform('sharedTier')`. `serverless` platform string kept (product is deprecated/gone). Dedicated still bounces a role-denied `autoCompact`.
+- Log watermark: `serverStatus.localTime` after the ident wait, immediately before enable. Client `ISODate()` only if `localTime` is missing.
+- First-pass latch (not ramlog, not `$currentOp` — the WT thread never reports there):
+  - `visits` = success + skipped* + timeout + interrupted + failed, snapshotted at enable.
+  - `sizeStorer` WTCMPCT is a last-file hint.
+  - `Δvisits >=` catalog ident count only after `$listCatalog` succeeds, then a visits-quiet window so the last file can finish.
+  - `Δvisits > 0` and visits quiet and no WTCMPCT heartbeat.
+  - no-op: no visits and no heartbeat for `NOOP_GRACE_MS` (works with `runOnce: false`, where the running bit stays true).
+  - `runOnce: true` still waits for `background compact running` to clear after first pass.
+  - Recovered-bytes stall is not a stop. Overflow only resets poll interval.
+
+**Remaining**
+
+- Ident pump lifetime: close/stop the `$listCatalog` cursor on disable-only or when `tailLogs` returns so it cannot keep the process alive.
+- Preflight leftovers: FCV vs binary major; `storageEngine == null` still continues; direct-to-member is only a mongos check.
+- Later: disable-wait `maxWaitMs` and `quit(1)` for cron; JSON recovered-bytes line for auto-trim.
 
 ### `dbstats.js`
 
