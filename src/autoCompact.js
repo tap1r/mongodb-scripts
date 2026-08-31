@@ -1,14 +1,14 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.25"
+    *  Version: "0.4.26"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Notes:
     *  - automates the autoCompact command with monitoring (https://www.mongodb.com/docs/v8.0/reference/command/autoCompact/)
-    *  - mongosh only; MongoDB 8.0+ WiredTiger mongod (not mongos). Do not top-level-await this IIFE (rewriter SyntaxError)
+    *  - mongosh only; MongoDB 8.0+ WiredTiger mongod (not mongos); FCV 8.0+ (binary 8 with FCV 7 is rejected). Do not top-level-await this IIFE (rewriter SyntaxError)
     *  - Atlas M0/Flex: isAtlasPlatform('sharedTier') fails fast; serverless platform string kept (deprecated). https://www.mongodb.com/docs/atlas/unsupported-commands/
     *  - per mongod only (not replicated); excludes local.oplog.rs
     *  - { autoCompact: true } (default) enables; { autoCompact: false } disables and exits (no log tail)
@@ -41,7 +41,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.25" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.26" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -388,16 +388,28 @@
          return false;
       }
       if (!Number.isFinite(major) || major < 8) {
-         console.log(`[red][ERROR] autoCompact requires MongoDB 8.0+; detected ${db.version()}[/]`);
+         console.log(`[red][ERROR] autoCompact requires MongoDB 8.0+; detected binary ${db.version()}[/]`);
          return false;
       }
-      let engine;
+      let engine, fcv;
       try {
-         ({ 'storageEngine': { 'name': engine } = {} } = serverStatus({
-            "storageEngine": true
+         ({
+            'storageEngine': { 'name': engine } = {},
+            'featureCompatibilityVersion': fcv
+         } = serverStatus({
+            "storageEngine": true,
+            "featureCompatibilityVersion": true
          }));
       } catch(e) {
          console.log('[red][ERROR] serverStatus() failed:[/]', e);
+         return false;
+      }
+      // explicit FCV from serverStatus; if omitted, effective FCV equals the binary version
+      const fcvVersion = (typeof fcv === 'string') ? fcv : fcv?.version;
+      const effectiveFcv = fcvVersion ?? db.version();
+      const fcvMajor = parseInt(String(effectiveFcv).split('.')[0], 10);
+      if (!Number.isFinite(fcvMajor) || fcvMajor < 8) {
+         console.log(`[red][ERROR] autoCompact requires FCV 8.0+; detected binary ${db.version()}, FCV ${effectiveFcv}[/]`);
          return false;
       }
       if (engine != null && engine !== 'wiredTiger') {
