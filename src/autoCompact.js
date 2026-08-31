@@ -1,26 +1,22 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.24"
+    *  Version: "0.4.25"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Notes:
     *  - automates the autoCompact command with monitoring (https://www.mongodb.com/docs/v8.0/reference/command/autoCompact/)
-    *  - mongosh only; MongoDB 8.0+ WiredTiger mongod (not mongos)
-    *  - Atlas M0 (Free) and Flex deny autoCompact; preflight uses mdblib.js isAtlasPlatform('sharedTier') / serverless and fails fast (https://www.mongodb.com/docs/atlas/unsupported-commands/)
-    *  - do not top-level-await this IIFE: mongosh --file rewrites await and fails with SyntaxError: Unexpected token ','
-    *  - operation is per mongod only: not replicated; does not compact the oplog
-    *  - monitors compaction thread, then reports bytes recovered
+    *  - mongosh only; MongoDB 8.0+ WiredTiger mongod (not mongos). Do not top-level-await this IIFE (rewriter SyntaxError)
+    *  - Atlas M0/Flex: isAtlasPlatform('sharedTier') fails fast; serverless platform string kept (deprecated). https://www.mongodb.com/docs/atlas/unsupported-commands/
+    *  - per mongod only (not replicated); excludes local.oplog.rs
     *  - { autoCompact: true } (default) enables; { autoCompact: false } disables and exits (no log tail)
-    *  - freeSpaceTargetMB is passed through only when supplied (server default 20 otherwise)
-    *  - runOnce defaults to true (opposite of the server default); pass { runOnce: false } for continuous compaction
-    *  - if enabling while background compact is already on, send { autoCompact: false }, wait until serverStatus running is false, then retry the original command (user options including runOnce are kept)
-    *  - that wait is unbounded; status is printed every 30s. CTRL+C aborts; you must re-run later so the new command options are applied
-    *  - ident → ns map is filled from $listCatalog in the background; autoCompact waits for the first batch (or IDENT_FIRST_MS)
-    *  - WTCMPCT log watermark is serverStatus.localTime taken immediately before autoCompact enable (not client ISODate)
-    *  - first-pass complete: sizeStorer hint, or WT file-visit counters stalled with no WTCMPCT heartbeat (runOnce:false does not clear the running bit)
+    *  - freeSpaceTargetMB passthrough (server default 20); runOnce defaults to true (opposite of the server)
+    *  - already-enabled: autoCompact:false, wait for running bit to clear (unbounded, 30s notes), re-issue user options
+    *  - ident → ns map from background $listCatalog (first batch or IDENT_FIRST_MS); await delay() so the pump can run
+    *  - WTCMPCT watermark is serverStatus.localTime immediately before enable (not client ISODate)
+    *  - first-pass latch: sizeStorer hint, or WT visits (success+skipped*+timeout+interrupted+failed) stall with no WTCMPCT heartbeat, or visits >= catalog ident count after $listCatalog. runOnce:false does not clear the running bit. $currentOp is unused (command only). Recovered-bytes stall is not a stop.
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "autoCompact": true };'] [-f|--file] </path/to/>autoCompact.js
@@ -45,7 +41,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.24" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.25" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
