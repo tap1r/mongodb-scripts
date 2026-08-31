@@ -94,7 +94,7 @@ Pin down in the implementation:
 
 ### `autoCompact.js`
 
-Executor auto-trim will call. Keep the file standalone. HEAD **0.4.26**; working **0.4.27**.
+Executor auto-trim will call. Keep the file standalone. HEAD **0.4.27**; working **0.4.28**.
 
 **Shipped**
 
@@ -111,7 +111,9 @@ Executor auto-trim will call. Keep the file standalone. HEAD **0.4.26**; working
   - `Δvisits > 0` and visits quiet and no WTCMPCT heartbeat.
   - no-op: no visits and no heartbeat for `NOOP_GRACE_MS` (works with `runOnce: false`, where the running bit stays true).
   - `runOnce: true` still waits for `background compact running` to clear after first pass.
-  - Recovered-bytes stall is not a stop. Overflow only resets poll interval.
+  - Recovered-bytes stall is not a stop.
+  - Ramlog overflow (`ΔtotalLinesWritten ≥ 1024`) is a **heartbeat**, not quiet (lost WTCMPCT must not latch mid-file). A full 1024-line snapshot keeps getLog poll at 50ms but does not count as heartbeat (chatty idle nodes stay full).
+  - getLog poll: min while visits increment or first pass is still in a file; backoff only after latch or during no-op.
 
 **Remaining**
 
