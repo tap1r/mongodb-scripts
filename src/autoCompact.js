@@ -1,7 +1,7 @@
-(() => {
+(async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.21"
+    *  Version: "0.4.22"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,6 +9,7 @@
     *  Notes:
     *  - automates the autoCompact command with monitoring (https://www.mongodb.com/docs/v8.0/reference/command/autoCompact/)
     *  - mongosh only; MongoDB 8.0+ WiredTiger mongod (not mongos)
+    *  - do not top-level-await this IIFE: mongosh --file rewrites await and fails with SyntaxError: Unexpected token ','
     *  - operation is per mongod only: not replicated; does not compact the oplog
     *  - monitors compaction thread, then reports bytes recovered
     *  - { autoCompact: true } (default) enables; { autoCompact: false } disables and exits (no log tail)
@@ -16,6 +17,7 @@
     *  - runOnce defaults to true (opposite of the server default); pass { runOnce: false } for continuous compaction
     *  - if enabling while background compact is already on, send { autoCompact: false }, wait until serverStatus running is false, then retry the original command (user options including runOnce are kept)
     *  - that wait is unbounded; status is printed every 30s. CTRL+C aborts; you must re-run later so the new command options are applied
+    *  - ident → ns map is filled from $listCatalog in the background; autoCompact waits for the first batch (or IDENT_FIRST_MS)
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "autoCompact": true };'] [-f|--file] </path/to/>autoCompact.js
@@ -40,7 +42,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.21" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.22" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -324,43 +326,10 @@
       }
       return true;
    };
+   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
    const identKey = name => String(name ?? '')
       .replace(/^(?:file:|table:|statistics:table:)/, '')
       .replace(/\.wt$/, '');
-   const buildIdentMap = () => {
-      // ident -> { kind, ns, idx? }; overlay WTCMPCT filenames with $listCatalog (WT name is the fallback)
-      const map = new Map([
-         ['sizeStorer', { "kind": "internal", "ns": "(sizeStorer)" }],
-         ['WiredTigerHS', { "kind": "internal", "ns": "(history store)" }],
-         ['_mdb_catalog', { "kind": "internal", "ns": "(catalog)" }]
-      ]);
-      let ok = false;
-      try {
-         db.getSiblingDB('admin').aggregate([
-            { "$listCatalog": {} },
-            { "$project": {
-               "ns": 1,
-               "db": 1,
-               "name": 1,
-               "ident": 1,
-               "idxIdent": 1
-            } }],
-            { "comment": `Executed by ${__script.name} v${__script.version} ident map` }
-         ).forEach(doc => {
-            const ns = doc.ns ?? (doc.db && doc.name ? `${doc.db}.${doc.name}` : null);
-            if (typeof doc.ident === 'string' && ns) map.set(doc.ident, { "kind": "collection", "ns": ns });
-            if (doc.idxIdent && ns) {
-               for (const [idx, ident] of Object.entries(doc.idxIdent)) {
-                  if (typeof ident === 'string') map.set(ident, { "kind": "index", "ns": ns, "idx": idx });
-               }
-            }
-         });
-         ok = true;
-      } catch(e) {
-         console.log('[red][WARN] $listCatalog() unavailable, WTCMPCT lines will show WT filenames:[/]', e);
-      }
-      return { map, ok };
-   };
    const nsFromWt = (name, map) => {
       const key = identKey(name);
       return key ? map.get(key) ?? null : null;
@@ -384,20 +353,76 @@
       return wtFile ? wtFile[0] : null;
    };
    const IDENT_REFRESH_MS = 5000;
-   const makeNsResolver = () => {
-      // unknown ident (collection created this pass): re-query $listCatalog, at most every IDENT_REFRESH_MS
-      let { map } = buildIdentMap();
+   const IDENT_BATCH = 64;
+   const IDENT_FIRST_MS = 5000; // do not block autoCompact if $listCatalog stalls
+   const startNsResolver = () => {
+      // ident -> { kind, ns, idx? }; internals first; $listCatalog fills the rest in the background
+      const map = new Map([
+         ['sizeStorer', { "kind": "internal", "ns": "(sizeStorer)" }],
+         ['WiredTigerHS', { "kind": "internal", "ns": "(history store)" }],
+         ['_mdb_catalog', { "kind": "internal", "ns": "(catalog)" }]
+      ]);
+      let pumping = false;
       let lastRefreshAt = 0;
-      return name => {
-         let ns = nsFromWt(name, map);
-         if (ns || !name) return ns;
-         if (Date.now() - lastRefreshAt >= IDENT_REFRESH_MS) {
-            ({ map } = buildIdentMap());
-            lastRefreshAt = Date.now();
-            ns = nsFromWt(name, map);
+      let firstSeen = false;
+      let firstResolve;
+      const ready = new Promise(resolve => { firstResolve = resolve; });
+      const signalReady = () => {
+         if (!firstSeen) {
+            firstSeen = true;
+            firstResolve();
          }
-         return ns;
       };
+      const ingest = doc => {
+         const ns = doc.ns ?? (doc.db && doc.name ? `${doc.db}.${doc.name}` : null);
+         if (typeof doc.ident === 'string' && ns) map.set(doc.ident, { "kind": "collection", "ns": ns });
+         if (doc.idxIdent && ns) {
+            for (const [idx, ident] of Object.entries(doc.idxIdent)) {
+               if (typeof ident === 'string') map.set(ident, { "kind": "index", "ns": ns, "idx": idx });
+            }
+         }
+      };
+      const pump = async() => {
+         if (pumping) return;
+         pumping = true;
+         let cursor;
+         try {
+            cursor = db.getSiblingDB('admin').aggregate([
+               { "$listCatalog": {} },
+               { "$project": {
+                  "ns": 1,
+                  "db": 1,
+                  "name": 1,
+                  "ident": 1,
+                  "idxIdent": 1
+               } }
+            ], {
+               "cursor": { "batchSize": IDENT_BATCH },
+               "comment": `Executed by ${__script.name} v${__script.version} ident map`
+            });
+            for await (const doc of cursor) {
+               ingest(doc);
+               signalReady();
+            }
+         } catch(e) {
+            console.log('[red][WARN] $listCatalog() unavailable, WTCMPCT lines will show WT filenames:[/]', e);
+         } finally {
+            if (cursor) {
+               try { cursor.close(); } catch(_) { /* already closed */ }
+            }
+            pumping = false;
+            lastRefreshAt = Date.now();
+            signalReady();
+         }
+      };
+      pump();
+      const resolveNs = name => {
+         const ns = nsFromWt(name, map);
+         if (ns || !name) return ns;
+         if (!pumping && Date.now() - lastRefreshAt >= IDENT_REFRESH_MS) pump();
+         return nsFromWt(name, map);
+      };
+      return { ready, resolve: resolveNs };
    };
    const annotateWtMsg = (msg, dhandle, resolveNs) => {
       const text = String(msg);
@@ -471,7 +496,7 @@
       }
       return { "logs": out, "totalLinesWritten": totalLinesWritten };
    };
-   const tailLogs = (ts, resolveNs = () => null, runOnce = true) => {
+   const tailLogs = async(ts, resolveNs = () => null, runOnce = true) => {
       /*
        *  Follow WTCMPCT until the first catalog walk ends, then report recovered bytes.
        *  sizeStorer is the last file (skip or compact). runOnce=false returns then (thread stays on).
@@ -541,7 +566,7 @@
             break;
          }
          pollMS = regulatePollMS(pollMS, { "overflow": overflow, "active": logs.length > 0 });
-         sleep(pollMS);
+         await delay(pollMS);
       } while (true);
       if (!runOnce && firstPassDone) {
          console.log('\n══════ [yellow]first pass complete; background compact thread left enabled (next walk ~24h)[/] ══════');
@@ -563,6 +588,7 @@
    };
    const enable = cmd.autoCompact !== false;
    if (!preflight()) return;
+   const nsResolver = enable ? startNsResolver() : null;
    // mongod rejects autoCompact:true while WT still has background compact enabled.
    const replace = enable && getBackgroundCompact(true).running === true;
    if (enable) {
@@ -599,7 +625,7 @@
       const startedAt = Date.now();
       let lastStatusAt = startedAt;
       while (running === true) {
-         sleep(DISABLE_POLL_MS);
+         await delay(DISABLE_POLL_MS);
          if (Date.now() - lastStatusAt >= DISABLE_STATUS_MS) {
             console.log(`[yellow][NOTE][/] still waiting after ${Math.round((Date.now() - startedAt) / 1000)}s (background compact running). CTRL+C to abort — you will need to re-run later to apply the new command options.`);
             lastStatusAt = Date.now();
@@ -613,12 +639,13 @@
       console.log('══════ [yellow]serverStatus: background compact running is false; retrying with updated options[/] ══════\n');
    }
    const ts = enable ? ISODate() : null;
+   if (nsResolver) await Promise.race([nsResolver.ready, delay(IDENT_FIRST_MS)]);
    if (!runCmd(cmd)) return;
    if (!enable) {
       console.log('══════ [yellow]background compact thread disabled[/] ══════');
       return;
    }
-   tailLogs(ts, makeNsResolver(), cmd.runOnce === true);
+   await tailLogs(ts, nsResolver.resolve, cmd.runOnce === true);
 })();
 
 // EOF
