@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.19"
+    *  Version: "0.4.20"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -40,7 +40,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.19" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.20" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -219,6 +219,7 @@
    const getBackgroundCompact = (fresh = false) => {
       // running + recovered bytes; cached SERVERSTATUS_MS unless fresh (end-of-pass report)
       // success/failed/skipped/timeout/interrupted are process-lifetime totals and are not used
+      // never returns null: probe failure is { running: null, bytesRecovered: null }
       if (!fresh && bcCache.value !== undefined && Date.now() - bcCache.at < SERVERSTATUS_MS) {
          return bcCache.value;
       }
@@ -238,12 +239,12 @@
             "bytesRecovered": Number.isFinite(+bytesRecovered) ? +bytesRecovered : null
          };
       } catch(e) {
-         value = null;
+         value = { "running": null, "bytesRecovered": null };
       }
       bcCache = { "at": Date.now(), "value": value };
       return value;
    };
-   const getAutoCompactRunning = () => getBackgroundCompact()?.running ?? null;
+   const getAutoCompactRunning = () => getBackgroundCompact().running;
    class AutoFactor {
       /*
        *  Determine scale factor automatically (same idea as mdblib.js / dbstats.js)
@@ -277,7 +278,7 @@
    const scaled = new AutoFactor();
    const reportRecoveredBytes = startBytes => {
       // this-pass delta vs process-lifetime cumulative recovered bytes
-      const { 'bytesRecovered': endBytes = null } = getBackgroundCompact(true) ?? {};
+      const { 'bytesRecovered': endBytes = null } = getBackgroundCompact(true);
       if (endBytes == null) {
          console.log('══════ [yellow]recovered bytes: unavailable[/] ══════');
          return;
@@ -499,7 +500,7 @@
       let pollMS = POLL_MS_MIN;
       let lastTotal = null;
       let lastLogAt = null;
-      const { 'bytesRecovered': startBytes = null } = getBackgroundCompact() ?? {};
+      const { 'bytesRecovered': startBytes = null } = getBackgroundCompact();
 
       do {
          const { logs, totalLinesWritten } = getLogs(ts, seen);
@@ -605,14 +606,14 @@
          "comment": `Executed by ${__script.name} v${__script.version}`
       })) return;
       const deadline = Date.now() + DISABLE_WAIT_MS;
-      let running = getBackgroundCompact(true)?.running ?? null;
+      let running = getBackgroundCompact(true).running;
       while (running === true) {
          if (Date.now() >= deadline) {
             console.log(`[red][ERROR] timed out after ${DISABLE_WAIT_MS / 1000}s waiting for background compact to disable (serverStatus still running)[/]`);
             return;
          }
          sleep(DISABLE_POLL_MS);
-         running = getBackgroundCompact(true)?.running ?? null;
+         running = getBackgroundCompact(true).running;
       }
       if (running !== false) {
          console.log('[red][ERROR] could not confirm background compact disabled (serverStatus unavailable)[/]');
