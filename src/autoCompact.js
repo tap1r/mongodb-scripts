@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.23"
+    *  Version: "0.4.24"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,6 +19,8 @@
     *  - if enabling while background compact is already on, send { autoCompact: false }, wait until serverStatus running is false, then retry the original command (user options including runOnce are kept)
     *  - that wait is unbounded; status is printed every 30s. CTRL+C aborts; you must re-run later so the new command options are applied
     *  - ident → ns map is filled from $listCatalog in the background; autoCompact waits for the first batch (or IDENT_FIRST_MS)
+    *  - WTCMPCT log watermark is serverStatus.localTime taken immediately before autoCompact enable (not client ISODate)
+    *  - first-pass complete: sizeStorer hint, or WT file-visit counters stalled with no WTCMPCT heartbeat (runOnce:false does not clear the running bit)
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "autoCompact": true };'] [-f|--file] </path/to/>autoCompact.js
@@ -43,7 +45,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.23" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.24" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -219,35 +221,59 @@
    const DISABLE_POLL_MS = 200;      // poll interval while waiting for disable to settle
    const DISABLE_STATUS_MS = 30000;  // progress note while waiting indefinitely
    let bcCache = { "at": 0, "value": undefined };
+   // WT file-visit outcomes (process-lifetime totals). Recovered-bytes and EMA are not visits.
+   const BC_VISIT_KEYS = [
+      'background compact successful calls',
+      'background compact skipped file, not meeting requirements for compaction',
+      'background compact skipped file, it is part of the exclude list',
+      'background compact skipped, there is a permissions issue',
+      'background compact skipped, no such file exists',
+      'background compact skipped file, it is smaller than 1MB in size',
+      'background compact skipped, last compact was unsuccessful/less successful than average',
+      'background compact timeout',
+      'background compact interrupted',
+      'background compact failed calls'
+   ];
    const getBackgroundCompact = (fresh = false) => {
-      // running + recovered bytes; cached SERVERSTATUS_MS unless fresh (end-of-pass report)
-      // success/failed/skipped/timeout/interrupted are process-lifetime totals and are not used
-      // never returns null: probe failure is { running: null, bytesRecovered: null }
+      // running + recovered bytes + file-visit totals; cached SERVERSTATUS_MS unless fresh
+      // never returns null: probe failure is { running: null, bytesRecovered: null, visits: null }
       if (!fresh && bcCache.value !== undefined && Date.now() - bcCache.at < SERVERSTATUS_MS) {
          return bcCache.value;
       }
-      let running, bytesRecovered, value;
+      let running, bytesRecovered, bc = {}, value;
       try {
          ({ 'wiredTiger': {
-               'background-compact': {
-                  'background compact running': running,
-                  'background compact recovered bytes': bytesRecovered
-               } = {}
+               'background-compact': bc = {}
             } = {}
          } = serverStatus({
             "wiredTiger": true
          }));
+         ({ 'background compact running': running,
+            'background compact recovered bytes': bytesRecovered
+         } = bc);
+         const visitN = BC_VISIT_KEYS.reduce((sum, key) => {
+            const n = +bc[key];
+            return sum + (Number.isFinite(n) ? n : 0);
+         }, 0);
          value = {
             "running": running === undefined ? null : (running > 0 || running === true),
-            "bytesRecovered": Number.isFinite(+bytesRecovered) ? +bytesRecovered : null
+            "bytesRecovered": Number.isFinite(+bytesRecovered) ? +bytesRecovered : null,
+            "visits": Object.keys(bc).length ? visitN : null
          };
       } catch(e) {
-         value = { "running": null, "bytesRecovered": null };
+         value = { "running": null, "bytesRecovered": null, "visits": null };
       }
       bcCache = { "at": Date.now(), "value": value };
       return value;
    };
-   const getAutoCompactRunning = () => getBackgroundCompact().running;
+   const serverLocalTime = () => {
+      // core serverStatus field (not an opt-in section); same clock as getLog t
+      try {
+         const { localTime } = serverStatus();
+         if (localTime != null) return localTime;
+      } catch(_) { /* fall through */ }
+      return ISODate();
+   };
    class AutoFactor {
       /*
        *  Determine scale factor automatically (same idea as mdblib.js / dbstats.js)
@@ -421,6 +447,7 @@
          ['_mdb_catalog', { "kind": "internal", "ns": "(catalog)" }]
       ]);
       let pumping = false;
+      let catalogOk = false;
       let lastRefreshAt = 0;
       let firstSeen = false;
       let firstResolve;
@@ -462,7 +489,9 @@
                ingest(doc);
                signalReady();
             }
+            catalogOk = true;
          } catch(e) {
+            catalogOk = false;
             console.log('[red][WARN] $listCatalog() unavailable, WTCMPCT lines will show WT filenames:[/]', e);
          } finally {
             if (cursor) {
@@ -480,7 +509,12 @@
          if (!pumping && Date.now() - lastRefreshAt >= IDENT_REFRESH_MS) pump();
          return nsFromWt(name, map);
       };
-      return { ready, resolve: resolveNs };
+      return {
+         ready,
+         resolve: resolveNs,
+         size: () => map.size,
+         catalogReady: () => catalogOk && !pumping
+      };
    };
    const annotateWtMsg = (msg, dhandle, resolveNs) => {
       const text = String(msg);
@@ -505,8 +539,9 @@
    };
    const POLL_MS_MIN = 50;     // after new WTCMPCT lines or ramlog overflow
    const POLL_MS_MAX = 1000;   // quiet backoff ceiling
-   const LOG_QUIET_MS = 2000;  // no new WTCMPCT: first-pass complete if overflow seen or compact idle
-   const NOOP_GRACE_MS = 5000; // never-seen-running and still idle
+   const LOG_QUIET_MS = 2000;  // WTCMPCT heartbeat: still in a file if lines arrived within this window
+   const VISITS_QUIET_MS = 2000; // WT visit counters unchanged
+   const NOOP_GRACE_MS = 5000; // no file visits and no WTCMPCT heartbeat
    const GETLOG_CAP = 1024;    // ramlog size; overflow warn + seen Set cap
    const clampPollMS = ms => {
       const n = +ms;
@@ -533,7 +568,7 @@
          ({ "log": lines = [], "totalLinesWritten": totalLinesWritten } = db.adminCommand({ "getLog": "global" }));
       } catch(e) {
          if (!getLogWarned) {
-            console.log('[red][WARN] getLog() unavailable, relying on serverStatus() for idle detection:[/]', e);
+            console.log('[red][WARN] getLog() unavailable, relying on serverStatus WT file-visit counters:[/]', e);
             getLogWarned = true;
          }
          return { "logs": [], "totalLinesWritten": null };
@@ -554,24 +589,37 @@
       }
       return { "logs": out, "totalLinesWritten": totalLinesWritten };
    };
-   const tailLogs = async(ts, resolveNs = () => null, runOnce = true) => {
+   const tailLogs = async(ts, nsResolver = {}, runOnce = true) => {
       /*
        *  Follow WTCMPCT until the first catalog walk ends, then report recovered bytes.
-       *  sizeStorer is the last file (skip or compact). runOnce=false returns then (thread stays on).
-       *  runOnce=true waits for serverStatus idle so sizeStorer work is included.
-       *  Missed sizeStorer (ramlog overflow): 2s with no new WTCMPCT if overflow was seen or compact is idle.
-       *  The in-progress banner does not count as a log. Never running and idle for NOOP_GRACE_MS is a no-op.
+       *  Latch (not $currentOp; WT thread never appears there):
+       *  - sizeStorer WTCMPCT is a last-file hint (ramlog can drop it)
+       *  - visits = success + skipped* + timeout + interrupted + failed (process-lifetime)
+       *  - WTCMPCT is a heartbeat: stall visits but still logging → still in a file
+       *  - runOnce:true: running bit clears when the thread stops; wait for that after first pass
+       *  - runOnce:false: running bit stays on; first pass = hint or visits stall
        */
+      const resolveNs = nsResolver.resolve ?? (() => null);
       let pause = false;
       let firstPassDone = false;
       let seenRunning = false;
-      let overflowSeen = false;
-      let idleSince = null;
       const seen = new Set();
       let pollMS = POLL_MS_MIN;
       let lastTotal = null;
       let lastLogAt = null;
-      const { 'bytesRecovered': startBytes = null } = getBackgroundCompact();
+      const startedAt = Date.now();
+      const {
+         'bytesRecovered': startBytes = null,
+         'visits': startVisits = null
+      } = getBackgroundCompact(true);
+      let lastVisits = startVisits;
+      let lastVisitsAt = startedAt;
+
+      const markFirstPass = reason => {
+         if (firstPassDone) return;
+         firstPassDone = true;
+         console.log(`\n══════ [yellow]${reason}[/] ══════`);
+      };
 
       do {
          const { logs, totalLinesWritten } = getLogs(ts, seen);
@@ -579,7 +627,6 @@
             && lastTotal != null
             && totalLinesWritten - lastTotal >= GETLOG_CAP;
          if (overflow) {
-            overflowSeen = true;
             console.log(`[red][WARN] getLog overflow: ${totalLinesWritten - lastTotal} lines since last poll (ramlog ~${GETLOG_CAP}); resetting poll ${pollMS}ms → ${POLL_MS_MIN}ms[/]`);
          }
          if (Number.isFinite(totalLinesWritten)) lastTotal = totalLinesWritten;
@@ -589,10 +636,12 @@
                const { t = ISODate(), 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = entry;
                rememberLog(seen, logKey(entry));
                if (t > ts) ts = t;
-               if (isSizeStorer(msg, session_dhandle_name)) firstPassDone = true;
+               if (isSizeStorer(msg, session_dhandle_name)) {
+                  markFirstPass('sizeStorer (last file of catalog walk)');
+               }
                console.log(t.toJSON(), annotateWtMsg(msg, session_dhandle_name, resolveNs));
             });
-            pause = false; // reset pause when new log entries are present
+            pause = false;
          } else if (!pause) {
             if (firstPassDone) {
                if (runOnce) console.log('\n══════ [yellow]last file done, waiting for background compact idle[/] ══════');
@@ -601,26 +650,37 @@
             }
             pause = true;
          }
-         const running = getAutoCompactRunning();
-         if (running === true) {
-            seenRunning = true;
-            idleSince = null;
-         } else if (running === false && idleSince == null) {
-            idleSince = Date.now();
+         const { running, visits } = getBackgroundCompact();
+         if (running === true) seenRunning = true;
+         if (visits != null && visits !== lastVisits) {
+            lastVisits = visits;
+            lastVisitsAt = Date.now();
          }
-         if (!firstPassDone && lastLogAt != null && Date.now() - lastLogAt >= LOG_QUIET_MS
-               && (overflowSeen || running === false)) {
-            firstPassDone = true;
-            console.log(`\n══════ [yellow]no new WTCMPCT logs for ${LOG_QUIET_MS / 1000}s; assuming first pass complete[/] ══════`);
+         const now = Date.now();
+         const deltaVisits = (visits != null && startVisits != null) ? visits - startVisits : null;
+         const visitsQuiet = lastVisitsAt != null && now - lastVisitsAt >= VISITS_QUIET_MS;
+         const logsHeartbeat = lastLogAt != null && now - lastLogAt < LOG_QUIET_MS;
+         const catalogCount = nsResolver.catalogReady?.() ? nsResolver.size() : null;
+
+         if (!firstPassDone && catalogCount != null && deltaVisits != null
+               && deltaVisits >= catalogCount && visitsQuiet) {
+            markFirstPass(`WT file visits reached catalog size (${deltaVisits}/${catalogCount})`);
          }
+         if (!firstPassDone && deltaVisits > 0 && visitsQuiet && !logsHeartbeat) {
+            markFirstPass('WT file visits stalled (no WTCMPCT heartbeat)');
+         }
+         if (!firstPassDone && (deltaVisits === 0 || deltaVisits == null)
+               && now - startedAt >= NOOP_GRACE_MS && !logsHeartbeat) {
+            markFirstPass('serverStatus: no WT file visits (no-op)');
+         }
+
          if (firstPassDone && !runOnce) break;
-         if (running === false && (seenRunning || (runOnce && firstPassDone))) {
+         if (runOnce && firstPassDone && running !== true) {
             console.log('\n══════ [yellow]serverStatus: background compact thread idle[/] ══════');
             break;
          }
-         if (!seenRunning && !firstPassDone && running === false
-               && idleSince != null && Date.now() - idleSince >= NOOP_GRACE_MS) {
-            console.log('\n══════ [yellow]serverStatus: background compact thread idle (no-op)[/] ══════');
+         if (runOnce && !firstPassDone && running === false && (seenRunning || deltaVisits > 0)) {
+            markFirstPass('serverStatus: background compact thread idle');
             break;
          }
          pollMS = regulatePollMS(pollMS, { "overflow": overflow, "active": logs.length > 0 });
@@ -696,14 +756,14 @@
       }
       console.log('══════ [yellow]serverStatus: background compact running is false; retrying with updated options[/] ══════\n');
    }
-   const ts = enable ? ISODate() : null;
    if (nsResolver) await Promise.race([nsResolver.ready, delay(IDENT_FIRST_MS)]);
+   const ts = enable ? serverLocalTime() : null;
    if (!runCmd(cmd)) return;
    if (!enable) {
       console.log('══════ [yellow]background compact thread disabled[/] ══════');
       return;
    }
-   await tailLogs(ts, nsResolver.resolve, cmd.runOnce === true);
+   await tailLogs(ts, nsResolver, cmd.runOnce === true);
 })();
 
 // EOF
