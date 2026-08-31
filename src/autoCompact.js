@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.22"
+    *  Version: "0.4.23"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,6 +9,7 @@
     *  Notes:
     *  - automates the autoCompact command with monitoring (https://www.mongodb.com/docs/v8.0/reference/command/autoCompact/)
     *  - mongosh only; MongoDB 8.0+ WiredTiger mongod (not mongos)
+    *  - Atlas M0 (Free) and Flex deny autoCompact; preflight uses mdblib.js isAtlasPlatform('sharedTier') / serverless and fails fast (https://www.mongodb.com/docs/atlas/unsupported-commands/)
     *  - do not top-level-await this IIFE: mongosh --file rewrites await and fails with SyntaxError: Unexpected token ','
     *  - operation is per mongod only: not replicated; does not compact the oplog
     *  - monitors compaction thread, then reports bytes recovered
@@ -42,7 +43,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.22" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.23" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -288,8 +289,55 @@
       const delta = startBytes != null ? endBytes - startBytes : endBytes;
       console.log(`\n══════ [yellow]recovered ${scaled.format(delta)} this pass (${scaled.format(endBytes)} cumulative runtime)[/] ══════`);
    };
+   const hostInfo = () => {
+      /*
+       *  mdblib.js hostInfo() — swallow Atlas/privilege failures; hostname fallbacks
+       */
+      let info = {};
+      try {
+         db.hostInfo(); // required by legacy mongo to capture server exception
+         info = db.hostInfo();
+      } catch(_) { /* Atlas M0/Flex, serverless, or unauthorized */ }
+      if (typeof info.system === 'undefined' && typeof db.hello().me === 'undefined') {
+         info = { "system": { "hostname": "serverless" } };
+      } else if (typeof info.system === 'undefined' && typeof db.hello().me !== 'undefined') {
+         info = { "system": { "hostname": db.hello().me.match(/(.*):/)[1] } };
+      } else if (typeof info.system !== 'undefined') {
+         // keep info
+      } else {
+         info = { "system": { "hostname": "unknown" } };
+      }
+      return info;
+   };
+   const isAtlasPlatform = (type = null) => {
+      /*
+       *  mdblib.js isAtlasPlatform() — 'sharedTier' is Atlas M0 (Free) / Flex
+       */
+      const { 'msg': helloMsg = false } = db.hello();
+      const isMongos = (helloMsg == 'isdbgrid') ? true : false;
+      const { hostname = false } = hostInfo().system;
+      const { atlasVersion = false } = serverStatus();
+      let isSharedTier = false;
+      try {
+         isSharedTier = (db.hostInfo().ok != 1);
+      } catch(e) {
+         isSharedTier = (e.codeName == 'AtlasError') ? true : false;
+      }
+      const atlasDomain = new RegExp(/\.mongodb\.net$/);
+      const isAtlas = (atlasVersion || atlasDomain.test(hostname)) ? true : false;
+      return (type === null && isMongos && isAtlas && hostname != 'serverless') ? 'dedicatedShardedCluster'
+           : (type == 'dedicatedShardedCluster' && isMongos && isAtlas && hostname != 'serverless') ? true
+           : (type === null && !isMongos && isAtlas && isSharedTier) ? 'sharedTier'
+           : (type == 'sharedTier' && !isMongos && isAtlas && isSharedTier) ? true
+           : (type === null && !isMongos && isAtlas) ? 'dedicatedReplicaSet'
+           : (type == 'dedicatedReplicaSet' && !isMongos && isAtlas) ? true
+           : (type === null && hostname == 'serverless') ? 'serverless'
+           : (type == 'serverless' && hostname == 'serverless') ? true
+           : false;
+   };
    const preflight = () => {
       // autoCompact is mongod 8.0+ / wiredTiger only.
+      // Atlas M0/Flex = isAtlasPlatform('sharedTier'); serverless is a separate platform string.
       // Already-enabled is handled by the disable-wait-retry loop, not an error here.
       try {
          if (db.hello().msg === 'isdbgrid') {
@@ -298,6 +346,16 @@
          }
       } catch(e) {
          console.log('[red][ERROR] hello() failed:[/]', e);
+         return false;
+      }
+      const atlasPlatform = isAtlasPlatform();
+      if (atlasPlatform === 'sharedTier') {
+         console.log('[red][ERROR] autoCompact is not supported on Atlas M0 (Free) or Flex clusters[/] (https://www.mongodb.com/docs/atlas/unsupported-commands/)');
+         return false;
+      }
+      if (atlasPlatform === 'serverless') {
+         // Atlas Serverless is deprecated/gone; keep the mdblib.js platform string
+         console.log('[red][ERROR] autoCompact is not supported on Atlas Serverless[/] (https://www.mongodb.com/docs/atlas/unsupported-commands/)');
          return false;
       }
       let major;
