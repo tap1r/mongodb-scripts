@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.26"
+    *  Version: "0.4.27"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
     *  - { autoCompact: true } (default) enables; { autoCompact: false } disables and exits (no log tail)
     *  - freeSpaceTargetMB passthrough (server default 20); runOnce defaults to true (opposite of the server)
     *  - already-enabled: autoCompact:false, wait for running bit to clear (unbounded, 30s notes), re-issue user options
-    *  - ident → ns map from background $listCatalog (first batch or IDENT_FIRST_MS); await delay() so the pump can run
+    *  - ident → ns map from background $listCatalog (first batch or IDENT_FIRST_MS); pump.stop() on every enable exit; await delay() so the pump can run
     *  - WTCMPCT watermark is serverStatus.localTime immediately before enable (not client ISODate)
     *  - first-pass latch: sizeStorer hint, or WT visits (success+skipped*+timeout+interrupted+failed) stall with no WTCMPCT heartbeat, or visits >= catalog ident count after $listCatalog. runOnce:false does not clear the running bit. $currentOp is unused (command only). Recovered-bytes stall is not a stop.
     */
@@ -41,7 +41,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.26" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.27" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -412,7 +412,11 @@
          console.log(`[red][ERROR] autoCompact requires FCV 8.0+; detected binary ${db.version()}, FCV ${effectiveFcv}[/]`);
          return false;
       }
-      if (engine != null && engine !== 'wiredTiger') {
+      if (engine == null) {
+         console.log('[red][ERROR] autoCompact requires wiredTiger; storageEngine.name unavailable from serverStatus[/]');
+         return false;
+      }
+      if (engine !== 'wiredTiger') {
          console.log(`[red][ERROR] autoCompact requires wiredTiger; detected storage engine "${engine}"[/]`);
          return false;
       }
@@ -455,9 +459,11 @@
          ['_mdb_catalog', { "kind": "internal", "ns": "(catalog)" }]
       ]);
       let pumping = false;
+      let cancelled = false;
       let catalogOk = false;
       let lastRefreshAt = 0;
       let firstSeen = false;
+      let cursor;
       let firstResolve;
       const ready = new Promise(resolve => { firstResolve = resolve; });
       const signalReady = () => {
@@ -465,6 +471,11 @@
             firstSeen = true;
             firstResolve();
          }
+      };
+      const closeCursor = () => {
+         if (!cursor) return;
+         try { cursor.close(); } catch(_) { /* already closed */ }
+         cursor = undefined;
       };
       const ingest = doc => {
          const ns = doc.ns ?? (doc.db && doc.name ? `${doc.db}.${doc.name}` : null);
@@ -476,9 +487,8 @@
          }
       };
       const pump = async() => {
-         if (pumping) return;
+         if (pumping || cancelled) return;
          pumping = true;
-         let cursor;
          try {
             cursor = db.getSiblingDB('admin').aggregate([
                { "$listCatalog": {} },
@@ -494,17 +504,18 @@
                "comment": `Executed by ${__script.name} v${__script.version} ident map`
             });
             for await (const doc of cursor) {
+               if (cancelled) break;
                ingest(doc);
                signalReady();
             }
-            catalogOk = true;
+            if (!cancelled) catalogOk = true;
          } catch(e) {
-            catalogOk = false;
-            console.log('[red][WARN] $listCatalog() unavailable, WTCMPCT lines will show WT filenames:[/]', e);
-         } finally {
-            if (cursor) {
-               try { cursor.close(); } catch(_) { /* already closed */ }
+            if (!cancelled) {
+               catalogOk = false;
+               console.log('[red][WARN] $listCatalog() unavailable, WTCMPCT lines will show WT filenames:[/]', e);
             }
+         } finally {
+            closeCursor();
             pumping = false;
             lastRefreshAt = Date.now();
             signalReady();
@@ -514,12 +525,18 @@
       const resolveNs = name => {
          const ns = nsFromWt(name, map);
          if (ns || !name) return ns;
-         if (!pumping && Date.now() - lastRefreshAt >= IDENT_REFRESH_MS) pump();
+         if (!cancelled && !pumping && Date.now() - lastRefreshAt >= IDENT_REFRESH_MS) pump();
          return nsFromWt(name, map);
+      };
+      const stop = () => {
+         cancelled = true;
+         closeCursor();
+         signalReady();
       };
       return {
          ready,
          resolve: resolveNs,
+         stop,
          size: () => map.size,
          catalogReady: () => catalogOk && !pumping
       };
@@ -715,63 +732,67 @@
    const enable = cmd.autoCompact !== false;
    if (!preflight()) return;
    const nsResolver = enable ? startNsResolver() : null;
-   // mongod rejects autoCompact:true while WT still has background compact enabled.
-   const replace = enable && getBackgroundCompact(true).running === true;
-   if (enable) {
-      console.log(`[yellow][NOTE][/] [blue]autoCompact[/] is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact excludes the '[yellow]local.oplog.rs[/]' collection.\n`);
-   }
-   const runCmd = cmdDoc => {
-      console.log(`[yellow]Executing shell command:[/]\n[blue]db.adminCommand(${EJSON.stringify(cmdDoc, null, 3)});[/]\n`);
-      try {
-         const result = db.adminCommand(cmdDoc);
-         if (result?.ok !== 1) {
-            console.log('[red][ERROR] autoCompact failed:[/]', result);
+   try {
+      // mongod rejects autoCompact:true while WT still has background compact enabled.
+      const replace = enable && getBackgroundCompact(true).running === true;
+      if (enable) {
+         console.log(`[yellow][NOTE][/] [blue]autoCompact[/] is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact excludes the '[yellow]local.oplog.rs[/]' collection.\n`);
+      }
+      const runCmd = cmdDoc => {
+         console.log(`[yellow]Executing shell command:[/]\n[blue]db.adminCommand(${EJSON.stringify(cmdDoc, null, 3)});[/]\n`);
+         try {
+            const result = db.adminCommand(cmdDoc);
+            if (result?.ok !== 1) {
+               console.log('[red][ERROR] autoCompact failed:[/]', result);
+               return null;
+            }
+            return result;
+         } catch(e) {
+            console.log('[red][ERROR] autoCompact failed:[/]', e);
             return null;
          }
-         return result;
-      } catch(e) {
-         console.log('[red][ERROR] autoCompact failed:[/]', e);
-         return null;
-      }
-   };
-   if (replace) {
-      // Already enabled: send autoCompact:false, wait for the enable bit to clear, then
-      // re-issue cmd so new user options take effect (runOnce and the rest of cmd are kept).
-      // Wait is serverStatus 'background compact running' — not WTCMPCT quiet, not currentOp.
-      console.log('[yellow][NOTE][/] background compact already enabled; sending [blue]{ "autoCompact": false }[/], waiting for [blue]serverStatus[/] background compact running to clear, then re-enabling with the requested options.\n');
-      if (!runCmd({
-         "autoCompact": false,
-         "comment": `Executed by ${__script.name} v${__script.version}`
-      })) return;
-      let running = getBackgroundCompact(true).running;
-      if (running === true) {
-         // disable is queued; WT flips the enable bit after the current file compact is safe to stop
-         console.log('[yellow][NOTE][/] existing autoCompaction still in progress; waiting indefinitely for serverStatus background compact running to clear. CTRL+C to abort — if you do, re-run later so the new command options are applied.\n');
-      }
-      const startedAt = Date.now();
-      let lastStatusAt = startedAt;
-      while (running === true) {
-         await delay(DISABLE_POLL_MS);
-         if (Date.now() - lastStatusAt >= DISABLE_STATUS_MS) {
-            console.log(`[yellow][NOTE][/] still waiting after ${Math.round((Date.now() - startedAt) / 1000)}s (background compact running). CTRL+C to abort — you will need to re-run later to apply the new command options.`);
-            lastStatusAt = Date.now();
+      };
+      if (replace) {
+         // Already enabled: send autoCompact:false, wait for the enable bit to clear, then
+         // re-issue cmd so new user options take effect (runOnce and the rest of cmd are kept).
+         // Wait is serverStatus 'background compact running' — not WTCMPCT quiet, not currentOp.
+         console.log('[yellow][NOTE][/] background compact already enabled; sending [blue]{ "autoCompact": false }[/], waiting for [blue]serverStatus[/] background compact running to clear, then re-enabling with the requested options.\n');
+         if (!runCmd({
+            "autoCompact": false,
+            "comment": `Executed by ${__script.name} v${__script.version}`
+         })) return;
+         let running = getBackgroundCompact(true).running;
+         if (running === true) {
+            // disable is queued; WT flips the enable bit after the current file compact is safe to stop
+            console.log('[yellow][NOTE][/] existing autoCompaction still in progress; waiting indefinitely for serverStatus background compact running to clear. CTRL+C to abort — if you do, re-run later so the new command options are applied.\n');
          }
-         running = getBackgroundCompact(true).running;
+         const startedAt = Date.now();
+         let lastStatusAt = startedAt;
+         while (running === true) {
+            await delay(DISABLE_POLL_MS);
+            if (Date.now() - lastStatusAt >= DISABLE_STATUS_MS) {
+               console.log(`[yellow][NOTE][/] still waiting after ${Math.round((Date.now() - startedAt) / 1000)}s (background compact running). CTRL+C to abort — you will need to re-run later to apply the new command options.`);
+               lastStatusAt = Date.now();
+            }
+            running = getBackgroundCompact(true).running;
+         }
+         if (running !== false) {
+            console.log('[red][ERROR] could not confirm background compact disabled (serverStatus unavailable)[/]');
+            return;
+         }
+         console.log('══════ [yellow]serverStatus: background compact running is false; retrying with updated options[/] ══════\n');
       }
-      if (running !== false) {
-         console.log('[red][ERROR] could not confirm background compact disabled (serverStatus unavailable)[/]');
+      if (nsResolver) await Promise.race([nsResolver.ready, delay(IDENT_FIRST_MS)]);
+      const ts = enable ? serverLocalTime() : null;
+      if (!runCmd(cmd)) return;
+      if (!enable) {
+         console.log('══════ [yellow]background compact thread disabled[/] ══════');
          return;
       }
-      console.log('══════ [yellow]serverStatus: background compact running is false; retrying with updated options[/] ══════\n');
+      await tailLogs(ts, nsResolver, cmd.runOnce === true);
+   } finally {
+      nsResolver?.stop?.();
    }
-   if (nsResolver) await Promise.race([nsResolver.ready, delay(IDENT_FIRST_MS)]);
-   const ts = enable ? serverLocalTime() : null;
-   if (!runCmd(cmd)) return;
-   if (!enable) {
-      console.log('══════ [yellow]background compact thread disabled[/] ══════');
-      return;
-   }
-   await tailLogs(ts, nsResolver, cmd.runOnce === true);
 })();
 
 // EOF
