@@ -1,6 +1,6 @@
 # mongosh scripting guide
 
-Practical quirks and patterns for writing scripts that run under [`mongosh`](https://www.mongodb.com/docs/mongodb-shell/) against replica sets, Atlas, and sharded clusters. This is not a full mongosh manual. It captures behaviours that repeatedly bite long-running or topology-aware scripts in this repository (for example `src/niceDeleteMany.js`, `src/congestionMonitor.js`, `src/discovery.js`, `src/mdblib.js`, `src/fuzzer.js`).
+Practical quirks and patterns for writing scripts that run under [`mongosh`](https://www.mongodb.com/docs/mongodb-shell/) against replica sets, Atlas, and sharded clusters. This is not a full mongosh manual. It captures behaviours that repeatedly bite long-running or topology-aware scripts in this repository (for example `src/niceDeleteMany.js`, `src/congestionMonitor.js`, `src/discovery.js`, `src/mdblib.js`, `src/fuzzer.js`, `src/autoCompact.js`).
 
 Where a point is specific to one workflow, the surrounding prose names that workflow instead of using opaque project jargon.
 
@@ -102,11 +102,47 @@ Also called out in that doc: non-async generator functions, `.sort()` callbacks 
 
 ### Top-level `async` and sync shell APIs
 
-- mongosh does **not** automatically await your `async function` the way some REPL toys might. Drive scripts with an explicit entrypoint, e.g. `(async () => { await main(); })();` (same pattern used in `fuzzer.js` / `discovery.js`).
-- Many shell helpers such as `db.adminCommand()` are **synchronous** in mongosh. Writing `await db.adminCommand(...)` does not schedule I/O by itself. If you need a thenable for in-flight coalescing (one shared `serverStatus` for concurrent callers), wrap explicitly:
+mongosh does **not** run `--file` / `--eval` as a plain Node script. [`@mongosh/async-rewriter2`](https://www.npmjs.com/package/@mongosh/async-rewriter2) wraps the source in an IIFE and inserts implicit `await` around **shell-API** promises (so `db.collection.find().toArray()` can look synchronous). Consequences:
+
+- `node --check script.js` can pass while `mongosh --file script.js` throws `SyntaxError`. Always parse-check with mongosh (`mongosh --nodb --file script.js`).
+- Real top-level `await` is **not** available in `--file`, `--eval`, or a piped REPL snippet (verified mongosh 2.10). `await main()` at the true top of a file fails with `'await' is only allowed within async functions…`.
+- **Do not** write `await (async () => { … })();` as the entrypoint. The rewriter turns `await (callee)()` into a maybe-awaited call and the result is:
+
+```text
+SyntaxError: Unexpected token ','
+```
+
+Same error from `--eval 'await (async () => { … })()'` and from typing that in the REPL (`autoCompact.js`).
+
+**Do** drive the script with an async IIFE and `await` *inside* it. Do not `await` the IIFE itself:
+
+```javascript
+(async () => {
+  await main();
+})();
+```
+
+Same pattern in `fuzzer.js`, `discovery.js`, `autoCompact.js`, `niceDeleteMany.js`. Inner `await` and `for await` are fine. `--file` keeps the process alive until pending promises settle, so you do not need a top-level `await` on the IIFE to prevent early exit.
+
+User-defined `async function`s are **not** implicitly awaited — only marked shell-API methods are. If the script would return while work is still in flight, hold the Promise (see the resharding wait in `fuzzer.js`).
+
+Many shell helpers such as `db.adminCommand()` are **synchronous** in mongosh. Writing `await db.adminCommand(...)` does not schedule I/O by itself. If you need a thenable for in-flight coalescing (one shared `serverStatus` for concurrent callers), wrap explicitly:
 
 ```javascript
 inflight = Promise.resolve().then(() => db.adminCommand({ serverStatus: 1, /* … */ }));
+```
+
+### Blocking `sleep()` vs `await` delays
+
+[`sleep(ms)`](https://www.mongodb.com/docs/mongodb-shell/reference/native-methods/) is a mongosh helper that **blocks** the JavaScript thread. That is fine for a simple poll loop (`congestionMonitor.js`). It is not fine if other promises must run during the wait (background `$listCatalog` cursor in `autoCompact.js`). Use `await new Promise(resolve => setTimeout(resolve, ms))` (or equivalent) so the event loop can continue.
+
+### Passing options with `--eval`
+
+Scripts that take a user document (`autoCompactOptions`, `options`) must **not** declare that binding in the file. `--eval` runs first; `--file` then sees it as a global. Probe with `typeof autoCompactOptions === 'undefined'` and merge. Prefer `var` in `--eval` so a second `load()` or re-run does not hit `let`/`const` redeclaration (mongosh sloppy mode). On mongosh 2.10, `let` / `const` in `--eval` also leak into `--file`, but `var` remains the least surprising.
+
+```javascript
+// CLI: mongosh --eval 'var autoCompactOptions = { runOnce: false };' -f autoCompact.js
+const userOptions = typeof autoCompactOptions === 'undefined' ? {} : autoCompactOptions;
 ```
 
 ---
@@ -184,6 +220,10 @@ When a script needs **WiredTiger / replica-set vitals** on shards but must delet
 | Keep connection RP stable while cursors run | Flip `setReadPref` under concurrent load |
 | Use `runCommand` + RP to verify secondary targeting | Use `adminCommand` for secondary landing |
 | Wrap sync `adminCommand` when you need a Promise | Assume `await adminCommand` is inherently async |
+| Drive `--file` with `(async () => { await main(); })();` | `await (async () => { … })();` or top-level `await main()` (rewriter `SyntaxError`) |
+| Parse-check with `mongosh --nodb --file` | Trust `node --check` alone |
+| `await` a `setTimeout` Promise when other work must overlap | `sleep()` during concurrent promises (it blocks the thread) |
+| `--eval 'var options = {…}'` and probe `typeof` in the file | Declare the same binding in the `--file` script |
 | Follow [script considerations](https://www.mongodb.com/docs/mongodb-shell/write-scripts/considerations/) for classes/generators | Put DB calls in sync constructors |
 | Route user data ops through `mongos` on 8.0+ | Plan general CRUD via direct shard connections |
 | Gate coloured HUDs on TTY; strip ANSI in logs | Assume `console.clear` + colour is CI-safe |
@@ -194,6 +234,8 @@ When a script needs **WiredTiger / replica-set vitals** on shards but must delet
 
 - [mongosh write scripts](https://www.mongodb.com/docs/mongodb-shell/write-scripts/)
 - [Script considerations (constructors, generators, …)](https://www.mongodb.com/docs/mongodb-shell/write-scripts/considerations/)
+- [`@mongosh/async-rewriter2`](https://www.npmjs.com/package/@mongosh/async-rewriter2) (how `--file` / `--eval` are wrapped)
+- [`sleep()`](https://www.mongodb.com/docs/mongodb-shell/reference/native-methods/)
 - [`db.runCommand()`](https://www.mongodb.com/docs/manual/reference/method/db.runcommand/)
 - [`Mongo.setReadPref()`](https://www.mongodb.com/docs/manual/reference/method/mongo.setreadpref/)
 - [Read preference](https://www.mongodb.com/docs/manual/core/read-preference/)
