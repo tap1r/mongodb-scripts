@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.27"
+    *  Version: "0.4.28"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
     *  - already-enabled: autoCompact:false, wait for running bit to clear (unbounded, 30s notes), re-issue user options
     *  - ident → ns map from background $listCatalog (first batch or IDENT_FIRST_MS); pump.stop() on every enable exit; await delay() so the pump can run
     *  - WTCMPCT watermark is serverStatus.localTime immediately before enable (not client ISODate)
-    *  - first-pass latch: sizeStorer hint, or WT visits (success+skipped*+timeout+interrupted+failed) stall with no WTCMPCT heartbeat, or visits >= catalog ident count after $listCatalog. runOnce:false does not clear the running bit. $currentOp is unused (command only). Recovered-bytes stall is not a stop.
+    *  - first-pass latch: sizeStorer hint, or WT visits (success+skipped*+timeout+interrupted+failed) stall with no WTCMPCT/overflow heartbeat, or visits >= catalog ident count after $listCatalog. runOnce:false does not clear the running bit. $currentOp is unused. Recovered-bytes stall is not a stop. getLog poll stays at min while visits are moving or first pass is still in a file.
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "autoCompact": true };'] [-f|--file] </path/to/>autoCompact.js
@@ -41,7 +41,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.27" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.28" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -562,20 +562,20 @@
       // last expected file of the walk
       return `${dhandle} ${msg}`.includes('sizeStorer');
    };
-   const POLL_MS_MIN = 50;     // after new WTCMPCT lines or ramlog overflow
-   const POLL_MS_MAX = 1000;   // quiet backoff ceiling
-   const LOG_QUIET_MS = 2000;  // WTCMPCT heartbeat: still in a file if lines arrived within this window
+   const POLL_MS_MIN = 50;     // after new WTCMPCT, overflow, visit increment, or full ramlog
+   const POLL_MS_MAX = 1000;   // quiet backoff ceiling (only once first pass is latched or still a no-op)
+   const LOG_QUIET_MS = 2000;  // WTCMPCT or ramlog-overflow heartbeat
    const VISITS_QUIET_MS = 2000; // WT visit counters unchanged
-   const NOOP_GRACE_MS = 5000; // no file visits and no WTCMPCT heartbeat
+   const NOOP_GRACE_MS = 5000; // no file visits and no heartbeat
    const GETLOG_CAP = 1024;    // ramlog size; overflow warn + seen Set cap
    const clampPollMS = ms => {
       const n = +ms;
       if (!Number.isFinite(n) || n <= 0) return POLL_MS_MIN;
       return Math.min(POLL_MS_MAX, Math.max(POLL_MS_MIN, n));
    };
-   const regulatePollMS = (pollMS, { overflow = false, active = false } = {}) =>
-      // reset to min on new WTCMPCT or overflow; otherwise double toward max
-      (overflow || active) ? POLL_MS_MIN : clampPollMS(pollMS * 2);
+   const regulatePollMS = (pollMS, { overflow = false, active = false, holdMin = false } = {}) =>
+      // hold min while the walk is live (visits moving / still in a file) so WTCMPCT is not dropped
+      (overflow || active || holdMin) ? POLL_MS_MIN : clampPollMS(pollMS * 2);
    let getLogWarned = false;
    const WTCMPCT_RE = /"c"\s*:\s*"WTCMPCT"/;
    const logKey = ({ t, 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = {}) =>
@@ -596,7 +596,7 @@
             console.log('[red][WARN] getLog() unavailable, relying on serverStatus WT file-visit counters:[/]', e);
             getLogWarned = true;
          }
-         return { "logs": [], "totalLinesWritten": null };
+         return { "logs": [], "totalLinesWritten": null, "rawCount": 0 };
       }
       const out = [];
       for (const line of lines) {
@@ -612,7 +612,7 @@
             // skip malformed WTCMPCT line
          }
       }
-      return { "logs": out, "totalLinesWritten": totalLinesWritten };
+      return { "logs": out, "totalLinesWritten": totalLinesWritten, "rawCount": lines.length };
    };
    const tailLogs = async(ts, nsResolver = {}, runOnce = true) => {
       /*
@@ -620,7 +620,8 @@
        *  Latch (not $currentOp; WT thread never appears there):
        *  - sizeStorer WTCMPCT is a last-file hint (ramlog can drop it)
        *  - visits = success + skipped* + timeout + interrupted + failed (process-lifetime)
-       *  - WTCMPCT is a heartbeat: stall visits but still logging → still in a file
+       *  - WTCMPCT is a heartbeat; ramlog overflow (lost lines) counts as heartbeat, not quiet
+       *  - stall visits but still logging/overflow → still in a file
        *  - runOnce:true: running bit clears when the thread stops; wait for that after first pass
        *  - runOnce:false: running bit stays on; first pass = hint or visits stall
        */
@@ -632,6 +633,7 @@
       let pollMS = POLL_MS_MIN;
       let lastTotal = null;
       let lastLogAt = null;
+      let lastOverflowAt = null;
       const startedAt = Date.now();
       const {
          'bytesRecovered': startBytes = null,
@@ -647,12 +649,14 @@
       };
 
       do {
-         const { logs, totalLinesWritten } = getLogs(ts, seen);
+         const { logs, totalLinesWritten, rawCount = 0 } = getLogs(ts, seen);
          const overflow = Number.isFinite(totalLinesWritten)
             && lastTotal != null
             && totalLinesWritten - lastTotal >= GETLOG_CAP;
+         const ramlogFull = rawCount >= GETLOG_CAP;
          if (overflow) {
-            console.log(`[red][WARN] getLog overflow: ${totalLinesWritten - lastTotal} lines since last poll (ramlog ~${GETLOG_CAP}); resetting poll ${pollMS}ms → ${POLL_MS_MIN}ms[/]`);
+            lastOverflowAt = Date.now();
+            console.log(`[red][WARN] getLog overflow: ${totalLinesWritten - lastTotal} lines since last poll (ramlog ~${GETLOG_CAP}); treating as heartbeat, poll ${pollMS}ms → ${POLL_MS_MIN}ms[/]`);
          }
          if (Number.isFinite(totalLinesWritten)) lastTotal = totalLinesWritten;
          if (logs.length > 0) {
@@ -677,14 +681,16 @@
          }
          const { running, visits } = getBackgroundCompact();
          if (running === true) seenRunning = true;
-         if (visits != null && visits !== lastVisits) {
+         const visitsMoved = visits != null && visits !== lastVisits;
+         if (visitsMoved) {
             lastVisits = visits;
             lastVisitsAt = Date.now();
          }
          const now = Date.now();
          const deltaVisits = (visits != null && startVisits != null) ? visits - startVisits : null;
          const visitsQuiet = lastVisitsAt != null && now - lastVisitsAt >= VISITS_QUIET_MS;
-         const logsHeartbeat = lastLogAt != null && now - lastLogAt < LOG_QUIET_MS;
+         const logsHeartbeat = (lastLogAt != null && now - lastLogAt < LOG_QUIET_MS)
+            || (lastOverflowAt != null && now - lastOverflowAt < LOG_QUIET_MS);
          const catalogCount = nsResolver.catalogReady?.() ? nsResolver.size() : null;
 
          if (!firstPassDone && catalogCount != null && deltaVisits != null
@@ -708,7 +714,11 @@
             markFirstPass('serverStatus: background compact thread idle');
             break;
          }
-         pollMS = regulatePollMS(pollMS, { "overflow": overflow, "active": logs.length > 0 });
+         pollMS = regulatePollMS(pollMS, {
+            "overflow": overflow,
+            "active": logs.length > 0 || visitsMoved || ramlogFull,
+            "holdMin": !firstPassDone && deltaVisits > 0
+         });
          await delay(pollMS);
       } while (true);
       if (!runOnce && firstPassDone) {
