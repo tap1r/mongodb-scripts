@@ -46,6 +46,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | **`connStats.js`** | **v0.1.14** (mongosh-only) | `$currentOp` pool stats with inprog fallback (`allUsers: false`). IPv6-bracket client parse. Further work (`whatsmyuri`, DRIVERS-3027, mongos `targetAllNodes`) is **mongosh-line**. Header documents this freeze. |
 | **`mdblib.js`** | **v0.15.10** | Dual-shell library snapshot. `fCV()` → `serverVer()` on Atlas M0/Flex is **by design** (`getParameter` FCV restricted; Atlas not on a lagging FCV). `slaveOk()` mongosh path can `setReadPref` (callers use per-command RP). `shellVer`/`serverVer` `+"x.y"` (2.10 ≡ 2.1) stays. Further work (`for(db)`, MetaStats, integer version parse) is **mongosh-line**. Header documents this freeze. |
 | **`discovery.js`** | **v0.2.1** (mongosh-only) | Not dual-shell (`async` IIFE, named capture groups). Topology fan-out stub; cmd profiles TBA. Do not top-level-await. Do not strip `(?<setName>)` for mongo. Further work (standalone/LB/arbiters, pool/jitter, primary-vs-secondary targeting) is **mongosh-line**. Header documents this freeze. |
+| **`niceDeleteMany.js`** | **v0.4.11** (mongosh-only) | Not dual-shell (`async` IIFE, `?.`). `--eval var` overlay (`typeof` probes; no in-file `const dbName`). Per-command RP (no `setReadPref`). Further work (per-shard WT via discovery, Policy B curation, `lowPriorityAdmissionBypassThreshold`) is **mongosh-line**. Header documents this freeze. |
 
 Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver before the cut. Those land on the mongosh-only line.
 
@@ -369,6 +370,10 @@ Remaining mongosh-line work (do not block the archive):
 - Pause / closed signal for auto-trim: backup cursor, repl-lag settle, WT dirty/updates (already has `backupCursorOpen`). Auto-trim is a consumer of these vitals, not a second monitor implementation if inlining is still required.
 
 ### `niceDeleteMany.js`
+
+**Legacy archive line: v0.4.11** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). `--eval` must use `var` (not `let`/`const`). Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`. Post-freeze feature work proceeds on the mongosh line only.
+
+Remaining mongosh-line work (do not block the archive):
 
 - Better sharding: per-shard WT vitals via `listShards` / discovery.
 - `lowPriorityAdmissionBypassThreshold` backward compatibility.

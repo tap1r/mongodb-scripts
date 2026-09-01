@@ -1,15 +1,23 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.10"
+    *  Version: "0.4.11"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *  Guide: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/mongosh-scripting-guide.md"
     *  Howto: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/Howto-streaming-sort.md"
     *
+    *  Legacy archive line: v0.4.11 is the snapshot for this script. mongosh-only
+    *  (async IIFE, optional chaining; incompatible with legacy mongo). Still
+    *  the demarked version for the whole-tree freeze. Further feature work
+    *  (per-shard WT via discovery, Policy B curation) targets mongosh; see
+    *  ROADMAP.md → Legacy mongo shell retirement.
+    *
     *  Notes:
-    *  - mongosh only
+    *  - mongosh only. Do not top-level-await this IIFE.
+    *  - --eval must use var (not let/const); probe typeof, do not declare
+    *    dbName/collName/filter in this file.
     *  - Curation relies on a semi-blocking operator for bucket estimations
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
@@ -23,7 +31,7 @@
     *  - refine curation order (Policy B: compound equality→trailing sort probes)
     */
 
-   // Syntax: mongosh [connection options] [--quiet] [--eval 'let dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>, interactive = <bool>;'] [-f|--file] </path/to/>niceDeleteMany.js
+   // Syntax: mongosh [connection options] [--quiet] [--eval 'var dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>, interactive = <bool>;'] [-f|--file] </path/to/>niceDeleteMany.js
 
    /*
     *  dbName: <string>       // (required) database name
@@ -53,7 +61,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.10" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.11" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
