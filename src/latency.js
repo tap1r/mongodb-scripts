@@ -1,9 +1,20 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.4.8"
+ *  Version: "0.4.9"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+ *
+ *  Legacy archive line: v0.4.9 is the snapshot for this script. mongosh-first
+ *  (inline console/EJSON polyfill for legacy mongo; no mdblib). Still the
+ *  demarked version for the whole-tree freeze. Further feature work ($sleep,
+ *  Atlas Flex, mdblib load) targets mongosh; see ROADMAP.md → Legacy mongo
+ *  shell retirement.
+ *
+ *  Notes:
+ *  - synthetic slow op via $function + sleep (javascriptEnabled; unsupported
+ *    on Atlas Flex; $function deprecated toward $sleep).
+ *  - getLog("global") + EJSON.parse to recover durationMillis.
  */
 
 // Usage: [mongo|mongosh] [connection options] [--quiet] [-f|--file] </path/to/>latency.js
@@ -14,7 +25,7 @@
    /*
     *  main
     */
-   const __script = { "name": "latency.js", "version": "0.4.8" };
+   const __script = { "name": "latency.js", "version": "0.4.9" };
    if (typeof console === 'undefined') {
       /*
        *  legacy mongo detected

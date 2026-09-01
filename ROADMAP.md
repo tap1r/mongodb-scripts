@@ -39,6 +39,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | **`fuzzer.js`** | **v0.6.43** (+ **`mdblib.js` ≥ 0.15.8**) | Dual-shell via mdblib. Dropped `Mongo.setReadPref('primary')` (mongosh reconnect hung the first DB call after local sampling on a replica set). `await main()` try/catch. Hardcoded `dbName`/`collName` (compact `load()` does not overlay). Reshard monitor is mongosh-strong / mongo-weak. Further work (`--eval` overlay, mongos `fCV`, `$genRandWord`) is **mongosh-line**. Header documents this freeze. |
 | **`onlineDefrag.js`** | **v0.1.4** (mongosh-only) | Not dual-shell (`async` IIFE, `process`/`fs`, `console.table`). `--eval` `var dbName`/`collName`/`options` overlay (no in-file bindings). `storageStats()` finds `dbstats.js` via MDBLIB / `~/.mongodb` / cwd. Demarked for the whole-tree freeze anyway. Further work (dbstats JSON/`dbStats` return, mdblib, WT v7 checkpoint) is **mongosh-line**. Header documents this freeze. |
 | **`oplogchurn.js`** | **v0.5.22** (+ **`mdblib.js` ≥ 0.15.8**) | Dual-shell via mdblib. Per-command RP (`aggregate` `readPreference` on mongosh; `cursor.readPref` on legacy mongo). Do not restore `slaveOk(readPref)`. `--eval var intervalHrs` overlay kept. Dual `Timestamp` (MONGOSH-930). Further work (TTY-guard `console.clear`, Atlas M0 oplog/hostInfo) is **mongosh-line**. Header documents this freeze. |
+| **`latency.js`** | **v0.4.9** (mongosh-first) | Dual-shell lite: inline `console`/`EJSON` polyfill, no mdblib. `$function`+`sleep` synthetic slow op (Flex / `javascriptEnabled`). `getLog` + EJSON to recover `durationMillis`. Further work (`$sleep`, Flex bounce, mdblib) is **mongosh-line**. Header documents this freeze. |
 
 Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver before the cut. Those land on the mongosh-only line.
 
@@ -499,7 +500,17 @@ Remaining mongosh-line work (do not block the archive):
 - Atlas M0/Flex: `local.oplog.rs` / `hostInfo` / free-space may be hidden or denied — same n/a story as dbstats.
 - `$collStats` / `hostInfo` / `serverCmdLineOpts` stay on the connected member (not covered by the aggregate RP).
 
-### `killAgedSessions.js` / `rtt.js` / `latency.js`
+### `latency.js`
+
+**Legacy archive line: v0.4.9** (mongosh-first; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Inline `console` / `EJSON` polyfill for legacy mongo; do not load mdblib on this line. Keep `[mongo|mongosh]` only while that polyfill stays. Do not block the archive on `$sleep` or Atlas Flex. Post-freeze feature work proceeds on the mongosh line only.
+
+Remaining mongosh-line work (do not block the archive):
+
+- Replace `$function` + `sleep` with `$sleep` when the server exposes it; Flex / `javascriptEnabled: false` still bounce.
+- `getLog("global")` can be noisy or denied on some Atlas tiers.
+- Optional mdblib load would drop the inline polyfill and the dual-shell usage claim.
+
+### `killAgedSessions.js` / `rtt.js`
 
 No storage-trim work. `rtt.js` TODOs are still TBA.
 
