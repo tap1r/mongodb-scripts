@@ -6,6 +6,7 @@ A collection of useful MongoDB related scripts and command tips.
 
 * [DISCLAIMER](DISCLAIMER.md)
 * [Roadmap](ROADMAP.md)
+* [Legacy mongo shell snapshot](legacy/mongo-shell/README.md)
 * [Aggregation tips](Aggregation%20tips.md)
 * [Atomic backups using _fsyncLock()_](fsyncLock.md)
 * [BI Connector reproductions](BI%20Connector%20reproductions.md)

@@ -12,7 +12,7 @@ Status is implied by section: **planned** unless marked later / hardening.
 - **mongosh scripting guide.** Living notes for `--file` rewriter, async IIFEs, `sleep()` vs `await` delays, `--eval` `var` options. Extend when a script hits a new shell quirk. Document the consumption modes below when they land.
 - **`ProgressTracker`.** Stub in `mdblib.js` (`/* Add to mdblib.js */`) for long catalog walks (dbstats, index cache, auto-trim snapshot, **autoCompact first-pass**). Must honour the shared emit rules: TTY progress only; silent or JSON progress events in module / redirected mode — never `\r` bars in piped logs.
 - **Topology fan-out.** Per-mongod tools (`autoCompact`, WT vitals, dbstats snapshots) eventually ride `discovery.js`. Until then, operators target members with a direct connection.
-- **Legacy mongo shell retirement.** Dual `mongo` / `mongosh` support stays until a correctness cut, then the dual-shell tree is frozen and archived. After that, GA `src/` is **GA mongosh only**, and stripping legacy shell shims is the next general architectural pass. See below. Do not delete `isMongosh()` branches before that archive exists.
+- **Legacy mongo shell retirement.** Dual-shell tree archived **2026-09-01** at [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/) (tag `legacy-mongo-shell` on that commit). Live `src/` still has shims until the [strip pass](#3-after-the-cut--strip-and-streamline-next-general-architecture). Do not delete `isMongosh()` branches before using that archive.
 
 ### Legacy mongo shell retirement
 
@@ -65,13 +65,20 @@ Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver be
 
 #### 2. Line in the sand
 
-On a chosen commit:
+**Drawn 2026-09-01.** Adequacy table in §1 is complete (remaining rows frozen as-is). Snapshot:
 
-1. **Freeze** every script version as shipped (header `Version` + `__script.version`). No further dual-shell feature work on that line.
-2. **Archive** that tree under a **legacy-labeled** src path (working name `legacy/mongo-shell/src/`, plus a git tag such as `legacy-mongo-shell`). README / DISCLAIMER there state: last dual-shell snapshot; unmaintained except critical fixes if ever; use `src/` for mongosh.
-3. **GA `src/`** from that point supports a **GA mongosh only** (pin the floor at the cut — today that is 1.10 / 2.10+, raise to whatever GA is then). Usage lines drop `[mongo|mongosh]`. `mdblib.js` Notes drop “dual mongo / mongosh”.
+| | |
+|--|--|
+| Archive path | [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/) |
+| README / DISCLAIMER | [`legacy/mongo-shell/README.md`](legacy/mongo-shell/README.md), [`legacy/mongo-shell/DISCLAIMER.md`](legacy/mongo-shell/DISCLAIMER.md) |
+| Intended git tag | `legacy-mongo-shell` (apply on the commit that adds this tree) |
+| Frozen library | `mdblib.js` **v0.15.10** |
+| mongosh floor (GA `src/` after shim strip) | **1.10 / 2.10+** (raise only with a later floor decision) |
+| mongod / legacy `mongo` floors in the archive | **4.4** |
 
-Operators who still have `mongo` keep the archive. Operators on mongosh use `src/`.
+No further dual-shell feature work on the archived line. Operators who still have `mongo` use the archive. Operators on mongosh use repository `src/`.
+
+**GA `src/` after this commit:** still contains dual-shell shims until [§3](#3-after-the-cut--strip-and-streamline-next-general-architecture) runs. Do not drop `[mongo|mongosh]` usage lines or `mdblib.js` “dual mongo / mongosh” Notes until that strip. The archive exists so that strip can proceed without silently breaking `mongo`.
 
 #### 3. After the cut — strip and streamline (next general architecture)
 
@@ -92,7 +99,7 @@ This pass is **shim deletion and helper streamlining**, not the `mdblib.for(db)`
 - Silently break `mongo` in `src/` before the archive is in place.
 - Raise the **mongod** floor as part of this cut unless it is already implied (legacy `mongo` 4.4 was the reason some 4.4 branches exist; mongosh-only may still talk to 4.4 servers until a separate server-floor decision).
 
-Pin the cut date, tag name, mongosh floor, and archive path in this file when it happens. Until then, dual-shell bugs in `src/` are still in-scope.
+Cut date, tag name, mongosh floor, and archive path are pinned in §2. Dual-shell bugs in live `src/` are **mongosh-line** (or archive-only critical fixes). Do not keep a second live dual-shell branch.
 
 ### Script consumption (unify standalone vs modular)
 
