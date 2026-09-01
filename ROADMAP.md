@@ -12,6 +12,54 @@ Status is implied by section: **planned** unless marked later / hardening.
 - **mongosh scripting guide.** Living notes for `--file` rewriter, async IIFEs, `sleep()` vs `await` delays, `--eval` `var` options. Extend when a script hits a new shell quirk. Document the consumption modes below when they land.
 - **`ProgressTracker`.** Stub in `mdblib.js` (`/* Add to mdblib.js */`) for long catalog walks (dbstats, index cache, auto-trim snapshot). Must honour the shared emit rules: TTY progress only; silent or JSON progress events in module / redirected mode — never `\r` bars in piped logs.
 - **Topology fan-out.** Per-mongod tools (`autoCompact`, WT vitals, dbstats snapshots) eventually ride `discovery.js`. Until then, operators target members with a direct connection.
+- **Legacy mongo shell retirement.** Dual `mongo` / `mongosh` support stays until a correctness cut, then the dual-shell tree is frozen and archived. After that, GA `src/` is **GA mongosh only**, and stripping legacy shell shims is the next general architectural pass. See below. Do not delete `isMongosh()` branches before that archive exists.
+
+### Legacy mongo shell retirement
+
+Today `mdblib.js` and most dual-shell scripts still target **legacy `mongo` (floor 4.4) and mongosh (floor 1.10 / 2.10+)** in one file: `isMongosh()` branches, `slaveOk` / `rs.slaveOk`, `Timestamp(t, i)` vs `Timestamp({ t, i })`, `getCollectionInfos` boolean vs options object, `runCommand(cmd)` vs `runCommand(cmd, options)`, `console` polyfill, `shellVer(2.0) && isMongosh()` for `toSorted` / second-arg options. That tax is accepted **until** the scripts are good enough to snapshot.
+
+This is a **sequenced cut**, not a now-task. Feature work (auto-trim, emit/options UX, discovery) does not wait on it; stripping shims does.
+
+#### 1. Nominal correctness first
+
+Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it should be explicit when drawn, for example:
+
+- Scripts that claim to run under `mongo` actually parse (`compact.js` `const` initializer, `explainHisto.js` duplicate `const pipeline`, and similar SyntaxErrors).
+- Known wrong-result bugs that dual-shell users would inherit (invalid `$expr`, `--eval` shadowing, `fCV()` falling back to binary version on mongos) are either fixed or documented as wontfix in the archive notes.
+- Version strings and `__script.version` are consistent with the freeze (one patch ahead of the last dual-shell HEAD).
+
+Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver before the cut. Those land on the mongosh-only line.
+
+#### 2. Line in the sand
+
+On a chosen commit:
+
+1. **Freeze** every script version as shipped (header `Version` + `__script.version`). No further dual-shell feature work on that line.
+2. **Archive** that tree under a **legacy-labeled** src path (working name `legacy/mongo-shell/src/`, plus a git tag such as `legacy-mongo-shell`). README / DISCLAIMER there state: last dual-shell snapshot; unmaintained except critical fixes if ever; use `src/` for mongosh.
+3. **GA `src/`** from that point supports a **GA mongosh only** (pin the floor at the cut — today that is 1.10 / 2.10+, raise to whatever GA is then). Usage lines drop `[mongo|mongosh]`. `mdblib.js` Notes drop “dual mongo / mongosh”.
+
+Operators who still have `mongo` keep the archive. Operators on mongosh use `src/`.
+
+#### 3. After the cut — strip and streamline (next general architecture)
+
+Only after the archive exists, `src/` / `mdblib.js` drop legacy-`mongo` compatibility and simplify:
+
+- Remove `isMongosh()` guards that exist solely for the old shell (keep them only if they distinguish mongosh 1.x vs 2.x behaviour you still support).
+- `slaveOk()` / `rs.slaveOk` / `rs.secondaryOk` → per-command `readPreference` (see [mongosh scripting guide](mongosh-scripting-guide.md)); no connection-wide `setReadPref` mid-cursor.
+- One `Timestamp({ t, i })`, one `getCollectionInfos(filter, { nameOnly, authorizedCollections })`, `runCommand(cmd, options)` as the second argument (never a field named `options` on the command document).
+- Drop the legacy `console` / `tojson` / `bsonsize` polyfills if mongosh already provides them.
+- `serverVer` / `fCV` / `shellVer`: integer `major.minor.patch` parse; `fCV` must not fall back to the mongos binary (see correctness notes). Easier once there is a single shell.
+- Usage / `--eval` examples assume mongosh sloppy `var` and Node (`process`, `fs`, `setTimeout`).
+
+This pass is **shim deletion and helper streamlining**, not the `mdblib.for(db)` redesign. Namespaced `load()` stays a separate General item and still must not block features.
+
+#### 4. What we will not do
+
+- Maintain two live dual-shell lines after the tag.
+- Silently break `mongo` in `src/` before the archive is in place.
+- Raise the **mongod** floor as part of this cut unless it is already implied (legacy `mongo` 4.4 was the reason some 4.4 branches exist; mongosh-only may still talk to 4.4 servers until a separate server-floor decision).
+
+Pin the cut date, tag name, mongosh floor, and archive path in this file when it happens. Until then, dual-shell bugs in `src/` are still in-scope.
 
 ### Script consumption (unify standalone vs modular)
 
@@ -213,7 +261,7 @@ Executor auto-trim will call. Keep the file standalone. Frozen at **0.4.28** for
 
 The storage snapshot other scripts want (auto-trim planner, discovery-directed jobs, later compact/onlineDefrag targeting). Current shape is still gather+print in one pass; the roadmap below assumes a **catalog-first, then stats** split so new catalog sources and output formats share one walk.
 
-Shipped recently: views listed once on the nameOnly pass; collection `$collStats` remains the second phase (Unauthorized → `name (unauthorized)`); databases sorted once after the fetch pool; section deep-merge for options (`filter` / `sort.*` / `output`); `output.format` canonical name `tabular` with `table` alias; `formatPct` / `formatRatio` guard zero/non-finite divisors (`n/a` instead of `NaN%` / `Infinity:1`).
+Shipped recently: views listed once on the nameOnly pass; collection `$collStats` remains the second phase (Unauthorized → `name (unauthorized)`); databases sorted once after the fetch pool; section deep-merge for options (`filter` / `sort.*` / `output`); `output.format` canonical name `tabular` with `table` alias; `formatPct` / `formatRatio` guard zero/non-finite divisors (`n/a` instead of `NaN%` / `Infinity:1`); sort helpers collapsed to `compareBy` + `stableSort`.
 
 #### Output formats
 
@@ -293,6 +341,7 @@ Per-namespace `compact` and update-based defrag. Not auto-trim. Auto-trim’s **
 ### `mdblib.js`
 
 - Namespaced helpers / `for(db)` — **after** the library strategy change, not before.
+- **Legacy `mongo` shims** — delete only after [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) (archive + tag). Until then keep `isMongosh()` / `slaveOk` / dual `Timestamp` / `runCommand` shapes. After the cut, streamline version helpers (`serverVer` / `fCV` / `shellVer`) in place; do not couple that cleanup to `for(db)`.
 - **Shared emit helpers** (see [Script consumption](#script-consumption-unify-standalone-vs-modular)): finish the story beyond today’s `console.log` TTY overload — one path for markup→ANSI, non-TTY strip, progress suppress, and module-quiet. Bring `print` / raw-escape call sites onto it over time.
 - Finish TBA namespace listers (`getAllNonSystemNamespaces`, views, system).
 - `AutoFactor` NaN / scale clamp (the copy in `autoCompact.js` is stricter).
