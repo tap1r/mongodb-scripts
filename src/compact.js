@@ -5,14 +5,44 @@
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
- *  Legacy archive line: v0.2.15 is the snapshot for this script. Parses under
- *  legacy mongo and mongosh (uninitialized `const reportLog` dropped). Runtime
- *  is mongosh-first (`console.log` before any mdblib load). Further feature
- *  work (dbstats module/JSON contract, discovery fan-out) targets mongosh;
- *  see ROADMAP.md → Legacy mongo shell retirement.
+ *  Legacy archive line: v0.2.15 (with mdblib.js ≥ 0.15.8) is the dual-shell
+ *  (legacy mongo 4.4+ / mongosh) adequacy snapshot for this script. Further
+ *  feature work (dbstats module/JSON contract, discovery fan-out) targets
+ *  mongosh; see ROADMAP.md → Legacy mongo shell retirement.
+ *  Pair with the matching mdblib from the same freeze when archiving.
  */
 
-// Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>compact.js
+// Usage: [mongo|mongosh] [connection options] [--quiet] [-f|--file] </path/to/>compact.js
+
+/*
+ *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
+ *  Save libs to the $MDBLIB or other valid search path
+ */
+
+(() => {
+   const __script = { "name": "compact.js", "version": "0.2.15" };
+   if (typeof __lib === 'undefined') {
+      /*
+       *  Load helper library mdblib.js
+       */
+      let __lib = { "name": "mdblib.js", "paths": null, "path": null };
+      if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
+         __lib.paths = [_getEnv('MDBLIB'), `${_getEnv('HOME')}/.mongodb`, '.'];
+         __lib.path = `${__lib.paths.find(path => fileExists(`${path}/${__lib.name}`))}/${__lib.name}`;
+      } else if (typeof process !== 'undefined') { // mongosh process.env attribute
+         __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
+         __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
+      } else {
+         print(`[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory`);
+         __lib.path = __lib.name;
+      }
+      load(__lib.path);
+   }
+   let __comment = `#### Running script ${__script.name} v${__script.version}`;
+   __comment += ` with ${__lib.name} v${__lib.version}`;
+   __comment += ` on shell v${version()}`;
+   console.log(`\n\n[yellow]${__comment}[/]`);
+})();
 
 /*
  *  User defined parameters
@@ -31,9 +61,6 @@ const options = {
    /*
     *  ...
     */
-   const __script = { "name": "compact.js", "version": "0.2.15" };
-   console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
-
    const namespace = db.getSiblingDB(dbName).getCollection(collName);
    if (!namespace.exists()) {
       throw `\x1b[31m[ERROR] namespace "${dbName}.${collName}" does not exist\x1b[0m`;
