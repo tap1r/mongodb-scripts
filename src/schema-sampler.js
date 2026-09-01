@@ -4,6 +4,15 @@
  *  Description: generate schema with simulated mongosqld sampling commands
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+ *
+ *  Legacy archive line: v0.2.16 is the snapshot for this script. Dual-shell
+ *  lite (no mdblib; mongosh via `process` / `util.inspect`, mongo via
+ *  `print`/`tojson`). Further feature work (mdblib, filter.db overlay,
+ *  --eval) targets mongosh; see ROADMAP.md → Legacy mongo shell retirement.
+ *
+ *  Notes:
+ *  - Do not Mongo.setReadPref(): mongosh reconnects. $sample uses per-command
+ *    RP (mongosh options.readPreference; legacy mongo cursor.readPref).
  */
 
 // Usage: "[mongo|mongosh] [connection options] [--quiet] [-f|--file] </path/to/>schema-sampler.js > schema.json"
