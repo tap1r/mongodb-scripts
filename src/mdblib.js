@@ -5,6 +5,11 @@
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *  Guide: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/mongosh-scripting-guide.md
+ *
+ *  Legacy archive line: v0.15.10 is the dual-shell (legacy mongo 4.4+ / mongosh)
+ *  adequacy snapshot for this library. Pair frozen scripts with this file when
+ *  archiving. Further feature work (for(db), MetaStats, integer version parse)
+ *  targets mongosh; see ROADMAP.md → Legacy mongo shell retirement.
  */
 
 if (typeof __lib === 'undefined') (
@@ -18,6 +23,8 @@ if (typeof __lib === 'undefined') (
  *  - floor mongod to v4.4
  *  - floor legacy mongo shell to v4.4
  *  - floor mongosh shell to v1.10 & v2.10 (updated to match GA releases)
+ *  - fCV() → serverVer() on Atlas M0/Flex is by design (getParameter FCV is
+ *    restricted; Atlas is not left on a lagging FCV)
  */
 
 function isMongosh() {
