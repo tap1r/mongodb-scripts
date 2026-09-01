@@ -24,7 +24,7 @@ This is a **sequenced cut**, not a now-task. Feature work (auto-trim, emit/optio
 
 Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it should be explicit when drawn, for example:
 
-- Scripts that claim to run under `mongo` actually parse (`compact.js` `const` initializer, `explainHisto.js` duplicate `const pipeline`, and similar SyntaxErrors).
+- Scripts that claim to run under `mongo` actually parse (`explainHisto.js` duplicate `const pipeline`, and similar SyntaxErrors).
 - Known wrong-result bugs that dual-shell users would inherit (invalid `$expr`, `--eval` shadowing, `fCV()` falling back to binary version on mongos) are either fixed or documented as wontfix in the archive notes.
 - Version strings and `__script.version` are consistent with the freeze (one patch ahead of the last dual-shell HEAD).
 
@@ -34,6 +34,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 |--------|--------------------------|--------|
 | **`dbstats.js`** | **v0.12.19** (+ **`mdblib.js` ≥ 0.15.8**) | Hygiene complete (A1–A8); legacy Unauthorized labels; authz preflight; `filter.system`; ANSI tag table uses a plain object (no `Map`). Further dbstats work (JSON contract, module mode, catalog dual-path, task pool) is **mongosh-line** — do not block the archive on B/C/D/E. Header documents this freeze. |
 | **`autoCompact.js`** | **v0.4.36** (mongosh-only) | Not dual-shell (`async` IIFE, `await delay`, mongosh `getLog` / `$listCatalog`). Demarked for the whole-tree freeze anyway. Further work (first-pass progress bar, auto-trim executor) is **mongosh-line**. Header documents this freeze. |
+| **`compact.js`** | **v0.2.15** | Parse bar: dropped uninitialized `const reportLog` (mechanical `let`→`const` in v0.2.10). Parses on mongo and mongosh. Runtime is mongosh-first (`console` is not defined in legacy mongo until mdblib; compact does not load mdblib itself). `isMongosh()` / `shellVer(2.0)` `runCommand` options kept. `load('dbstats.js')` still prints the full interactive report with no `options.filter` overlay — consumption/module-mode, not freeze-blocking. Further work (dbstats JSON contract, discovery fan-out, Atlas M0 bounce) is **mongosh-line**. Header documents this freeze. |
 
 Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver before the cut. Those land on the mongosh-only line.
 
@@ -324,7 +325,15 @@ A compact “hot” report mode (verbosity or dedicated format): **top-N namespa
 
 ### `compact.js` / `onlineDefrag.js`
 
-Per-namespace `compact` and update-based defrag. Not auto-trim. Auto-trim’s **opt-in oplog** path is 8.0+ `compact` + `freeSpaceTargetMB` on `local.oplog.rs`, not this script’s entropy loop. Later: point compact/rebuild at a single dbstats “compact” / “rebuild” row when autoCompact’s file walk is the wrong tool (one collection, dryRun estimate, `_id` rebuild). `compact` is also [unsupported on Atlas M0/Flex](https://www.mongodb.com/docs/atlas/unsupported-commands/); same bounce as autoCompact. Pre-v8 `compact` has no `freeSpaceTargetMB` — no oplog trim path.
+Per-namespace `compact` and update-based defrag. Not auto-trim. Auto-trim’s **opt-in oplog** path is 8.0+ `compact` + `freeSpaceTargetMB` on `local.oplog.rs`, not this script’s entropy loop.
+
+**Legacy archive line for `compact.js`: v0.2.15** (parse snapshot — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not restore `const dbFilter = dbName, collFilter = collName, reportLog;` — `const` requires an initializer; those names were never read, and IIFE-scoped bindings are invisible to `load('dbstats.js')` anyway. `let options` is also not an `--eval` overlay (that needs the `typeof options === 'undefined'` probe and **no** in-file binding). Do not claim dual-shell runtime without loading mdblib (or using `print`) before the banner: legacy mongo throws `console is not defined`.
+
+Remaining mongosh-line work (do not block the archive):
+
+- Stop re-`load()`ing interactive `dbstats.js` three times; consume dbstats in **module/JSON** mode (and overlay `options.filter` if the full report stays in-process).
+- Later: point compact/rebuild at a single dbstats “compact” / “rebuild” row when autoCompact’s file walk is the wrong tool (one collection, dryRun estimate, `_id` rebuild).
+- `compact` is also [unsupported on Atlas M0/Flex](https://www.mongodb.com/docs/atlas/unsupported-commands/); same bounce as autoCompact. Pre-v8 `compact` has no `freeSpaceTargetMB` — no oplog trim path.
 
 ### `discovery.js`
 
