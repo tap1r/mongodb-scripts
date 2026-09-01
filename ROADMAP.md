@@ -36,6 +36,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | **`autoCompact.js`** | **v0.4.36** (mongosh-only) | Not dual-shell (`async` IIFE, `await delay`, mongosh `getLog` / `$listCatalog`). Demarked for the whole-tree freeze anyway. Further work (first-pass progress bar, auto-trim executor) is **mongosh-line**. Header documents this freeze. |
 | **`compact.js`** | **v0.2.15** (+ **`mdblib.js` ≥ 0.15.8**) | Parse bar: dropped uninitialized `const reportLog`. Dual-shell via mdblib (`console` polyfill, `isMongosh()` / `shellVer(2.0)` `runCommand` options). `load('fuzzer.js')` uses fuzzer’s own namespace constants; `load('dbstats.js')` prints the full interactive report (compact’s `options` has no `filter`) — consumption/module-mode, not freeze-blocking. Further work (dbstats JSON contract, discovery fan-out, Atlas M0 bounce) is **mongosh-line**. Header documents this freeze. |
 | **`explainHisto.js`** | **v0.1.4** (mongosh-only) | Not dual-shell (`require` / `jsonc-require` / `./pipeline.jsonc`). Parse bar: duplicate `const pipeline` → `userPipeline`. Demarked for the whole-tree freeze anyway. Further work (sharded/newer explain stages, `--eval` overlay, sampled-pipeline caveat) is **mongosh-line**. Header documents this freeze. |
+| **`fuzzer.js`** | **v0.6.43** (+ **`mdblib.js` ≥ 0.15.8**) | Dual-shell via mdblib. Dropped `Mongo.setReadPref('primary')` (mongosh reconnect hung the first DB call after local sampling on a replica set). `await main()` try/catch. Hardcoded `dbName`/`collName` (compact `load()` does not overlay). Reshard monitor is mongosh-strong / mongo-weak. Further work (`--eval` overlay, mongos `fCV`, `$genRandWord`) is **mongosh-line**. Header documents this freeze. |
 
 Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver before the cut. Those land on the mongosh-only line.
 
@@ -474,7 +475,14 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `fuzzer.js`
 
-Resharding wait already holds the user Promise so mongosh does not exit early. No auto-trim work.
+**Legacy archive line: v0.6.43** (requires **mdblib.js ≥ 0.15.8**). See [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1. Dual-shell. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()` — mongosh reconnects and the next DB call (`exists` / `drop` / `createCollection`) hangs or rejects unhandled on a local replica set (Atlas SRV usually survives). Writes already target primary. Compact `load('fuzzer.js')` uses fuzzer’s own `dbName`/`collName`; keep them in sync by hand. Post-freeze feature work proceeds on the mongosh line only.
+
+Remaining mongosh-line work (do not block the archive):
+
+- `--eval` overlay for namespace / `totalDocs` (`var` + `typeof … === 'undefined'`; do not declare `const dbName` if `--eval` is the path).
+- Reshard wait already holds the user Promise so mongosh does not exit early; legacy mongo still only logs that async reshard monitoring is unsupported.
+- `w: "majority"` with no `wtimeout` can stall `createCollection` / bulk on PSA or a lagging secondary.
+- Inherits mdblib `fCV()` mongos `serverVer()` fallback; `$genRandWord` / `$benford` stay later.
 
 ### `killAgedSessions.js` / `rtt.js` / `latency.js`
 

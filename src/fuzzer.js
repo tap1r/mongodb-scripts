@@ -4,6 +4,12 @@
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+ *
+ *  Legacy archive line: v0.6.43 (with mdblib.js ≥ 0.15.8) is the dual-shell
+ *  (legacy mongo 4.4+ / mongosh) adequacy snapshot for this script. Further
+ *  feature work (--eval overlay, mongos fCV, $genRandWord) targets mongosh;
+ *  see ROADMAP.md → Legacy mongo shell retirement.
+ *  Pair with the matching mdblib from the same freeze when archiving.
  */
 
 // Usage: [mongo|mongosh] [connection options] [--quiet] [-f|--file] </path/to/>fuzzer.js
