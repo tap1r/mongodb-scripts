@@ -1,6 +1,6 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.33"
+ *  Version: "0.1.34"
  *  Description: "sample document size distribution"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -22,7 +22,7 @@ const options = {
    /*
     *  main
     */
-   const __script = { "name": "docSizes.js", "version": "0.1.33" };
+   const __script = { "name": "docSizes.js", "version": "0.1.34" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
    // connection preferences
    const hello = db.hello();
@@ -70,7 +70,31 @@ const options = {
          "readConcern": { "level": "local" },
          "comment": `Performing document distribution analysis with ${__script.name} v${__script.version}`
       },
-      { 'system': { hostname } } = db.hostInfo(),
+      hostname = (() => {
+         const hostNameFromHostPort = value => {
+            const s = (value == null) ? '' : String(value);
+            if (!s) return '';
+            if (s.charAt(0) === '[') {
+               const end = s.indexOf(']');
+               return (end > 1) ? s.substring(1, end) : s;
+            }
+            const first = s.indexOf(':');
+            const last = s.lastIndexOf(':');
+            if (first === -1) return s;
+            if (first !== last) return s;
+            return (/^\d+$/).test(s.substring(last + 1)) ? s.substring(0, last) : s;
+         };
+         try {
+            const h = db.hostInfo()?.system?.hostname;
+            if (h) return h;
+         } catch(_) { /* Atlas M0/Flex, unauthorized */ }
+         try {
+            const name = hostNameFromHostPort(db.serverStatus()?.host);
+            if (name) return name;
+         } catch(_) { /* fall through */ }
+         const name = hostNameFromHostPort(hello.me);
+         return name || 'unknown';
+      })(),
       dbPath = db.serverCmdLineOpts().parsed?.storage?.dbPath ?? 'sharded',
       metadataSize = internalPageSize, // outside of WT stats (4k-64MB)
       ratio = +((dataSize / (storageSize - blocksFree - metadataSize)).toFixed(2));

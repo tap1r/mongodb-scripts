@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.33"
+    *  Version: "0.4.34"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -37,7 +37,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.33" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.34" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -321,24 +321,48 @@
       const delta = startBytes != null ? endBytes - startBytes : endBytes;
       console.log(`\n══════ [yellow]recovered[/] [blue]${scaled.format(delta)}[/] [yellow]this pass ([/][blue]${scaled.format(endBytes)}[/] [yellow]cumulative runtime)[/] ══════`);
    };
+   const hostNameFromHostPort = value => {
+      const s = (value == null) ? '' : String(value);
+      if (!s) return '';
+      if (s.charAt(0) === '[') {
+         const end = s.indexOf(']');
+         return (end > 1) ? s.substring(1, end) : s;
+      }
+      const first = s.indexOf(':');
+      const last = s.lastIndexOf(':');
+      if (first === -1) return s;
+      if (first !== last) return s;
+      return (/^\d+$/).test(s.substring(last + 1)) ? s.substring(0, last) : s;
+   };
    const hostInfo = () => {
       /*
-       *  mdblib.js hostInfo() — swallow Atlas/privilege failures; hostname fallbacks
+       *  mdblib.js hostInfo() — swallow Atlas/privilege failures
+       *  Hostname: hostInfo.system.hostname, else serverStatus().host (M0/Flex),
+       *  else hello().me (mongod; often absent on mongos), else unknown.
        */
       let info = {};
       try {
          db.hostInfo(); // required by legacy mongo to capture server exception
          info = db.hostInfo();
       } catch(_) { /* Atlas M0/Flex, serverless, or unauthorized */ }
-      if (typeof info.system === 'undefined' && typeof db.hello().me === 'undefined') {
-         info = { "system": { "hostname": "serverless" } };
-      } else if (typeof info.system === 'undefined' && typeof db.hello().me !== 'undefined') {
-         info = { "system": { "hostname": db.hello().me.match(/(.*):/)[1] } };
-      } else if (typeof info.system !== 'undefined') {
-         // keep info
-      } else {
-         info = { "system": { "hostname": "unknown" } };
+      const existing = (info.system && info.system.hostname) ? String(info.system.hostname) : '';
+      if (existing) return info;
+      let hostname = '';
+      try {
+         hostname = hostNameFromHostPort(serverStatus().host);
+      } catch(_) { /* fall through */ }
+      if (!hostname) {
+         try {
+            const helloDoc = db.hello();
+            hostname = hostNameFromHostPort(helloDoc.me);
+            if (!hostname && helloDoc.msg !== 'isdbgrid' && typeof helloDoc.me === 'undefined') {
+               hostname = 'serverless';
+            }
+         } catch(_) { /* fall through */ }
       }
+      if (!hostname) hostname = 'unknown';
+      if (typeof info.system === 'undefined') info.system = {};
+      info.system.hostname = hostname;
       return info;
    };
    const isAtlasPlatform = (type = null) => {

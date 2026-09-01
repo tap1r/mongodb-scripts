@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.2.0"
+    *  Version: "0.2.1"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -196,12 +196,37 @@
       });
    }
 
+   const hostNameFromHostPort = value => {
+      const s = (value == null) ? '' : String(value);
+      if (!s) return '';
+      if (s.charAt(0) === '[') {
+         const end = s.indexOf(']');
+         return (end > 1) ? s.substring(1, end) : s;
+      }
+      const first = s.indexOf(':');
+      const last = s.lastIndexOf(':');
+      if (first === -1) return s;
+      if (first !== last) return s;
+      return (/^\d+$/).test(s.substring(last + 1)) ? s.substring(0, last) : s;
+   };
+
    async function me(node) {
       /*
-       *  returns a node's self-identity
+       *  node's self-identity: hostInfo hostname, else serverStatus().host, else hello().me
        */
-      // TBA: add shell version and privileges checks
-      return await node.hello().me || await node.hostInfo().system.hostname || 'unknown';
+      try {
+         const hostname = (await node.hostInfo())?.system?.hostname;
+         if (hostname) return hostname;
+      } catch(_) { /* unauthorized / Atlas */ }
+      try {
+         const name = hostNameFromHostPort((await node.serverStatus())?.host);
+         if (name) return name;
+      } catch(_) { /* fall through */ }
+      try {
+         const name = hostNameFromHostPort((await node.hello())?.me);
+         if (name) return name;
+      } catch(_) { /* fall through */ }
+      return 'unknown';
    }
 
    async function connectAndExec({ name, host } = {}, cmdFn = async() => {}, { targetType = null, readPreference = 'nearest' } = {}) {

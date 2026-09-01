@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.15.8"
+ *  Version: "0.15.9"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -10,7 +10,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.15.8"
+      "version": "0.15.9"
 });
 
 /*  Notes:
@@ -635,29 +635,62 @@ function hello() {
    return db.adminCommand({ "hello": 1 });
 }
 
+function hostNameFromHostPort(value) {
+   /*
+    *  Bare hostname from host:port, [IPv6]:port, or a bare host.
+    *  serverStatus().host and hello().me are typically host:port.
+    */
+   const s = (value == null) ? '' : String(value);
+   if (!s) return '';
+   if (s.charAt(0) === '[') {
+      const end = s.indexOf(']');
+      return (end > 1) ? s.substring(1, end) : s;
+   }
+   const first = s.indexOf(':');
+   const last = s.lastIndexOf(':');
+   if (first === -1) return s;
+   if (first !== last) return s; // IPv6 without brackets
+   return (/^\d+$/).test(s.substring(last + 1)) ? s.substring(0, last) : s;
+}
+
 function hostInfo() {
    /*
     *  Forward compatibility with db.hostInfo()
+    *  Hostname: hostInfo.system.hostname, else serverStatus().host (M0/Flex),
+    *  else hello().me (mongod; often absent on mongos), else unknown.
+    *  mongos: hello().msg === 'isdbgrid' / serverStatus().process === 'mongos';
+    *  the mongos host name is OS hostname or serverStatus().host, not hello().me.
     */
-   let hostInfo = {};
+   let info = {};
    try {
       db.hostInfo(); // required by legacy mongo to capture server exception
-      hostInfo = db.hostInfo();
+      info = db.hostInfo();
    } catch(_) {
-      // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.hostInfo()\n${error}\x1b[0m`);
+      // Atlas M0/Flex, serverless, or unauthorized
    }
 
-   if (typeof hostInfo.system === 'undefined' && typeof hello().me === 'undefined') {
-      hostInfo = { "system": { "hostname": "serverless" } };
-   } else if (typeof hostInfo.system === 'undefined' && typeof hello().me !== 'undefined') {
-      hostInfo = { "system": { "hostname": hello().me.match(/(.*):/)[1] } };
-   } else if (typeof hostInfo.system !== 'undefined') { // && typeof hello().me === 'undefined') {
-      // hostInfo;
-   } else {
-      hostInfo = { "system": { "hostname": "unknown" } };
+   const existing = (info.system && info.system.hostname) ? String(info.system.hostname) : '';
+   if (existing) return info;
+
+   let hostname = '';
+   try {
+      hostname = hostNameFromHostPort(serverStatus().host);
+   } catch(_) { /* fall through */ }
+
+   if (!hostname) {
+      try {
+         const helloDoc = hello();
+         hostname = hostNameFromHostPort(helloDoc.me);
+         if (!hostname && helloDoc.msg !== 'isdbgrid' && typeof helloDoc.me === 'undefined') {
+            hostname = 'serverless';
+         }
+      } catch(_) { /* fall through */ }
    }
 
-   return hostInfo;
+   if (!hostname) hostname = 'unknown';
+   if (typeof info.system === 'undefined') info.system = {};
+   info.system.hostname = hostname;
+   return info;
 }
 
 function serverCmdLineOpts() {
