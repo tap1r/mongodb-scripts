@@ -10,7 +10,7 @@ Status is implied by section: **planned** unless marked later / hardening.
 
 - **Library / `load()` / multi-tenant `db`.** `mdblib.js` today is a global `load()` with a free `db`. `ctxDemo.js` sketches `mdblib.for(db)`. That story will change; do not refactor other scripts to depend on a new module layout until it exists.
 - **mongosh scripting guide.** Living notes for `--file` rewriter, async IIFEs, `sleep()` vs `await` delays, `--eval` `var` options. Extend when a script hits a new shell quirk. Document the consumption modes below when they land.
-- **`ProgressTracker`.** Stub in `mdblib.js` (`/* Add to mdblib.js */`) for long catalog walks (dbstats, index cache, auto-trim snapshot). Must honour the shared emit rules: TTY progress only; silent or JSON progress events in module / redirected mode — never `\r` bars in piped logs.
+- **`ProgressTracker`.** Stub in `mdblib.js` (`/* Add to mdblib.js */`) for long catalog walks (dbstats, index cache, auto-trim snapshot, **autoCompact first-pass**). Must honour the shared emit rules: TTY progress only; silent or JSON progress events in module / redirected mode — never `\r` bars in piped logs.
 - **Topology fan-out.** Per-mongod tools (`autoCompact`, WT vitals, dbstats snapshots) eventually ride `discovery.js`. Until then, operators target members with a direct connection.
 - **Legacy mongo shell retirement.** Dual `mongo` / `mongosh` support stays until a correctness cut, then the dual-shell tree is frozen and archived. After that, GA `src/` is **GA mongosh only**, and stripping legacy shell shims is the next general architectural pass. See below. Do not delete `isMongosh()` branches before that archive exists.
 
@@ -262,6 +262,16 @@ Executor auto-trim will call. Keep the file standalone. Frozen at **0.4.28** for
   - Recovered-bytes stall is not a stop.
   - Ramlog overflow (`ΔtotalLinesWritten ≥ 1024`) is a **heartbeat**, not quiet (lost WTCMPCT must not latch mid-file). A full 1024-line snapshot keeps getLog poll at 50ms but does not count as heartbeat (chatty idle nodes stay full).
   - getLog poll: min while visits increment or first pass is still in a file; backoff only after latch or during no-op.
+
+**Aspirational — first-pass progress bar**
+
+Replace or sit beside the WTCMPCT line dump with a `ProgressTracker`-style bar for the catalog walk (output only; latches stay as shipped):
+
+- **Total** = catalog ident count from the `$listCatalog` map (`nsResolver.size()` once `catalogReady`) — collections + indexes + known internals. Until the catalog is ready, hold or show an unknown total; do not block enable (`IDENT_FIRST_MS` already exists).
+- **Current** = cumulative this-pass WT file-visit **delta** from `serverStatus` (`visits` = success + skipped* + timeout + interrupted + failed), not recovered bytes and not log-line count (ramlog can drop WTCMPCT).
+- TTY: `\r` bar, `current/total`, optional last ident/ns from WTCMPCT. Piped / module: no `\r`; honour [Shared emit / logging](#shared-emit--logging) (strip ANSI, suppress live redraws).
+- `runOnce: false` still latches first pass the same way; the bar completes on first-pass latch, not on the ~24h thread.
+- Keep sizeStorer / visits-quiet / running-bit stops; the bar must not become a stop condition.
 
 ### `dbstats.js`
 
