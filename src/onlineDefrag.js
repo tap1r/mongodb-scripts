@@ -4,18 +4,33 @@
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+ *
+ *  Legacy archive line: v0.1.4 is the snapshot for this script. mongosh-only
+ *  (async IIFE, process/fs, console.table; incompatible with legacy mongo).
+ *  Still the demarked version for the whole-tree freeze. Further feature
+ *  work (dbstats JSON contract, mdblib load, WT v7 checkpoint path) targets
+ *  mongosh; see ROADMAP.md → Legacy mongo shell retirement.
+ *
+ *  Notes:
+ *  - mongosh only. Do not top-level-await this IIFE (rewriter SyntaxError).
+ *  - --eval must use var (not let/const). Do not declare dbName/collName/options
+ *    in this file — IIFE const would shadow the overlay.
+ *  - storageStats() load()s dbstats.js (MDBLIB, ~/.mongodb, or cwd).
  */
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>onlineDefrag.js
 
 /*
- *  Custom parameters:
- *  mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection';" [-f|--file] </path/to/>onlineDefrag.js
+ *  Example:
+ *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection';" [-f|--file] </path/to/>onlineDefrag.js
  */
 
 (async() => {
-   const dbName = 'database', collName = 'collection';
-   const namespace = db.getSiblingDB(dbName).getCollection(collName);
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.4" };
+   const nsDb = typeof dbName === 'undefined' ? 'database' : dbName;
+   const nsColl = typeof collName === 'undefined' ? 'collection' : collName;
+   const namespace = db.getSiblingDB(nsDb).getCollection(nsColl);
+   console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    const pageFillRatio = 0.9;
    const concurrentUpdatesRatio = 0.005;
@@ -238,7 +253,7 @@
          "comment": "online compacting updates"
       };
       const session = db.getMongo().startSession(sessionOpts);
-      const namespace = session.getDatabase(dbName).getCollection(collName);
+      const namespace = session.getDatabase(nsDb).getCollection(nsColl);
       const bulkUpdate = async() => {
          const { modifiedCount } = await namespace.bulkWrite(ops, bulkOpts);
          console.log(`\tmodifiedCount: ${modifiedCount}`);
@@ -262,12 +277,16 @@
             ...updateManyOpts
          } }
       ];
-      // await bulkOps(ops, bulkOpts);
-      bulkOps(ops, bulkOpts);
+      await bulkOps(ops, bulkOpts);
    }
 
    function storageStats() {
-      load(`${process.env.MDBLIB}/dbstats.js`);
+      const name = 'dbstats.js';
+      const dirs = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'].filter(Boolean);
+      const dir = dirs.find(p => fs.existsSync(`${p}/${name}`));
+      if (!dir)
+         throw new Error(`${name} not found (set MDBLIB or place it in ~/.mongodb or cwd)`);
+      load(`${dir}/${name}`);
       const { dataSize, storageSize, freeStorageSize } = dbStats.databases[0].collections[0];
       return {
          // 'dataSize': dataSize,
@@ -302,6 +321,10 @@
    }
 
    async function main() {
+      typeof options === 'undefined' && (options = {
+         "filter": { "db": `^${nsDb}$`, "collection": `^${nsColl}$` },
+         "output": { "format": "json" }
+      });
       const bulkOpts = {
          "writeConcern": { "w": "majority" },
          "ordered": false
@@ -321,7 +344,7 @@
          console.log(`Iterative bulk updates round ${i} of ${iterations} with pageFillTarget ${pageFillTarget} and sampleRate 1/${pageFillActual}`);
          let tasks = [];
          let update = 0;
-         for await (ids of getIds(sampleSize, concurrentUpdates, sampleRate)) {
+         for await (const ids of getIds(sampleSize, concurrentUpdates, sampleRate)) {
             const updateOneIds = ids.map(id => id._id).toArray();
             const updateManyFilter = { "_id": { "$in": updateOneIds } };
             ++update;
@@ -354,7 +377,12 @@
       }
    }
 
-   await main();
-})(options = { "filter": { "db": "^database$", "collection": "^collection$" }, "output": { "format": "json" } });
+   try {
+      await main();
+   } catch(e) {
+      console.log('[red][ERROR][/]', e.errmsg || e.message || String(e));
+      throw e;
+   }
+})();
 
 // EOF

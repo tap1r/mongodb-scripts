@@ -37,6 +37,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | **`compact.js`** | **v0.2.15** (+ **`mdblib.js` ≥ 0.15.8**) | Parse bar: dropped uninitialized `const reportLog`. Dual-shell via mdblib (`console` polyfill, `isMongosh()` / `shellVer(2.0)` `runCommand` options). `load('fuzzer.js')` uses fuzzer’s own namespace constants; `load('dbstats.js')` prints the full interactive report (compact’s `options` has no `filter`) — consumption/module-mode, not freeze-blocking. Further work (dbstats JSON contract, discovery fan-out, Atlas M0 bounce) is **mongosh-line**. Header documents this freeze. |
 | **`explainHisto.js`** | **v0.1.4** (mongosh-only) | Not dual-shell (`require` / `jsonc-require` / `./pipeline.jsonc`). Parse bar: duplicate `const pipeline` → `userPipeline`. Demarked for the whole-tree freeze anyway. Further work (sharded/newer explain stages, `--eval` overlay, sampled-pipeline caveat) is **mongosh-line**. Header documents this freeze. |
 | **`fuzzer.js`** | **v0.6.43** (+ **`mdblib.js` ≥ 0.15.8**) | Dual-shell via mdblib. Dropped `Mongo.setReadPref('primary')` (mongosh reconnect hung the first DB call after local sampling on a replica set). `await main()` try/catch. Hardcoded `dbName`/`collName` (compact `load()` does not overlay). Reshard monitor is mongosh-strong / mongo-weak. Further work (`--eval` overlay, mongos `fCV`, `$genRandWord`) is **mongosh-line**. Header documents this freeze. |
+| **`onlineDefrag.js`** | **v0.1.4** (mongosh-only) | Not dual-shell (`async` IIFE, `process`/`fs`, `console.table`). `--eval` `var dbName`/`collName`/`options` overlay (no in-file bindings). `storageStats()` finds `dbstats.js` via MDBLIB / `~/.mongodb` / cwd. Demarked for the whole-tree freeze anyway. Further work (dbstats JSON/`dbStats` return, mdblib, WT v7 checkpoint) is **mongosh-line**. Header documents this freeze. |
 
 Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver before the cut. Those land on the mongosh-only line.
 
@@ -331,11 +332,14 @@ Per-namespace `compact` and update-based defrag. Not auto-trim. Auto-trim’s **
 
 **Legacy archive line for `compact.js`: v0.2.15** (requires **mdblib.js ≥ 0.15.8**). See [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1. Do not restore `const dbFilter = dbName, collFilter = collName, reportLog;` — `const` requires an initializer; those names were never read, and IIFE-scoped bindings are invisible to `load('dbstats.js')` anyway. `let options` is not an `--eval` overlay (that needs the `typeof options === 'undefined'` probe and **no** in-file binding). Post-freeze feature work (dbstats module/JSON, discovery, Atlas M0 bounce) proceeds on the mongosh line only.
 
+**Legacy archive line for `onlineDefrag.js`: v0.1.4** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not declare `const dbName` / `collName` / `options` in-file (shadows `--eval var`). Do not invoke the IIFE as `(async() => { … })(options = {…})` — that clobbers a user `options` overlay. Do not top-level-await. Post-freeze feature work proceeds on the mongosh line only.
+
 Remaining mongosh-line work (do not block the archive):
 
 - Stop re-`load()`ing interactive `dbstats.js` three times; consume dbstats in **module/JSON** mode (and overlay `options.filter` if the full report stays in-process).
 - Later: point compact/rebuild at a single dbstats “compact” / “rebuild” row when autoCompact’s file walk is the wrong tool (one collection, dryRun estimate, `_id` rebuild).
 - `compact` is also [unsupported on Atlas M0/Flex](https://www.mongodb.com/docs/atlas/unsupported-commands/); same bounce as autoCompact. Pre-v8 `compact` has no `freeSpaceTargetMB` — no oplog trim path.
+- **onlineDefrag:** `dbstats.js` `main()` currently `return;`s so `dbStats = await main()` is `undefined` — `storageStats()` still reads `dbStats.databases[0].collections[0]`. Needs the JSON contract. WT checkpoint helpers are v8+ (`wiredTiger.checkpoint`); v7 path is commented. `session.withTransaction` may need `await`. No mdblib.
 
 ### `discovery.js`
 
