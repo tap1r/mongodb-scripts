@@ -35,6 +35,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | **`dbstats.js`** | **v0.12.19** (+ **`mdblib.js` ≥ 0.15.8**) | Hygiene complete (A1–A8); legacy Unauthorized labels; authz preflight; `filter.system`; ANSI tag table uses a plain object (no `Map`). Further dbstats work (JSON contract, module mode, catalog dual-path, task pool) is **mongosh-line** — do not block the archive on B/C/D/E. Header documents this freeze. |
 | **`autoCompact.js`** | **v0.4.36** (mongosh-only) | Not dual-shell (`async` IIFE, `await delay`, mongosh `getLog` / `$listCatalog`). Demarked for the whole-tree freeze anyway. Further work (first-pass progress bar, auto-trim executor) is **mongosh-line**. Header documents this freeze. |
 | **`compact.js`** | **v0.2.15** (+ **`mdblib.js` ≥ 0.15.8**) | Parse bar: dropped uninitialized `const reportLog`. Dual-shell via mdblib (`console` polyfill, `isMongosh()` / `shellVer(2.0)` `runCommand` options). `load('fuzzer.js')` uses fuzzer’s own namespace constants; `load('dbstats.js')` prints the full interactive report (compact’s `options` has no `filter`) — consumption/module-mode, not freeze-blocking. Further work (dbstats JSON contract, discovery fan-out, Atlas M0 bounce) is **mongosh-line**. Header documents this freeze. |
+| **`explainHisto.js`** | **v0.1.4** (mongosh-only) | Not dual-shell (`require` / `jsonc-require` / `./pipeline.jsonc`). Parse bar: duplicate `const pipeline` → `userPipeline`. Demarked for the whole-tree freeze anyway. Further work (sharded/newer explain stages, `--eval` overlay, sampled-pipeline caveat) is **mongosh-line**. Header documents this freeze. |
 
 Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver before the cut. Those land on the mongosh-only line.
 
@@ -462,11 +463,9 @@ Scaling notes:
 
 ### `explainHisto.js`
 
-Aggregation `explain('executionStats')` stage-timer histogram. **mongosh-only** (`require` / `jsonc-require` / `./pipeline.jsonc`). Not dual-shell — do not load mdblib or restore a `[mongo|mongosh]` usage line.
+Aggregation `explain('executionStats')` stage-timer histogram. **Legacy archive line: v0.1.4** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Not dual-shell (`require` / `jsonc-require` / `./pipeline.jsonc`). Do not load mdblib, restore a `[mongo|mongosh]` usage line, or redeclare `const pipeline`. Post-freeze feature work proceeds on the mongosh line only.
 
-Parse bar: duplicate `const pipeline` (JSONC import vs sampled pipeline) renamed the import to `userPipeline` in **v0.1.3**. Do not redeclare `const pipeline`. Header / `__script.version` are 0.1.3. Not yet a freeze snapshot.
-
-Remaining (do not block a later mongosh-only demark on these):
+Remaining mongosh-line work (do not block the archive):
 
 - **`pipeline.jsonc` is operator-supplied and not in the tree.** `jsonc-require` must be resolvable on mongosh’s require path. A stub file is optional; do not inline a pipeline just to make `--nodb` load.
 - Always prepends `$sample`; reported times are of the **sampled** pipeline, not the production one.

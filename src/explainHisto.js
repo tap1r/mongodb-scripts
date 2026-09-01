@@ -5,6 +5,12 @@
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
+ *  Legacy archive line: v0.1.4 is the snapshot for this script. mongosh-only
+ *  (incompatible with legacy mongo: no require). Still the demarked version
+ *  for the whole-tree freeze. Further feature work (sharded explain stages,
+ *  --eval overlay) targets mongosh; see ROADMAP.md → Legacy mongo shell
+ *  retirement.
+ *
  *  Notes:
  *  - mongosh only (`require`, jsonc-require). Legacy mongo has no require.
  *  - provides histogram of stage execution times
