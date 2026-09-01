@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.10"
+ *  Version: "0.12.11"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -107,7 +107,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.10" };
+   const __script = { "name": "dbstats.js", "version": "0.12.11" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -235,12 +235,19 @@
          "sharded": "summary" // ['summary'|'expanded']
       }
    };
-   typeof options === 'undefined' && (options = optionsDefaults);
-   const filterOptions = { ...optionsDefaults.filter, ...options.filter };
-   const sortOptions = { ...optionsDefaults.sort, ...options.sort };
-   const outputOptions = { ...optionsDefaults.output, ...options.output };
-   // const limitOptions = { ...optionsDefaults.limit, ...options.limit };
-   // const topologyOptions = { ...optionsDefaults.topology, ...options.topology };
+   // Partial user overrides must not wipe sibling defaults (shallow merge was wrong for sort.*).
+   typeof options === 'undefined' && (options = {});
+   const filterOptions = { ...optionsDefaults.filter, ...(options.filter || {}) };
+   const sortOptions = {};
+   for (const section of Object.keys(optionsDefaults.sort)) {
+      sortOptions[section] = {
+         ...optionsDefaults.sort[section],
+         ...((options.sort || {})[section] || {})
+      };
+   }
+   const outputOptions = { ...optionsDefaults.output, ...(options.output || {}) };
+   // const limitOptions = { ...optionsDefaults.limit, ...(options.limit || {}) };
+   // const topologyOptions = { ...optionsDefaults.topology, ...(options.topology || {}) };
 
    /*
     *  Global defaults
