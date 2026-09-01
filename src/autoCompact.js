@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.30"
+    *  Version: "0.4.31"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -41,7 +41,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.30" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.31" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -555,22 +555,30 @@
          catalogReady: () => catalogOk && !pumping
       };
    };
+   const WT_NO_WORK = 'there is no useful work to do -';
+   const stripWtNoWork = text => {
+      const cut = text.indexOf(WT_NO_WORK);
+      if (cut === -1) return text;
+      let i = cut + WT_NO_WORK.length;
+      while (i < text.length && text.charCodeAt(i) <= 32) i++;
+      return text.slice(0, cut) + text.slice(i);
+   };
    const annotateWtMsg = (msg, dhandle, resolveNs) => {
-      const text = String(msg);
+      const text = stripWtNoWork(String(msg));
       const wtName = wtNameFromMsg(text, dhandle);
-      let out = text;
-      if (wtName) {
-         const entry = resolveNs(wtName);
-         const plain = nsPlain(entry);
-         if (plain && !text.includes(plain)) {
-            const key = identKey(wtName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            if (key) {
-               const substituted = text.replace(new RegExp(`(?:file:|table:|statistics:table:)?${key}(?:\\.wt)?`, 'g'), nsColored(entry));
-               if (substituted !== text) out = substituted;
-            }
-         }
+      if (!wtName) return text;
+      const entry = resolveNs(wtName);
+      const plain = nsPlain(entry);
+      if (!plain || text.includes(plain)) return text;
+      const ident = identKey(wtName);
+      if (!ident) return text;
+      const colored = nsColored(entry);
+      // longest forms first so ident is not left as a .wt suffix
+      const needles = [wtName, `${ident}.wt`, `file:${ident}`, `table:${ident}`, `statistics:table:${ident}`, ident];
+      for (const n of needles) {
+         if (n && text.includes(n)) return text.replaceAll(n, colored);
       }
-      return out.replace(/there is no useful work to do -\s*/g, '');
+      return text;
    };
    const isSizeStorer = (msg = '', dhandle = '') => {
       // last expected file of the walk
@@ -616,15 +624,18 @@
       if (Number.isFinite(totalLinesWritten) && totalLinesWritten === lastTotal) {
          return { "logs": [], "totalLinesWritten": totalLinesWritten, "rawCount": lines.length };
       }
+      // first poll: skip t === since for the whole walk (seen grows as we remember)
+      const exclusiveSince = seen.size === 0;
       const out = [];
       for (const line of lines) {
          if (!WTCMPCT_RE.test(String(line))) continue;
          try {
             const entry = EJSON.parse(line);
             if (entry.t < since) continue;
-            if (+entry.t === +since && seen.size === 0) continue;
+            if (exclusiveSince && +entry.t === +since) continue;
             const key = logKey(entry);
             if (seen.has(key)) continue;
+            rememberLog(seen, key);
             out.push(entry);
          } catch(e) {
             // skip malformed WTCMPCT line
@@ -681,7 +692,6 @@
             lastLogAt = Date.now();
             logs.forEach(entry => {
                const { t = ISODate(), 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = entry;
-               rememberLog(seen, logKey(entry));
                if (t > ts) ts = t;
                if (isSizeStorer(msg, session_dhandle_name)) {
                   markFirstPass('sizeStorer (last file of catalog walk)');
