@@ -1,28 +1,24 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.15.10"
- *  Description: mongo/mongosh shell helper library
+ *  Version: "0.15.11"
+ *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *  Guide: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/mongosh-scripting-guide.md
  *
- *  Legacy archive line: v0.15.10 is the dual-shell (legacy mongo 4.4+ / mongosh)
- *  adequacy snapshot for this library. Pair frozen scripts with this file when
- *  archiving. Further feature work (for(db), MetaStats, integer version parse)
- *  targets mongosh; see ROADMAP.md → Legacy mongo shell retirement.
+ *  Dual-shell snapshot: legacy/mongo-shell (tag legacy-mongo-shell, v0.15.10).
+ *  This file is mongosh-only. Further work (for(db), MetaStats) still TBA.
  */
 
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.15.10"
+      "version": "0.15.11"
 });
 
 /*  Notes:
- *  - dual mongo / mongosh support
+ *  - mongosh only (floor 1.10 / 2.10+)
  *  - floor mongod to v4.4
- *  - floor legacy mongo shell to v4.4
- *  - floor mongosh shell to v1.10 & v2.10 (updated to match GA releases)
  *  - fCV() → serverVer() on Atlas M0/Flex is by design (getParameter FCV is
  *    restricted; Atlas is not left on a lagging FCV)
  */
@@ -98,8 +94,7 @@ const ansiTags = [
 
 // One scan per string. TTY expands [red]/[/] … to CSI; piped output strips tags+CSI.
 // Case-sensitive lookup first so [R] (bright red) is not eaten by [r].
-// Plain object — legacy mongo Map is missing/unusable (ansiTagCode.set is not a function).
-// After the legacy archive, this can return to Map.
+// Plain object lookup (tag → CSI). Case-sensitive first so [R] is not eaten by [r].
 const ANSI_TAG_RE = /\[(\/|bg bright \w+|bright \w+|bg \w+|\w+)\]/gi;
 const ANSI_CSI_RE = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
 const ansiTagCode = {};
@@ -134,20 +129,16 @@ function formatLogArgs(args, isTTY) {
    return [...args].map(arg => typeof arg === 'string' ? paint(arg) : arg);
 }
 
-isMongosh() && (console['log'] = (function() {
+(console['log'] = (function() {
    /*
     *  overloading the console.log() method
     *  - add colour markup support for TTY output
     *  - strips [tags] and CSI from non-TTY output (never expand-then-strip)
     */
    const method = () => console;
-   const fn = 'log'; // target method's attribute name for overloading
-   /*
-    *  end user defined options
-    */
-   const _fn = '_' + fn; // wrapped shadow method's name
+   const fn = 'log';
+   const _fn = '_' + fn;
    if (method()[fn].name !== 'modifiedLog') {
-      // copy to the shadowed method if it doesn't already exist
       method()[_fn] = method()[fn];
    }
    function modifiedLog() {
@@ -157,29 +148,13 @@ isMongosh() && (console['log'] = (function() {
    return modifiedLog;
 })());
 
-if (typeof console === 'undefined') {
-   /*
-    *  legacy mongo shell detected
-    */
-   var console = {
-      log: args => print(typeof args === 'string' ? stripAnsiMarkup(args) : args),
-      clear: () => _runMongoProgram('clear'),
-      error: tojson,
-      debug: tojson,
-      dir: tojson
-   };
-}
-
 (() => {
    /*
-    *  Runtime floors (see Notes). Parse major.minor as integers — shellVer()
-    *  uses +"x.y" so mongosh 2.10 and 2.1 both become 2.1.
+    *  Runtime floors (see Notes). Integer major.minor — 2.10 is not 2.1.
     */
    const [, maj, min] = String(version()).match(/^(\d+)\.(\d+)/) || [0, 0, 0];
    const major = +maj, minor = +min;
-   if (!isMongosh() && (major < 4 || (major === 4 && minor < 4)))
-      console.log(`\n[red][WARN] Possibly incompatible legacy shell version detected: ${version()}[/]`);
-   if (isMongosh() && !((major === 1 && minor >= 10) || (major === 2 && minor >= 10) || major >= 3))
+   if (!((major === 1 && minor >= 10) || (major === 2 && minor >= 10) || major >= 3))
       console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
    if (!serverVer(4.4))
       console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
@@ -390,22 +365,9 @@ function formatTime(s) {
 
 function $rand() {
    /*
-    *  Choose your preferred PRNG
+    *  Preferred PRNG (Web Crypto)
     */
-   if (isMongosh()) {
-      // mongosh/nodejs detected
-      return crypto.webcrypto.getRandomValues(new Uint32Array(1))[0] / Uint32MaxVal;
-   } else {
-      // default PRNG
-      return Math.random();
-   }
-   // return _rand(); // the shell's prng
-   // return Math.abs(_srand()) / (Math.pow(2, 63) - 1); // SecureRandom() method
-   // return Math.random(); // node's prng
-   /*
-      Random.setRandomSeed();
-      return Random.rand(); // SecureRandom() method
-   */
+   return crypto.webcrypto.getRandomValues(new Uint32Array(1))[0] / Uint32MaxVal;
 }
 
 function $ceil(num) {
@@ -478,8 +440,8 @@ function getDBNames(dbFilter = /^.+/) {
       // ignoring comment on unsupported versions
       command.comment = comment;
    }
-   slaveOk(options.readPreference);
-   const dbs = (shellVer(2.0) && isMongosh()) ? db.getSiblingDB('admin').runCommand(command, options)
+   const dbs = shellVer(2.0)
+             ? db.getSiblingDB('admin').runCommand(command, options)
              : db.getSiblingDB('admin').runCommand(command);
 
    return dbs.databases.map(({ name }) => name).filter(namespace => !restrictedNamespaces.includes(namespace));
@@ -535,15 +497,13 @@ function getAllNonSystemNamespaces() { // TBA — full catalog walk; use systemC
          "type": /^(?:collection|timeseries)$/,
          "name": /(?:^(?!(system\..+|replset\..+)$).+)/
       },
-      isMongosh() ? { "nameOnly": true } : true,
-      true
+      { "nameOnly": true, "authorizedCollections": true }
    ];
    const listViewOpts = [{
          "type": "view",
          "name": /(?:^(?!system\..+$).+)/
       },
-      isMongosh() ? { "nameOnly": true } : true,
-      true
+      { "nameOnly": true, "authorizedCollections": true }
    ];
    // Prefer client-side systemCollectionFilter('exclude') when listing with nameOnly + authorizedCollections.
    // return dbs = db.adminCommand(...listDbOpts).databases.map(dbName => dbName.name);
@@ -575,62 +535,75 @@ function getAllSystemNamespaces() { // TBA
  *  Versioned helper commands
  */
 
-function serverVer(ver = false) {
-   /*
-    *  Evaluate the server version
-    */
-   const svrVer = +db.version().match(/^\d+\.\d+/);
-
-   return (ver && ver <= svrVer) ? true
-        : (ver && ver >  svrVer) ? false
-        : svrVer;
+function parseVer(s) {
+   const m = String(s ?? '').match(/^(\d+)\.(\d+)(?:\.(\d+))?/);
+   return m ? [+m[1], +m[2], +(m[3] || 0)] : null;
 }
 
-function fCV(ver = false) { // updated for shared tier compatibility
+function specToTuple(ver) {
+   if (typeof ver === 'number') {
+      if (Number.isInteger(ver)) return [ver, 0, 0];
+      const m = String(ver).match(/^(\d+)\.(\d+)/);
+      return m ? [+m[1], +m[2], 0] : null;
+   }
+   return parseVer(ver);
+}
+
+function cmpVer(a, b) {
+   if (!a || !b) return NaN;
+   for (let i = 0; i < 3; i++) {
+      if (a[i] !== b[i]) return a[i] - b[i];
+   }
+   return 0;
+}
+
+function verNumber(tuple) {
+   // 2.10 → 2.010; 2.1 → 2.001 (do not use +"x.y")
+   return tuple[0] + tuple[1] / 1000 + tuple[2] / 1000000;
+}
+
+function verAtLeast(parsed, ver) {
+   const need = specToTuple(ver);
+   return !!(parsed && need && cmpVer(parsed, need) >= 0);
+}
+
+function serverVer(ver = false) {
    /*
-    *  Evaluate feature compatibility version
+    *  Server binary version. Predicate: serverVer(4.4) / serverVer(8).
+    *  Getter: numeric major.minor.patch with integer minors (2.10 ≠ 2.1).
+    */
+   const parsed = parseVer(db.version());
+   if (ver === false) return parsed ? verNumber(parsed) : 0;
+   return verAtLeast(parsed, ver);
+}
+
+function fCV(ver = false) { // Atlas M0/Flex: getParameter FCV restricted
+   /*
+    *  Feature compatibility version from getParameter when present.
+    *  Prefer that document on mongos (do not require process == mongod).
+    *  Fall back to binary version when FCV is unavailable (M0/Flex by design).
     */
    let cmd = {};
    try {
       cmd = db.adminCommand({ "getParameter": 1, "featureCompatibilityVersion": 1 });
    } catch(_) {
-      // console.error(`\x1b[31m[WARN] cannot obtain fCV from shared tiers or sharded clusters\n${error}\x1b[0m`);
       cmd.ok = 0;
    }
 
-   const featureVer = () => {
-      return (serverStatus().ok && serverStatus().process == 'mongod' && cmd.ok )
-         ? +db.adminCommand({
-            "getParameter": 1,
-            "featureCompatibilityVersion": 1
-            }).featureCompatibilityVersion.version
-         : serverVer();
-   }
-
-   return (ver && ver <= featureVer()) ? true
-        : (ver && ver >  featureVer()) ? false
-        : featureVer();
+   const raw = cmd.featureCompatibilityVersion;
+   const versionStr = (typeof raw === 'string') ? raw : raw && raw.version;
+   const parsed = parseVer(versionStr) || parseVer(db.version());
+   if (ver === false) return parsed ? verNumber(parsed) : 0;
+   return verAtLeast(parsed, ver);
 }
 
 function shellVer(ver = false) {
    /*
-    *  Evaluate the shell version
+    *  mongosh version. Predicate: shellVer(2.0). Getter uses integer minors.
     */
-   const shell = +version().match(/^\d+\.\d+/);
-
-   return (ver && ver <= shell) ? true
-        : (ver && ver >  shell) ? false
-        : shell;
-}
-
-function slaveOk(readPref = 'primaryPreferred') {
-   /*
-    *  Backward compatibility with rs.slaveOk() and MONGOSH-910
-    */
-   return (typeof rs.slaveOk === 'undefined' && typeof rs.secondaryOk !== 'undefined')
-        ? db.getMongo().setReadPref(readPref) // else if (shellVer(4.4))
-        : (typeof rs.secondaryOk === 'function') ? rs.secondaryOk()
-        : rs.slaveOk();
+   const parsed = parseVer(version());
+   if (ver === false) return parsed ? verNumber(parsed) : 0;
+   return verAtLeast(parsed, ver);
 }
 
 function hello() {
@@ -673,7 +646,6 @@ function hostInfo() {
     */
    let info = {};
    try {
-      db.hostInfo(); // required by legacy mongo to capture server exception
       info = db.hostInfo();
    } catch(_) {
       // Atlas M0/Flex, serverless, or unauthorized
@@ -709,7 +681,6 @@ function serverCmdLineOpts() {
     */
    let serverCmdLineOpts = {};
    try {
-      db.serverCmdLineOpts(); // required by legacy mongo to capture server exception
       serverCmdLineOpts = db.serverCmdLineOpts();
    } catch(_) {
       // console.debug(`\x1b[31m[WARN] insufficient rights to execute db.serverCmdLineOpts()\n${error}\x1b[0m`);
@@ -837,9 +808,8 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
    try {
       serverStatusResults = db.adminCommand({
          "serverStatus": true,
-         ...{ ...SERVER_STATUS_OPTIONS_DEFAULTS, ...serverStatusOptions },
-         options
-      });
+         ...{ ...SERVER_STATUS_OPTIONS_DEFAULTS, ...serverStatusOptions }
+      }, options);
    } catch(_) {
       serverStatusResults.ok = 0;
    }
@@ -854,23 +824,12 @@ if (typeof bsonsize === 'undefined') {
    bsonsize = arg => Object.getPrototypeOf(Object).bsonsize(arg);
 }
 
-if (isMongosh()) {
-   /*
-    *  mongosh wrappers
-    */
-   if (typeof Object.getPrototypeOf(UUID()).base64 === 'undefined') {
-      /*
-       *  Backward compatibility with UUID().base64()
-       */
-      Object.getPrototypeOf(UUID()).base64 = () => this.toString('base64');
-   }
+if (typeof Object.getPrototypeOf(UUID()).base64 === 'undefined') {
+   Object.getPrototypeOf(UUID()).base64 = () => this.toString('base64');
+}
 
-   if (typeof hex_md5 === 'undefined') {
-      /*
-       *  Backward compatibility with hex_md5()
-       */
-      hex_md5 = arg => crypto.createHash('md5').update(arg).digest('hex');
-   }
+if (typeof hex_md5 === 'undefined') {
+   hex_md5 = arg => crypto.createHash('md5').update(arg).digest('hex');
 }
 
 if (typeof tojson === 'undefined') {
@@ -917,27 +876,21 @@ function $NumberLong(arg) {
    /*
     *  NumberLong() wrapper
     */
-   return isMongosh()
-        ? Long.fromNumber(arg)
-        : NumberLong(arg);
+   return Long.fromNumber(arg);
 }
 
 function $NumberDecimal(arg) {
    /*
     *  NumberDecimal() wrapper
     */
-   return isMongosh()
-        ? Decimal128.fromString(arg.toString())
-        : NumberDecimal(arg);
+   return Decimal128.fromString(arg.toString());
 }
 
 function $NumberInt(arg) {
    /*
     *  NumberInt() wrapper
     */
-   return isMongosh()
-        ? NumberInt(arg)
-        : NumberInt(arg);
+   return NumberInt(arg);
 }
 
 function $getRandRegex() {
@@ -1558,7 +1511,7 @@ function $stats(dbName = db.getName()) {
     */
    let stats = db.getSiblingDB(dbName).stats( // max precision due to SERVER-69036
       // MONGOSH-1108 (mongosh v1.2.0) & SERVER-62277 (mongod v5.0.6)
-      (serverVer(5.0) && (shellVer(5.0) || (isMongosh() && shellVer(1.2))))
+      (serverVer('5.0.6') && shellVer(1.2))
       ? { "freeStorage": 1, "scale": 1 } : 1
    );
    stats.name = dbName;
@@ -1917,7 +1870,7 @@ function $collStats(dbName = db.getName(), collName = '') {
    function isUnauthorizedError(e) {
       if (!e) return false;
       if (e.codeName == 'Unauthorized') return true;
-      if (+e.code === 13) return true; // Unauthorized (legacy shell / drivers)
+      if (+e.code === 13) return true; // Unauthorized
       const msg = e.errmsg || e.message || String(e);
       return /not authorized|unauthorized/i.test(msg);
    }

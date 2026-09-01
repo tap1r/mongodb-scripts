@@ -1,17 +1,14 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.19"
+ *  Version: "0.12.20"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
- *  Legacy archive line: v0.12.19 (with mdblib.js ≥ 0.15.8) is the dual-shell
- *  (legacy mongo 4.4+ / mongosh) adequacy snapshot for this script. Further
- *  feature work targets mongosh; see ROADMAP.md → Legacy mongo shell retirement.
- *  Pair with the matching mdblib from the same freeze when archiving.
+ *  Dual-shell snapshot: legacy/mongo-shell (v0.12.19). This file is mongosh-only.
  */
 
-// Usage: [mongo|mongosh] [connection options] --quiet [--eval 'var options = {...};'] [-f|--file] </path/to/>dbstats.js
+// Usage: mongosh [connection options] --quiet [--eval 'var options = {...};'] [-f|--file] </path/to/>dbstats.js
 
 /*
  *  options = {
@@ -116,22 +113,14 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.19" };
+   const __script = { "name": "dbstats.js", "version": "0.12.20" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
        */
       let __lib = { "name": "mdblib.js", "paths": null, "path": null };
-      if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
-         __lib.paths = [_getEnv('MDBLIB'), `${_getEnv('HOME')}/.mongodb`, '.'];
-         __lib.path = `${__lib.paths.find(path => fileExists(`${path}/${__lib.name}`))}/${__lib.name}`;
-      } else if (typeof process !== 'undefined') { // mongosh process.env attribute
-         __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
-         __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
-      } else {
-         print(`[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory`);
-         __lib.path = __lib.name;
-      }
+      __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
+      __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
       load(__lib.path);
       // Fix: Namespace the library. Instead of global.$stats = ..., use global.mdblib = { $stats: ..., MetaStats: ... } and access via mdblib.$stats
    }
@@ -299,7 +288,6 @@
       let { 'format': formatOutput = 'tabular' } = outputOptions;
       if (formatOutput === 'table') formatOutput = 'tabular'; // alias
 
-      slaveOk(readPref);
       const dbStats = await getStats();
 
       switch (formatOutput) {
@@ -368,40 +356,22 @@
       // }
 
       let collNamesTasks = dbPath.databases.map(async database => {
-         database.collections = (shellVer(2.0) && isMongosh())
-            ? db.getSiblingDB(database.name).getCollectionInfos({ // mongosh v2 optimised
-                  "type": /^(collection|timeseries)$/,
-                  "name": collFilter
-               },
-               { "nameOnly": true },
-               true
-              )
-            : db.getSiblingDB(database.name).getCollectionInfos({ // legacy shell(s) method
-                  "type": /^(collection|timeseries)$/,
-                  "name": collFilter
-               },
-               isMongosh() ? { "nameOnly": true } : true,
-               true
-              );
+         database.collections = db.getSiblingDB(database.name).getCollectionInfos({
+               "type": /^(collection|timeseries)$/,
+               "name": collFilter
+            },
+            { "nameOnly": true, "authorizedCollections": true }
+         );
          database.collections = stableSort(
             database.collections.filter(acceptCollName),
             compareBy('name', 1)
          );
-         database.views = (shellVer(2.0) && isMongosh())
-            ? db.getSiblingDB(database.name).getCollectionInfos({ // mongosh v2 optimised
-                  "type": "view",
-                  "name": collFilter
-               },
-               { "nameOnly": true },
-               true
-              )
-            : db.getSiblingDB(database.name).getCollectionInfos({ // legacy shell(s) method
-                  "type": "view",
-                  "name": collFilter
-               },
-               isMongosh() ? { "nameOnly": true } : true,
-               true
-              );
+         database.views = db.getSiblingDB(database.name).getCollectionInfos({
+               "type": "view",
+               "name": collFilter
+            },
+            { "nameOnly": true, "authorizedCollections": true }
+         );
          database.views = stableSort(
             database.views.filter(acceptCollName),
             sortBy('view')
@@ -621,7 +591,7 @@
        *  Non-mutating sort: toSorted on mongosh 2+, copy+.sort otherwise.
        */
       if (!Array.isArray(arr)) return arr;
-      return (shellVer(2.0) && isMongosh()) ? arr.toSorted(cmp) : arr.slice().sort(cmp);
+      return shellVer(2.0) ? arr.toSorted(cmp) : arr.slice().sort(cmp);
    }
 
    function sortBy(type) {

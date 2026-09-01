@@ -19,6 +19,7 @@
          "readConcern": { "level": "local" },
          // "collation": { "locale": "simple" },
          // "hint": { "_id": 1 },
+         "readPreference": { "mode": readPref },
          "comment": "My aggregation query",
          "writeConcern": {
             "w": "majority",
@@ -33,7 +34,6 @@
          }
       ];
 
-   db.getMongo().setReadPref(readPref);
    namespace.aggregate(pipeline, options).forEach(printjson);
 })();
 
@@ -52,6 +52,7 @@
          "readConcern": { "level": "local" },
          // "collation": { "locale": "simple" },
          // "hint": { "_id": 1 },
+         "readPreference": { "mode": readPref },
          "comment": "Explain my aggregation query",
          "writeConcern": {
             "w": "majority",
@@ -66,7 +67,6 @@
          }
       ];
 
-   db.getMongo().setReadPref(readPref);
    printjson(namespace.explain(explainPlan).aggregate(pipeline, options));
 })();
 
@@ -90,7 +90,6 @@
             "dialect": "mongosql"
       } }];
 
-   db.getMongo().setReadPref(readPref);
    namespace.aggregate(pipeline, options).forEach(printjson);
 })();
 

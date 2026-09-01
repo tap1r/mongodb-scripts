@@ -1,15 +1,11 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.4.9"
+ *  Version: "0.4.10"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
- *  Legacy archive line: v0.4.9 is the snapshot for this script. mongosh-first
- *  (inline console/EJSON polyfill for legacy mongo; no mdblib). Still the
- *  demarked version for the whole-tree freeze. Further feature work ($sleep,
- *  Atlas Flex, mdblib load) targets mongosh; see ROADMAP.md → Legacy mongo
- *  shell retirement.
+ *  Dual-shell snapshot: legacy/mongo-shell (v0.4.9). This file is mongosh-only.
  *
  *  Notes:
  *  - synthetic slow op via $function + sleep (javascriptEnabled; unsupported
@@ -17,7 +13,7 @@
  *  - getLog("global") + EJSON.parse to recover durationMillis.
  */
 
-// Usage: [mongo|mongosh] [connection options] [--quiet] [-f|--file] </path/to/>latency.js
+// Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>latency.js
 
 // Example: mongosh --host "replset/localhost" --quiet latency.js
 
@@ -25,20 +21,7 @@
    /*
     *  main
     */
-   const __script = { "name": "latency.js", "version": "0.4.9" };
-   if (typeof console === 'undefined') {
-      /*
-       *  legacy mongo detected
-       */
-      var console = {
-         log: print,
-         clear: () => _runMongoProgram('clear'),
-         error: arg => printjson(arg, '', true, 64),
-         debug: arg => printjson(arg, '', true, 64),
-         dir: arg => printjson(arg, '', true, 64)
-      };
-      var EJSON = { parse: JSON.parse };
-   }
+   const __script = { "name": "latency.js", "version": "0.4.10" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    const spacing = 1;

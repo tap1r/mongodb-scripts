@@ -1,32 +1,15 @@
 (() => {
    /*
     *  Name: "sleepy.js"
-    *  Version: "0.2.6"
+    *  Version: "0.2.7"
     *  Description: "aggregation based '$sleepy' pipeline PoC to substitute for $function's sleep()"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
-    *  Legacy archive line: v0.2.6 is the snapshot for this script. Dual-shell
-    *  lite (inline console polyfill; no mdblib). Still the demarked version
-    *  for the whole-tree freeze. Further feature work targets mongosh; see
-    *  ROADMAP.md → Legacy mongo shell retirement.
+    *  Dual-shell snapshot: legacy/mongo-shell (v0.2.6). This file is mongosh-only.
     */
 
-   const __script = { "name": "sleepy.js", "version": "0.2.6" };
-
-   if (typeof console === 'undefined') {
-      /*
-       *  legacy mongo detected
-       */
-      var console = {
-         log: print,
-         clear: () => _runMongoProgram('clear'),
-         error: arg => printjson(arg, '', true, 64),
-         debug: arg => printjson(arg, '', true, 64),
-         dir: arg => printjson(arg, '', true, 64)
-      };
-      var EJSON = { parse: JSON.parse };
-   }
+   const __script = { "name": "sleepy.js", "version": "0.2.7" };
 
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 

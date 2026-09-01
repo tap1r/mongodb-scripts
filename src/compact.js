@@ -1,18 +1,14 @@
 /*
  *  Name: "compact.js"
- *  Version: "0.2.15"
+ *  Version: "0.2.16"
  *  Description: schrödinger's page reproduction
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
- *  Legacy archive line: v0.2.15 (with mdblib.js ≥ 0.15.8) is the dual-shell
- *  (legacy mongo 4.4+ / mongosh) adequacy snapshot for this script. Further
- *  feature work (dbstats module/JSON contract, discovery fan-out) targets
- *  mongosh; see ROADMAP.md → Legacy mongo shell retirement.
- *  Pair with the matching mdblib from the same freeze when archiving.
+ *  Dual-shell snapshot: legacy/mongo-shell (v0.2.15). This file is mongosh-only.
  */
 
-// Usage: [mongo|mongosh] [connection options] [--quiet] [-f|--file] </path/to/>compact.js
+// Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>compact.js
 
 /*
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
@@ -20,22 +16,14 @@
  */
 
 (() => {
-   const __script = { "name": "compact.js", "version": "0.2.15" };
+   const __script = { "name": "compact.js", "version": "0.2.16" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
        */
       let __lib = { "name": "mdblib.js", "paths": null, "path": null };
-      if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
-         __lib.paths = [_getEnv('MDBLIB'), `${_getEnv('HOME')}/.mongodb`, '.'];
-         __lib.path = `${__lib.paths.find(path => fileExists(`${path}/${__lib.name}`))}/${__lib.name}`;
-      } else if (typeof process !== 'undefined') { // mongosh process.env attribute
-         __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
-         __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
-      } else {
-         print(`[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory`);
-         __lib.path = __lib.name;
-      }
+      __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
+      __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
       load(__lib.path);
    }
    let __comment = `#### Running script ${__script.name} v${__script.version}`;
@@ -98,7 +86,7 @@ const options = {
    const compactCmdOptions = { "readPreference": "secondary" };
    for (let i = 1; i <= compactions; i++) {
       console.log(`Compacting collection ${i} of ${compactions}`);
-      const { bytesFreed } = (shellVer(2.0) && isMongosh())
+      const { bytesFreed } = shellVer(2.0)
                            ? dbContext.runCommand(compactCmd, compactCmdOptions)
                            : dbContext.runCommand(compactCmd);
 

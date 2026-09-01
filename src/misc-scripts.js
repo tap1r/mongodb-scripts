@@ -255,7 +255,7 @@ exports = function() { // Sample trigger to update a materialised view
          } }
       ];
 
-   db.getMongo().setReadPref('primary');
+   // Per-command RP; do not Mongo.setReadPref() (mongosh reconnects).
 
    namespace.drop();
    namespace.insertMany(batch);

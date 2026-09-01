@@ -12,7 +12,7 @@ Status is implied by section: **planned** unless marked later / hardening.
 - **mongosh scripting guide.** Living notes for `--file` rewriter, async IIFEs, `sleep()` vs `await` delays, `--eval` `var` options. Extend when a script hits a new shell quirk. Document the consumption modes below when they land.
 - **`ProgressTracker`.** Stub in `mdblib.js` (`/* Add to mdblib.js */`) for long catalog walks (dbstats, index cache, auto-trim snapshot, **autoCompact first-pass**). Must honour the shared emit rules: TTY progress only; silent or JSON progress events in module / redirected mode — never `\r` bars in piped logs.
 - **Topology fan-out.** Per-mongod tools (`autoCompact`, WT vitals, dbstats snapshots) eventually ride `discovery.js`. Until then, operators target members with a direct connection.
-- **Legacy mongo shell retirement.** Dual-shell tree archived **2026-09-01** at [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/) (tag `legacy-mongo-shell` on that commit). Live `src/` still has shims until the [strip pass](#3-after-the-cut--strip-and-streamline-next-general-architecture). Do not delete `isMongosh()` branches before using that archive.
+- **Legacy mongo shell retirement.** Dual-shell tree archived **2026-09-01** at [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/) (tag `legacy-mongo-shell`). Live `src/` is **mongosh-only** after the [strip pass](#3-after-the-cut--strip-and-streamline-next-general-architecture) (`mdblib.js` v0.15.11).
 
 ### Legacy mongo shell retirement
 
@@ -78,20 +78,22 @@ Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver be
 
 No further dual-shell feature work on the archived line. Operators who still have `mongo` use the archive. Operators on mongosh use repository `src/`.
 
-**GA `src/` after this commit:** still contains dual-shell shims until [§3](#3-after-the-cut--strip-and-streamline-next-general-architecture) runs. Do not drop `[mongo|mongosh]` usage lines or `mdblib.js` “dual mongo / mongosh” Notes until that strip. The archive exists so that strip can proceed without silently breaking `mongo`.
+**GA `src/`:** mongosh-only after the §3 strip (`mdblib.js` v0.15.11+). Dual-shell sources remain in [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/).
 
 #### 3. After the cut — strip and streamline (next general architecture)
 
-Only after the archive exists, `src/` / `mdblib.js` drop legacy-`mongo` compatibility and simplify:
+**Executed in live `src/` (`mdblib.js` v0.15.11).** Archive is unchanged. Remaining helper work (`for(db)`, MetaStats) is not this pass.
 
-- Remove `isMongosh()` guards that exist solely for the old shell (keep them only if they distinguish mongosh 1.x vs 2.x behaviour you still support).
-- `slaveOk()` / `rs.slaveOk` / `rs.secondaryOk` → per-command `readPreference` (see [mongosh scripting guide](mongosh-scripting-guide.md)); no connection-wide `setReadPref` mid-cursor.
-- One `Timestamp({ t, i })`, one `getCollectionInfos(filter, { nameOnly, authorizedCollections })`, `runCommand(cmd, options)` as the second argument (never a field named `options` on the command document).
-- Drop the legacy `console` / `tojson` / `bsonsize` polyfills if mongosh already provides them.
-- `serverVer` / `fCV` / `shellVer`: integer `major.minor.patch` parse. Shared-tier `fCV()` → `serverVer()` stays (M0/Flex). On mongos, `getParameter` FCV is not the failure mode; the `process == 'mongod'` gate currently skips a successful FCV document — after-cut, prefer that document over the mongos binary.
-- Usage / `--eval` examples assume mongosh sloppy `var` and Node (`process`, `fs`, `setTimeout`).
+Done in this pass:
 
-This pass is **shim deletion and helper streamlining**, not the `mdblib.for(db)` redesign. Namespaced `load()` stays a separate General item and still must not block features.
+- Dropped `isMongosh()` branches that existed only for legacy `mongo`. `isMongosh()` remains as `typeof process !== 'undefined'`. `shellVer(2.0)` still gates mongosh 1.x vs 2.x (`toSorted`, `runCommand` options).
+- Removed `slaveOk()`. Callers use per-command `readPreference` (see [mongosh scripting guide](mongosh-scripting-guide.md)).
+- `Timestamp({ t, i })` only; `getCollectionInfos(filter, { nameOnly, authorizedCollections })`; `runCommand(cmd, options)` as the second argument (`serverStatus` no longer embeds `{ options }` in the command body).
+- Dropped the missing-`console` polyfill. `bsonsize` / `tojson` / `hex_md5` still defined if absent.
+- `serverVer` / `fCV` / `shellVer` use integer `major.minor.patch` (2.10 ≠ 2.1). M0/Flex `fCV` still falls back to binary. mongos uses the `getParameter` FCV document when present.
+- Usage / `--eval` examples are mongosh + `var` + Node (`process`, `fs`, `setTimeout`). Loaders use `process.env.MDBLIB` / `fs.existsSync` only.
+
+This pass is **shim deletion and helper streamlining**, not the `mdblib.for(db)` redesign. Namespaced `load()` stays a separate General item and still must not block features. Do not restore `_getEnv` loaders, `slaveOk()`, dual `Timestamp(t, i)`, or `[mongo|mongosh]` usage lines in live `src/`.
 
 #### 4. What we will not do
 
@@ -429,7 +431,7 @@ Remaining mongosh-line work (do not block the archive):
 **Legacy archive line: v0.15.10.** Dual-shell library snapshot — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1. Pair archived scripts with this file (not only “≥ 0.15.8”). Do not “fix” `fCV()` → `serverVer()` on M0/Flex. Post-freeze feature work proceeds on the mongosh line only.
 
 - Namespaced helpers / `for(db)` — **after** the library strategy change, not before.
-- **Legacy `mongo` shims** — delete only after [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) (archive + tag). Until then keep `isMongosh()` / `slaveOk` / dual `Timestamp` / `runCommand` shapes. After the cut, streamline version helpers (`serverVer` / `fCV` / `shellVer`) in place; do not couple that cleanup to `for(db)`. `fCV()` on M0/Flex → `serverVer()` is intentional (Atlas not on a lagging FCV).
+- **Legacy `mongo` shims** — stripped in live `src/` (`mdblib.js` v0.15.11). Archive keeps v0.15.10. Do not restore `slaveOk` / dual `Timestamp` / `_getEnv` loaders. Integer `serverVer` / `fCV` / `shellVer` are in place; do not couple further cleanup to `for(db)`. `fCV()` on M0/Flex → `serverVer()` is intentional (Atlas not on a lagging FCV).
 - **Shared emit helpers** (see [Script consumption](#script-consumption-unify-standalone-vs-modular)): finish the story beyond today’s `console.log` TTY overload — one path for markup→ANSI, non-TTY strip, progress suppress, and module-quiet. Bring `print` / raw-escape call sites onto it over time.
 - **System name policy (shipped):** `isSystemCollectionName` / `normalizeSystemFilter` / `acceptSystemCollectionName` / `systemCollectionFilter` — used by dbstats `filter.system`. Full catalog walkers (`getAllNonSystemNamespaces`, collections, views, `getAllSystemNamespaces`) still TBA; they should apply the same predicate after listCollections, not re-encode regexes.
 - `AutoFactor` NaN / scale clamp (the copy in `autoCompact.js` is stricter).

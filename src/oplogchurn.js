@@ -1,22 +1,18 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.22"
+ *  Version: "0.5.23"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
- *  Legacy archive line: v0.5.22 (with mdblib.js ≥ 0.15.8) is the dual-shell
- *  (legacy mongo 4.4+ / mongosh) adequacy snapshot for this script. Further
- *  feature work (TTY-guard console.clear, Atlas M0 oplog/hostInfo) targets
- *  mongosh; see ROADMAP.md → Legacy mongo shell retirement.
- *  Pair with the matching mdblib from the same freeze when archiving.
+ *  Dual-shell snapshot: legacy/mongo-shell (v0.5.22). This file is mongosh-only.
  */
 
-// Usage: "[mongo|mongosh] [connection options] [--quiet] [-f|--file] </path/to/>oplogchurn.js"
+// Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>oplogchurn.js
 
 /*
  *  Custom parameters:
- *  [mongo|mongosh] [connection options] [--quiet] --eval "var intervalHrs = 1;" [-f|--file] </path/to/>oplogchurn.js
+ *  mongosh [connection options] [--quiet] --eval "var intervalHrs = 1;" [-f|--file] </path/to/>oplogchurn.js
  */
 
 (() => {
@@ -24,22 +20,14 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.5.22" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.23" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
        */
       let __lib = { "name": "mdblib.js", "paths": null, "path": null };
-      if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
-         __lib.paths = [_getEnv('MDBLIB'), `${_getEnv('HOME')}/.mongodb`, '.'];
-         __lib.path = `${__lib.paths.find(path => fileExists(`${path}/${__lib.name}`))}/${__lib.name}`;
-      } else if (typeof process !== 'undefined') { // mongosh process.env attribute
-         __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
-         __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
-      } else {
-         print(`[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory`);
-         __lib.path = __lib.name;
-      }
+      __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
+      __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
       load(__lib.path);
    }
    let __comment = `#### Running script ${__script.name} v${__script.version}`;
@@ -71,11 +59,10 @@
 
    function tsSeconds(ts) {
       /*
-       *  Extract seconds from a BSON Timestamp (mongosh or legacy)
+       *  Extract seconds from a BSON Timestamp
        */
       if (ts == null) return null;
       if (typeof ts.t === 'number') return ts.t;
-      if (typeof ts.getHighBits === 'function') return ts.getHighBits();
       return null;
    }
 
@@ -95,16 +82,10 @@
          d2 = date.toISOString(), // end datetime
          t1 = Math.floor(date.setHours(date.getHours() - intervalHrs) / 1000), // start timestamp
          d1 = date.toISOString(), // start datetime
-         $match = isMongosh() // MONGOSH-930
-                ? { "$match": {
+         $match = { "$match": {
                      "ts": {
                         "$gt": Timestamp({ "t": t1, "i": 0 }),
                         "$lte": Timestamp({ "t": t2, "i": 0 })
-                  } } }
-                : { "$match": {
-                     "ts": {
-                        "$gt": Timestamp(t1, 0),
-                        "$lte": Timestamp(t2, 0)
                   } } },
          $group = {
             "$group": {
@@ -123,20 +104,13 @@
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
-         "comment": "Calculating oplog size via oplogchurn.js v0.5.22"
+         "comment": "Calculating oplog size via oplogchurn.js v0.5.23"
       };
-      // Per-command RP only — slaveOk/setReadPref reconnects mongosh and is
-      // denied on Atlas shared tiers. Legacy mongo: cursor.readPref().
-      if (isMongosh())
-         options.readPreference = { "mode": readPref };
+      // Per-command RP only — setReadPref reconnects mongosh and is denied on Atlas shared tiers.
+      options.readPreference = { "mode": readPref };
 
       const oplog = db.getSiblingDB('local').getCollection('oplog.rs');
-      const oplogCursor = () => {
-         const cursor = oplog.aggregate(pipeline, options);
-         if (!isMongosh() && typeof cursor.readPref === 'function')
-            cursor.readPref(readPref);
-         return cursor;
-      };
+      const oplogCursor = () => oplog.aggregate(pipeline, options);
 
       if (serverVer(4.4)) {
          ([{

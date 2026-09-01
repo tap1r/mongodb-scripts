@@ -1,19 +1,17 @@
 /*
  *  Name: "batchUpdater.js"
- *  Version: "0.1.6"
+ *  Version: "0.1.7"
  *  Description: batch updater with ranged based pagination
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
- *  Legacy archive line: v0.1.6 is the snapshot for this script. mongosh-only;
- *  still the demarked version for the whole-tree freeze. In-file const
- *  dbName/collName; known invalid $expr / endValue === null are wontfix on
- *  this line. See ROADMAP.md → Legacy mongo shell retirement.
+ *  Dual-shell snapshot: legacy/mongo-shell (v0.1.6). This file is mongosh-only.
+ *  Known invalid $expr / endValue === null are mongosh-line.
  */
 
 // Usage: "mongosh [connection options] --quiet batchUpdater.js"
 
-const __script = { "name": "batchUpdater.js", "version": "0.1.6" };
+const __script = { "name": "batchUpdater.js", "version": "0.1.7" };
 
 // user defined variables
 const dbName = 'database',
@@ -34,8 +32,6 @@ const sort = { "_id": 1 },
    readPref = 'primary',
    readConcern = 'local';
 let currentKey = MinKey();
-
-db.getMongo().setReadPref(readPref);
 
 async function updateStrings(startValue, nPerPage) {
    console.log(`Finding batch of ${batchSize} documents from OID ${startValue.toString()}`);

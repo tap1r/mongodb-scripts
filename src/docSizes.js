@@ -1,14 +1,11 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.34"
+ *  Version: "0.1.35"
  *  Description: "sample document size distribution"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
- *  Legacy archive line: v0.1.34 is the snapshot for this script. mongosh-only;
- *  still the demarked version for the whole-tree freeze. In-file const options
- *  is not an --eval overlay. Further feature work targets mongosh; see
- *  ROADMAP.md → Legacy mongo shell retirement.
+ *  Dual-shell snapshot: legacy/mongo-shell (v0.1.34). This file is mongosh-only.
  */
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>docSizes.js
@@ -27,15 +24,13 @@ const options = {
    /*
     *  main
     */
-   const __script = { "name": "docSizes.js", "version": "0.1.34" };
+   const __script = { "name": "docSizes.js", "version": "0.1.35" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
-   // connection preferences
    const hello = db.hello();
    if (typeof readPref === 'undefined')
       (readPref = (hello.secondary === false) ? 'primaryPreferred' : 'secondaryPreferred');
-   db.getMongo().setReadPref(readPref);
    try { // not direct-shard-friendly
-      if (db.getSiblingDB(dbName).getCollectionInfos({ "name": collName }, true)[0]?.name !== collName)
+      if (db.getSiblingDB(dbName).getCollectionInfos({ "name": collName }, { "nameOnly": true })[0]?.name !== collName)
          throw 'namespace does not exist';
    } catch(e) {
       console.error(`${dbName}.${collName}`, e.errmsg ?? e.message ?? String(e));
@@ -73,6 +68,7 @@ const options = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
+         "readPreference": { "mode": readPref },
          "comment": `Performing document distribution analysis with ${__script.name} v${__script.version}`
       },
       hostname = (() => {

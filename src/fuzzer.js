@@ -1,18 +1,14 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.43"
+ *  Version: "0.6.44"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
- *  Legacy archive line: v0.6.43 (with mdblib.js ≥ 0.15.8) is the dual-shell
- *  (legacy mongo 4.4+ / mongosh) adequacy snapshot for this script. Further
- *  feature work (--eval overlay, mongos fCV, $genRandWord) targets mongosh;
- *  see ROADMAP.md → Legacy mongo shell retirement.
- *  Pair with the matching mdblib from the same freeze when archiving.
+ *  Dual-shell snapshot: legacy/mongo-shell (v0.6.43). This file is mongosh-only.
  */
 
-// Usage: [mongo|mongosh] [connection options] [--quiet] [-f|--file] </path/to/>fuzzer.js
+// Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>fuzzer.js
 
 /*
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
@@ -20,22 +16,14 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.43" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.44" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
        */
       let __lib = { "name": "mdblib.js", "paths": null, "path": null };
-      if (typeof _getEnv !== 'undefined') { // newer legacy shell _getEnv() method
-         __lib.paths = [_getEnv('MDBLIB'), `${_getEnv('HOME')}/.mongodb`, '.'];
-         __lib.path = `${__lib.paths.find(path => fileExists(`${path}/${__lib.name}`))}/${__lib.name}`;
-      } else if (typeof process !== 'undefined') { // mongosh process.env attribute
-         __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
-         __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
-      } else {
-         print(`[WARN] Legacy shell methods detected, must load ${__lib.name} from the current working directory`);
-         __lib.path = __lib.name;
-      }
+      __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
+      __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
       load(__lib.path);
    }
    let __comment = `#### Running script ${__script.name} v${__script.version}`;
@@ -332,34 +320,25 @@
             { "comment": "Monitoring resharding progress by fuzzer.js" }).toArray();
          }
          console.log('\nResharding activated...');
-         if (isMongosh()) {
-            const pollIntervalMS = 500;
-            let done = false;
-            // Hold the issuing command Promise so mongosh does not exit (and abort resharding) early.
-            // User-defined async functions are not auto-awaited by the mongosh rewriter.
-            const reshardPromise = resharding().finally(() => { done = true; });
-            sleep(3 * pollIntervalMS); // allow $currentOp to publish the initial donor/recipient ops
-            while (!done) {
-               const ops = rebalancingOps();
-               if (ops.length > 0) {
-                  console.clear();
-                  console.log(`\nMonitoring resharding operations:\n`);
-                  printjson(...ops);
-               }
-               sleep(pollIntervalMS);
+         const pollIntervalMS = 500;
+         let done = false;
+         // Hold the issuing command Promise so mongosh does not exit (and abort resharding) early.
+         // User-defined async functions are not auto-awaited by the mongosh rewriter.
+         const reshardPromise = resharding().finally(() => { done = true; });
+         sleep(3 * pollIntervalMS); // allow $currentOp to publish the initial donor/recipient ops
+         while (!done) {
+            const ops = rebalancingOps();
+            if (ops.length > 0) {
+               console.clear();
+               console.log(`\nMonitoring resharding operations:\n`);
+               printjson(...ops);
             }
-            try {
-               await reshardPromise;
-            } catch(e) {
-               console.log('Resharding attempt:', (e.errmsg || e.message || String(e)));
-            }
-         } else {
-            console.log(`\nMonitoring of resharding (via async) operations are not supported in the legacy shell\n`);
-            try {
-               await resharding();
-            } catch(e) {
-               console.log('Resharding attempt:', (e.errmsg || e.message || String(e)));
-            }
+            sleep(pollIntervalMS);
+         }
+         try {
+            await reshardPromise;
+         } catch(e) {
+            console.log('Resharding attempt:', (e.errmsg || e.message || String(e)));
          }
          console.log(`\nResharding complete.`);
       }
@@ -416,9 +395,7 @@
             );
       }
       const date = new Date(now + secondsOffset * 1000);
-      const ts = isMongosh() // MONGOSH-930
-               ? new Timestamp({ "t": timestamp + secondsOffset, "i": 0 })
-               : new Timestamp(timestamp + secondsOffset, 0);
+      const ts = new Timestamp({ "t": timestamp + secondsOffset, "i": 0 });
       let schemas = new Array();
       schemas.push({
          "_id": oid,
@@ -874,7 +851,7 @@
          const bulk = namespace.initializeUnorderedBulkOp();
          for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument(fuzzer, timestamp));
          const result = bulk.execute(writeConcern);
-         const bInserted = isMongosh() ? result.insertedCount : result.nInserted;
+         const bInserted = result.insertedCount;
          console.log(`\t[Batch ${1 + i}/${totalBatches}] bulk inserted ${bInserted} document${(bInserted === 1) ? '' : 's'}`);
       }
 

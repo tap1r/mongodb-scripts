@@ -1,15 +1,12 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.36"
+    *  Version: "0.4.37"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
-    *  Legacy archive line: v0.4.36 is the snapshot for this script. mongosh-only
-    *  (incompatible with legacy mongo); still the demarked version for the
-    *  whole-tree freeze. Further feature work (first-pass progress bar, auto-trim)
-    *  targets mongosh; see ROADMAP.md → Legacy mongo shell retirement.
+    *  Dual-shell snapshot: legacy/mongo-shell (v0.4.36). This file is mongosh-only.
     *
     *  Notes:
     *  - automates the autoCompact command with monitoring (https://www.mongodb.com/docs/v8.0/reference/command/autoCompact/)
@@ -42,10 +39,9 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.36" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.37" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (from mdblib.js)
-   const isMongosh = () => typeof process !== 'undefined';
    const ansiTags = [
       { "tag": "\/", "code": 0 },
       { "tag": "bold", "code": 1 },
@@ -109,8 +105,7 @@
    ];
    // One scan per string. TTY expands [red]/[/] … to CSI; piped output strips tags+CSI.
    // Case-sensitive lookup first so [R] (bright red) is not eaten by [r].
-   // Plain object — same as mdblib.js (legacy mongo Map is missing/unusable).
-   // After the legacy archive, this can return to Map.
+   // Plain object lookup (tag → CSI).
    const ANSI_TAG_RE = /\[(\/|bg bright \w+|bright \w+|bg \w+|\w+)\]/gi;
    const ANSI_CSI_RE = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
    const ansiTagCode = {};
@@ -135,7 +130,7 @@
       const paint = isTTY ? applyAnsiTags : stripAnsiMarkup;
       return [...args].map(arg => typeof arg === 'string' ? paint(arg) : arg);
    };
-   isMongosh() && (console['log'] = (function() {
+   (console['log'] = (function() {
       const method = () => console;
       const fn = 'log';
       const _fn = '_' + fn;
@@ -350,7 +345,6 @@
        */
       let info = {};
       try {
-         db.hostInfo(); // required by legacy mongo to capture server exception
          info = db.hostInfo();
       } catch(_) { /* Atlas M0/Flex, serverless, or unauthorized */ }
       const existing = (info.system && info.system.hostname) ? String(info.system.hostname) : '';
