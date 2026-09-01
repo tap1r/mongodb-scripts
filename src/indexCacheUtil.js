@@ -5,7 +5,13 @@
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
- *  Notes: mongosh only
+ *  Legacy archive line: v0.1.5 is the snapshot for this script. mongosh-only
+ *  (async IIFE, Promise.allSettled; incompatible with legacy mongo). Still
+ *  the demarked version for the whole-tree freeze. Further feature work
+ *  (thread pool, sharding, runCommand, ProgressTracker) targets mongosh;
+ *  see ROADMAP.md → Legacy mongo shell retirement.
+ *
+ *  Notes: mongosh only. Do not top-level-await this IIFE.
  *
  *  TODOs:
  *  - Add threadpool support
