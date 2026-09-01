@@ -1,3 +1,9 @@
+/*
+ *  Name: "pcg-xsh-rr.js"
+ *  Legacy archive line: as-is (no Version field). PCG RNG helper; freeze as-is
+ *  for the whole-tree snapshot. See ROADMAP.md → Legacy mongo shell retirement.
+ */
+
 let UINT64 = function(a, b, c, d) {
    let a48, a32, a16, a00;
    const _mask = {

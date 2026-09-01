@@ -28,7 +28,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 - Known wrong-result bugs that dual-shell users would inherit (invalid `$expr`, `--eval` shadowing) are either fixed or documented as wontfix in the archive notes. `fCV()` → `serverVer()` on Atlas M0/Flex is **by design** (`getParameter` FCV is restricted there; Atlas is not left on a lagging FCV).
 - Version strings and `__script.version` are consistent with the freeze (one patch ahead of the last dual-shell HEAD).
 
-**Per-script adequacy (drawn when ready, before the whole-tree freeze):**
+**Per-script adequacy (complete for current `src/`; remaining rows frozen as-is):**
 
 | Script | Dual-shell adequacy line | Notes |
 |--------|--------------------------|--------|
@@ -47,6 +47,19 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | **`mdblib.js`** | **v0.15.10** | Dual-shell library snapshot. `fCV()` → `serverVer()` on Atlas M0/Flex is **by design** (`getParameter` FCV restricted; Atlas not on a lagging FCV). `slaveOk()` mongosh path can `setReadPref` (callers use per-command RP). `shellVer`/`serverVer` `+"x.y"` (2.10 ≡ 2.1) stays. Further work (`for(db)`, MetaStats, integer version parse) is **mongosh-line**. Header documents this freeze. |
 | **`discovery.js`** | **v0.2.1** (mongosh-only) | Not dual-shell (`async` IIFE, named capture groups). Topology fan-out stub; cmd profiles TBA. Do not top-level-await. Do not strip `(?<setName>)` for mongo. Further work (standalone/LB/arbiters, pool/jitter, primary-vs-secondary targeting) is **mongosh-line**. Header documents this freeze. |
 | **`niceDeleteMany.js`** | **v0.4.11** (mongosh-only) | Not dual-shell (`async` IIFE, `?.`). `--eval var` overlay (`typeof` probes; no in-file `const dbName`). Per-command RP (no `setReadPref`). Further work (per-shard WT via discovery, Policy B curation, `lowPriorityAdmissionBypassThreshold`) is **mongosh-line**. Header documents this freeze. |
+| **`congestionMonitor.js`** | **v0.2.13** (mongosh-only) | Not dual-shell (`async` IIFE, `sleep` poll). Known: `.finally(process.stdout.write(…))` runs immediately — **freeze as-is** (wontfix on this line). Further work (sharding, v8 execution control, `bytes_dirty_intl`/`leaf`, auto-trim pause signal) is **mongosh-line**. Header documents this freeze. |
+| **`batchUpdater.js`** | **v0.1.6** (mongosh-only) | In-file `const dbName`/`collName` (not an `--eval` overlay). Known invalid `$expr` / `endValue === null` — **freeze as-is**. Further work (query `$type`, `--eval var`) is **mongosh-line**. Header documents this freeze. |
+| **`killAgedSessions.js`** | **v0.2.2** (mongosh-only) | Async generator + batch `killSessions`. `--eval` examples use `let` (not `var`). Further work is **mongosh-line**. Header documents this freeze. |
+| **`rtt.js`** | **v0.3.0** (mongosh-only) | Application RTT from mongosh topology/private API. Further work (TODOs) is **mongosh-line**. Header documents this freeze. |
+| **`sleepy.js`** | **v0.2.6** (dual-shell lite) | Inline `console` polyfill; `$sleepy` agg PoC vs `$function` `sleep()`. Further work is **mongosh-line**. Header documents this freeze. |
+| **`docSizes.js`** | **v0.1.34** (mongosh-only) | `$sample` BSON/page size histogram. In-file `const options` is not an `--eval` overlay. Further work is **mongosh-line**. Header documents this freeze. |
+| **`oidGenerator.js`** | **v0.2.7** | Aggregation OID generator (mongod 5.0+). Further work is **mongosh-line**. Header documents this freeze. |
+| **`oidFunction.js`** | **v0.1.5** | OID view/`$function` reproduction (mongod 5.0+). Further work is **mongosh-line**. Header documents this freeze. |
+| **`ctxDemo.js`** | **v0.1.0** (mongosh-only) | `mdblib.for(db)` sketch; stand-in lib, no `load('mdblib.js')`. Freeze as-is. Header documents this freeze. |
+| **`modifiedCountDocumentsByKey.js`** | **v0.1.7** (mongosh-only) | `countDocuments` prototype overload. Further work is **mongosh-line**. Header documents this freeze. |
+| **`pcg-xsh-rr.js`** | **as-is** (no `Version`) | PCG RNG helper. Freeze as-is. |
+| **`aggregation-template.js`** | **as-is** (no `Version`) | Aggregation snippets. Freeze as-is. |
+| **`misc-scripts.js`** | **as-is** (no `Version`) | Unsorted snippets. Freeze as-is. |
 
 Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver before the cut. Those land on the mongosh-only line.
 
@@ -364,10 +377,15 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `congestionMonitor.js`
 
+**Legacy archive line: v0.2.13** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Known `.finally(process.stdout.write(…))` (write runs immediately) is **wontfix on this line**. Post-freeze feature work proceeds on the mongosh line only.
+
+Remaining mongosh-line work (do not block the archive):
+
 - Sharding (per-shard WT vitals; same need as niceDeleteMany).
 - MongoDB 8 execution-control metrics.
 - `bytes_dirty_intl` / `bytes_dirty_leaf` when the server exposes them.
 - Pause / closed signal for auto-trim: backup cursor, repl-lag settle, WT dirty/updates (already has `backupCursorOpen`). Auto-trim is a consumer of these vitals, not a second monitor implementation if inlining is still required.
+- `.finally(() => process.stdout.write(…))` so the alt-buffer teardown actually waits.
 
 ### `niceDeleteMany.js`
 
@@ -553,9 +571,41 @@ Remaining mongosh-line work (do not block the archive):
 - `listDBs()` logs names but never fills `dbNames`.
 - `--eval var` overlay requires dropping the in-file `const userOptions`.
 
-### `killAgedSessions.js` / `rtt.js`
+### `killAgedSessions.js`
 
-No storage-trim work. `rtt.js` TODOs are still TBA.
+**Legacy archive line: v0.2.2** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. `--eval` examples on this line use `let` (not `var`). Post-freeze feature work proceeds on the mongosh line only.
+
+### `rtt.js`
+
+**Legacy archive line: v0.3.0** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. TODOs stay TBA on the mongosh line.
+
+### `sleepy.js`
+
+**Legacy archive line: v0.2.6** (dual-shell lite; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Inline `console` polyfill; do not load mdblib on this line.
+
+### `docSizes.js`
+
+**Legacy archive line: v0.1.34** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). In-file `const options` is not an `--eval` overlay.
+
+### `batchUpdater.js`
+
+**Legacy archive line: v0.1.6** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). In-file `const dbName`/`collName`. Invalid `$expr` / `endValue === null` is **wontfix on this line**.
+
+### `oidGenerator.js` / `oidFunction.js`
+
+**Legacy archive lines: v0.2.7 / v0.1.5.** OID generator and `$function` view reproduction (mongod 5.0+). Freeze as-is. Post-freeze feature work proceeds on the mongosh line only.
+
+### `ctxDemo.js`
+
+**Legacy archive line: v0.1.0** (mongosh-only). `mdblib.for(db)` sketch; stand-in library, no `load('mdblib.js')`. Freeze as-is.
+
+### `modifiedCountDocumentsByKey.js`
+
+**Legacy archive line: v0.1.7** (mongosh-only). `countDocuments` prototype overload. Freeze as-is.
+
+### `pcg-xsh-rr.js` / `aggregation-template.js` / `misc-scripts.js`
+
+**Legacy archive line: as-is** (no `Version` field). Helpers and snippets. Freeze as-is; do not invent version numbers for the tag.
 
 ---
 

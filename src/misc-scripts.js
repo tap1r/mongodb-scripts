@@ -1,5 +1,8 @@
 /*
  *  miscellaneous unsorted scripts
+ *
+ *  Legacy archive line: as-is (no Version field). Freeze as-is for the
+ *  whole-tree snapshot. See ROADMAP.md → Legacy mongo shell retirement.
  */
 
 (() => {

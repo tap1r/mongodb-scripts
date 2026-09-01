@@ -5,6 +5,10 @@
     *  Description: "Aggregation based OID generator (requires v5.0+)"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+    *
+    *  Legacy archive line: v0.2.7 is the snapshot for this script. Still the
+    *  demarked version for the whole-tree freeze. Further feature work targets
+    *  mongosh; see ROADMAP.md → Legacy mongo shell retirement.
     */
 
    const options = {

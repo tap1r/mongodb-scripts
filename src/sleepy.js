@@ -5,6 +5,11 @@
     *  Description: "aggregation based '$sleepy' pipeline PoC to substitute for $function's sleep()"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+    *
+    *  Legacy archive line: v0.2.6 is the snapshot for this script. Dual-shell
+    *  lite (inline console polyfill; no mdblib). Still the demarked version
+    *  for the whole-tree freeze. Further feature work targets mongosh; see
+    *  ROADMAP.md → Legacy mongo shell retirement.
     */
 
    const __script = { "name": "sleepy.js", "version": "0.2.6" };

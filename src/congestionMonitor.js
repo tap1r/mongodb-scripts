@@ -7,6 +7,12 @@
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *  Guide: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/mongosh-scripting-guide.md"
     *
+    *  Legacy archive line: v0.2.13 is the snapshot for this script. mongosh-only
+    *  (incompatible with legacy mongo); still the demarked version for the
+    *  whole-tree freeze. Known `.finally(process.stdout.write(…))` is wontfix
+    *  on this line. Further feature work (sharding, v8 execution control)
+    *  targets mongosh; see ROADMAP.md → Legacy mongo shell retirement.
+    *
     *  TODOs:
     *  - Add sharding support
     *  - Add v8.0 Execution Control metrics

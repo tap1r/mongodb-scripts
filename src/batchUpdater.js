@@ -4,6 +4,11 @@
  *  Description: batch updater with ranged based pagination
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+ *
+ *  Legacy archive line: v0.1.6 is the snapshot for this script. mongosh-only;
+ *  still the demarked version for the whole-tree freeze. In-file const
+ *  dbName/collName; known invalid $expr / endValue === null are wontfix on
+ *  this line. See ROADMAP.md → Legacy mongo shell retirement.
  */
 
 // Usage: "mongosh [connection options] --quiet batchUpdater.js"

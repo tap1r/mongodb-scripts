@@ -6,6 +6,10 @@
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
+    *  Legacy archive line: v0.1.0 is the snapshot for this script. mongosh-only
+    *  mdblib.for(db) sketch; still the demarked version for the whole-tree
+    *  freeze. See ROADMAP.md → Legacy mongo shell retirement.
+    *
     *  Notes:
     *  - mongosh only
     *  - does not load mdblib.js; a tiny stand-in library is defined in this file

@@ -6,6 +6,11 @@
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
+    *  Legacy archive line: v0.3.0 is the snapshot for this script. mongosh-only
+    *  (incompatible with legacy mongo); still the demarked version for the
+    *  whole-tree freeze. Further feature work (TODOs) targets mongosh; see
+    *  ROADMAP.md → Legacy mongo shell retirement.
+    *
     *  Notes:
     *  - mongosh only
     *  - Reports on all discoverable servers only
