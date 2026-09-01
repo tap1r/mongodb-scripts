@@ -41,6 +41,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | **`oplogchurn.js`** | **v0.5.22** (+ **`mdblib.js` ≥ 0.15.8**) | Dual-shell via mdblib. Per-command RP (`aggregate` `readPreference` on mongosh; `cursor.readPref` on legacy mongo). Do not restore `slaveOk(readPref)`. `--eval var intervalHrs` overlay kept. Dual `Timestamp` (MONGOSH-930). Further work (TTY-guard `console.clear`, Atlas M0 oplog/hostInfo) is **mongosh-line**. Header documents this freeze. |
 | **`latency.js`** | **v0.4.9** (mongosh-first) | Dual-shell lite: inline `console`/`EJSON` polyfill, no mdblib. `$function`+`sleep` synthetic slow op (Flex / `javascriptEnabled`). `getLog` + EJSON to recover `durationMillis`. Further work (`$sleep`, Flex bounce, mdblib) is **mongosh-line**. Header documents this freeze. |
 | **`schema-sampler.js`** | **v0.2.16** (dual-shell lite) | No mdblib. Dropped `Mongo.setReadPref`; `$sample` per-command RP (mongosh `options.readPreference`; mongo `cursor.readPref`). `listDatabases`/`getCollectionInfos` stay on the connected node. Further work (mdblib, `filter.db` actually applied, `--eval` overlay) is **mongosh-line**. Header documents this freeze. |
+| **`schema-import.js`** | **v0.1.8** (mongosh-only) | Companion stub to schema-sampler. Dropped `Mongo.setReadPref`. `fs.readFileSync` schema JSON; create collection/index/view still commented. In-file `const userOptions` is not an `--eval` overlay. Further work (apply sampler JSON) is **mongosh-line**. Header documents this freeze. |
 
 Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver before the cut. Those land on the mongosh-only line.
 
@@ -520,6 +521,16 @@ Remaining mongosh-line work (do not block the archive):
 - `userOptions.filter.db` / `filter.collection` are unused; catalog regexes are hardcoded in `listDbOpts` / `listColOpts`.
 - `adminCommand({ listDatabases })` is always primary.
 - Optional mdblib load; `--eval var` overlay requires dropping the in-file `const userOptions`.
+
+### `schema-import.js`
+
+**Legacy archive line: v0.1.8** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not restore `db.getMongo().setReadPref(readPreference)` — writes already target primary. In-file `const userOptions` is not an `--eval` overlay. Create collection/index/view from sampler JSON stays stubbed on this line. Post-freeze feature work proceeds on the mongosh line only.
+
+Remaining mongosh-line work (do not block the archive):
+
+- Implement parse-and-create for DBs, collections + sampled docs, indexes, views.
+- `listDBs()` logs names but never fills `dbNames`.
+- `--eval var` overlay requires dropping the in-file `const userOptions`.
 
 ### `killAgedSessions.js` / `rtt.js`
 
