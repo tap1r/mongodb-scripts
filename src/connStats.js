@@ -5,10 +5,16 @@
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+    *
+    *  Legacy archive line: v0.1.14 is the snapshot for this script. mongosh-only
+    *  (usage; still the demarked version for the whole-tree freeze). Further
+    *  feature work (whatsmyuri, DRIVERS-3027, targetAllNodes) targets mongosh;
+    *  see ROADMAP.md → Legacy mongo shell retirement.
     */
 
    /*
     *  Notes:
+    *  - mongosh only
     *  - requires "inprog" privileges to capture all connections, but supports fallback
     *  - statistics are per mongos/mongod as determined by the connection URI and readPreference
     *  - $currentOp client addresses: IPv4/hostname as host:port; IPv6 always bracketed as [addr]:port
