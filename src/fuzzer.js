@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.42"
+ *  Version: "0.6.43"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.42" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.43" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -184,7 +184,8 @@
       /*
        *  main
        */
-      db.getMongo().setReadPref('primary');
+      // Do not Mongo.setReadPref(): mongosh reconnects and the next
+      // DB call (exists/drop/create) hangs or rejects on a local RS.
       console.log(`\nSynthesising ${totalDocs} document${(totalDocs === 1) ? '' : 's'}`);
 
       // sampling synthetic documents and estimating batch size
@@ -660,11 +661,13 @@
        *  drop target namespace
        */
       if (dropNamespace && !!dbName && !!collName) {
-         msg = `\nDropping namespace "${dbName}.${collName}"\n`;
+         console.log(`\nDropping namespace "${dbName}.${collName}"\n`);
          db.getSiblingDB(dbName).getCollection(collName).drop();
-      } else if (!dropNamespace && !namespace.exists()) {
+         return;
+      }
+      if (!dropNamespace && !namespace.exists())
          msg = `\nNominated namespace "${dbName}.${collName}" does not exist\n`;
-      } else
+      else
          msg = `\nPreserving existing namespace "${dbName}.${collName}"`;
 
       return console.log(msg);
@@ -872,7 +875,12 @@
       return console.log('Generation completed.');
    }
 
-   await main();
+   try {
+      await main();
+   } catch(e) {
+      console.log('[red][ERROR][/]', e.errmsg || e.message || String(e));
+      throw e;
+   }
 })();
 
 // EOF
