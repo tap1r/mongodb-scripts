@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.35"
+    *  Version: "0.4.36"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -37,7 +37,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.35" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.36" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -104,17 +104,19 @@
    ];
    // One scan per string. TTY expands [red]/[/] … to CSI; piped output strips tags+CSI.
    // Case-sensitive lookup first so [R] (bright red) is not eaten by [r].
+   // Plain object — same as mdblib.js (legacy mongo Map is missing/unusable).
+   // After the legacy archive, this can return to Map.
    const ANSI_TAG_RE = /\[(\/|bg bright \w+|bright \w+|bg \w+|\w+)\]/gi;
    const ANSI_CSI_RE = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
-   const ansiTagCode = new Map();
+   const ansiTagCode = {};
    ansiTags.forEach(({ tag, code }) => {
-      ansiTagCode.set(tag, code);
+      ansiTagCode[tag] = code;
       const lower = tag.toLowerCase();
-      if (!ansiTagCode.has(lower)) ansiTagCode.set(lower, code);
+      if (ansiTagCode[lower] === undefined) ansiTagCode[lower] = code;
    });
    const ansiTagCodeOf = tag => {
-      let code = ansiTagCode.get(tag);
-      if (code === undefined) code = ansiTagCode.get(tag.toLowerCase());
+      let code = ansiTagCode[tag];
+      if (code === undefined) code = ansiTagCode[tag.toLowerCase()];
       return code;
    };
    const applyAnsiTags = text => text.replace(ANSI_TAG_RE, (all, tag) => {
@@ -322,6 +324,7 @@
       console.log(`\n══════ [yellow]recovered[/] [blue]${scaled.format(delta)}[/] [yellow]this pass ([/][blue]${scaled.format(endBytes)}[/] [yellow]cumulative runtime)[/] ══════`);
    };
    const hostNameFromHostPort = value => {
+      // Bare hostname from host:port, [IPv6]:port, or a bare host (mdblib.js)
       const s = (value == null) ? '' : String(value);
       if (!s) return '';
       if (s.charAt(0) === '[') {
@@ -331,7 +334,7 @@
       const first = s.indexOf(':');
       const last = s.lastIndexOf(':');
       if (first === -1) return s;
-      if (first !== last) return s;
+      if (first !== last) return s; // IPv6 without brackets
       return (/^\d+$/).test(s.substring(last + 1)) ? s.substring(0, last) : s;
    };
    const hostInfo = () => {

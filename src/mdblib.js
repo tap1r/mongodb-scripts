@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.15.9"
+ *  Version: "0.15.10"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -10,7 +10,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.15.9"
+      "version": "0.15.10"
 });
 
 /*  Notes:
@@ -92,6 +92,7 @@ const ansiTags = [
 // One scan per string. TTY expands [red]/[/] … to CSI; piped output strips tags+CSI.
 // Case-sensitive lookup first so [R] (bright red) is not eaten by [r].
 // Plain object — legacy mongo Map is missing/unusable (ansiTagCode.set is not a function).
+// After the legacy archive, this can return to Map.
 const ANSI_TAG_RE = /\[(\/|bg bright \w+|bright \w+|bg \w+|\w+)\]/gi;
 const ANSI_CSI_RE = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
 const ansiTagCode = {};
@@ -210,6 +211,16 @@ if (typeof nonce === 'undefined') {
  *  Helper classes
  */
 
+const SCALE_METRICS = [ // array ordered by scale factor
+   { "unit":      "bytes", "symbol":   "B", "factor": 1,                 "precision": 0, "pctPoint": 2 },
+   { "unit":  "kibibytes", "symbol": "KiB", "factor": 1024,              "precision": 2, "pctPoint": 1 },
+   { "unit":  "mebibytes", "symbol": "MiB", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 },
+   { "unit":  "gibibytes", "symbol": "GiB", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 },
+   { "unit":  "tebibytes", "symbol": "TiB", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 },
+   { "unit":  "pebibytes", "symbol": "PiB", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 },
+   { "unit":  "exbibytes", "symbol": "EiB", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 }
+];
+
 class AutoFactor {
    /*
     *  Determine scale factor automatically
@@ -219,13 +230,13 @@ class AutoFactor {
    }
    scale(number = this.number) {
       if (number < 1) number = 1;
-      return Math.floor(Math.log2(number) / 10);
+      return Math.min(Math.floor(Math.log2(number) / 10), SCALE_METRICS.length - 1);
    }
    factor(number = this.number) {
       return Math.pow(1024, this.scale(number));
    }
    metric(number = this.number) {
-      return this.metrics[this.scale(number)];
+      return SCALE_METRICS[this.scale(number)];
    }
    format(number = this.number) {
       this.value(number);
@@ -239,16 +250,8 @@ class AutoFactor {
       }
       return this.number;
    }
-   get metrics() { // array ordered by scale factor
-      return [
-         { "unit":      "bytes", "symbol":   "B", "factor": 1,                 "precision": 0, "pctPoint": 2 },
-         { "unit":  "kibibytes", "symbol": "KiB", "factor": 1024,              "precision": 2, "pctPoint": 1 },
-         { "unit":  "mebibytes", "symbol": "MiB", "factor": Math.pow(1024, 2), "precision": 2, "pctPoint": 1 },
-         { "unit":  "gibibytes", "symbol": "GiB", "factor": Math.pow(1024, 3), "precision": 2, "pctPoint": 1 },
-         { "unit":  "tebibytes", "symbol": "TiB", "factor": Math.pow(1024, 4), "precision": 2, "pctPoint": 1 },
-         { "unit":  "pebibytes", "symbol": "PiB", "factor": Math.pow(1024, 5), "precision": 2, "pctPoint": 1 },
-         { "unit":  "exbibytes", "symbol": "EiB", "factor": Math.pow(1024, 6), "precision": 2, "pctPoint": 1 }
-      ];
+   get metrics() {
+      return SCALE_METRICS;
    }
 }
 
@@ -728,8 +731,7 @@ function isAtlasPlatform(type = null) {
       isSharedTier = (e.codeName == 'AtlasError') ? true : false;
    }
 
-   const atlasDomain = new RegExp(/\.mongodb\.net$/);
-   const isAtlas = (atlasVersion || atlasDomain.test(hostname)) ? true : false;
+   const isAtlas = (atlasVersion || (typeof hostname === 'string' && hostname.endsWith('.mongodb.net'))) ? true : false;
 
    return (type === null && isMongos && isAtlas && hostname != 'serverless') ? 'dedicatedShardedCluster'
         : (type == 'dedicatedShardedCluster' && isMongos && isAtlas && hostname != 'serverless') ? true
@@ -742,80 +744,82 @@ function isAtlasPlatform(type = null) {
         : false;
 }
 
+// Hoisted once — avoid rebuilding ~70-key maps on every serverStatus() call.
+const SERVER_STATUS_OPTIONS_DEFAULTS = { // multiversion compatible
+   "none": true, // 8.3 feature: exclude all optional fields, then opt-in
+   "activeIndexBuilds": false,
+   "asserts": false,
+   "batchedDeletes": false,
+   "bucketCatalog": false,
+   "catalogStats": false,
+   "changeStreamPreImages": false,
+   "collectionCatalog": false,
+   "connections": false,
+   "defaultRWConcern": false,
+   "directShardConnections": false,
+   "electionMetrics": false,
+   "encryptionAtRest": false,
+   "extra_info": false,
+   "featureCompatibilityVersion": false,
+   "fle": false,
+   "flowControl": false,
+   "ftdcCollectionMetrics": false,
+   "globalLock": false,
+   "health": false,
+   "hedgingMetrics": false,
+   "indexBuilds": false,
+   "indexBulkBuilder": false,
+   "indexStats": false,
+   "internalTransactions": false,
+   "latchAnalysis": false,
+   "locks": false,
+   "lockContentionMetrics": false,
+   "logicalSessionRecordCache": false,
+   "mem": false,
+   "metrics": false,
+   "mirroredReads": false,
+   "network": false,
+   "opLatencies": false,
+   "opReadConcernCounters": false,
+   "opWorkingTime": false,
+   "opWriteConcernCounters": false,
+   "opcounters": false,
+   "opcountersRepl": false,
+   "oplogTruncation": false,
+   "oplogTruncationThread": false,
+   "planCache": false,
+   "profiler": false,
+   "queryAnalyzers": false,
+   "querySettings": false,
+   "queryStats": false,
+   "queues": false,
+   "readConcernCounters": false,
+   "readPreferenceCounters": false,
+   "recoveryOplogApplier": false,
+   "repl": false,
+   "scramCache": false,
+   "security": false,
+   "sharding": false,
+   "shardingStatistics": false,
+   "shardedIndexConsistency": false,
+   "shardSplits": false,
+   "spillWiredTiger": false,
+   "storageEngine": false,
+   "tcmalloc": false,
+   "tenantMigrations": false,
+   "trafficRecording": false,
+   "transactions": false,
+   "transportSecurity": false,
+   "twoPhaseCommitCoordinator": false,
+   "watchdog": false,
+   "wiredTiger": false,
+   "writeBacksQueued": false
+};
+
 function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
    /*
     *  opt-in version of db.serverStatus()
     */
-   const serverStatusOptionsDefaults = { // multiversion compatible
-      "none": true, // 8.3 feature: exclude all optional fields, then opt-in
-      "activeIndexBuilds": false,
-      "asserts": false,
-      "batchedDeletes": false,
-      "bucketCatalog": false,
-      "catalogStats": false,
-      "changeStreamPreImages": false,
-      "collectionCatalog": false,
-      "connections": false,
-      "defaultRWConcern": false,
-      "directShardConnections": false,
-      "electionMetrics": false,
-      "encryptionAtRest": false,
-      "extra_info": false,
-      "featureCompatibilityVersion": false,
-      "fle": false,
-      "flowControl": false,
-      "ftdcCollectionMetrics": false,
-      "globalLock": false,
-      "health": false,
-      "hedgingMetrics": false,
-      "indexBuilds": false,
-      "indexBulkBuilder": false,
-      "indexStats": false,
-      "internalTransactions": false,
-      "latchAnalysis": false,
-      "locks": false,
-      "lockContentionMetrics": false,
-      "logicalSessionRecordCache": false,
-      "mem": false,
-      "metrics": false,
-      "mirroredReads": false,
-      "network": false,
-      "opLatencies": false,
-      "opReadConcernCounters": false,
-      "opWorkingTime": false,
-      "opWriteConcernCounters": false,
-      "opcounters": false,
-      "opcountersRepl": false,
-      "oplogTruncation": false,
-      "oplogTruncationThread": false,
-      "planCache": false,
-      "profiler": false,
-      "queryAnalyzers": false,
-      "querySettings": false,
-      "queryStats": false,
-      "queues": false,
-      "readConcernCounters": false,
-      "readPreferenceCounters": false,
-      "recoveryOplogApplier": false,
-      "repl": false,
-      "scramCache": false,
-      "security": false,
-      "sharding": false,
-      "shardingStatistics": false,
-      "shardedIndexConsistency": false,
-      "shardSplits": false,
-      "spillWiredTiger": false,
-      "storageEngine": false,
-      "tcmalloc": false,
-      "tenantMigrations": false,
-      "trafficRecording": false,
-      "transactions": false,
-      "transportSecurity": false,
-      "twoPhaseCommitCoordinator": false,
-      "watchdog": false,
-      "wiredTiger": false,
-      "writeBacksQueued": false
-   };
    const options = {
       "readPreference": (typeof readPref !== 'undefined') ? readPref
                       : (hello().secondary) ? 'secondaryPreferred'
@@ -826,7 +830,7 @@ function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
    try {
       serverStatusResults = db.adminCommand({
          "serverStatus": true,
-         ...{ ...serverStatusOptionsDefaults, ...serverStatusOptions },
+         ...{ ...SERVER_STATUS_OPTIONS_DEFAULTS, ...serverStatusOptions },
          options
       });
    } catch(_) {
