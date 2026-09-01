@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.12"
+ *  Version: "0.12.13"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -108,7 +108,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.12" };
+   const __script = { "name": "dbstats.js", "version": "0.12.13" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -787,9 +787,11 @@
 
    function formatPct(numerator = 0, denominator = 1) {
       /*
-       *  Pretty format percentage
+       *  Pretty format percentage. Zero/null/NaN denominator → n/a (not Infinity%/NaN%).
        */
-      return `${Number.parseFloat(((numerator / denominator) * 100).toFixed(1))}%`;
+      const num = +numerator, den = +denominator;
+      if (!Number.isFinite(num) || !Number.isFinite(den) || den === 0) return 'n/a';
+      return `${Number.parseFloat(((num / den) * 100).toFixed(1))}%`;
    }
 
    function freeStorageKnown(bytes) {
@@ -824,9 +826,11 @@
 
    function formatRatio(metric) {
       /*
-       *  Pretty format ratio
+       *  Pretty format compression ratio. Non-finite (÷0 from MetaStats.compression) → n/a.
        */
-      return `${Number.parseFloat(metric.toFixed(2))}:1`;
+      const value = +metric;
+      if (!Number.isFinite(value)) return 'n/a';
+      return `${Number.parseFloat(value.toFixed(2))}:1`;
    }
 
    function printCollHeader(collTotal = 0) {
