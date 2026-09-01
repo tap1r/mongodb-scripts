@@ -1,16 +1,16 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.3"
+ *  Version: "0.1.4"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  */
 
-// Usage: "[mongo|mongosh] [connection options] [--quiet] [-f|--file] </path/to/>onlineDefrag.js"
+// Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>onlineDefrag.js
 
 /*
  *  Custom parameters:
- *  [mongo|mongosh] [connection options] --quiet --eval "let dbName = 'database', collName = 'collection';" [-f|--file] onlineDefrag.js
+ *  mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection';" [-f|--file] </path/to/>onlineDefrag.js
  */
 
 (async() => {
