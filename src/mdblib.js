@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.15.7"
+ *  Version: "0.15.8"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -10,7 +10,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.15.7"
+      "version": "0.15.8"
 });
 
 /*  Notes:
@@ -91,18 +91,19 @@ const ansiTags = [
 
 // One scan per string. TTY expands [red]/[/] … to CSI; piped output strips tags+CSI.
 // Case-sensitive lookup first so [R] (bright red) is not eaten by [r].
+// Plain object — legacy mongo Map is missing/unusable (ansiTagCode.set is not a function).
 const ANSI_TAG_RE = /\[(\/|bg bright \w+|bright \w+|bg \w+|\w+)\]/gi;
 const ANSI_CSI_RE = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
-const ansiTagCode = new Map();
+const ansiTagCode = {};
 ansiTags.forEach(({ tag, code }) => {
-   ansiTagCode.set(tag, code);
+   ansiTagCode[tag] = code;
    const lower = tag.toLowerCase();
-   if (!ansiTagCode.has(lower)) ansiTagCode.set(lower, code);
+   if (ansiTagCode[lower] === undefined) ansiTagCode[lower] = code;
 });
 
 function ansiTagCodeOf(tag) {
-   let code = ansiTagCode.get(tag);
-   if (code === undefined) code = ansiTagCode.get(tag.toLowerCase());
+   let code = ansiTagCode[tag];
+   if (code === undefined) code = ansiTagCode[tag.toLowerCase()];
    return code;
 }
 
