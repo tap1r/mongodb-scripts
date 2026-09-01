@@ -235,7 +235,7 @@ Namespace discovery should **bifurcate**, then feed one shared stats walker (avo
 
 Selection: capability + privilege probe, with explicit option to force legacy. On catalog-stage failure or authz denial, fall back to legacy without aborting the report.
 
-**Refactor implication:** build the **whole catalog first** (names, types, shard placement if known), *then* walk that list for component statistics. That unlocks dual builders and a clean concurrency boundary without forking the rest of the script.
+**Refactor implication:** build the **whole catalog first** (names, types, shard placement if known), *then* walk that list for component statistics. That unlocks dual builders and a clean concurrency boundary without forking the rest of the script. Entity shape should follow the [`MetaStats` redesign](#metastats--typed-storage--topology-model) (catalog nodes first; stats via `fetchStats` / `materialize`, not kitchen-sink constructors + `delete`).
 
 #### Concurrency (stats fetch)
 
@@ -297,6 +297,87 @@ Per-namespace `compact` and update-based defrag. Not auto-trim. Auto-trim’s **
 - Finish TBA namespace listers (`getAllNonSystemNamespaces`, views, system).
 - `AutoFactor` NaN / scale clamp (the copy in `autoCompact.js` is stricter).
 - `$genRandWord`, `$benford` — later / fuzzer.
+- **`MetaStats` redesign** — see below; underpins dbstats catalog-first work and discovery’s per-node payload shape.
+
+#### `MetaStats` → typed storage / topology model
+
+Narrow but deep. Today `MetaStats` is a kitchen sink: one constructor accepts db-shaped and collection-shaped inputs, merges counters that mean different things (`collections` as list vs count, `indexes` as list vs count), applies version/Atlas heuristics inline, and relies on callers (`dbstats.js`) to `delete` host/cluster fields that do not belong at that level. `init()` then bolts on hostname / proc / dbPath / shards. That conflates **parsing**, **entity modelling**, and **topology**.
+
+##### 1. Consistent parsers → stable contracts
+
+Split “talk to the server / normalise history” from “be a domain object”:
+
+| Layer | Responsibility |
+|-------|----------------|
+| **`$stats` / `$collStats` (or successors)** | Fetch raw commands; remain the only place that knows mongod version quirks, `freeStorage` option gating, sharded `raw` rollups, Atlas M0/Flex “hidden free-space → `null`”, Unauthorized stubs, BSON number coercion. |
+| **Pure normalisers** | `parseDbStats(raw) → DbStatsDTO`, `parseCollStats(raw) → CollStatsDTO`, `parseIndexStats(…) → IndexStatsDTO`. Idempotent, no `db` global, unit-testable with fixtures from old/new server shapes. |
+| **Entity classes** | Construct **only** from DTOs (or explicit fields). No “if collections is array vs number” in the constructor. |
+
+Goal: one documented field contract per level (`freeStorageSize: number | null`, `indexes: Index[]` vs `nindexes: number`, never overloaded). Version drift dies in the parser, not in `new MetaStats` or in printers.
+
+##### 2. Stop the kitchen sink — specialised types
+
+Prefer **composition** (and light inheritance only where behaviour is truly shared) over one class + `delete`:
+
+```text
+StorageMetrics          // dataSize, storageSize, freeStorageSize, objects, compression getter, compactionHelper hooks
+  ├─ IndexStats         // name + StorageMetrics (+ idx-specific)
+  ├─ CollectionStats    // name, compressor, indexes: IndexStats[], orphans, …
+  ├─ ViewRef            // name (no WT stats)
+  ├─ DatabaseStats      // name, collections[], views[], rollup metrics, per-shard count arrays when sharded
+  └─ DbPathStats        // rollup over databases on one node (what dbstats “dbPath totals” is today)
+```
+
+Shared bits (format helpers, compression, reuse ratios) live on `StorageMetrics` or plain functions — not by stuffing `databases` / `hostname` / `shards` onto every collection row. **No caller-side `delete` to reshape the model.**
+
+Migration: keep `MetaStats` as a thin deprecated façade over the new types until dbstats/oplogchurn call sites move.
+
+##### 3. Topology superset (prudent if composed)
+
+A **cluster / topology object** that also captures host- and cluster-level detail is a good idea **as a container**, not as “MetaStats grew more fields”:
+
+```text
+TopologySnapshot          // discovery-aligned
+  ├─ cluster: { kind, setName?, shards? }
+  ├─ nodes: HostNode[]    // hostname, proc, me, dbPath, role, tags…
+  │    └─ catalog + stats // DatabaseStats / CollectionStats for that node
+  └─ aggregate?           // optional mongos-level rollup (knows local NS gaps)
+```
+
+Why this helps discovery: fan-out returns `HostNode` payloads; dbstats module mode returns `DbPathStats` or `TopologySnapshot` depending on scope; auto-trim consumes per-node catalog metrics without scraping. Host identity (`init()` today’s job) belongs on `HostNode`, not on every collection.
+
+Avoid a single mutable god-object that mixes router aggregate and per-shard mongod state without labelling which is which (mongos local-NS gap stays explicit).
+
+##### 4. Experimental — catalog first, stats lazy
+
+Aligns with dbstats “build catalog, then task-pool stats,” but pushes laziness into the model:
+
+- **Build** topology + namespace catalog first (cheap nameOnly / `$listCatalog`): entities exist with identity and `stats: unset`.
+- **Fill** storage attributes on demand.
+
+**Recommendation:** use **explicit async loaders**, not magic getters, as the primary API:
+
+```text
+await collection.fetchStats()           // one NS
+await database.fetchAllStats({ concurrency })
+await node.materialize({ concurrency }) // bounded pool — same pool story as dbstats
+```
+
+Optional **lazy getters** as REPL sugar only (`get stats()` that throws if not loaded, or returns a Promise — but Promise-returning getters are easy to misuse with the async rewriter and with `JSON.stringify`). For module/JSON/discovery, always **`materialize()` then serialise** so the contract is a plain snapshot, not a live graph.
+
+Scaling notes:
+
+- Laziness shines for hot summary / single-NS drill-down / unauthorized skip.
+- Full dbstats report and auto-trim planners should materialise in a **bounded pool** (not unbounded getter storms).
+- Cache fetches on the entity (`_statsPromise`) to avoid duplicate `$collStats` under parallel walkers.
+- Catalog identity must remain available when stats fail (existing `(unauthorized)` behaviour).
+
+##### Suggested order
+
+1. Extract DTO normalisers from `$stats` / `$collStats` (behaviour-preserving).
+2. Introduce `StorageMetrics` + `CollectionStats` / `DatabaseStats`; point dbstats at them; delete the `delete` soup.
+3. `HostNode` + optional `TopologySnapshot` when discovery per-node dbstats lands.
+4. Catalog-first + `fetchStats` / `materialize` (task pool); experiment with lazy getters only behind an interactive flag.
 
 ### `fuzzer.js`
 
