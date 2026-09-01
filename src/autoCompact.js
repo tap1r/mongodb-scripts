@@ -699,10 +699,10 @@
             logs.forEach(entry => {
                const { t = ISODate(), 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = entry;
                if (t > ts) ts = t;
+               console.log(t.toJSON(), annotateWtMsg(msg, session_dhandle_name, resolveNs));
                if (isSizeStorer(msg, session_dhandle_name)) {
                   markFirstPass('sizeStorer (last file of catalog walk)');
                }
-               console.log(t.toJSON(), annotateWtMsg(msg, session_dhandle_name, resolveNs));
             });
             pause = false;
          } else if (!pause) {
