@@ -1,6 +1,6 @@
 /*
  *  Name: "schema-sampler.js"
- *  Version: "0.2.15"
+ *  Version: "0.2.16"
  *  Description: generate schema with simulated mongosqld sampling commands
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,22 +25,21 @@ const userOptions = {
    /*
     *
     */
-   const __script = { "name": "schema-sampler.js", "version": "0.2.15" };
+   const __script = { "name": "schema-sampler.js", "version": "0.2.16" };
    print(`\n#### Running script ${__script.name} v${__script.version}\n`);
 
    function main({ sampleSize = 1, dbs = [], readPreference = 'secondaryPreferred' }) {
       /*
        *  main
        */
-      db.getMongo().setReadPref(readPreference);
-      // (dbs === 'undefined');
-      const schema = getSchema(sampleSize);
+      // Do not Mongo.setReadPref(): mongosh reconnects and closes the client.
+      const schema = getSchema(sampleSize, readPreference);
       genReport(schema);
 
       return;
    }
 
-   function getSchema(sampleSize = 1) {
+   function getSchema(sampleSize = 1, readPreference = 'secondaryPreferred') {
       /*
        *  generate a synthetic schema with metadata
        */
@@ -52,6 +51,17 @@ const userOptions = {
          "cursor": { "batchSize": sampleSize },
          "readConcern": { "level": "local" },
          "comment": comment
+      };
+      // Per-command RP on $sample. Legacy mongo rejects readPreference on
+      // aggregate options — use cursor.readPref() there.
+      const isMongosh = typeof process !== 'undefined';
+      if (isMongosh)
+         options.readPreference = { "mode": readPreference };
+      const sampleAgg = (coll, pipeline) => {
+         const cursor = coll.aggregate(pipeline, options);
+         if (!isMongosh && typeof cursor.readPref === 'function')
+            cursor.readPref(readPreference);
+         return cursor.toArray();
       };
       const listDbOpts = [{
          "listDatabases": 1,
@@ -81,7 +91,7 @@ const userOptions = {
                "name":      collName,
                "documents": namespace(dbName, collName).estimatedDocumentCount(),
                "indexes":   namespace(dbName, collName).getIndexes(),
-               "$sample":   namespace(dbName, collName).aggregate(collectionPipeline, options).toArray()
+               "$sample":   sampleAgg(namespace(dbName, collName), collectionPipeline)
             }));
       };
       const views = dbName => {
@@ -90,7 +100,7 @@ const userOptions = {
             .map(({ 'name': viewName, 'options': viewOptions }) => ({
                "name":     viewName,
                "options":  viewOptions,
-               "$sample":  namespace(dbName, viewName).aggregate(viewPipeline, options).toArray()
+               "$sample":  sampleAgg(namespace(dbName, viewName), viewPipeline)
             }));
       };
       return dbs().map(dbName => ({
