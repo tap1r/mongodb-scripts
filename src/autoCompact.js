@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.31"
+    *  Version: "0.4.32"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,10 +13,6 @@
     *  - per mongod only (not replicated); excludes local.oplog.rs
     *  - { autoCompact: true } (default) enables; { autoCompact: false } disables and exits (no log tail)
     *  - freeSpaceTargetMB passthrough (server default 20); runOnce defaults to true (opposite of the server)
-    *  - already-enabled: autoCompact:false, wait for running bit to clear (unbounded, 30s notes), re-issue user options
-    *  - ident → ns map from background $listCatalog (first batch or IDENT_FIRST_MS); pump.stop() on every enable exit; await delay() so the pump can run
-    *  - WTCMPCT watermark is serverStatus.localTime immediately before enable (not client ISODate)
-    *  - first-pass latch: sizeStorer hint, or WT visits (success+skipped*+timeout+interrupted+failed) stall with no WTCMPCT/overflow heartbeat, or visits >= catalog ident count after $listCatalog. runOnce:false does not clear the running bit. $currentOp is unused. Recovered-bytes stall is not a stop. getLog poll stays at min while visits are moving or first pass is still in a file. runOnce:true waits for running === false after first pass (serverStatus null is not idle). Unchanged totalLinesWritten skips the ramlog walk.
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "autoCompact": true };'] [-f|--file] </path/to/>autoCompact.js
@@ -41,7 +37,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.31" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.32" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -228,7 +224,7 @@
    }
 
    const SERVERSTATUS_MS = 1000;
-   const DISABLE_POLL_MS = 200;      // poll interval while waiting for disable to settle
+   const DISABLE_POLL_MS = 200;      // poll interval while waiting for running bit to clear
    const DISABLE_STATUS_MS = 30000;  // progress note while waiting indefinitely
    let bcCache = { "at": 0, "value": undefined };
    // WT file-visit outcomes (process-lifetime totals). Recovered-bytes and EMA are not visits.
@@ -278,6 +274,7 @@
    };
    const serverLocalTime = () => {
       // core serverStatus field (not an opt-in section); same clock as getLog t
+      // enable watermark: call immediately before autoCompact (not client ISODate)
       try {
          const { localTime } = serverStatus();
          if (localTime != null) return localTime;
@@ -323,7 +320,7 @@
          return;
       }
       const delta = startBytes != null ? endBytes - startBytes : endBytes;
-      console.log(`\n══════ [yellow]recovered ${scaled.format(delta)} this pass (${scaled.format(endBytes)} cumulative runtime)[/] ══════`);
+      console.log(`\n══════ [yellow]recovered[/] [blue]${scaled.format(delta)}[/] [yellow]this pass ([/][blue]${scaled.format(endBytes)}[/] [yellow]cumulative runtime)[/] ══════`);
    };
    const hostInfo = () => {
       /*
@@ -436,7 +433,7 @@
       }
       return true;
    };
-   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+   const delay = ms => new Promise(resolve => setTimeout(resolve, ms)); // non-blocking so $listCatalog pump can run
    const identKey = name => String(name ?? '')
       .replace(/^(?:file:|table:|statistics:table:)/, '')
       .replace(/\.wt$/, '');
@@ -464,9 +461,10 @@
    };
    const IDENT_REFRESH_MS = 5000;
    const IDENT_BATCH = 64;
-   const IDENT_FIRST_MS = 5000; // do not block autoCompact if $listCatalog stalls
+   const IDENT_FIRST_MS = 5000; // first batch or this timeout; do not block enable if $listCatalog stalls
    const startNsResolver = () => {
-      // ident -> { kind, ns, idx? }; internals first; $listCatalog fills the rest in the background
+      // ident → { kind, ns, idx? }; internals first; background $listCatalog fills the rest
+      // stop() from the enable finally so the pump is cancelled on every exit
       const map = new Map([
          ['sizeStorer', { "kind": "internal", "ns": "(sizeStorer)" }],
          ['WiredTigerHS', { "kind": "internal", "ns": "(history store)" }],
@@ -651,7 +649,10 @@
        *  - visits = success + skipped* + timeout + interrupted + failed (process-lifetime)
        *  - WTCMPCT is a heartbeat; ramlog overflow (lost lines) counts as heartbeat, not quiet
        *  - stall visits but still logging/overflow → still in a file
-       *  - runOnce:true: running bit clears when the thread stops; wait for running === false after first pass (null is not idle)
+       *  - recovered-bytes stall is not a stop
+       *  - getLog poll stays at min while visits are moving or first pass is still in a file
+       *  - runOnce:true: stop getLog after first pass; wait for running === false with fresh
+       *    serverStatus (DISABLE_POLL_MS, no 1s cache; null is not idle)
        *  - runOnce:false: running bit stays on; first pass = hint or visits stall
        */
       const resolveNs = nsResolver.resolve ?? (() => null);
@@ -677,7 +678,7 @@
          console.log(`\n══════ [yellow]${reason}[/] ══════`);
       };
 
-      do {
+      while (!firstPassDone) {
          const { logs, totalLinesWritten, rawCount = 0 } = getLogs(ts, seen, lastTotal);
          const overflow = Number.isFinite(totalLinesWritten)
             && lastTotal != null
@@ -700,11 +701,7 @@
             });
             pause = false;
          } else if (!pause) {
-            if (firstPassDone) {
-               if (runOnce) console.log('\n══════ [yellow]last file done, waiting for background compact idle[/] ══════');
-            } else {
-               console.log('══════ [yellow]autoCompaction work in progress, waiting for new logs[/] ══════');
-            }
+            console.log('══════ [yellow]autoCompaction work in progress, waiting for new logs[/] ══════');
             pause = true;
          }
          const { running, visits } = getBackgroundCompact();
@@ -732,27 +729,37 @@
                && now - startedAt >= NOOP_GRACE_MS && !logsHeartbeat) {
             markFirstPass('serverStatus: no WT file visits (no-op)');
          }
-
-         if (firstPassDone && !runOnce) break;
-         if (runOnce && firstPassDone && running === false) {
-            console.log('\n══════ [yellow]serverStatus: background compact thread idle[/] ══════');
-            break;
-         }
          if (runOnce && !firstPassDone && running === false && (seenRunning || deltaVisits > 0)) {
             markFirstPass('serverStatus: background compact thread idle');
-            break;
          }
+         if (firstPassDone) break;
          pollMS = regulatePollMS(pollMS, {
             "overflow": overflow,
             "active": logs.length > 0 || visitsMoved || ramlogFull,
-            "holdMin": !firstPassDone && deltaVisits > 0
+            "holdMin": deltaVisits > 0
          });
          await delay(pollMS);
-      } while (true);
-      if (!runOnce && firstPassDone) {
+      }
+
+      if (!runOnce) {
          console.log('\n══════ [yellow]first pass complete; background compact thread left enabled (next walk ~24h)[/] ══════');
          reportRecoveredBytes(startBytes);
          return;
+      }
+
+      // sizeStorer (and other latches) are last-file hints; the running bit clears after the file
+      let running = getBackgroundCompact(true).running;
+      if (running === true) {
+         console.log('\n══════ [yellow]last file done, waiting for background compact idle[/] ══════');
+         while (running === true) {
+            await delay(DISABLE_POLL_MS);
+            running = getBackgroundCompact(true).running;
+         }
+      }
+      if (running === false) {
+         console.log('\n══════ [yellow]serverStatus: background compact thread idle[/] ══════');
+      } else {
+         console.log('[red][ERROR] could not confirm background compact idle (serverStatus unavailable)[/]');
       }
       console.log('\n══════ [yellow]autoCompaction round complete[/] ══════');
       reportRecoveredBytes(startBytes);
@@ -791,8 +798,8 @@
          }
       };
       if (replace) {
-         // Already enabled: send autoCompact:false, wait for the enable bit to clear, then
-         // re-issue cmd so new user options take effect (runOnce and the rest of cmd are kept).
+         // Already enabled: autoCompact:false, wait unbounded for running bit to clear
+         // (DISABLE_STATUS_MS progress notes), then re-issue cmd so user options take effect.
          // Wait is serverStatus 'background compact running' — not WTCMPCT quiet, not currentOp.
          console.log('[yellow][NOTE][/] background compact already enabled; sending [blue]{ "autoCompact": false }[/], waiting for [blue]serverStatus[/] background compact running to clear, then re-enabling with the requested options.\n');
          if (!runCmd({
@@ -821,7 +828,7 @@
          console.log('══════ [yellow]serverStatus: background compact running is false; retrying with updated options[/] ══════\n');
       }
       if (nsResolver) await Promise.race([nsResolver.ready, delay(IDENT_FIRST_MS)]);
-      const ts = enable ? serverLocalTime() : null;
+      const ts = enable ? serverLocalTime() : null; // WTCMPCT watermark; exclusive start in getLogs
       if (!runCmd(cmd)) return;
       if (!enable) {
          console.log('══════ [yellow]background compact thread disabled[/] ══════');
@@ -829,7 +836,7 @@
       }
       await tailLogs(ts, nsResolver, cmd.runOnce === true);
    } finally {
-      nsResolver?.stop?.();
+      nsResolver?.stop?.(); // cancel $listCatalog pump on every enable exit
    }
 })();
 
