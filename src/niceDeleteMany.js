@@ -9,6 +9,7 @@
     *  Howto: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/Howto-streaming-sort.md"
     *
     *  Notes:
+    *  - mongosh only
     *  - Curation relies on a semi-blocking operator for bucket estimations
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
