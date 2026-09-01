@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.32"
+    *  Version: "0.4.33"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -37,7 +37,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.32" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.33" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -141,85 +141,86 @@
 
    console.log(`\n[yellow]#### Running script ${__script.name} v${__script.version} on shell v${version()}[/]\n`);
 
+   // Hoisted once — avoid rebuilding ~70-key maps on every serverStatus() call.
+   const SERVER_STATUS_OPTIONS_DEFAULTS = { // multiversion compatible
+      "none": true, // 8.3 feature: exclude all optional fields, then opt-in
+      "activeIndexBuilds": false,
+      "asserts": false,
+      "batchedDeletes": false,
+      "bucketCatalog": false,
+      "catalogStats": false,
+      "changeStreamPreImages": false,
+      "collectionCatalog": false,
+      "connections": false,
+      "defaultRWConcern": false,
+      "directShardConnections": false,
+      "electionMetrics": false,
+      "encryptionAtRest": false,
+      "extra_info": false,
+      "featureCompatibilityVersion": false,
+      "fle": false,
+      "flowControl": false,
+      "ftdcCollectionMetrics": false,
+      "globalLock": false,
+      "health": false,
+      "hedgingMetrics": false,
+      "indexBuilds": false,
+      "indexBulkBuilder": false,
+      "indexStats": false,
+      "internalTransactions": false,
+      "latchAnalysis": false,
+      "locks": false,
+      "lockContentionMetrics": false,
+      "logicalSessionRecordCache": false,
+      "mem": false,
+      "metrics": false,
+      "mirroredReads": false,
+      "network": false,
+      "opLatencies": false,
+      "opReadConcernCounters": false,
+      "opWorkingTime": false,
+      "opWriteConcernCounters": false,
+      "opcounters": false,
+      "opcountersRepl": false,
+      "oplogTruncation": false,
+      "oplogTruncationThread": false,
+      "planCache": false,
+      "profiler": false,
+      "queryAnalyzers": false,
+      "querySettings": false,
+      "queryStats": false,
+      "queues": false,
+      "readConcernCounters": false,
+      "readPreferenceCounters": false,
+      "recoveryOplogApplier": false,
+      "repl": false,
+      "scramCache": false,
+      "security": false,
+      "sharding": false,
+      "shardingStatistics": false,
+      "shardedIndexConsistency": false,
+      "shardSplits": false,
+      "spillWiredTiger": false,
+      "storageEngine": false,
+      "tcmalloc": false,
+      "tenantMigrations": false,
+      "trafficRecording": false,
+      "transactions": false,
+      "transportSecurity": false,
+      "twoPhaseCommitCoordinator": false,
+      "watchdog": false,
+      "wiredTiger": false,
+      "writeBacksQueued": false
+   };
+
    function serverStatus(serverStatusOptions = {}) {
       /*
        *  opt-in version of db.serverStatus()
        *  command options are multiversion compatible
        */
-      const serverStatusOptionsDefaults = {
-         "none": true, // 8.3 feature: exclude all optional fields, then opt-in
-         "activeIndexBuilds": false,
-         "asserts": false,
-         "batchedDeletes": false,
-         "bucketCatalog": false,
-         "catalogStats": false,
-         "changeStreamPreImages": false,
-         "collectionCatalog": false,
-         "connections": false,
-         "defaultRWConcern": false,
-         "directShardConnections": false,
-         "electionMetrics": false,
-         "encryptionAtRest": false,
-         "extra_info": false,
-         "featureCompatibilityVersion": false,
-         "fle": false,
-         "flowControl": false,
-         "ftdcCollectionMetrics": false,
-         "globalLock": false,
-         "health": false,
-         "hedgingMetrics": false,
-         "indexBuilds": false,
-         "indexBulkBuilder": false,
-         "indexStats": false,
-         "internalTransactions": false,
-         "latchAnalysis": false,
-         "locks": false,
-         "lockContentionMetrics": false,
-         "logicalSessionRecordCache": false,
-         "mem": false,
-         "metrics": false,
-         "mirroredReads": false,
-         "network": false,
-         "opLatencies": false,
-         "opReadConcernCounters": false,
-         "opWorkingTime": false,
-         "opWriteConcernCounters": false,
-         "opcounters": false,
-         "opcountersRepl": false,
-         "oplogTruncation": false,
-         "oplogTruncationThread": false,
-         "planCache": false,
-         "profiler": false,
-         "queryAnalyzers": false,
-         "querySettings": false,
-         "queryStats": false,
-         "queues": false,
-         "readConcernCounters": false,
-         "readPreferenceCounters": false,
-         "recoveryOplogApplier": false,
-         "repl": false,
-         "scramCache": false,
-         "security": false,
-         "sharding": false,
-         "shardingStatistics": false,
-         "shardedIndexConsistency": false,
-         "shardSplits": false,
-         "spillWiredTiger": false,
-         "storageEngine": false,
-         "tcmalloc": false,
-         "tenantMigrations": false,
-         "trafficRecording": false,
-         "transactions": false,
-         "transportSecurity": false,
-         "twoPhaseCommitCoordinator": false,
-         "watchdog": false,
-         "wiredTiger": false,
-         "writeBacksQueued": false
-      };
-
       return db.adminCommand({
          "serverStatus": true,
-         ...{ ...serverStatusOptionsDefaults, ...serverStatusOptions }
+         ...{ ...SERVER_STATUS_OPTIONS_DEFAULTS, ...serverStatusOptions }
       });
    }
 
@@ -281,16 +282,25 @@
       } catch(_) { /* fall through */ }
       return ISODate();
    };
+   const SCALE_METRICS = [
+      { "unit": "bytes", "symbol": "B", "factor": 1, "precision": 0 },
+      { "unit": "kibibytes", "symbol": "KiB", "factor": 1024, "precision": 2 },
+      { "unit": "mebibytes", "symbol": "MiB", "factor": Math.pow(1024, 2), "precision": 2 },
+      { "unit": "gibibytes", "symbol": "GiB", "factor": Math.pow(1024, 3), "precision": 2 },
+      { "unit": "tebibytes", "symbol": "TiB", "factor": Math.pow(1024, 4), "precision": 2 },
+      { "unit": "pebibytes", "symbol": "PiB", "factor": Math.pow(1024, 5), "precision": 2 },
+      { "unit": "exbibytes", "symbol": "EiB", "factor": Math.pow(1024, 6), "precision": 2 }
+   ];
    class AutoFactor {
       /*
        *  Determine scale factor automatically (same idea as mdblib.js / dbstats.js)
        */
       scale(number) {
          if (number < 1) number = 1;
-         return Math.min(Math.floor(Math.log2(number) / 10), this.metrics.length - 1);
+         return Math.min(Math.floor(Math.log2(number) / 10), SCALE_METRICS.length - 1);
       }
       metric(number) {
-         return this.metrics[this.scale(number)];
+         return SCALE_METRICS[this.scale(number)];
       }
       format(number = 0) {
          const n = Number(number);
@@ -298,17 +308,6 @@
          const value = Math.max(0, n);
          const metric = this.metric(value);
          return `${+(value / metric.factor).toFixed(metric.precision)} ${metric.symbol}`;
-      }
-      get metrics() {
-         return [
-            { "unit": "bytes", "symbol": "B", "factor": 1, "precision": 0 },
-            { "unit": "kibibytes", "symbol": "KiB", "factor": 1024, "precision": 2 },
-            { "unit": "mebibytes", "symbol": "MiB", "factor": Math.pow(1024, 2), "precision": 2 },
-            { "unit": "gibibytes", "symbol": "GiB", "factor": Math.pow(1024, 3), "precision": 2 },
-            { "unit": "tebibytes", "symbol": "TiB", "factor": Math.pow(1024, 4), "precision": 2 },
-            { "unit": "pebibytes", "symbol": "PiB", "factor": Math.pow(1024, 5), "precision": 2 },
-            { "unit": "exbibytes", "symbol": "EiB", "factor": Math.pow(1024, 6), "precision": 2 }
-         ];
       }
    }
    const scaled = new AutoFactor();
@@ -356,8 +355,7 @@
       } catch(e) {
          isSharedTier = (e.codeName == 'AtlasError') ? true : false;
       }
-      const atlasDomain = new RegExp(/\.mongodb\.net$/);
-      const isAtlas = (atlasVersion || atlasDomain.test(hostname)) ? true : false;
+      const isAtlas = (atlasVersion || (typeof hostname === 'string' && hostname.endsWith('.mongodb.net'))) ? true : false;
       return (type === null && isMongos && isAtlas && hostname != 'serverless') ? 'dedicatedShardedCluster'
            : (type == 'dedicatedShardedCluster' && isMongos && isAtlas && hostname != 'serverless') ? true
            : (type === null && !isMongos && isAtlas && isSharedTier) ? 'sharedTier'
@@ -434,9 +432,14 @@
       return true;
    };
    const delay = ms => new Promise(resolve => setTimeout(resolve, ms)); // non-blocking so $listCatalog pump can run
-   const identKey = name => String(name ?? '')
-      .replace(/^(?:file:|table:|statistics:table:)/, '')
-      .replace(/\.wt$/, '');
+   const identKey = name => {
+      let s = String(name ?? '');
+      if (s.startsWith('statistics:table:')) s = s.slice('statistics:table:'.length);
+      else if (s.startsWith('file:')) s = s.slice('file:'.length);
+      else if (s.startsWith('table:')) s = s.slice('table:'.length);
+      if (s.endsWith('.wt')) s = s.slice(0, -'.wt'.length);
+      return s;
+   };
    const nsFromWt = (name, map) => {
       const key = identKey(name);
       return key ? map.get(key) ?? null : null;
@@ -451,12 +454,14 @@
       if (entry.kind === 'index') return `[yellow]${entry.ns}[/].[green]${entry.idx}[/]`;
       return `[yellow]${entry.ns}[/]`;
    };
+   const WT_PREFIXED_RE = /(?:file:|table:|statistics:table:)[\w.-]+(?:\.wt)?/;
+   const WT_FILE_RE = /(?:[\w.-]+\/)?[\w.-]+\.wt/;
    const wtNameFromMsg = (msg = '', dhandle) => {
       if (dhandle) return dhandle;
       const text = String(msg);
-      const prefixed = text.match(/(?:file:|table:|statistics:table:)[\w.-]+(?:\.wt)?/);
+      const prefixed = text.match(WT_PREFIXED_RE);
       if (prefixed) return prefixed[0];
-      const wtFile = text.match(/(?:[\w.-]+\/)?[\w.-]+\.wt/);
+      const wtFile = text.match(WT_FILE_RE);
       return wtFile ? wtFile[0] : null;
    };
    const IDENT_REFRESH_MS = 5000;
