@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.21"
+ *  Version: "0.5.22"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,7 +18,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.5.21" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.22" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -117,12 +117,20 @@
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
-         "comment": "Calculating oplog size via oplogchurn.js v0.5.20"
+         "comment": "Calculating oplog size via oplogchurn.js v0.5.22"
       };
+      // Per-command RP only — slaveOk/setReadPref reconnects mongosh and is
+      // denied on Atlas shared tiers. Legacy mongo: cursor.readPref().
+      if (isMongosh())
+         options.readPreference = { "mode": readPref };
 
-      // Measure interval statistics
-      slaveOk(readPref); // not supported on shared tiers
       const oplog = db.getSiblingDB('local').getCollection('oplog.rs');
+      const oplogCursor = () => {
+         const cursor = oplog.aggregate(pipeline, options);
+         if (!isMongosh() && typeof cursor.readPref === 'function')
+            cursor.readPref(readPref);
+         return cursor;
+      };
 
       if (serverVer(4.4)) {
          ([{
@@ -130,10 +138,10 @@
             '_documentCount': docs = 0,
             '_firstTs': firstTs = null,
             '_lastTs': lastTs = null
-         } = {}] = oplog.aggregate(pipeline, options).toArray());
+         } = {}] = oplogCursor().toArray());
       } else {
          console.log('\n[R]Warning: Using the legacy client side calculation technique[/]');
-         oplog.aggregate(pipeline, options).forEach(op => {
+         oplogCursor().forEach(op => {
             opSize += bsonsize(op);
             docs++;
             const sec = tsSeconds(op.ts);
