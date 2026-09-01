@@ -44,6 +44,8 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | **`schema-import.js`** | **v0.1.8** (mongosh-only) | Companion stub to schema-sampler. Dropped `Mongo.setReadPref`. `fs.readFileSync` schema JSON; create collection/index/view still commented. In-file `const userOptions` is not an `--eval` overlay. Further work (apply sampler JSON) is **mongosh-line**. Header documents this freeze. |
 | **`indexCacheUtil.js`** | **v0.1.5** (mongosh-only) | Not dual-shell (`async` IIFE, `Promise.allSettled`). `$collStats` index cache bytes vs WT `serverStatus` cache. Do not top-level-await. Further work (thread pool, sharding, `runCommand`, system-ns scope, progress) is **mongosh-line**. Header documents this freeze. |
 | **`connStats.js`** | **v0.1.14** (mongosh-only) | `$currentOp` pool stats with inprog fallback (`allUsers: false`). IPv6-bracket client parse. Further work (`whatsmyuri`, DRIVERS-3027, mongos `targetAllNodes`) is **mongosh-line**. Header documents this freeze. |
+| **`mdblib.js`** | **v0.15.10** | Dual-shell library snapshot. `fCV()` → `serverVer()` on Atlas M0/Flex is **by design** (`getParameter` FCV restricted; Atlas not on a lagging FCV). `slaveOk()` mongosh path can `setReadPref` (callers use per-command RP). `shellVer`/`serverVer` `+"x.y"` (2.10 ≡ 2.1) stays. Further work (`for(db)`, MetaStats, integer version parse) is **mongosh-line**. Header documents this freeze. |
+| **`discovery.js`** | **v0.2.1** (mongosh-only) | Not dual-shell (`async` IIFE, named capture groups). Topology fan-out stub; cmd profiles TBA. Do not top-level-await. Do not strip `(?<setName>)` for mongo. Further work (standalone/LB/arbiters, pool/jitter, primary-vs-secondary targeting) is **mongosh-line**. Header documents this freeze. |
 
 Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver before the cut. Those land on the mongosh-only line.
 
@@ -349,6 +351,8 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `discovery.js`
 
+**Legacy archive line: v0.2.1** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Do not strip named capture groups for legacy mongo. Post-freeze feature work proceeds on the mongosh line only.
+
 - Plugable command profiles (auto-trim / autoCompact as a per-member job; **dbstats in module mode** as a measurement profile — JSON contract per host, no interactive table on the wire).
 - Prefer invoking support scripts in **non-interactive / module mode** so fan-out results are structured (`ok`, host, payload, warnings), not ANSI logs to stitch together.
 - **Direct-to-member for compact / per-node dbstats:** replica-set URI without `directConnection=true` lands on the primary; only that process is compacted (not replicated), and mongos-level dbstats misses mongod-local namespaces. Warn when `hello().me` ≠ connected host, or when `isWritablePrimary` and the seed list looks like a set. Pin each member (prefer secondaries first) and run auto-trim / autoCompact / dbstats per host.
@@ -391,6 +395,8 @@ Remaining mongosh-line work (do not block the archive):
 - System-namespace cache scope; progress while accumulating.
 
 ### `mdblib.js`
+
+**Legacy archive line: v0.15.10.** Dual-shell library snapshot — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1. Pair archived scripts with this file (not only “≥ 0.15.8”). Do not “fix” `fCV()` → `serverVer()` on M0/Flex. Post-freeze feature work proceeds on the mongosh line only.
 
 - Namespaced helpers / `for(db)` — **after** the library strategy change, not before.
 - **Legacy `mongo` shims** — delete only after [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) (archive + tag). Until then keep `isMongosh()` / `slaveOk` / dual `Timestamp` / `runCommand` shapes. After the cut, streamline version helpers (`serverVer` / `fCV` / `shellVer`) in place; do not couple that cleanup to `for(db)`. `fCV()` on M0/Flex → `serverVer()` is intentional (Atlas not on a lagging FCV).
