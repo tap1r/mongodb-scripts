@@ -38,6 +38,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | **`explainHisto.js`** | **v0.1.4** (mongosh-only) | Not dual-shell (`require` / `jsonc-require` / `./pipeline.jsonc`). Parse bar: duplicate `const pipeline` → `userPipeline`. Demarked for the whole-tree freeze anyway. Further work (sharded/newer explain stages, `--eval` overlay, sampled-pipeline caveat) is **mongosh-line**. Header documents this freeze. |
 | **`fuzzer.js`** | **v0.6.43** (+ **`mdblib.js` ≥ 0.15.8**) | Dual-shell via mdblib. Dropped `Mongo.setReadPref('primary')` (mongosh reconnect hung the first DB call after local sampling on a replica set). `await main()` try/catch. Hardcoded `dbName`/`collName` (compact `load()` does not overlay). Reshard monitor is mongosh-strong / mongo-weak. Further work (`--eval` overlay, mongos `fCV`, `$genRandWord`) is **mongosh-line**. Header documents this freeze. |
 | **`onlineDefrag.js`** | **v0.1.4** (mongosh-only) | Not dual-shell (`async` IIFE, `process`/`fs`, `console.table`). `--eval` `var dbName`/`collName`/`options` overlay (no in-file bindings). `storageStats()` finds `dbstats.js` via MDBLIB / `~/.mongodb` / cwd. Demarked for the whole-tree freeze anyway. Further work (dbstats JSON/`dbStats` return, mdblib, WT v7 checkpoint) is **mongosh-line**. Header documents this freeze. |
+| **`oplogchurn.js`** | **v0.5.22** (+ **`mdblib.js` ≥ 0.15.8**) | Dual-shell via mdblib. Per-command RP (`aggregate` `readPreference` on mongosh; `cursor.readPref` on legacy mongo). Do not restore `slaveOk(readPref)`. `--eval var intervalHrs` overlay kept. Dual `Timestamp` (MONGOSH-930). Further work (TTY-guard `console.clear`, Atlas M0 oplog/hostInfo) is **mongosh-line**. Header documents this freeze. |
 
 Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver before the cut. Those land on the mongosh-only line.
 
@@ -487,6 +488,16 @@ Remaining mongosh-line work (do not block the archive):
 - Reshard wait already holds the user Promise so mongosh does not exit early; legacy mongo still only logs that async reshard monitoring is unsupported.
 - `w: "majority"` with no `wtimeout` can stall `createCollection` / bulk on PSA or a lagging secondary.
 - Inherits mdblib `fCV()` mongos `serverVer()` fallback; `$genRandWord` / `$benford` stay later.
+
+### `oplogchurn.js`
+
+**Legacy archive line: v0.5.22** (requires **mdblib.js ≥ 0.15.8**). See [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1. Dual-shell. Do not restore `slaveOk(readPref)` before the oplog aggregate — mdblib `slaveOk` can `setReadPref` and reconnect mongosh; Atlas shared tiers deny it. Per-command RP only: mongosh `options.readPreference = { mode: readPref }`; legacy mongo `cursor.readPref(readPref)` (do not put `readPreference` on legacy aggregate options — the server rejects the field). Keep `--eval var intervalHrs` and `typeof intervalHrs === 'undefined'` (no in-file `const intervalHrs`). Dual `Timestamp({ t, i })` / `Timestamp(t, i)` stays. Post-freeze feature work proceeds on the mongosh line only.
+
+Remaining mongosh-line work (do not block the archive):
+
+- TTY-guard or drop `console.clear()` in the loader (piped/CI).
+- Atlas M0/Flex: `local.oplog.rs` / `hostInfo` / free-space may be hidden or denied — same n/a story as dbstats.
+- `$collStats` / `hostInfo` / `serverCmdLineOpts` stay on the connected member (not covered by the aggregate RP).
 
 ### `killAgedSessions.js` / `rtt.js` / `latency.js`
 

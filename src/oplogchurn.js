@@ -4,6 +4,12 @@
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+ *
+ *  Legacy archive line: v0.5.22 (with mdblib.js ≥ 0.15.8) is the dual-shell
+ *  (legacy mongo 4.4+ / mongosh) adequacy snapshot for this script. Further
+ *  feature work (TTY-guard console.clear, Atlas M0 oplog/hostInfo) targets
+ *  mongosh; see ROADMAP.md → Legacy mongo shell retirement.
+ *  Pair with the matching mdblib from the same freeze when archiving.
  */
 
 // Usage: "[mongo|mongosh] [connection options] [--quiet] [-f|--file] </path/to/>oplogchurn.js"
