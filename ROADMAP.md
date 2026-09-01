@@ -24,7 +24,7 @@ This is a **sequenced cut**, not a now-task. Feature work (auto-trim, emit/optio
 
 Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it should be explicit when drawn, for example:
 
-- Scripts that claim to run under `mongo` actually parse (`explainHisto.js` duplicate `const pipeline`, and similar SyntaxErrors).
+- Scripts that claim to run under `mongo` actually parse (similar SyntaxErrors).
 - Known wrong-result bugs that dual-shell users would inherit (invalid `$expr`, `--eval` shadowing, `fCV()` falling back to binary version on mongos) are either fixed or documented as wontfix in the archive notes.
 - Version strings and `__script.version` are consistent with the freeze (one patch ahead of the last dual-shell HEAD).
 
@@ -459,6 +459,19 @@ Scaling notes:
 2. Introduce `StorageMetrics` + `CollectionStats` / `DatabaseStats`; point dbstats at them; delete the `delete` soup.
 3. `HostNode` + optional `TopologySnapshot` when discovery per-node dbstats lands.
 4. Catalog-first + `fetchStats` / `materialize` (task pool); experiment with lazy getters only behind an interactive flag.
+
+### `explainHisto.js`
+
+Aggregation `explain('executionStats')` stage-timer histogram. **mongosh-only** (`require` / `jsonc-require` / `./pipeline.jsonc`). Not dual-shell — do not load mdblib or restore a `[mongo|mongosh]` usage line.
+
+Parse bar: duplicate `const pipeline` (JSONC import vs sampled pipeline) renamed the import to `userPipeline` in **v0.1.3**. Do not redeclare `const pipeline`. Header / `__script.version` are 0.1.3. Not yet a freeze snapshot.
+
+Remaining (do not block a later mongosh-only demark on these):
+
+- **`pipeline.jsonc` is operator-supplied and not in the tree.** `jsonc-require` must be resolvable on mongosh’s require path. A stub file is optional; do not inline a pipeline just to make `--nodb` load.
+- Always prepends `$sample`; reported times are of the **sampled** pipeline, not the production one.
+- `explainOutput.stages` (fallback `executionStats.stages`) misses some sharded / newer explain shapes. Later: walk shard-local stages / `$cursor` (see [mongosh scripting guide](mongosh-scripting-guide.md) — do not treat the echoed command pipeline as an explain stage).
+- No `--eval` overlay for `dbName` / `collName` / `sampleSize` (in-file consts). Same `var` + `typeof … === 'undefined'` pattern as other scripts if that lands.
 
 ### `fuzzer.js`
 
