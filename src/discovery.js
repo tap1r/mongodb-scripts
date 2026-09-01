@@ -7,8 +7,15 @@
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *  Guide: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/mongosh-scripting-guide.md"
     *
+    *  Legacy archive line: v0.2.1 is the snapshot for this script. mongosh-only
+    *  (async IIFE, named capture groups; incompatible with legacy mongo). Still
+    *  the demarked version for the whole-tree freeze. Further feature work
+    *  (cmd profiles, standalone/LB/arbiters, pool/jitter/cancel) targets
+    *  mongosh; see ROADMAP.md → Legacy mongo shell retirement.
+    *
     *  Notes:
-    *  - mongosh only
+    *  - mongosh only. Do not top-level-await this IIFE.
+    *  - do not strip (?<setName>)/(?<seedList>) for mongo — freeze is mongosh-only
     *  - support for async required to parallelise and access the topology with auth
     *  - only supports driver URI parameters, some driver options may not be supported
     *  - WARNING: debugging may leak credentials
