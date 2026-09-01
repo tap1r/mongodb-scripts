@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.15"
+ *  Version: "0.12.16"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -108,7 +108,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.15" };
+   const __script = { "name": "dbstats.js", "version": "0.12.16" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -304,13 +304,6 @@
       const systemFilter = /.+/;
       let dbPath = new MetaStats();
       dbPath.init();
-      if (dbPath.shards.length > 0) {
-         const paddedArray = [...Array(dbPath.shards.length)].map(() => 0);
-         dbPath.ncollections = paddedArray;
-         dbPath.nviews = paddedArray;
-         dbPath.namespaces = paddedArray;
-         dbPath.indexes = paddedArray;
-      }
       delete dbPath.name;
       delete dbPath.collections;
       delete dbPath.views;
@@ -320,64 +313,9 @@
 
       const dbNames = stableSort(getDBNames(dbFilter), compareBy(v => v, 1));
       console.log('');
-      // add debug clause
-      // if (dbPath.shards.length > 0) {
-      //    console.log('Discovered', dbPath.shards.length, 'shards:', JSON.stringify(dbPath.shards, null, 3));
-      // }
-      // console.log('Discovered', dbNames.length, 'distinct databases');
-      // const dbFetchTasks = dbNames.map(async dbName => {
-      dbPath.databases = dbNames.map(dbName => {
-         let database = new MetaStats($stats(dbName));
-         delete database.databases;
-         delete database.instance;
-         delete database.hostname;
-         delete database.proc;
-         delete database.dbPath;
-         database.shards = dbPath.shards;
-         if (dbPath.shards.length > 0) {
-            dbPath.ncollections = dbPath.ncollections.reduce((result, current, _idx) => {
-                  result.push(current + database.ncollections[_idx]);
-                  return result;
-               }, []);
-            dbPath.nviews = dbPath.nviews.reduce((result, current, _idx) => {
-                  result.push(current + database.nviews[_idx]);
-                  return result;
-               }, []);
-            dbPath.namespaces = dbPath.namespaces.reduce((result, current, _idx) => {
-                  result.push(current + database.namespaces[_idx]);
-                  return result;
-               }, []);
-            dbPath.indexes = dbPath.indexes.reduce((result, current, _idx) => {
-                  result.push(current + database.indexes[_idx]);
-                  return result;
-               }, []);
-            dbPath.nindexes = dbPath.indexes;
-         } else {
-            dbPath.ncollections += database.ncollections;
-            dbPath.nviews += database.nviews;
-            dbPath.namespaces += database.namespaces;
-            // dbPath.indexes += +database.indexes;
-            dbPath.nindexes += +database.indexes;
-         }
-         dbPath.dataSize += database.dataSize;
-         dbPath.storageSize += database.storageSize;
-         dbPath.objects += database.objects;
-         dbPath.orphans += database.orphans;
-         dbPath.totalIndexSize += database.totalIndexSize;
-         if (!dbPath._freeRolled) {
-            dbPath.freeStorageSize = database.freeStorageSize;
-            dbPath.totalIndexBytesReusable = database.totalIndexBytesReusable;
-            dbPath._freeRolled = true;
-         } else {
-            dbPath.freeStorageSize = (dbPath.freeStorageSize == null || database.freeStorageSize == null)
-               ? null : dbPath.freeStorageSize + database.freeStorageSize;
-            dbPath.totalIndexBytesReusable = (dbPath.totalIndexBytesReusable == null || database.totalIndexBytesReusable == null)
-               ? null : dbPath.totalIndexBytesReusable + database.totalIndexBytesReusable;
-         }
-
-         return database;
-      });
-      // dbPath.databases = await Promise.all(dbFetchTasks);
+      // Map: build per-DB metas only. Reduce: rollupDbPath aggregates totals (no map side-effects).
+      dbPath.databases = dbNames.map(dbName => buildDatabaseMeta(dbName, dbPath.shards));
+      rollupDbPath(dbPath, dbPath.databases);
 
       // add debug clause
       // if (dbPath.shards.length > 0) {
@@ -485,8 +423,77 @@
       if (dbPath.databases.length && dbPath.databases.every(d => d.totalIndexBytesReusable == null)) {
          dbPath.totalIndexBytesReusable = null;
       }
-      delete dbPath._freeRolled;
 
+      return dbPath;
+   }
+
+   function buildDatabaseMeta(dbName, shards = []) {
+      /*
+       *  Pure-ish: $stats → MetaStats for one DB (no cluster rollup mutation)
+       */
+      let database = new MetaStats($stats(dbName));
+      delete database.databases;
+      delete database.instance;
+      delete database.hostname;
+      delete database.proc;
+      delete database.dbPath;
+      database.shards = shards;
+      return database;
+   }
+
+   function sumNullable(values) {
+      /*
+       *  Sum numbers; any null/undefined → null (Atlas hidden free-space propagates)
+       */
+      if (!values.length) return 0;
+      if (values.some(v => v == null)) return null;
+      return values.reduce((a, b) => a + b, 0);
+   }
+
+   function sumPerShard(arrays, nShards) {
+      const zeros = Array(nShards).fill(0);
+      return arrays.reduce(
+         (acc, arr) => acc.map((v, i) => v + (+((arr && arr[i]) || 0))),
+         zeros
+      );
+   }
+
+   function rollupDbPath(dbPath, databases = []) {
+      /*
+       *  Aggregate database metas into dbPath totals (sharded arrays or scalars).
+       *  Empty catalog: sharded → zero-filled per-shard arrays; unsharded → leave MetaStats defaults.
+       */
+      const nShards = dbPath.shards.length;
+      if (!databases.length) {
+         if (nShards > 0) {
+            const zeros = Array(nShards).fill(0);
+            dbPath.ncollections = zeros;
+            dbPath.nviews = zeros.slice();
+            dbPath.namespaces = zeros.slice();
+            dbPath.indexes = zeros.slice();
+            dbPath.nindexes = dbPath.indexes;
+         }
+         return dbPath;
+      }
+      if (nShards > 0) {
+         dbPath.ncollections = sumPerShard(databases.map(d => d.ncollections), nShards);
+         dbPath.nviews = sumPerShard(databases.map(d => d.nviews), nShards);
+         dbPath.namespaces = sumPerShard(databases.map(d => d.namespaces), nShards);
+         dbPath.indexes = sumPerShard(databases.map(d => d.indexes), nShards);
+         dbPath.nindexes = dbPath.indexes;
+      } else {
+         dbPath.ncollections = databases.reduce((s, d) => s + d.ncollections, 0);
+         dbPath.nviews = databases.reduce((s, d) => s + d.nviews, 0);
+         dbPath.namespaces = databases.reduce((s, d) => s + d.namespaces, 0);
+         dbPath.nindexes = databases.reduce((s, d) => s + +d.indexes, 0);
+      }
+      dbPath.dataSize = databases.reduce((s, d) => s + d.dataSize, 0);
+      dbPath.storageSize = databases.reduce((s, d) => s + d.storageSize, 0);
+      dbPath.objects = databases.reduce((s, d) => s + d.objects, 0);
+      dbPath.orphans = databases.reduce((s, d) => s + d.orphans, 0);
+      dbPath.totalIndexSize = databases.reduce((s, d) => s + d.totalIndexSize, 0);
+      dbPath.freeStorageSize = sumNullable(databases.map(d => d.freeStorageSize));
+      dbPath.totalIndexBytesReusable = sumNullable(databases.map(d => d.totalIndexBytesReusable));
       return dbPath;
    }
 
