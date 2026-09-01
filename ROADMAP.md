@@ -28,6 +28,12 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 - Known wrong-result bugs that dual-shell users would inherit (invalid `$expr`, `--eval` shadowing, `fCV()` falling back to binary version on mongos) are either fixed or documented as wontfix in the archive notes.
 - Version strings and `__script.version` are consistent with the freeze (one patch ahead of the last dual-shell HEAD).
 
+**Per-script adequacy (drawn when ready, before the whole-tree freeze):**
+
+| Script | Dual-shell adequacy line | Notes |
+|--------|--------------------------|--------|
+| **`dbstats.js`** | **v0.12.19** (+ **`mdblib.js` ≥ 0.15.8**) | Hygiene complete (A1–A8); legacy Unauthorized labels; authz preflight; `filter.system`; ANSI tag table uses a plain object (no `Map`). Further dbstats work (JSON contract, module mode, catalog dual-path, task pool) is **mongosh-line** — do not block the archive on B/C/D/E. Header documents this freeze. |
+
 Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver before the cut. Those land on the mongosh-only line.
 
 #### 2. Line in the sand
@@ -262,6 +268,8 @@ Executor auto-trim will call. Keep the file standalone. Frozen at **0.4.28** for
 The storage snapshot other scripts want (auto-trim planner, discovery-directed jobs, later compact/onlineDefrag targeting). Current shape is still gather+print in one pass; the roadmap below assumes a **catalog-first, then stats** split so new catalog sources and output formats share one walk.
 
 Shipped recently: views listed once on the nameOnly pass; collection `$collStats` remains the second phase (Unauthorized → `name (unauthorized)`); databases sorted once after the fetch pool; section deep-merge for options (`filter` / `sort.*` / `output`); `output.format` canonical name `tabular` with `table` alias; `formatPct` / `formatRatio` guard zero/non-finite divisors (`n/a` instead of `NaN%` / `Infinity:1`); sort helpers collapsed to `compareBy` + `stableSort`; printers share `metricsCols` / `printRollupRows` / `formatShardCounts`; DB `$stats` map is pure — `rollupDbPath` aggregates totals separately; **`filter.system`** (`true`/`include` default, `false`/`exclude`, `only`) via mdblib `systemCollectionFilter` (replaces dead `systemFilter = /.+/`); authz preflight uses named booleans (`authzAdequate`); legacy Unauthorized detection on `$collStats` / features probe.
+
+**Legacy archive line for this script: v0.12.19** (requires **mdblib.js ≥ 0.15.8**). See [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1. Post-freeze feature work (JSON/module mode, dual catalog, task pool, MetaStats split, hot summary/HTML) proceeds on the mongosh line only.
 
 #### System namespace filter
 

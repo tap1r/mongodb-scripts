@@ -4,6 +4,11 @@
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+ *
+ *  Legacy archive line: v0.12.19 (with mdblib.js ≥ 0.15.8) is the dual-shell
+ *  (legacy mongo 4.4+ / mongosh) adequacy snapshot for this script. Further
+ *  feature work targets mongosh; see ROADMAP.md → Legacy mongo shell retirement.
+ *  Pair with the matching mdblib from the same freeze when archiving.
  */
 
 // Usage: [mongo|mongosh] [connection options] --quiet [--eval 'var options = {...};'] [-f|--file] </path/to/>dbstats.js
