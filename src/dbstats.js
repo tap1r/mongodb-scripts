@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.13"
+ *  Version: "0.12.14"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -108,7 +108,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.13" };
+   const __script = { "name": "dbstats.js", "version": "0.12.14" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -318,9 +318,7 @@
       // delete dbPath.nindexes;
       delete dbPath.compressor;
 
-      const dbNames = (shellVer(2.0) && isMongosh())
-                    ? getDBNames(dbFilter).toSorted(sortAsc) // mongosh v2 optimised
-                    : getDBNames(dbFilter).sort(sortAsc);    // legacy shell(s) method
+      const dbNames = stableSort(getDBNames(dbFilter), compareBy(v => v, 1));
       console.log('');
       // add debug clause
       // if (dbPath.shards.length > 0) {
@@ -412,14 +410,15 @@
                },
                { "nameOnly": true },
                true
-              ).filter(({ 'name': collName }) => collName.match(systemFilter)).toSorted(sortNameAsc)
+              ).filter(({ 'name': collName }) => collName.match(systemFilter))
             : db.getSiblingDB(database.name).getCollectionInfos({ // legacy shell(s) method
                   "type": /^(collection|timeseries)$/,
                   "name": collFilter
                },
                isMongosh() ? { "nameOnly": true } : true,
                true
-              ).filter(({ 'name': collName }) => collName.match(systemFilter)).sort(sortNameAsc);
+              ).filter(({ 'name': collName }) => collName.match(systemFilter));
+         database.collections = stableSort(database.collections, compareBy('name', 1));
          database.views = (shellVer(2.0) && isMongosh())
             ? db.getSiblingDB(database.name).getCollectionInfos({ // mongosh v2 optimised
                   "type": "view",
@@ -427,16 +426,17 @@
                },
                { "nameOnly": true },
                true
-              ).toSorted(sortBy('view'))
-              // ).filter(({ 'name': viewName }) => viewName.match(systemFilter)).toSorted(sortBy('view'))
+              )
+              // ).filter(({ 'name': viewName }) => viewName.match(systemFilter))
             : db.getSiblingDB(database.name).getCollectionInfos({ // legacy shell(s) method
                   "type": "view",
                   "name": collFilter
                },
                isMongosh() ? { "nameOnly": true } : true,
                true
-              ).sort(sortBy('view'));
-              // ).filter(({ 'name': viewName }) => viewName.match(systemFilter)).sort(sortBy('view'));
+              );
+              // ).filter(({ 'name': viewName }) => viewName.match(systemFilter));
+         database.views = stableSort(database.views, sortBy('view'));
 
          return database;
       });
@@ -455,27 +455,19 @@
             delete collection.hostname;
             delete collection.proc;
             delete collection.dbPath;
-            // collection.indexes.sort(sortBy('index')); // add toSorted optimisation here
-            collection.indexes = (shellVer(2.0) && isMongosh())
-               ? collection.indexes.toSorted(sortBy('index')) // mongosh v2 optimised
-               : collection.indexes.sort(sortBy('index'));    // legacy shell(s) method
+            collection.indexes = stableSort(collection.indexes, sortBy('index'));
 
             return collection;
          });
          database.collections = await Promise.all(collFetchTasks);
-         // database.collections.sort(sortBy('collection')); // add toSorted optimisation here
-         database.collections = (shellVer(2.0) && isMongosh())
-            ? database.collections.toSorted(sortBy('collection')) // mongosh v2 optimised
-            : database.collections.sort(sortBy('collection'));    // legacy shell(s) method
+         database.collections = stableSort(database.collections, sortBy('collection'));
          // database.views already listed + sorted in collNamesTasks (nameOnly);
          // collections above may be tagged "(unauthorized)" by $collStats on auth failure
 
          return database;
       });
       dbPath.databases = await Promise.all(dbFetchTasks);
-      dbPath.databases = (shellVer(2.0) && isMongosh())
-         ? dbPath.databases.toSorted(sortBy('db')) // mongosh v2 optimised
-         : dbPath.databases.sort(sortBy('db'));    // legacy shell(s) method
+      dbPath.databases = stableSort(dbPath.databases, sortBy('db'));
 
       // If every namespace hid WT free-space, don't keep a db.stats() 0 as an empty free list.
       dbPath.databases.forEach(database => {
@@ -534,10 +526,11 @@
             collections.push(updatedCollection);
             return collections;
          }, []);
-      }).sort(sortBy('namespace'));
+      });
+      const sortedNamespaces = stableSort(namespaces, sortBy('namespace'));
 
-      printNSHeader(namespaces.length);
-      namespaces.forEach(namespace => {
+      printNSHeader(sortedNamespaces.length);
+      sortedNamespaces.forEach(namespace => {
          printNamespace(namespace);
          namespace.indexes.forEach(printIndex);
       });
@@ -565,217 +558,55 @@
       return;
    }
 
+   function compareBy(keyOrGetter, dir = 1) {
+      /*
+       *  Comparator factory: string key or getter, dir 1|-1. Null/non-finite numerics sort last.
+       */
+      const get = (typeof keyOrGetter === 'function') ? keyOrGetter : (o => o[keyOrGetter]);
+      return (a, b) => {
+         const av = get(a), bv = get(b);
+         if (typeof av === 'string' && typeof bv === 'string')
+            return dir * av.localeCompare(bv);
+         const an = (av == null) ? NaN : +av, bn = (bv == null) ? NaN : +bv;
+         const aOk = Number.isFinite(an), bOk = Number.isFinite(bn);
+         if (aOk && bOk) return dir * (an - bn);
+         if (aOk !== bOk) return aOk ? -1 : 1; // finite before null/NaN
+         if (av == null && bv == null) return 0;
+         return dir * String(av).localeCompare(String(bv));
+      };
+   }
+
+   function stableSort(arr, cmp) {
+      /*
+       *  Non-mutating sort: toSorted on mongosh 2+, copy+.sort otherwise.
+       */
+      if (!Array.isArray(arr)) return arr;
+      return (shellVer(2.0) && isMongosh()) ? arr.toSorted(cmp) : arr.slice().sort(cmp);
+   }
+
    function sortBy(type) {
       /*
-       *  sortBy value
+       *  Resolve options.sort[type] → comparator (first non-zero key wins).
        */
-      const sortByType = sortOptions[type];
+      const sortByType = sortOptions[type] || {};
       const sortKey = Object.keys(sortByType).find(key => sortByType[key] !== 0) || 'name';
-      let sortValue = sortByType[sortKey];
-      switch (sortValue) {
-         case -1:
-            sortValue = 'desc';
-            break;
-         default:
-            sortValue = 'asc';
-      }
-
-      const sortFns = {
-         "sort": {
-            "asc": sortAsc,
-            "desc": sortDesc
-         },
-         "name": {
-            "asc": sortNameAsc,
-            "desc": sortNameDesc
-         },
-         "namespace": {
-            "asc": sortNamespaceAsc,
-            "desc": sortNamespaceDesc
-         },
-         "dataSize": {
-            "asc": sortDataSizeAsc,
-            "desc": sortDataSizeDesc
-         },
-         "storageSize": {
-            "asc": storageSizeAsc,
-            "desc": storageSizeDesc
-         },
-         "freeStorageSize": {
-            "asc": sortFreeStorageSizeAsc,
-            "desc": sortFreeStorageSizeDesc
-         },
-         "idxDataSize": {
-            "asc": sortIdxDataSizeAsc,
-            "desc": sortIdxDataSizeDesc
-         },
-         "idxStorageSize": {
-            "asc": sortIdxStorageSizeAsc,
-            "desc": sortIdxStorageSizeDesc
-         },
-         "idxFreeStorageSize": {
-            "asc": sortIdxFreeStorageSizeAsc,
-            "desc": sortIdxFreeStorageSizeDesc
-         },
-         "reuse": { // TBA
-            "asc": sortAsc,
-            "desc": sortDesc
-         },
-         "compression": { // TBA
-            "asc": sortAsc,
-            "desc": sortDesc
-         },
-         "objects": {
-            "asc": sortObjectsAsc,
-            "desc": sortObjectsDesc
-         },
-         "compaction": { // TBA
-            "asc": sortAsc,
-            "desc": sortDesc
-         }
+      const dir = sortByType[sortKey] === -1 ? -1 : 1;
+      const getters = {
+         "name": o => o.name,
+         "namespace": o => o.namespace,
+         "dataSize": o => o.dataSize,
+         "storageSize": o => o.storageSize,
+         "freeStorageSize": o => o.freeStorageSize,
+         "idxDataSize": o => (o.freeStorageSize == null) ? null : (o.storageSize - o.freeStorageSize),
+         "idxStorageSize": o => o.storageSize,
+         "idxFreeStorageSize": o => o.freeStorageSize,
+         "objects": o => o.objects,
+         "reuse": o => o.freeStorageSize, // TBA: reuse ratio
+         "compression": o => o.compression,
+         "compaction": o => o.name // TBA
       };
 
-      return sortFns[sortKey][sortValue];
-   }
-
-   function sortAsc(x, y) {
-      /*
-       *  sort by value ascending
-       */
-      return x.localeCompare(y);
-   }
-
-   function sortDesc(x, y) {
-      /*
-       *  sort by value descending
-       */
-      return y.localeCompare(x);
-   }
-
-   function sortNameAsc(x, y) {
-      /*
-       *  sort by name ascending
-       */
-      return x.name.localeCompare(y.name);
-   }
-
-   function sortNameDesc(x, y) {
-      /*
-       *  sort by name descending
-       */
-      return y.name.localeCompare(x.name);
-   }
-
-   function sortNamespaceAsc(x, y) {
-      /*
-       *  sort by namespace ascending
-       */
-      return x.namespace.localeCompare(y.namespace);
-   }
-
-   function sortNamespaceDesc(x, y) {
-      /*
-       *  sort by namespace descending
-       */
-      return y.namespace.localeCompare(x.namespace);
-   }
-
-   function sortDataSizeAsc(x, y) {
-      /*
-       *  sort by dataSize ascending
-       */
-      return x.dataSize - y.dataSize;
-   }
-
-   function sortDataSizeDesc(x, y) {
-      /*
-       *  sort by dataSize descending
-       */
-      return y.dataSize - x.dataSize;
-   }
-
-   function sortIdxStorageSizeAsc(x, y) {
-      /*
-       *  sort by index dataSize ascending
-       */
-      return x.storageSize - y.storageSize;
-   }
-
-   function sortIdxStorageSizeDesc(x, y) {
-      /*
-       *  sort by index dataSize descending
-       */
-      return y.storageSize - x.storageSize;
-   }
-
-   function sortIdxDataSizeAsc(x, y) {
-      /*
-       *  sort by index "dataSize" ascending
-       */
-      return (x.storageSize - x.freeStorageSize) - (y.storageSize - y.freeStorageSize);
-   }
-
-   function sortIdxDataSizeDesc(x, y) {
-      /*
-       *  sort by index "dataSize" descending
-       */
-      return (y.storageSize - y.freeStorageSize) - (x.storageSize - x.freeStorageSize);
-   }
-
-   function sortIdxFreeStorageSizeAsc(x, y) {
-      /*
-       *  sort by index freeStorageSize ascending
-       */
-      return x.freeStorageSize - y.freeStorageSize;
-   }
-
-   function sortIdxFreeStorageSizeDesc(x, y) {
-      /*
-       *  sort by index freeStorageSize descending
-       */
-      return y.freeStorageSize - x.freeStorageSize;
-   }
-
-   function storageSizeAsc(x, y) {
-      /*
-       *  sort by 'file size in bytes' ascending
-       */
-      return x.storageSize - y.storageSize;
-   }
-
-   function storageSizeDesc(x, y) {
-      /*
-       *  sort by 'file size in bytes' descending
-       */
-      return y.storageSize - x.storageSize;
-   }
-
-   function sortFreeStorageSizeAsc(x, y) {
-      /*
-       *  sort by 'file bytes available for reuse' ascending
-       */
-      return x.freeStorageSize - y.freeStorageSize;
-   }
-
-   function sortFreeStorageSizeDesc(x, y) {
-      /*
-       *  sort by 'file bytes available for reuse' descending
-       */
-      return y.freeStorageSize - x.freeStorageSize;
-   }
-
-   function sortObjectsAsc(x, y) {
-      /*
-       *  sort by objects/document count ascending
-       */
-      return x.objects - y.objects;
-   }
-
-   function sortObjectsDesc(x, y) {
-      /*
-       *  sort by objects/document count descending
-       */
-      return y.objects - x.objects;
+      return compareBy(getters[sortKey] || getters.name, dir);
    }
 
    function formatUnit(metric) {
