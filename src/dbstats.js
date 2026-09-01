@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.11"
+ *  Version: "0.12.12"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -69,7 +69,7 @@
  *        objects: <int>
  *     },
  *     output: {
- *        format: <'table'|'nsTable'|'json'|'html'>,
+ *        format: <'tabular'|'table'|'nsTable'|'json'|'html'>, // 'table' aliases 'tabular'
  *        topology: <'summary'|'expanded'>, // TBA
  *        colour: <true|false>, // TBA
  *        verbosity: <'full'|'summary'|'summaryIdx'|'compactOnly'/> // TBA
@@ -97,6 +97,7 @@
  *  Examples of using formatting:
  *
  *    mongosh --quiet --eval 'var options = { output: { format: "tabular" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { output: { format: "table" } };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { output: { format: "json" } };' -f dbstats.js
  */
 
@@ -107,7 +108,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.11" };
+   const __script = { "name": "dbstats.js", "version": "0.12.12" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -224,7 +225,7 @@
          "objects": 0
       },
       "output": {
-         "format": "tabular", // ['tabular'|'nsTable'|'json'|'html']
+         "format": "tabular", // ['tabular'|'table'|'nsTable'|'json'|'html'] ('table' → 'tabular')
          "topology": "summary", // ['summary'|'expanded'] // TBA
          "colour": true, // [true|false] // TBA
          "verbosity": "full" // ['full'|'summary'|'summaryIdx'|'compactOnly'] // TBA
@@ -268,7 +269,8 @@
       /*
        *  main
        */
-      const { 'format': formatOutput = 'tabular' } = outputOptions;
+      let { 'format': formatOutput = 'tabular' } = outputOptions;
+      if (formatOutput === 'table') formatOutput = 'tabular'; // alias
 
       slaveOk(readPref);
       const dbStats = await getStats();
@@ -285,7 +287,8 @@
          case 'nsTable':
             nsTableOut(dbStats);
             break;
-         default: // tabular
+         case 'tabular':
+         default:
             tableOut(dbStats);
       }
 
