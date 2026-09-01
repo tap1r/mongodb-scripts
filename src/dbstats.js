@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.18"
+ *  Version: "0.12.19"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -111,7 +111,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.18" };
+   const __script = { "name": "dbstats.js", "version": "0.12.19" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -139,24 +139,42 @@
 
 (() => {
    /*
-    *  Ensure authorized users have the following minimum required roles
+    *  Minimum useful roles for a full report:
     *  clusterMonitor@admin && readAnyDatabase@admin
+    *  (or a stronger admin role). Unauthenticated / localhost exception skips the warn.
     */
    try {
       db.adminCommand({ "features": 1 });
-   } catch({ codeName }) {
-      if (codeName == 'Unauthorized') {
+   } catch(e) {
+      // Legacy mongo often has code 13 / errmsg only — same idea as $collStats.
+      if (e.codeName == 'Unauthorized' || +e.code === 13
+            || /not authorized|unauthorized/i.test(e.errmsg || e.message || '')) {
          console.log('[red][ERR] MongoServerError: Unauthorized user requires authentication[/]');
       }
    }
-   const monitorRoles = ['clusterMonitor'],
-         adminRoles = ['atlasAdmin', 'clusterAdmin', 'backup', 'root', '__system'],
-         dbRoles = ['dbAdminAnyDatabase', 'readAnyDatabase', 'readWriteAnyDatabase'];
-   const { 'authInfo': { authenticatedUsers, authenticatedUserRoles } } = db.adminCommand({ "connectionStatus": 1 });
-   const authz = authenticatedUserRoles.filter(({ role, db }) => dbRoles.includes(role) && db == 'admin'),
-         users = authenticatedUserRoles.filter(({ role, db }) => adminRoles.includes(role) && db == 'admin'),
-         monitors = authenticatedUserRoles.filter(({ role, db }) => monitorRoles.includes(role) && db == 'admin');
-   if (!(!(!!authenticatedUsers.length) || !!users.length || !!monitors.length && !!authz.length)) {
+
+   const monitorRoles = ['clusterMonitor'];
+   const adminRoles = ['atlasAdmin', 'clusterAdmin', 'backup', 'root', '__system'];
+   const dbRoles = ['dbAdminAnyDatabase', 'readAnyDatabase', 'readWriteAnyDatabase'];
+
+   const { 'authInfo': { authenticatedUsers, authenticatedUserRoles } }
+      = db.adminCommand({ "connectionStatus": 1 });
+
+   const hasAdminRole = authenticatedUserRoles.some(
+      ({ role, db: roleDb }) => adminRoles.includes(role) && roleDb == 'admin'
+   );
+   const hasMonitorRole = authenticatedUserRoles.some(
+      ({ role, db: roleDb }) => monitorRoles.includes(role) && roleDb == 'admin'
+   );
+   const hasReadAnyRole = authenticatedUserRoles.some(
+      ({ role, db: roleDb }) => dbRoles.includes(role) && roleDb == 'admin'
+   );
+
+   const isUnauthenticated = authenticatedUsers.length === 0; // localhost exception / auth off
+   const hasMonitorAndRead = hasMonitorRole && hasReadAnyRole;
+   const authzAdequate = isUnauthenticated || hasAdminRole || hasMonitorAndRead;
+
+   if (!authzAdequate) {
       console.log(`[red][WARN] The connecting user's authz privileges may be inadequate to report all namespaces statistics[/]`);
       console.log(`[red][WARN] consider inheriting the built-in roles for 'clusterMonitor@admin' and 'readAnyDatabase@admin' at a minimum[/]`);
    }
