@@ -1,14 +1,21 @@
 /*
  *  Name: "explainHisto.js"
- *  Version: "0.1.2"
+ *  Version: "0.1.3"
  *  Description: "Generates a text-based histogram of aggregation stage execution timers"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+ * 
+ *  Notes:
+ *  - mognosh only
+ *  - expects 'pipeline.jsonc' file to define the aggregation pipeline
+ *  - uses sampling to reduce runtime
+ *  - uses explain('executionStats') to get execution times
+ *  - provides histogram of stage execution times
  */
 
 (() => {
    require('jsonc-require');
-   const pipeline = require('./pipeline.jsonc');
+   const userPipeline = require('./pipeline.jsonc');
    const dbName = 'database';
    const collName = 'collection';
    const namespace = db.getSiblingDB(dbName).getCollection(collName);
@@ -17,7 +24,7 @@
    // Construct pipeline with sampling for performance (if required)
    const pipeline = [
       { "$sample": { "size": sampleSize } },
-      ...pipeline
+      ...userPipeline
    ];
 
    const options = {
