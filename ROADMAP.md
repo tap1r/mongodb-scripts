@@ -261,7 +261,11 @@ Executor auto-trim will call. Keep the file standalone. Frozen at **0.4.28** for
 
 The storage snapshot other scripts want (auto-trim planner, discovery-directed jobs, later compact/onlineDefrag targeting). Current shape is still gather+print in one pass; the roadmap below assumes a **catalog-first, then stats** split so new catalog sources and output formats share one walk.
 
-Shipped recently: views listed once on the nameOnly pass; collection `$collStats` remains the second phase (Unauthorized → `name (unauthorized)`); databases sorted once after the fetch pool; section deep-merge for options (`filter` / `sort.*` / `output`); `output.format` canonical name `tabular` with `table` alias; `formatPct` / `formatRatio` guard zero/non-finite divisors (`n/a` instead of `NaN%` / `Infinity:1`); sort helpers collapsed to `compareBy` + `stableSort`; printers share `metricsCols` / `printRollupRows` / `formatShardCounts`; DB `$stats` map is pure — `rollupDbPath` aggregates totals separately.
+Shipped recently: views listed once on the nameOnly pass; collection `$collStats` remains the second phase (Unauthorized → `name (unauthorized)`); databases sorted once after the fetch pool; section deep-merge for options (`filter` / `sort.*` / `output`); `output.format` canonical name `tabular` with `table` alias; `formatPct` / `formatRatio` guard zero/non-finite divisors (`n/a` instead of `NaN%` / `Infinity:1`); sort helpers collapsed to `compareBy` + `stableSort`; printers share `metricsCols` / `printRollupRows` / `formatShardCounts`; DB `$stats` map is pure — `rollupDbPath` aggregates totals separately; **`filter.system`** (`true`/`include` default, `false`/`exclude`, `only`) via mdblib `systemCollectionFilter` (replaces dead `systemFilter = /.+/`).
+
+#### System namespace filter
+
+Orthogonal to `filter.db` / `filter.collection` regexes. “System” means collection/view **names** matching `system.*` or `replset.*` (not admin/config/local DB exclusion — that stays in `getDBNames` / Atlas paths). Default **include** preserves historical dbstats behaviour; operators opt into `system: false` or `system: 'only'` instead of negative-lookahead regexes. Shared predicate lives in mdblib so dual catalog builders (legacy + `$listCatalog`) can reuse it later; full `getAllNonSystem*` catalog walkers remain TBA.
 
 #### Output formats
 
@@ -343,7 +347,7 @@ Per-namespace `compact` and update-based defrag. Not auto-trim. Auto-trim’s **
 - Namespaced helpers / `for(db)` — **after** the library strategy change, not before.
 - **Legacy `mongo` shims** — delete only after [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) (archive + tag). Until then keep `isMongosh()` / `slaveOk` / dual `Timestamp` / `runCommand` shapes. After the cut, streamline version helpers (`serverVer` / `fCV` / `shellVer`) in place; do not couple that cleanup to `for(db)`.
 - **Shared emit helpers** (see [Script consumption](#script-consumption-unify-standalone-vs-modular)): finish the story beyond today’s `console.log` TTY overload — one path for markup→ANSI, non-TTY strip, progress suppress, and module-quiet. Bring `print` / raw-escape call sites onto it over time.
-- Finish TBA namespace listers (`getAllNonSystemNamespaces`, views, system).
+- **System name policy (shipped):** `isSystemCollectionName` / `normalizeSystemFilter` / `acceptSystemCollectionName` / `systemCollectionFilter` — used by dbstats `filter.system`. Full catalog walkers (`getAllNonSystemNamespaces`, collections, views, `getAllSystemNamespaces`) still TBA; they should apply the same predicate after listCollections, not re-encode regexes.
 - `AutoFactor` NaN / scale clamp (the copy in `autoCompact.js` is stricter).
 - `$genRandWord`, `$benford` — later / fuzzer.
 - **`MetaStats` redesign** — see below; underpins dbstats catalog-first work and discovery’s per-node payload shape.
