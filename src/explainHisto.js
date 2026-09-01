@@ -1,19 +1,23 @@
 /*
  *  Name: "explainHisto.js"
- *  Version: "0.1.3"
+ *  Version: "0.1.4"
  *  Description: "Generates a text-based histogram of aggregation stage execution timers"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
- * 
+ *
  *  Notes:
- *  - mognosh only
- *  - expects 'pipeline.jsonc' file to define the aggregation pipeline
- *  - uses sampling to reduce runtime
- *  - uses explain('executionStats') to get execution times
+ *  - mongosh only (`require`, jsonc-require). Legacy mongo has no require.
  *  - provides histogram of stage execution times
+ *  - expects ./pipeline.jsonc (operator-supplied; not shipped). jsonc-require
+ *    must be resolvable on mongosh's require path.
+ *  - prepends $sample to reduce explain runtime; stats are of the sampled pipeline.
+ *  - uses explain('executionStats'); the stages array shape is version/driver-dependent.
  */
 
+// Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>explainHisto.js
+
 (() => {
+   const __script = { "name": "explainHisto.js", "version": "0.1.4" };
    require('jsonc-require');
    const userPipeline = require('./pipeline.jsonc');
    const dbName = 'database';
@@ -31,9 +35,10 @@
       "allowDiskUse": true,
       "cursor": { "batchSize": 0 },
       "readConcern": { "level": "local" },
-      "comment": "Explain plan stats for histogram"
+      "comment": `${__script.name} v${__script.version}`
    };
 
+   console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
    console.log('\nRunning aggregation explain plan (executionStats)...\n');
 
    // Run explain
@@ -65,7 +70,7 @@
       const delta = time - prevTime;
 
       return {
-         "id": index++,
+         "id": index,
          "name": name,
          "time": +time,
          "delta": delta
