@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.29"
+    *  Version: "0.4.30"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
     *  - already-enabled: autoCompact:false, wait for running bit to clear (unbounded, 30s notes), re-issue user options
     *  - ident → ns map from background $listCatalog (first batch or IDENT_FIRST_MS); pump.stop() on every enable exit; await delay() so the pump can run
     *  - WTCMPCT watermark is serverStatus.localTime immediately before enable (not client ISODate)
-    *  - first-pass latch: sizeStorer hint, or WT visits (success+skipped*+timeout+interrupted+failed) stall with no WTCMPCT/overflow heartbeat, or visits >= catalog ident count after $listCatalog. runOnce:false does not clear the running bit. $currentOp is unused. Recovered-bytes stall is not a stop. getLog poll stays at min while visits are moving or first pass is still in a file.
+    *  - first-pass latch: sizeStorer hint, or WT visits (success+skipped*+timeout+interrupted+failed) stall with no WTCMPCT/overflow heartbeat, or visits >= catalog ident count after $listCatalog. runOnce:false does not clear the running bit. $currentOp is unused. Recovered-bytes stall is not a stop. getLog poll stays at min while visits are moving or first pass is still in a file. runOnce:true waits for running === false after first pass (serverStatus null is not idle). Unchanged totalLinesWritten skips the ramlog walk.
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "autoCompact": true };'] [-f|--file] </path/to/>autoCompact.js
@@ -41,7 +41,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.29" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.30" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -599,9 +599,10 @@
       seen.add(key);
       while (seen.size > GETLOG_CAP) seen.delete(seen.keys().next().value);
    };
-   const getLogs = (since, seen) => {
+   const getLogs = (since, seen, lastTotal = null) => {
       // ramlog ~1024 raw lines; prefilter WTCMPCT (spacing-tolerant) before EJSON.parse
       // start watermark exclusive; later same-ms siblings kept if not yet in seen
+      // unchanged totalLinesWritten → no new ramlog lines; skip the walk
       let lines, totalLinesWritten;
       try {
          ({ "log": lines = [], "totalLinesWritten": totalLinesWritten } = db.adminCommand({ "getLog": "global" }));
@@ -611,6 +612,9 @@
             getLogWarned = true;
          }
          return { "logs": [], "totalLinesWritten": null, "rawCount": 0 };
+      }
+      if (Number.isFinite(totalLinesWritten) && totalLinesWritten === lastTotal) {
+         return { "logs": [], "totalLinesWritten": totalLinesWritten, "rawCount": lines.length };
       }
       const out = [];
       for (const line of lines) {
@@ -636,7 +640,7 @@
        *  - visits = success + skipped* + timeout + interrupted + failed (process-lifetime)
        *  - WTCMPCT is a heartbeat; ramlog overflow (lost lines) counts as heartbeat, not quiet
        *  - stall visits but still logging/overflow → still in a file
-       *  - runOnce:true: running bit clears when the thread stops; wait for that after first pass
+       *  - runOnce:true: running bit clears when the thread stops; wait for running === false after first pass (null is not idle)
        *  - runOnce:false: running bit stays on; first pass = hint or visits stall
        */
       const resolveNs = nsResolver.resolve ?? (() => null);
@@ -663,7 +667,7 @@
       };
 
       do {
-         const { logs, totalLinesWritten, rawCount = 0 } = getLogs(ts, seen);
+         const { logs, totalLinesWritten, rawCount = 0 } = getLogs(ts, seen, lastTotal);
          const overflow = Number.isFinite(totalLinesWritten)
             && lastTotal != null
             && totalLinesWritten - lastTotal >= GETLOG_CAP;
@@ -720,7 +724,7 @@
          }
 
          if (firstPassDone && !runOnce) break;
-         if (runOnce && firstPassDone && running !== true) {
+         if (runOnce && firstPassDone && running === false) {
             console.log('\n══════ [yellow]serverStatus: background compact thread idle[/] ══════');
             break;
          }
