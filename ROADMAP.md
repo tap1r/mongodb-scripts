@@ -33,6 +33,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | Script | Dual-shell adequacy line | Notes |
 |--------|--------------------------|--------|
 | **`dbstats.js`** | **v0.12.19** (+ **`mdblib.js` ≥ 0.15.8**) | Hygiene complete (A1–A8); legacy Unauthorized labels; authz preflight; `filter.system`; ANSI tag table uses a plain object (no `Map`). Further dbstats work (JSON contract, module mode, catalog dual-path, task pool) is **mongosh-line** — do not block the archive on B/C/D/E. Header documents this freeze. |
+| **`autoCompact.js`** | **v0.4.36** (mongosh-only) | Not dual-shell (`async` IIFE, `await delay`, mongosh `getLog` / `$listCatalog`). Demarked for the whole-tree freeze anyway. Further work (first-pass progress bar, auto-trim executor) is **mongosh-line**. Header documents this freeze. |
 
 Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver before the cut. Those land on the mongosh-only line.
 
@@ -242,7 +243,7 @@ Pin down in the implementation:
 
 ### `autoCompact.js`
 
-Executor auto-trim will call. Keep the file standalone. Frozen at **0.4.28** for now. Direct-to-member targeting belongs in `discovery.js`; cron/JSON/wait caps belong in `autoTrim.js`.
+Executor auto-trim will call. Keep the file standalone. **Legacy archive line: v0.4.36** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Direct-to-member targeting belongs in `discovery.js`; cron/JSON/wait caps belong in `autoTrim.js`. Further feature work (progress bar, auto-trim coupling) is mongosh-line only.
 
 **Shipped**
 
