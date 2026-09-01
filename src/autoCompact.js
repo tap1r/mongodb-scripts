@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.34"
+    *  Version: "0.4.35"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -37,7 +37,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.34" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.35" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
@@ -723,7 +723,7 @@
             logs.forEach(entry => {
                const { t = ISODate(), 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = entry;
                if (t > ts) ts = t;
-               console.log(t.toJSON(), annotateWtMsg(msg, session_dhandle_name, resolveNs));
+               console.log(`[blue]${t.toJSON()}[/]`, annotateWtMsg(msg, session_dhandle_name, resolveNs));
                if (isSizeStorer(msg, session_dhandle_name)) {
                   markFirstPass('sizeStorer (last file of catalog walk)');
                }
