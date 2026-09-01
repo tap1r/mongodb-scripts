@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.15.6"
+ *  Version: "0.15.7"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -10,7 +10,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.15.6"
+      "version": "0.15.7"
 });
 
 /*  Notes:
@@ -89,11 +89,47 @@ const ansiTags = [
    { "tag": "bg bright white", "code": 107 }
 ];
 
+// One scan per string. TTY expands [red]/[/] … to CSI; piped output strips tags+CSI.
+// Case-sensitive lookup first so [R] (bright red) is not eaten by [r].
+const ANSI_TAG_RE = /\[(\/|bg bright \w+|bright \w+|bg \w+|\w+)\]/gi;
+const ANSI_CSI_RE = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
+const ansiTagCode = new Map();
+ansiTags.forEach(({ tag, code }) => {
+   ansiTagCode.set(tag, code);
+   const lower = tag.toLowerCase();
+   if (!ansiTagCode.has(lower)) ansiTagCode.set(lower, code);
+});
+
+function ansiTagCodeOf(tag) {
+   let code = ansiTagCode.get(tag);
+   if (code === undefined) code = ansiTagCode.get(tag.toLowerCase());
+   return code;
+}
+
+function applyAnsiTags(text) {
+   return text.replace(ANSI_TAG_RE, (all, tag) => {
+      const code = ansiTagCodeOf(tag);
+      return (code === undefined) ? all : `\x1b[${code}m`;
+   });
+}
+
+function stripAnsiMarkup(text) {
+   // Drop known colour tags only; keep [WARN]/[ERROR]/[NOTE] labels
+   return text.replace(ANSI_TAG_RE, (all, tag) => (
+      ansiTagCodeOf(tag) === undefined ? all : ''
+   )).replace(ANSI_CSI_RE, '');
+}
+
+function formatLogArgs(args, isTTY) {
+   const paint = isTTY ? applyAnsiTags : stripAnsiMarkup;
+   return [...args].map(arg => typeof arg === 'string' ? paint(arg) : arg);
+}
+
 isMongosh() && (console['log'] = (function() {
    /*
     *  overloading the console.log() method
     *  - add colour markup support for TTY output
-    *  - strips out ANSI escape sequences from non-TTY output
+    *  - strips [tags] and CSI from non-TTY output (never expand-then-strip)
     */
    const method = () => console;
    const fn = 'log'; // target method's attribute name for overloading
@@ -106,31 +142,7 @@ isMongosh() && (console['log'] = (function() {
       method()[_fn] = method()[fn];
    }
    function modifiedLog() {
-      const isTTY = process.stdout.isTTY;
-      const markup = text => {
-         ansiTags.forEach(({ tag, code }) => {
-            const re = new RegExp(`\\[${tag}\\]`, 'gi');
-            text = text.replaceAll(re, `\x1b[${code}m`);
-         });
-         return text;
-      };
-      const colourise = args => { // add colour markup support
-         return [...args].map(arg =>
-            typeof arg === 'string'
-                 ? markup(arg)
-                 : arg
-         );
-      };
-      const noEsc = args => { // strips out ANSI escape sequences
-         const ansi = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
-         return [...args].map(arg =>
-            typeof arg === 'string'
-                 ? arg.replaceAll(ansi, '')
-                 : arg
-         );
-      };
-
-      return method()[_fn].apply(null, isTTY ? colourise(arguments) : noEsc(colourise(arguments)));
+      return method()[_fn].apply(null, formatLogArgs(arguments, process.stdout.isTTY));
    };
 
    return modifiedLog;
@@ -141,23 +153,7 @@ if (typeof console === 'undefined') {
     *  legacy mongo shell detected
     */
    var console = {
-      log: args => {
-         const markup = text => {
-            ansiTags.forEach(({ tag, code }) => {
-               const re = new RegExp(`\\[${tag}\\]`, 'gi');
-               text = text.replace(re, `\x1b[${code}m`);
-            });
-            return text;
-         };
-         const noEsc = arg => { // strip out ANSI escape sequences
-            const ansi = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
-            return typeof arg === 'string'
-               ? arg.replace(ansi, '')
-               : arg;
-         };
-
-         return print(noEsc(markup(args)));
-      },
+      log: args => print(typeof args === 'string' ? stripAnsiMarkup(args) : args),
       clear: () => _runMongoProgram('clear'),
       error: tojson,
       debug: tojson,

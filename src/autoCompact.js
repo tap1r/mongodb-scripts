@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.28"
+    *  Version: "0.4.29"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -41,9 +41,9 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.28" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.29" };
 
-   // colour tags ([red]/[yellow]/[/] …) expanded on TTY; ANSI stripped when piped (from mdblib.js)
+   // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (from mdblib.js)
    const isMongosh = () => typeof process !== 'undefined';
    const ansiTags = [
       { "tag": "\/", "code": 0 },
@@ -106,25 +106,39 @@
       { "tag": "bg bright cyan", "code": 106 },
       { "tag": "bg bright white", "code": 107 }
    ];
+   // One scan per string. TTY expands [red]/[/] … to CSI; piped output strips tags+CSI.
+   // Case-sensitive lookup first so [R] (bright red) is not eaten by [r].
+   const ANSI_TAG_RE = /\[(\/|bg bright \w+|bright \w+|bg \w+|\w+)\]/gi;
+   const ANSI_CSI_RE = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
+   const ansiTagCode = new Map();
+   ansiTags.forEach(({ tag, code }) => {
+      ansiTagCode.set(tag, code);
+      const lower = tag.toLowerCase();
+      if (!ansiTagCode.has(lower)) ansiTagCode.set(lower, code);
+   });
+   const ansiTagCodeOf = tag => {
+      let code = ansiTagCode.get(tag);
+      if (code === undefined) code = ansiTagCode.get(tag.toLowerCase());
+      return code;
+   };
+   const applyAnsiTags = text => text.replace(ANSI_TAG_RE, (all, tag) => {
+      const code = ansiTagCodeOf(tag);
+      return (code === undefined) ? all : `\x1b[${code}m`;
+   });
+   const stripAnsiMarkup = text => text.replace(ANSI_TAG_RE, (all, tag) => (
+      ansiTagCodeOf(tag) === undefined ? all : ''
+   )).replace(ANSI_CSI_RE, '');
+   const formatLogArgs = (args, isTTY) => {
+      const paint = isTTY ? applyAnsiTags : stripAnsiMarkup;
+      return [...args].map(arg => typeof arg === 'string' ? paint(arg) : arg);
+   };
    isMongosh() && (console['log'] = (function() {
       const method = () => console;
       const fn = 'log';
       const _fn = '_' + fn;
       if (method()[fn].name !== 'modifiedLog') method()[_fn] = method()[fn];
       function modifiedLog() {
-         const isTTY = process.stdout.isTTY;
-         const markup = text => {
-            ansiTags.forEach(({ tag, code }) => {
-               text = text.replaceAll(new RegExp(`\\[${tag}\\]`, 'gi'), `\x1b[${code}m`);
-            });
-            return text;
-         };
-         const colourise = args => [...args].map(arg => typeof arg === 'string' ? markup(arg) : arg);
-         const noEsc = args => {
-            const ansi = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
-            return [...args].map(arg => typeof arg === 'string' ? arg.replaceAll(ansi, '') : arg);
-         };
-         return method()[_fn].apply(null, isTTY ? colourise(arguments) : noEsc(colourise(arguments)));
+         return method()[_fn].apply(null, formatLogArgs(arguments, process.stdout.isTTY));
       }
       return modifiedLog;
    })());

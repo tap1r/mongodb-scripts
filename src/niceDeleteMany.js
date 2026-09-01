@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.9"
+    *  Version: "0.4.10"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -52,7 +52,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.9" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.10" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -155,9 +155,11 @@
       return Math.min(HUD_POOL_DISPLAY_MAX_CAP, Math.max(HUD_POOL_DISPLAY_MIN, termColumns() - 40));
    }
 
+   const ANSI_CSI_RE = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
+
    function stripAnsi(text) {
-      // Same idea as mdblib.js console.log wrapper (non-TTY strips escapes).
-      return String(text).replace(/(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi, '');
+      // Same CSI pattern as mdblib.js. Raw \x1b only — do not strip [WARN]/[INFO] as colour tags.
+      return String(text).replace(ANSI_CSI_RE, '');
    }
 
    function emit(...args) {
