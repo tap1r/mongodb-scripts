@@ -38,10 +38,10 @@ Work per iteration is bounded by the **high-pass on free space**, not by listing
 New monolithic script (working name `autoTrim.js`), not a preflight inside `autoCompact.js`. Coupling:
 
 - **Plan** from a dbstats-style snapshot. Prefer consuming `dbstats.js` `output.format: json` once that path is a stable ranked list (`sort` by `freeStorageSize` / `idxFreeStorageSize` is already there; `compactOnly` verbosity is TBA).
-- **Execute** by driving `autoCompact.js` (`--eval` options + `--file`), same process or a wrapper. Do not `load()` either until the library story settles. Bounce `autoCompact` command errors.
+- **Execute** by driving `autoCompact.js` (`--eval` options + `--file`), same process or a wrapper. Do not `load()` either until the library story settles. Bounce `autoCompact` command errors. Script-only keys (`maxWaitMs`, output format) live on auto-trim, not in the `autoCompact` command document. Cap waits, `quit(1)` on hard errors, and emit a JSON summary (`ok`, recovered bytes, visits, `T_j`) so cron does not scrape colour banners.
 - **Oplog (opt-in only):** MongoDB 8.0+ [`compact`](https://www.mongodb.com/docs/manual/reference/command/compact/) accepts `freeSpaceTargetMB`, so auto-trim can issue a targeted `{ compact: "oplog.rs", freeSpaceTargetMB: T }` on `local` to cover the namespace autoCompact never walks. Pre-v8 has no `freeSpaceTargetMB` on `compact`; do not add an oplog path there. Compacting the oplog is **generally risky and discouraged** (capped collection, replication, lag, cache pressure). Default **off**; require an explicit flag. Prefer a secondary, `force` only if the operator really wants a primary. Same Atlas M0/Flex deny list as autoCompact — no fallback.
 
-Direct-to-mongod only (same constraint as autoCompact). Prefer secondaries first; the command is not replicated, so each member still needs its own trim.
+Direct-to-mongod only. Prefer secondaries first; the command is not replicated, so each member still needs its own trim — **`discovery.js`** owns targeting (replica-set URI without `directConnection` lands on the primary; warn / pin members). Do not add that walk to `autoCompact.js`.
 
 ### Admission control
 
@@ -94,7 +94,7 @@ Pin down in the implementation:
 
 ### `autoCompact.js`
 
-Executor auto-trim will call. Keep the file standalone. HEAD **0.4.27**; working **0.4.28**.
+Executor auto-trim will call. Keep the file standalone. Frozen at **0.4.28** for now. Direct-to-member targeting belongs in `discovery.js`; cron/JSON/wait caps belong in `autoTrim.js`.
 
 **Shipped**
 
@@ -115,11 +115,6 @@ Executor auto-trim will call. Keep the file standalone. HEAD **0.4.27**; working
   - Ramlog overflow (`ΔtotalLinesWritten ≥ 1024`) is a **heartbeat**, not quiet (lost WTCMPCT must not latch mid-file). A full 1024-line snapshot keeps getLog poll at 50ms but does not count as heartbeat (chatty idle nodes stay full).
   - getLog poll: min while visits increment or first pass is still in a file; backoff only after latch or during no-op.
 
-**Remaining**
-
-- **Direct-to-member.** Mongos is rejected; a replica-set URI without `directConnection=true` still lands on the **primary** and only compacts that node (command is not replicated). Warn when `hello().me` does not match the connected host, or when `isWritablePrimary` and the seed list looks like a set. Do not try to walk secondaries from this file (discovery later).
-- **Later, for cron / auto-trim:** peel script-only keys (`maxWaitMs`, output format) out of the command document before `adminCommand` so mongod never sees them. Cap the unbounded disable-wait. `quit(1)` on hard errors (`killAgedSessions.js` already notes mongosh `-f` may not surface the code). One JSON line (`ok`, `recoveredBytes`, `runOnce`, `visits`) after the round so auto-trim does not scrape banners.
-
 ### `dbstats.js`
 
 The snapshot auto-trim wants. Existing TBA that matters for that:
@@ -138,6 +133,7 @@ Per-namespace `compact` and update-based defrag. Not auto-trim. Auto-trim’s **
 ### `discovery.js`
 
 - Plugable command profiles (auto-trim / autoCompact as a per-member job).
+- **Direct-to-member for compact:** replica-set URI without `directConnection=true` lands on the primary; only that process is compacted (not replicated). Warn when `hello().me` ≠ connected host, or when `isWritablePrimary` and the seed list looks like a set. Pin each member (prefer secondaries first) and run auto-trim / autoCompact per host.
 - Standalone, load-balanced, arbiters.
 - Execution modes: serial; shards in parallel / serial per shard; limited pool; jitter; timeout cancel.
 - Target primary vs secondaries only (auto-trim wants the latter by default).
