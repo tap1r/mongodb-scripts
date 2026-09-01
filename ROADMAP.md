@@ -25,7 +25,7 @@ This is a **sequenced cut**, not a now-task. Feature work (auto-trim, emit/optio
 Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it should be explicit when drawn, for example:
 
 - Scripts that claim to run under `mongo` actually parse (similar SyntaxErrors).
-- Known wrong-result bugs that dual-shell users would inherit (invalid `$expr`, `--eval` shadowing, `fCV()` falling back to binary version on mongos) are either fixed or documented as wontfix in the archive notes.
+- Known wrong-result bugs that dual-shell users would inherit (invalid `$expr`, `--eval` shadowing) are either fixed or documented as wontfix in the archive notes. `fCV()` → `serverVer()` on Atlas M0/Flex is **by design** (`getParameter` FCV is restricted there; Atlas is not left on a lagging FCV).
 - Version strings and `__script.version` are consistent with the freeze (one patch ahead of the last dual-shell HEAD).
 
 **Per-script adequacy (drawn when ready, before the whole-tree freeze):**
@@ -36,7 +36,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | **`autoCompact.js`** | **v0.4.36** (mongosh-only) | Not dual-shell (`async` IIFE, `await delay`, mongosh `getLog` / `$listCatalog`). Demarked for the whole-tree freeze anyway. Further work (first-pass progress bar, auto-trim executor) is **mongosh-line**. Header documents this freeze. |
 | **`compact.js`** | **v0.2.15** (+ **`mdblib.js` ≥ 0.15.8**) | Parse bar: dropped uninitialized `const reportLog`. Dual-shell via mdblib (`console` polyfill, `isMongosh()` / `shellVer(2.0)` `runCommand` options). `load('fuzzer.js')` uses fuzzer’s own namespace constants; `load('dbstats.js')` prints the full interactive report (compact’s `options` has no `filter`) — consumption/module-mode, not freeze-blocking. Further work (dbstats JSON contract, discovery fan-out, Atlas M0 bounce) is **mongosh-line**. Header documents this freeze. |
 | **`explainHisto.js`** | **v0.1.4** (mongosh-only) | Not dual-shell (`require` / `jsonc-require` / `./pipeline.jsonc`). Parse bar: duplicate `const pipeline` → `userPipeline`. Demarked for the whole-tree freeze anyway. Further work (sharded/newer explain stages, `--eval` overlay, sampled-pipeline caveat) is **mongosh-line**. Header documents this freeze. |
-| **`fuzzer.js`** | **v0.6.43** (+ **`mdblib.js` ≥ 0.15.8**) | Dual-shell via mdblib. Dropped `Mongo.setReadPref('primary')` (mongosh reconnect hung the first DB call after local sampling on a replica set). `await main()` try/catch. Hardcoded `dbName`/`collName` (compact `load()` does not overlay). Reshard monitor is mongosh-strong / mongo-weak. Further work (`--eval` overlay, mongos `fCV`, `$genRandWord`) is **mongosh-line**. Header documents this freeze. |
+| **`fuzzer.js`** | **v0.6.43** (+ **`mdblib.js` ≥ 0.15.8**) | Dual-shell via mdblib. Dropped `Mongo.setReadPref('primary')` (mongosh reconnect hung the first DB call after local sampling on a replica set). `await main()` try/catch. Hardcoded `dbName`/`collName` (compact `load()` does not overlay). Reshard monitor is mongosh-strong / mongo-weak. Further work (`--eval` overlay, `$genRandWord`) is **mongosh-line**. Header documents this freeze. |
 | **`onlineDefrag.js`** | **v0.1.4** (mongosh-only) | Not dual-shell (`async` IIFE, `process`/`fs`, `console.table`). `--eval` `var dbName`/`collName`/`options` overlay (no in-file bindings). `storageStats()` finds `dbstats.js` via MDBLIB / `~/.mongodb` / cwd. Demarked for the whole-tree freeze anyway. Further work (dbstats JSON/`dbStats` return, mdblib, WT v7 checkpoint) is **mongosh-line**. Header documents this freeze. |
 | **`oplogchurn.js`** | **v0.5.22** (+ **`mdblib.js` ≥ 0.15.8**) | Dual-shell via mdblib. Per-command RP (`aggregate` `readPreference` on mongosh; `cursor.readPref` on legacy mongo). Do not restore `slaveOk(readPref)`. `--eval var intervalHrs` overlay kept. Dual `Timestamp` (MONGOSH-930). Further work (TTY-guard `console.clear`, Atlas M0 oplog/hostInfo) is **mongosh-line**. Header documents this freeze. |
 | **`latency.js`** | **v0.4.9** (mongosh-first) | Dual-shell lite: inline `console`/`EJSON` polyfill, no mdblib. `$function`+`sleep` synthetic slow op (Flex / `javascriptEnabled`). `getLog` + EJSON to recover `durationMillis`. Further work (`$sleep`, Flex bounce, mdblib) is **mongosh-line**. Header documents this freeze. |
@@ -65,7 +65,7 @@ Only after the archive exists, `src/` / `mdblib.js` drop legacy-`mongo` compatib
 - `slaveOk()` / `rs.slaveOk` / `rs.secondaryOk` → per-command `readPreference` (see [mongosh scripting guide](mongosh-scripting-guide.md)); no connection-wide `setReadPref` mid-cursor.
 - One `Timestamp({ t, i })`, one `getCollectionInfos(filter, { nameOnly, authorizedCollections })`, `runCommand(cmd, options)` as the second argument (never a field named `options` on the command document).
 - Drop the legacy `console` / `tojson` / `bsonsize` polyfills if mongosh already provides them.
-- `serverVer` / `fCV` / `shellVer`: integer `major.minor.patch` parse; `fCV` must not fall back to the mongos binary (see correctness notes). Easier once there is a single shell.
+- `serverVer` / `fCV` / `shellVer`: integer `major.minor.patch` parse. Shared-tier `fCV()` → `serverVer()` stays (M0/Flex). On mongos, `getParameter` FCV is not the failure mode; the `process == 'mongod'` gate currently skips a successful FCV document — after-cut, prefer that document over the mongos binary.
 - Usage / `--eval` examples assume mongosh sloppy `var` and Node (`process`, `fs`, `setTimeout`).
 
 This pass is **shim deletion and helper streamlining**, not the `mdblib.for(db)` redesign. Namespaced `load()` stays a separate General item and still must not block features.
@@ -393,7 +393,7 @@ Remaining mongosh-line work (do not block the archive):
 ### `mdblib.js`
 
 - Namespaced helpers / `for(db)` — **after** the library strategy change, not before.
-- **Legacy `mongo` shims** — delete only after [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) (archive + tag). Until then keep `isMongosh()` / `slaveOk` / dual `Timestamp` / `runCommand` shapes. After the cut, streamline version helpers (`serverVer` / `fCV` / `shellVer`) in place; do not couple that cleanup to `for(db)`.
+- **Legacy `mongo` shims** — delete only after [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) (archive + tag). Until then keep `isMongosh()` / `slaveOk` / dual `Timestamp` / `runCommand` shapes. After the cut, streamline version helpers (`serverVer` / `fCV` / `shellVer`) in place; do not couple that cleanup to `for(db)`. `fCV()` on M0/Flex → `serverVer()` is intentional (Atlas not on a lagging FCV).
 - **Shared emit helpers** (see [Script consumption](#script-consumption-unify-standalone-vs-modular)): finish the story beyond today’s `console.log` TTY overload — one path for markup→ANSI, non-TTY strip, progress suppress, and module-quiet. Bring `print` / raw-escape call sites onto it over time.
 - **System name policy (shipped):** `isSystemCollectionName` / `normalizeSystemFilter` / `acceptSystemCollectionName` / `systemCollectionFilter` — used by dbstats `filter.system`. Full catalog walkers (`getAllNonSystemNamespaces`, collections, views, `getAllSystemNamespaces`) still TBA; they should apply the same predicate after listCollections, not re-encode regexes.
 - `AutoFactor` NaN / scale clamp (the copy in `autoCompact.js` is stricter).
@@ -500,7 +500,7 @@ Remaining mongosh-line work (do not block the archive):
 - `--eval` overlay for namespace / `totalDocs` (`var` + `typeof … === 'undefined'`; do not declare `const dbName` if `--eval` is the path).
 - Reshard wait already holds the user Promise so mongosh does not exit early; legacy mongo still only logs that async reshard monitoring is unsupported.
 - `w: "majority"` with no `wtimeout` can stall `createCollection` / bulk on PSA or a lagging secondary.
-- Inherits mdblib `fCV()` mongos `serverVer()` fallback; `$genRandWord` / `$benford` stay later.
+- `$genRandWord` / `$benford` stay later. Shared-tier `fCV()` → `serverVer()` is by design (see mdblib).
 
 ### `oplogchurn.js`
 
