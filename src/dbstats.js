@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.16"
+ *  Version: "0.12.17"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -12,7 +12,8 @@
  *  options = {
  *     filter: {
  *        db: <null|<string>|/<regex>/>,
- *        collection: <null|<string>|/<regex>/>
+ *        collection: <null|<string>|/<regex>/>,
+ *        system: <true|false|'include'|'exclude'|'only'> // default true/'include'; system.*|replset.*
  *     },
  *     sort: {
  *        db: {
@@ -88,6 +89,8 @@
  *    mongosh --quiet --eval 'var options = { filter: { db: "^database$" } };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { filter: { collection: "^c.+" } };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { filter: { db: /(^(?!(d.+)).+)/i, collection: /collection/i } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { filter: { system: false } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { filter: { system: "only" } };' -f dbstats.js
  *
  *  Examples of using sorting:
  *
@@ -108,7 +111,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.16" };
+   const __script = { "name": "dbstats.js", "version": "0.12.17" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -167,7 +170,8 @@
    const optionsDefaults = {
       "filter": {
          "db": new RegExp(/.+/),
-         "collection": new RegExp(/.+/)
+         "collection": new RegExp(/.+/),
+         "system": true // true|'include' (default) | false|'exclude' | 'only' — see mdblib systemCollectionFilter
       },
       "sort": {
          "db": {
@@ -299,9 +303,9 @@
       /*
        *  Gather DB stats
        */
-      let { 'db': dbFilter, 'collection': collFilter } = filterOptions;
+      let { 'db': dbFilter, 'collection': collFilter, 'system': systemOpt = true } = filterOptions;
       collFilter = new RegExp(collFilter);
-      const systemFilter = /.+/;
+      const acceptCollName = systemCollectionFilter(systemOpt);
       let dbPath = new MetaStats();
       dbPath.init();
       delete dbPath.name;
@@ -348,15 +352,18 @@
                },
                { "nameOnly": true },
                true
-              ).filter(({ 'name': collName }) => collName.match(systemFilter))
+              )
             : db.getSiblingDB(database.name).getCollectionInfos({ // legacy shell(s) method
                   "type": /^(collection|timeseries)$/,
                   "name": collFilter
                },
                isMongosh() ? { "nameOnly": true } : true,
                true
-              ).filter(({ 'name': collName }) => collName.match(systemFilter));
-         database.collections = stableSort(database.collections, compareBy('name', 1));
+              );
+         database.collections = stableSort(
+            database.collections.filter(acceptCollName),
+            compareBy('name', 1)
+         );
          database.views = (shellVer(2.0) && isMongosh())
             ? db.getSiblingDB(database.name).getCollectionInfos({ // mongosh v2 optimised
                   "type": "view",
@@ -365,7 +372,6 @@
                { "nameOnly": true },
                true
               )
-              // ).filter(({ 'name': viewName }) => viewName.match(systemFilter))
             : db.getSiblingDB(database.name).getCollectionInfos({ // legacy shell(s) method
                   "type": "view",
                   "name": collFilter
@@ -373,8 +379,10 @@
                isMongosh() ? { "nameOnly": true } : true,
                true
               );
-              // ).filter(({ 'name': viewName }) => viewName.match(systemFilter));
-         database.views = stableSort(database.views, sortBy('view'));
+         database.views = stableSort(
+            database.views.filter(acceptCollName),
+            sortBy('view')
+         );
 
          return database;
       });

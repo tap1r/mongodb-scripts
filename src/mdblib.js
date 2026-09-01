@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.15.4"
+ *  Version: "0.15.5"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -10,7 +10,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.15.4"
+      "version": "0.15.5"
 });
 
 /*  Notes:
@@ -478,7 +478,42 @@ function getDBNames(dbFilter = /^.+/) {
    return dbs.databases.map(({ name }) => name).filter(namespace => !restrictedNamespaces.includes(namespace));
 };
 
-function getAllNonSystemNamespaces() { // TBA
+/*
+ *  System collection-name policy (shared by dbstats filter.system, catalog builders)
+ *  "System" here means collection/view names: system.* or replset.* (not admin/config/local DBs).
+ */
+
+function isSystemCollectionName(name = '') {
+   return /^(system\..+|replset\..+)$/.test(String(name));
+}
+
+function normalizeSystemFilter(system = true) {
+   /*
+    *  true | 'include' → include (default)
+    *  false | 'exclude' → omit system/replset names
+    *  'only' → system/replset names only
+    */
+   if (system === false || system === 'exclude') return 'exclude';
+   if (system === 'only') return 'only';
+   return 'include';
+}
+
+function acceptSystemCollectionName(name, system = true) {
+   const mode = normalizeSystemFilter(system);
+   const isSys = isSystemCollectionName(name);
+   if (mode === 'exclude') return !isSys;
+   if (mode === 'only') return isSys;
+   return true;
+}
+
+function systemCollectionFilter(system = true) {
+   /*
+    *  Predicate for getCollectionInfos results: ({ name }) => boolean
+    */
+   return ({ name }) => acceptSystemCollectionName(name, system);
+}
+
+function getAllNonSystemNamespaces() { // TBA — full catalog walk; use systemCollectionFilter() for name policy
    /*
     *  getAllNonSystemNamespaces
     */
@@ -503,29 +538,28 @@ function getAllNonSystemNamespaces() { // TBA
       isMongosh() ? { "nameOnly": true } : true,
       true
    ];
+   // Prefer client-side systemCollectionFilter('exclude') when listing with nameOnly + authorizedCollections.
    // return dbs = db.adminCommand(...listDbOpts).databases.map(dbName => dbName.name);
    return null;
 }
 
 function getAllNonSystemCollections() { // TBA
    /*
-    *  getAllNonSystemCollections
+    *  getAllNonSystemCollections — apply systemCollectionFilter(false) after listCollections
     */
-   // const systemFilter = /(?:^(?!(system\..+|replset\..+)$).+)/; // required for less privileged users
-   // const systemFilter = /(?:^(?!(system\..+|replset\..+)&&(system\.profile|system\.sessions|system\.views)$).+)/;
    return null;
 }
 
 function getAllNonSystemViews() { // TBA
    /*
-    *  getAllNonSystemViews()
+    *  getAllNonSystemViews — apply systemCollectionFilter(false) after listCollections
     */
    return null;
 }
 
 function getAllSystemNamespaces() { // TBA
    /*
-    *  getAllSystemNamespaces
+    *  getAllSystemNamespaces — apply systemCollectionFilter('only')
     */
    return null;
 }
