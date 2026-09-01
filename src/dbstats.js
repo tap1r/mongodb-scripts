@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.17"
+ *  Version: "0.12.18"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -111,7 +111,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.17" };
+   const __script = { "name": "dbstats.js", "version": "0.12.18" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -390,7 +390,9 @@
 
       const dbFetchTasks = dbPath.databases.map(async database => {
          const collFetchTasks = database.collections.map(async({ 'name': collName }) => {
-            let collection = new MetaStats($collStats(database.name, collName));
+            // Prefer catalog name if $collStats stub/defaults omit it (legacy Unauthorized without codeName).
+            let collection = new MetaStats($collStats(database.name, collName) || { "name": collName });
+            if (!collection.name) collection.name = collName;
             delete collection.databases;
             delete collection.collections;
             delete collection.views;
@@ -401,7 +403,7 @@
             delete collection.hostname;
             delete collection.proc;
             delete collection.dbPath;
-            collection.indexes = stableSort(collection.indexes, sortBy('index'));
+            collection.indexes = stableSort(collection.indexes || [], sortBy('index'));
 
             return collection;
          });
@@ -699,6 +701,7 @@
    }
 
    function truncateLabel(label, maxLen, cutWidth) {
+      label = (label == null) ? '' : String(label);
       return (label.length > maxLen) ? `${label.substring(0, cutWidth)}~` : label;
    }
 

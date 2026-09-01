@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.15.5"
+ *  Version: "0.15.6"
  *  Description: mongo/mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -10,7 +10,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.15.5"
+      "version": "0.15.6"
 });
 
 /*  Notes:
@@ -1848,28 +1848,46 @@ function $collStats(dbName = db.getName(), collName = '') {
    ];
    let results;
 
+   function unauthorizedStub() {
+      /*
+       *  Legacy mongo often has code 13 / errmsg only — no codeName.
+       *  Keep collName so printers are not blank when MetaStats gets defaults.
+       */
+      return {
+         "name": `${collName} (unauthorized)`,
+         "nodes": 0,
+         "shards": [],
+         "dataSize": 0,
+         "objects": 0,
+         "avgObjSize": 0,
+         "orphans": 0,
+         "storageSize": 0,
+         "freeStorageSize": null,
+         "compressor": "",
+         "internalPageSize": 0,
+         "dataPageSize": 0,
+         "nindexes": 0,
+         "indexes": [],
+         "totalIndexSize": 0,
+         "totalIndexBytesReusable": null
+      };
+   }
+
+   function isUnauthorizedError(e) {
+      if (!e) return false;
+      if (e.codeName == 'Unauthorized') return true;
+      if (+e.code === 13) return true; // Unauthorized (legacy shell / drivers)
+      const msg = e.errmsg || e.message || String(e);
+      return /not authorized|unauthorized/i.test(msg);
+   }
+
    try {
       results = namespace.aggregate(pipeline, options).toArray()[0];
    } catch(e) {
-      if (e.codeName == 'Unauthorized') {
-         results = {
-            "name": `${collName} (unauthorized)`,
-            "nodes": 0,
-            "shards": [],
-            "dataSize": 0,
-            "objects": 0,
-            "avgObjSize": 0,
-            "orphans": 0,
-            "storageSize": 0,
-            "freeStorageSize": null,
-            "compressor": "",
-            "internalPageSize": 0,
-            "dataPageSize": 0,
-            "nindexes": 0,
-            "indexes": [],
-            "totalIndexSize": 0,
-            "totalIndexBytesReusable": null
-         };
+      if (isUnauthorizedError(e)) {
+         results = unauthorizedStub();
+      } else {
+         throw e;
       }
    }
 
