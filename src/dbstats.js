@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.9"
+ *  Version: "0.12.10"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -107,7 +107,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.9" };
+   const __script = { "name": "dbstats.js", "version": "0.12.10" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -457,19 +457,8 @@
          database.collections = (shellVer(2.0) && isMongosh())
             ? database.collections.toSorted(sortBy('collection')) // mongosh v2 optimised
             : database.collections.sort(sortBy('collection'));    // legacy shell(s) method
-         database.views = db.getSiblingDB(database.name).getCollectionInfos({
-               "type": "view",
-               "name": collFilter
-            },
-            isMongosh() ? { "nameOnly": true } : true,
-            true
-         ); // .sort(sortBy('view')); // add toSorted optimisation here
-         database.views = (shellVer(2.0) && isMongosh())
-            ? database.views.toSorted(sortBy('view')) // mongosh v2 optimised
-            : database.views.sort(sortBy('view'));    // legacy shell(s) method
-         dbPath.databases = (shellVer(2.0) && isMongosh())
-            ? dbPath.databases.toSorted(sortBy('db')) // mongosh v2 optimised
-            : dbPath.databases.sort(sortBy('db'));    // legacy shell(s) method
+         // database.views already listed + sorted in collNamesTasks (nameOnly);
+         // collections above may be tagged "(unauthorized)" by $collStats on auth failure
 
          return database;
       });
