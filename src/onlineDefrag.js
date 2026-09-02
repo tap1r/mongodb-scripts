@@ -206,12 +206,12 @@
       }
       //
       try {
-         session.withTransaction(bulkUpdate, txnOpts);
+         await session.withTransaction(bulkUpdate, txnOpts);
       } catch(error) {
          // console.log(`txn error:`, error);
          console.log(`\ttxn conflict detected, aborting op`);
       } finally {
-         session.endSession();
+         await session.endSession();
       }
    }
 
