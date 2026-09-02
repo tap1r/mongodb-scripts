@@ -139,26 +139,34 @@ inflight = Promise.resolve().then(() => db.adminCommand({ serverStatus: 1, /* �
 
 ### Thenable cursors: do not `await` a live cursor
 
-mongosh [`FindCursor`](https://www.mongodb.com/docs/manual/reference/method/js-cursor/) / aggregation cursors are **thenable** so the REPL can treat `await db.coll.find()` as “give me the documents.” `Cursor.prototype.then` consumes the cursor (typically via [`toArray()`](https://www.mongodb.com/docs/manual/reference/method/cursor.toArray/)). That is **not** “wait until the cursor object exists.”
+mongosh [`FindCursor`](https://www.mongodb.com/docs/manual/reference/method/js-cursor/) **and** aggregation cursors are **thenable** so the REPL can treat `await db.coll.find()` / `await db.coll.aggregate(…)` as “give me the documents.” `Cursor.prototype.then` consumes the cursor (typically via [`toArray()`](https://www.mongodb.com/docs/manual/reference/method/cursor.toArray/)). That is **not** “wait until the cursor object exists.”
+
+This is the same trap for **`find` and `aggregate`**. Both collection methods are rewriter-awaited; both return a thenable cursor.
 
 ```javascript
 // WRONG — Cursor has .then, so this drains the whole result (breaks streaming)
 let cursor = collection.find(filter, { _id: 1 });
 if (typeof cursor.then === 'function') cursor = await cursor;
+// equally wrong:
+cursor = await collection.aggregate(pipeline, opts);
 
 // RIGHT — unwrap only a bare Promise (no cursor methods). Leave a live cursor alone.
 let cursor = collection.find(filter, { _id: 1 }, findOpts);
-if (cursor && typeof cursor.then === 'function' && typeof cursor.sort !== 'function') {
+// or: collection.aggregate(pipeline, opts)
+if (cursor && typeof cursor.then === 'function' && typeof cursor.close !== 'function') {
   cursor = await cursor;
 }
 for await (const doc of cursor) { /* stream */ }
+// aggregate: yield* cursor;  — do not await first
 ```
 
-Discriminate with a **cursor method** such as `.sort`, not with `.then`. A `Promise` has `.then` and no `.sort`; a mongosh cursor has both.
+Discriminate with a method **both** cursor types have, such as `.close` or `Symbol.asyncIterator`, not `.then`. Do **not** use `.sort`: that exists on `find` cursors only; an aggregation cursor has `.then` and **no** `.sort`, so a `.sort` check would treat a live agg cursor as a Promise and drain it.
+
+A `Promise` has `.then` and no `.close`; a mongosh find or aggregation cursor has both.
 
 In `--file` scripts the [async rewriter](https://www.npmjs.com/package/@mongosh/async-rewriter2) already inserts implicit `await` around marked **shell-API** methods (`find`, `aggregate`, …). You usually receive a **cursor object**, not `Promise<Cursor>`. Stream it with `for await` or `yield*`. Do not `await` it first.
 
-Hit in `niceDeleteMany.js` on the hinted `_id` `find()` fallback: `typeof cursor.then === 'function'` was true for a live cursor, and `await cursor` would materialise every matching `_id` instead of yielding 100-id buckets.
+Hit in `niceDeleteMany.js` on the hinted `_id` `find()` fallback: `typeof cursor.then === 'function'` was true for a live cursor, and `await cursor` would materialise every matching `_id` instead of yielding 100-id buckets. The window `aggregate()` path already `yield*`s the cursor without awaiting it.
 
 ### Blocking `sleep()` vs `await` delays
 
