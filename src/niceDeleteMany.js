@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.11"
+    *  Version: "0.4.12"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,6 +24,7 @@
     *  - Prefers index-ordered curation (avoids blocking sorts); optional user hint supported
     *  - "pace" admission mode when WT cache vitals are unavailable (mongos/Atlas M0/Flex)
     *  - Progress HUD shows congestion, admission, and pool utilization only — ETA is not cheap
+    *  - HUD is pinned below the log; emit lines persist and are never clobbered by redraws
     *
     *  TODOs:
     *  - better sharding (per-shard WT vitals via listShards / discovery)
@@ -61,7 +62,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.11" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.12" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -136,7 +137,7 @@
    let paceAiGraceUntil = 0;      // post-AI grace — suppress MD while probe settles
    let paceRateBeforeAi = null;   // EWMA snapshot at last +1 (benefit check)
    let paceClimbExhausted = false; // probe didn't help — stop AI until MD
-   // Live HUD; no % complete / ETA. Interactive: clear+bars; non-interactive: plain log lines.
+   // Live HUD; no % complete / ETA. Interactive: pinned bars; non-interactive: plain log lines.
    const HUD_BAR_WIDTH_MIN = 12;
    const HUD_BAR_WIDTH_MAX = 48;
    const HUD_POOL_DISPLAY_MIN = 16;
@@ -171,18 +172,85 @@
       return String(text).replace(ANSI_CSI_RE, '');
    }
 
-   function emit(...args) {
-      if (interactive) {
-         console.log(...args);
+   // Pinned HUD: in-place overwrite of its own rows. emit() persists into banner and
+   // lifts the HUD so log lines (curation WARN, batch errors, …) are never clobbered.
+   let hudActive = false;
+   let hudPaintedRows = 0;
+   let redrawHudFn = null;
+
+   function formatEmitArgs(args) {
+      if (interactive) return [...args];
+      return [...args].map(a => (typeof a === 'string' ? stripAnsi(a) : a));
+   }
+
+   function emitLineText(args) {
+      return formatEmitArgs(args).map(a => (typeof a === 'string' ? a : String(a))).join(' ');
+   }
+
+   function writeConsole(...args) {
+      console.log(...formatEmitArgs(args));
+   }
+
+   function persistBannerLine(text) {
+      // Resize / non-TTY fallback full-repaints from banner; keep every emit line.
+      if (!interactive) return;
+      const line = String(text ?? '');
+      if (!line) return;
+      if (banner.length && !banner.endsWith('\n')) banner += '\n';
+      banner += line;
+      if (!banner.endsWith('\n')) banner += '\n';
+   }
+
+   function canPinHud() {
+      return !!(interactive && typeof process !== 'undefined' && process.stdout && process.stdout.isTTY);
+   }
+
+   function visualRows(text) {
+      const cols = Math.max(1, termColumns());
+      let rows = 0;
+      for (const line of String(text).split('\n')) {
+         const w = stripAnsi(line).length;
+         rows += Math.max(1, Math.ceil(w / cols));
+      }
+      return rows;
+   }
+
+   function eraseHudRegion() {
+      if (!canPinHud() || hudPaintedRows <= 0) {
+         hudPaintedRows = 0;
          return;
       }
-      console.log(...args.map(a => (typeof a === 'string' ? stripAnsi(a) : a)));
+      process.stdout.write(`\x1b[${hudPaintedRows}A\r\x1b[J`);
+      hudPaintedRows = 0;
+   }
+
+   function paintHudRegion(hudText) {
+      const body = String(hudText).replace(/\n+$/, '');
+      process.stdout.write(body + '\n');
+      hudPaintedRows = visualRows(body);
+   }
+
+   function emit(...args) {
+      persistBannerLine(emitLineText(args));
+      if (interactive && hudActive) {
+         if (canPinHud()) {
+            eraseHudRegion();
+            writeConsole(...args);
+            if (typeof redrawHudFn === 'function') redrawHudFn({ "force": true });
+         } else if (typeof redrawHudFn === 'function') {
+            redrawHudFn({ "force": true, "full": true });
+         } else {
+            writeConsole(...args);
+         }
+         return;
+      }
+      writeConsole(...args);
    }
 
    function installHudResizeWatch(onResize) {
       /*
        *  Node/mongosh expose process.stdout.columns and a 'resize' event.
-       *  On resize: recompute bar widths and force a full clear+repaint.
+       *  On resize: recompute bar widths and full-repaint from banner (persisted emit lines).
        */
       if (!interactive || typeof process === 'undefined' || !process.stdout || typeof process.stdout.on !== 'function') {
          return () => {};
@@ -334,9 +402,7 @@
    function enablePaceAdmission(reason, detail) {
       admissionMode = 'pace';
       paceReason = reason;
-      const line = `\n\x1b[31m[WARN]\x1b[0m \x1b[33m${detail}\x1b[0m`;
-      banner += `\n${line}`;
-      emit(line);
+      emit(`\n\x1b[31m[WARN]\x1b[0m \x1b[33m${detail}\x1b[0m`);
    }
 
    function hasWiredTigerVitals(sample = vitals) {
@@ -566,7 +632,6 @@
       const cmdRP = commandReadPreference(readPreference);
       const { host, role, tags } = curationLandingNode(readPreference);
       const landingLine = `\x1b[34m[INFO]\x1b[0m Curation query target: \x1b[33m${host} (${role})\x1b[0m tags: \x1b[33m${JSON.stringify(tags)}\x1b[0m`;
-      banner += `\n${landingLine}\n`;
       emit(landingLine);
       if (
          role === 'PRIMARY' &&
@@ -2001,7 +2066,7 @@
          "buffered": 0
       };
 
-      function redrawHud({ force = false, final = false } = {}) {
+      function redrawHud({ force = false, final = false, full = false } = {}) {
          const now = Date.now();
          const minMs = interactive ? HUD_MIN_REDRAW_MS : HUD_LOG_REDRAW_MS;
          // TTY: force refreshes immediately. Log mode: throttle always except first/final.
@@ -2023,29 +2088,40 @@
             ...hudSnap
          });
          if (interactive) {
-            console.clear();
-            console.log(banner);
-            console.log(hud);
+            const pin = canPinHud() && !full;
+            if (pin) {
+               eraseHudRegion();
+               paintHudRegion(hud);
+            } else {
+               console.clear();
+               writeConsole(banner);
+               if (canPinHud()) paintHudRegion(hud);
+               else writeConsole(hud);
+            }
          } else {
-            // Append-only plain status (ANSI stripped via emit); no bars / no clear.
-            emit(hud);
+            // Append-only plain status (ANSI stripped via writeConsole); no bars / no clear.
+            writeConsole(hud);
          }
       }
+      redrawHudFn = redrawHud;
 
-      // TTY resize → recompute bar widths and force clear+repaint.
-      const uninstallResize = installHudResizeWatch(() => redrawHud({ "force": true }));
+      // TTY resize → recompute bar widths and full-repaint from banner (only while HUD is live).
+      const uninstallResize = installHudResizeWatch(() => {
+         if (!hudActive) return;
+         redrawHud({ "force": true, "full": true });
+      });
       try {
          if (interactive) console.clear();
-         emit(banner);
+         writeConsole(banner);
          const deletionList = getIds(filter, bucketSizeLimit, readSessionOpts);
          const { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
          if (initialEmptyBatch === true) {
             emit('\tNo matching documents found to match the filter, double-check the namespace and filter');
          } else {
-            banner += interactive
-               ? `\n\x1b[34m[INFO]\x1b[0m HUD: congestion / admission / pool — no % complete or ETA\n`
-               : `\n[INFO] status: elapsed / congestion / admission / pool (plain, no bars) — no % complete or ETA\n`;
-            if (!interactive) emit(banner);
+            emit(interactive
+               ? `\x1b[34m[INFO]\x1b[0m HUD: congestion / admission / pool — no % complete or ETA`
+               : `[INFO] status: elapsed / congestion / admission / pool (plain, no bars) — no % complete or ETA`);
+            hudActive = true;
             redrawHud({ "force": true });
             for await (const [, deletedCount, batchOk] of asyncPool(
                prepend(initialBatch, deletionList),
@@ -2068,7 +2144,9 @@
                if (interactive) redrawHud({ "force": true });
             }
             redrawHud({ "final": true });
+            hudActive = false;
          }
+         uninstallResize();
          emit(`\nValidating deletion results ...please wait\n`);
          emit('...you may CTRL+C here to exit gracefully if validation is not required\n');
          // countIds uses a primary-oriented session; no connection setReadPref.
@@ -2083,6 +2161,8 @@
          });
          emit('\nDone!');
       } finally {
+         hudActive = false;
+         redrawHudFn = null;
          uninstallResize();
          vitalsSampling = false;
          await sampler;
