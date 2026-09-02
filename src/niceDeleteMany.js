@@ -757,7 +757,7 @@
             "ids": 1
          } }
       ];
-      // offload iterator to the server's cursor (same RP as Policy A explain)
+      // offload iterator to the shell's cursor (same RP as Policy A explain)
       const cursor = namespace.aggregate(pipeline, aggOpts);
       try {
          yield* cursor;
