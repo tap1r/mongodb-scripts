@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.9"
+ *  Version: "0.1.10"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,6 +16,7 @@
  *    in this file — IIFE const would shadow the overlay.
  *  - storage snapshots use mdblib $collStats (MDBLIB, ~/.mongodb, or cwd).
  *  - defragOptions.sampler: 'random' | 'adjacent' | 'bucketed' (default).
+ *  - bucketed sampler streams _id-range batches (no $sort / $bucketAuto).
  */
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>onlineDefrag.js
@@ -34,7 +35,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.9" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.10" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -142,17 +143,29 @@
          { "$sample": { "size": nBuckets * pageSize } },
          { "$project": { "_id": 1 } }
       ];
-      yield* batchesFromCursor(namespace.aggregate(pipeline, aggOpts("$sample technique")), pageSize);
+      // $sample is blocking; after it completes, batch the cursor (do not toArray / await it).
+      yield* batchesFromCursor(
+         namespace.aggregate(pipeline, aggOpts("$sample technique", { "cursor": { "batchSize": pageSize } })),
+         pageSize
+      );
    }
 
    async function* adjacentSample(sampleSize = 1, concurrentUpdates = 1, sampleRate = 1) {
       const { nBuckets, pageSize } = sampleDims(sampleSize, concurrentUpdates);
-      const seedDocs = namespace.aggregate([
+      const seedCursor = namespace.aggregate([
          { "$sample": { "size": 1 } },
          { "$project": { "_id": 1 } }
-      ], aggOpts("fetching seed _id via $sample")).toArray();
-      if (!seedDocs.length) return;
-      const { '_id': seed } = seedDocs[0];
+      ], aggOpts("fetching seed _id via $sample", { "cursor": { "batchSize": 1 } }));
+      let seed;
+      try {
+         for await (const doc of seedCursor) {
+            seed = doc._id;
+            break;
+         }
+      } finally {
+         try { seedCursor.close(); } catch(_) { /* exhausted or already closed */ }
+      }
+      if (seed === undefined) return;
       const seeding = [
          { "$gte": seed },
          { "$lte": seed }
@@ -164,28 +177,43 @@
          { "$project": { "_id": 1 } }
       ];
       yield* batchesFromCursor(
-         namespace.aggregate(pipeline, aggOpts("get neighbouring documents by _id/recordId", { "hint": { "$natural": -1 } })),
+         namespace.aggregate(pipeline, aggOpts("get neighbouring documents by _id/recordId", {
+            "hint": { "$natural": -1 },
+            "cursor": { "batchSize": pageSize }
+         })),
          pageSize
       );
    }
 
    async function* bucketedIds(sampleSize = 1, concurrentUpdates = 1, sampleRate = 1) {
-      // Disjoint _id ranges (not a clone of adjacentSample). $sample bounds
-      // the set so $bucketAuto $push cannot hit 16MB; sampleRate is accepted
-      // for getIds() but $sample already caps cardinality.
-      const { nBuckets, pageSize, sampleN } = sampleDims(sampleSize, concurrentUpdates);
-      const pipeline = [
-         { "$sample": { "size": sampleN } },
-         { "$project": { "_id": 1 } },
-         { "$bucketAuto": {
-            "groupBy": "$_id",
-            "buckets": nBuckets,
-            "output": { "ids": { "$push": "$_id" } }
-         } }
-      ];
-      for (const { ids = [] } of namespace.aggregate(pipeline, aggOpts("bucketed _id samples for concurrent rewrites")).toArray()) {
-         yield ids.slice(0, pageSize).map(_id => ({ "_id": _id }));
+      // Stream page-sized batches from an _id range. No $sort / $bucketAuto /
+      // $setWindowFields — those block (or semi-block) before the first yield.
+      const { nBuckets, pageSize } = sampleDims(sampleSize, concurrentUpdates);
+      const seedCursor = namespace.aggregate([
+         { "$sample": { "size": 1 } },
+         { "$project": { "_id": 1 } }
+      ], aggOpts("bucketedIds seed _id", { "cursor": { "batchSize": 1 } }));
+      let seed;
+      try {
+         for await (const doc of seedCursor) {
+            seed = doc._id;
+            break;
+         }
+      } finally {
+         try { seedCursor.close(); } catch(_) { /* exhausted or already closed */ }
       }
+      if (seed === undefined) return;
+      const bound = Math.random() < 0.5 ? { "$gte": seed } : { "$lte": seed };
+      const pipeline = [
+         { "$match": { "_id": bound } },
+         ...(sampleRate < 1 ? [{ "$match": { "$sampleRate": sampleRate } }] : []),
+         { "$limit": nBuckets * pageSize },
+         { "$project": { "_id": 1 } }
+      ];
+      yield* batchesFromCursor(
+         namespace.aggregate(pipeline, aggOpts("bucketed _id batches", { "cursor": { "batchSize": pageSize } })),
+         pageSize
+      );
    }
 
    async function* getIds(sampleSize, concurrentUpdates, sampleRate) {
