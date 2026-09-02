@@ -24,6 +24,10 @@ db.runCommand(
 // aggregation / explain
 collection.aggregate(pipeline, { readPreference: { mode: 'secondaryPreferred', tags: [...] } });
 collection.explain('queryPlanner').aggregate(pipeline, { readPreference: { mode: 'secondaryPreferred' } });
+
+// find — same per-command RP in the options document (mongosh find(query, projection, options)).
+// Also apply cursor.readPref(mode, tags) so a later .sort()/.hint() cannot drop it.
+collection.find(filter, { _id: 1 }, { readPreference: { mode: 'secondaryPreferred', tags: [...] } });
 ```
 
 Background: [Read preference](https://www.mongodb.com/docs/manual/core/read-preference/), [`db.runCommand()`](https://www.mongodb.com/docs/manual/reference/method/db.runcommand/), [`Mongo.setReadPref()`](https://www.mongodb.com/docs/manual/reference/method/mongo.setreadpref/), [`cursor.readPref()`](https://www.mongodb.com/docs/manual/reference/method/cursor.readpref/).
@@ -72,6 +76,7 @@ Practical lessons:
 
 - Running `explain` on a **DriverSession** and then expecting a long aggregation on the same session to survive can fail with session-expiry errors (`MongoExpiredSessionError` in the driver/mongosh stack). For long batching pipelines, prefer connection-scoped collection helpers for explain + aggregate, or manage explicit session refresh if you must use a session ([`refreshSessions`](https://www.mongodb.com/docs/manual/reference/command/refreshSessions/)).
 - If you open a cursor yourself, close it in `finally` (`cursor.close()`), ignoring “already closed” where appropriate.
+- Do **not** `await` a mongosh cursor to “unwrap” it — see [Thenable cursors](#thenable-cursors-do-not-await-a-live-cursor).
 
 ---
 
@@ -131,6 +136,29 @@ Many shell helpers such as `db.adminCommand()` are **synchronous** in mongosh. W
 ```javascript
 inflight = Promise.resolve().then(() => db.adminCommand({ serverStatus: 1, /* … */ }));
 ```
+
+### Thenable cursors: do not `await` a live cursor
+
+mongosh [`FindCursor`](https://www.mongodb.com/docs/manual/reference/method/js-cursor/) / aggregation cursors are **thenable** so the REPL can treat `await db.coll.find()` as “give me the documents.” `Cursor.prototype.then` consumes the cursor (typically via [`toArray()`](https://www.mongodb.com/docs/manual/reference/method/cursor.toArray/)). That is **not** “wait until the cursor object exists.”
+
+```javascript
+// WRONG — Cursor has .then, so this drains the whole result (breaks streaming)
+let cursor = collection.find(filter, { _id: 1 });
+if (typeof cursor.then === 'function') cursor = await cursor;
+
+// RIGHT — unwrap only a bare Promise (no cursor methods). Leave a live cursor alone.
+let cursor = collection.find(filter, { _id: 1 }, findOpts);
+if (cursor && typeof cursor.then === 'function' && typeof cursor.sort !== 'function') {
+  cursor = await cursor;
+}
+for await (const doc of cursor) { /* stream */ }
+```
+
+Discriminate with a **cursor method** such as `.sort`, not with `.then`. A `Promise` has `.then` and no `.sort`; a mongosh cursor has both.
+
+In `--file` scripts the [async rewriter](https://www.npmjs.com/package/@mongosh/async-rewriter2) already inserts implicit `await` around marked **shell-API** methods (`find`, `aggregate`, …). You usually receive a **cursor object**, not `Promise<Cursor>`. Stream it with `for await` or `yield*`. Do not `await` it first.
+
+Hit in `niceDeleteMany.js` on the hinted `_id` `find()` fallback: `typeof cursor.then === 'function'` was true for a live cursor, and `await cursor` would materialise every matching `_id` instead of yielding 100-id buckets.
 
 ### Blocking `sleep()` vs `await` delays
 
@@ -216,7 +244,8 @@ When a script needs **WiredTiger / replica-set vitals** on shards but must delet
 
 | Do | Don’t |
 |----|--------|
-| Pass `readPreference` on `runCommand` / `aggregate` / `explain` | Assume `setReadPref` alone fixes `runCommand` (mongosh 2.0+) |
+| Pass `readPreference` on `runCommand` / `aggregate` / `explain` / `find` | Assume `setReadPref` alone fixes `runCommand` (mongosh 2.0+) |
+| Stream `find`/`aggregate` with `for await` / `yield*` | `await cursor` because it is thenable (drains via `toArray`) |
 | Keep connection RP stable while cursors run | Flip `setReadPref` under concurrent load |
 | Use `runCommand` + RP to verify secondary targeting | Use `adminCommand` for secondary landing |
 | Wrap sync `adminCommand` when you need a Promise | Assume `await adminCommand` is inherently async |
@@ -235,6 +264,7 @@ When a script needs **WiredTiger / replica-set vitals** on shards but must delet
 - [mongosh write scripts](https://www.mongodb.com/docs/mongodb-shell/write-scripts/)
 - [Script considerations (constructors, generators, …)](https://www.mongodb.com/docs/mongodb-shell/write-scripts/considerations/)
 - [`@mongosh/async-rewriter2`](https://www.npmjs.com/package/@mongosh/async-rewriter2) (how `--file` / `--eval` are wrapped)
+- [Cursor methods](https://www.mongodb.com/docs/manual/reference/method/js-cursor/) / [`cursor.toArray()`](https://www.mongodb.com/docs/manual/reference/method/cursor.toArray/)
 - [`sleep()`](https://www.mongodb.com/docs/mongodb-shell/reference/native-methods/)
 - [`db.runCommand()`](https://www.mongodb.com/docs/manual/reference/method/db.runcommand/)
 - [`Mongo.setReadPref()`](https://www.mongodb.com/docs/manual/reference/method/mongo.setreadpref/)
