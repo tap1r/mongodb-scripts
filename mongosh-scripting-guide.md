@@ -168,6 +168,16 @@ In `--file` scripts the [async rewriter](https://www.npmjs.com/package/@mongosh/
 
 Hit in `niceDeleteMany.js` on the hinted `_id` `find()` fallback: `typeof cursor.then === 'function'` was true for a live cursor, and `await cursor` would materialise every matching `_id` instead of yielding 100-id buckets. The window `aggregate()` path already `yield*`s the cursor without awaiting it.
 
+The object you hold is the **mongosh cursor**, not the server cursor. It wraps a Node driver cursor (`_cursor`). `for await` / `yield*` on the shell object uses `Symbol.asyncIterator`, which (unless `.map()` is set) **delegates to the driver iterator**. `close()` is `await this._cursor.close()` (killCursors on the server when the id is still live).
+
+That wrapper **buffers and reports its own state**:
+
+- **Driver buffer** — `objsLeftInBatch()` is `bufferedCount()` from the last getMore, not “how many the server still has.”
+- **REPL print batch** — inspecting a cursor in the shell runs `_it()` with `_displayBatchSize()` (often ~20). That path is **not** used by `for await` / `yield*` / `next()`.
+- **`isClosed()`** — the driver `closed` flag, not a separate shell flag. The driver async iterator also `close()`s in its `finally` when the loop ends or breaks; a generator `finally { cursor.close() }` is then a second close on an already-closed wrapper (ignore “already closed”).
+
+So generators should keep **one** shell cursor, iterate it, and `close()` it. They cannot read the real server cursor id or remaining count through mongosh. Wire `batchSize` on `find` / `aggregate` still controls getMore size on the driver/server side.
+
 ### Blocking `sleep()` vs `await` delays
 
 [`sleep(ms)`](https://www.mongodb.com/docs/mongodb-shell/reference/native-methods/) is a mongosh helper that **blocks** the JavaScript thread. That is fine for a simple poll loop (`congestionMonitor.js`). It is not fine if other promises must run during the wait (background `$listCatalog` cursor in `autoCompact.js`). Use `await new Promise(resolve => setTimeout(resolve, ms))` (or equivalent) so the event loop can continue.
