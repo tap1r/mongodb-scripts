@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.5"
+ *  Version: "0.1.6"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -30,7 +30,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.5" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.6" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -86,35 +86,54 @@
       };
    }
 
-   async function* rndSample(sampleSize = 1, concurrentUpdates = 1) {
-      //
-      const options = {
-            "allowDiskUse": true,
-            "readConcern": { "level": "local" },
-            "batchSize": Math.ceil(sampleSize / concurrentUpdates),
-            "comment": "$sample technique"
-         },
-         pipeline = [
-            { "$sample": { "size": sampleSize } },
-            { "$project": { "_id": 1 } }
-         ];
+   async function* batchesFromCursor(cursor, batchSize = 1) {
+      // Do not yield* the cursor: that emits one document per yield.
+      // Do not yield the cursor object: batchSize is only a getMore hint.
+      const size = Math.max(1, Math.ceil(+batchSize) || 1);
+      let batch = [];
+      try {
+         for await (const doc of cursor) {
+            batch.push(doc);
+            if (batch.length >= size) {
+               yield batch;
+               batch = [];
+            }
+         }
+         if (batch.length) yield batch;
+      } finally {
+         try { cursor.close(); } catch(_) { /* exhausted or already closed */ }
+      }
+   }
 
-      yield namespace.aggregate(pipeline, options);
+   async function* rndSample(sampleSize = 1, concurrentUpdates = 1) {
+      const nBuckets = Math.max(1, Math.ceil(+concurrentUpdates) || 1);
+      const pageSize = Math.max(1, Math.ceil(+sampleSize) || 1);
+      const options = {
+         "allowDiskUse": true,
+         "readConcern": { "level": "local" },
+         "comment": "$sample technique"
+      };
+      const pipeline = [
+         { "$sample": { "size": nBuckets * pageSize } },
+         { "$project": { "_id": 1 } }
+      ];
+      yield* batchesFromCursor(namespace.aggregate(pipeline, options), pageSize);
    }
 
    async function* adjacentSample(sampleSize = 1, concurrentUpdates = 1, sampleRate = 1) {
-      //
-      let options, pipeline;
-      options = {
+      const nBuckets = Math.max(1, Math.ceil(+concurrentUpdates) || 1);
+      const pageSize = Math.max(1, Math.ceil(+sampleSize) || 1);
+      let options = {
          "allowDiskUse": true,
          "readConcern": { "level": "local" },
          "comment": "fetching seed _id via $sample"
-      },
-      pipeline = [
+      };
+      const seedDocs = namespace.aggregate([
          { "$sample": { "size": 1 } },
          { "$project": { "_id": 1 } }
-      ];
-      const { '_id': seed } = namespace.aggregate(pipeline, options).toArray()[0];
+      ], options).toArray();
+      if (!seedDocs.length) return;
+      const { '_id': seed } = seedDocs[0];
       const seeding = [
          { "$gte": seed },
          { "$lte": seed }
@@ -123,64 +142,47 @@
          "allowDiskUse": true,
          "readConcern": { "level": "local" },
          "hint": { "$natural": -1 },
-         // "batchSize": Math.ceil(sampleSize / concurrentUpdates),
          "comment": "get neighbouring documents by _id/recordId"
-      },
-      pipeline = [
+      };
+      const pipeline = [
          { "$match": { "_id": seeding } },
          { "$match": { "$sampleRate": sampleRate } },
-         { "$limit": sampleSize },
-         { "$group": { "_id": "$_id" } }
+         { "$limit": nBuckets * pageSize },
+         { "$project": { "_id": 1 } }
       ];
-      yield namespace.aggregate(pipeline, options);
-      // yield db.getSiblingDB(dbName).runCommand(
-      //    {
-      //       "aggregate": collName,
-      //       "pipeline": pipeline,
-      //       ...options,
-      //       "cursor": { "batchSize": Math.ceil(sampleSize / concurrentUpdates) }
-      //    },
-      //    { "readPreference": { "mode": "secondaryPreferred" } }
-      // );
+      yield* batchesFromCursor(namespace.aggregate(pipeline, options), pageSize);
    }
 
-   async function* bucketedIds(sampleSize = 1, concurrentUpdates = 1) {
-      //
-      let options, pipeline;
-      options = {
+   async function* bucketedIds(sampleSize = 1, concurrentUpdates = 1, sampleRate = 1) {
+      // Disjoint _id ranges (not a clone of adjacentSample). $sample bounds
+      // the set so $bucketAuto $push cannot hit 16MB; sampleRate is accepted
+      // for getIds() but $sample already caps cardinality.
+      const nBuckets = Math.max(1, Math.ceil(+concurrentUpdates) || 1);
+      const pageSize = Math.max(1, Math.ceil(+sampleSize) || 1);
+      const sampleN = Math.max(nBuckets * pageSize, nBuckets);
+      const options = {
          "allowDiskUse": true,
          "readConcern": { "level": "local" },
-         "comment": "fetching seed _id via $sample"
-      },
-      pipeline = [
-         { "$sample": { "size": 1 } },
-         { "$project": { "_id": 1 } }
+         "comment": "bucketed _id samples for concurrent rewrites"
+      };
+      const pipeline = [
+         { "$sample": { "size": sampleN } },
+         { "$project": { "_id": 1 } },
+         { "$bucketAuto": {
+            "groupBy": "$_id",
+            "buckets": nBuckets,
+            "output": { "ids": { "$push": "$_id" } }
+         } }
       ];
-      const { '_id': seed } = namespace.aggregate(pipeline, options).toArray()[0];
-      const seeding = [
-         { "$gte": seed },
-         { "$lte": seed }
-      ][Math.floor(Math.random() * 2)];
-      options = {
-         "allowDiskUse": true,
-         "readConcern": { "level": "local" },
-         "hint": { "$natural": -1 },
-         "batchSize": Math.ceil(sampleSize / concurrentUpdates),
-         "comment": "get neighbouring documents by _id/recordId"
-      },
-      pipeline = [
-         { "$match": { "_id": seeding } },
-         { "$match": { "$sampleRate": sampleRate } },
-         { "$limit": sampleSize },
-         { "$group": { "_id": "$_id" } }
-      ];
-      yield namespace.aggregate(pipeline, options);
+      for (const { ids = [] } of namespace.aggregate(pipeline, options).toArray()) {
+         yield ids.slice(0, pageSize).map(_id => ({ "_id": _id }));
+      }
    }
 
    async function* getIds(sampleSize, concurrentUpdates, sampleRate) {
       // yield* rndSample(sampleSize, concurrentUpdates);
-      yield* adjacentSample(sampleSize, concurrentUpdates, sampleRate);
-      // yield* bucketedIds(sampleSize, concurrentUpdates);
+      // yield* adjacentSample(sampleSize, concurrentUpdates, sampleRate);
+      yield* bucketedIds(sampleSize, concurrentUpdates, sampleRate);
    }
 
    async function bulkOps(ops, bulkOpts) {
@@ -266,7 +268,8 @@
          let tasks = [];
          let update = 0;
          for await (const ids of getIds(sampleSize, concurrentUpdates, sampleRate)) {
-            const updateOneIds = ids.map(id => id._id).toArray();
+            const updateOneIds = ids.map(id => id._id);
+            if (!updateOneIds.length) continue;
             const updateManyFilter = { "_id": { "$in": updateOneIds } };
             ++update;
             console.log(`\tforking concurrent update ${update} with ${updateOneIds.length} IDs`);
