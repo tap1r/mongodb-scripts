@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.6"
+ *  Version: "0.1.7"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -30,7 +30,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.6" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.7" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -236,21 +236,45 @@
       // mongos / Atlas M0/Flex / non-WT: no wiredTiger section.
       const { wiredTiger } = serverStatus({ "wiredTiger": true });
       if (wiredTiger == null) {
-         return { "available": false, "running": false, "minTimeMS": null };
+         return { "available": false, "running": false, "minTimeMS": null, "recentTimeMS": null };
       }
       const v8 = wiredTiger.checkpoint;
       const v7 = wiredTiger.transaction;
       return {
          "available": true,
          "running": (v8?.['progress state'] > 0) || (v7?.['transaction checkpoint currently running'] === 1),
-         "minTimeMS": v8?.['min time (msecs)'] ?? v7?.['transaction checkpoint min time (msecs)'] ?? null
+         "minTimeMS": v8?.['min time (msecs)'] ?? v7?.['transaction checkpoint min time (msecs)'] ?? null,
+         "recentTimeMS": v8?.['most recent time (msecs)'] ?? v7?.['transaction checkpoint most recent time (msecs)'] ?? null
       };
+   }
+
+   function waitForCheckpoint() {
+      let { available, running, minTimeMS, recentTimeMS } = wtCheckpoint();
+      if (!available) {
+         console.log('checkpoint metrics unavailable (no wiredTiger in serverStatus), skipping wait');
+         return;
+      }
+      const pollMs = Math.max(1, Math.ceil(0.9 * (minTimeMS || 1000)));
+      const timeoutMs = Math.max(120000, 2 * (recentTimeMS || minTimeMS || 0));
+      const deadline = Date.now() + timeoutMs;
+      if (running) {
+         console.log(`checkpoint running, waiting to complete (timeout ${timeoutMs}ms)...`);
+      } else {
+         console.log(`waiting for checkpoint to start and complete (timeout ${timeoutMs}ms)...`);
+      }
+      let completed = false;
+      do {
+         const wasRunning = running;
+         sleep(Math.min(pollMs, Math.max(1, deadline - Date.now())));
+         ({ running } = wtCheckpoint());
+         if (wasRunning && !running) completed = true;
+      } while ((running || !completed) && Date.now() < deadline);
+      console.log(completed ? 'checkpoint completed' : 'checkpoint wait timed out, continuing');
    }
 
    async function main() {
       const bulkOpts = {
-         "writeConcern": { "w": "majority" },
-         "ordered": false
+         "ordered": false // writeConcern belongs on the txn, not bulkWrite
       };
       const updatePipeline = [{ "$unset": "_id" }]; // leverages SERVER-36405
       const updateManyOpts = {
@@ -280,29 +304,7 @@
          }
          await Promise.allSettled(tasks);
          console.log(EJSON.stringify({ "state": "volatile storage", ...storageStats() }));
-         let { available, running: checkpointState, minTimeMS } = wtCheckpoint();
-         if (!available) {
-            console.log('checkpoint metrics unavailable (no wiredTiger in serverStatus), skipping wait');
-         } else {
-            let checkpointCompleted = false;
-            const checkpointSleep = Math.ceil(0.9 * (minTimeMS || 1000));
-            if (checkpointState) {
-               console.log('checkpoint running, waiting to complete...');
-            } else {
-               console.log('waiting for checkpoint to start and complete...');
-            }
-            do {
-               const checkpointInitState = checkpointState;
-               // console.log(`sleeping for ${checkpointSleep}ms`);
-               sleep(checkpointSleep);
-               ({ running: checkpointState } = wtCheckpoint());
-               // console.log('checkpointActive:', checkpointState);
-               if (checkpointInitState != checkpointState && !checkpointState) {
-                  checkpointCompleted = true;
-               }
-            } while (checkpointState || !checkpointCompleted);
-            console.log('checkpoint completed');
-         }
+         waitForCheckpoint();
          console.log(EJSON.stringify({ "state": "settled storage", ...storageStats() }));
       }
    }
