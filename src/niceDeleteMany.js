@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.13"
+    *  Version: "0.4.14"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -63,7 +63,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.13" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.14" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -787,7 +787,10 @@
       };
       if (hasUserCollation(collation)) findOpts.collation = collation;
       let cursor = namespace.find(filter, { "_id": 1 }, findOpts);
-      if (cursor && typeof cursor.then === 'function') cursor = await cursor;
+      // mongosh Cursor is thenable (await → toArray). Only unwrap a bare Promise.
+      if (cursor && typeof cursor.then === 'function' && typeof cursor.sort !== 'function') {
+         cursor = await cursor;
+      }
       if (typeof cursor.sort === 'function') cursor = cursor.sort({ "_id": 1 }) ?? cursor;
       if (typeof cursor.hint === 'function') cursor = cursor.hint({ "_id": 1 }) ?? cursor;
       cursor = applyCursorReadPref(cursor, cmdRP);
