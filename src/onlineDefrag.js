@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.11"
+ *  Version: "0.1.12"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,6 +17,7 @@
  *  - storage snapshots use mdblib $collStats (MDBLIB, ~/.mongodb, or cwd).
  *  - defragOptions.sampler: 'random' | 'adjacent' | 'bucketed' (default).
  *  - bucketed sampler streams _id-range batches (no $sort / $bucketAuto).
+ *  - each wave dirties at most dirtyBudgetRatio of current reusable bytes, then checkpoints.
  */
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>onlineDefrag.js
@@ -35,7 +36,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.11" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.12" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -63,6 +64,8 @@
       "pageFillRatio": pageFillRatio = 0.9,
       "concurrentUpdatesRatio": concurrentUpdatesRatio = 0.005,
       "totalUpdatesRatio": totalUpdatesRatio = 2,
+      "dirtyBudgetRatio": dirtyBudgetRatio = 0.5, // max fraction of reusable bytes dirtied per wave
+      "maxConcurrent": maxConcurrent,
       "checkpointTimeoutMs": checkpointTimeoutMs
    } = userOptions;
 
@@ -114,8 +117,20 @@
          "concurrentUpdates": concurrentUpdates,
          "iterations": iterations,
          "pageFillActual": pageFillActual,
-         "estimatedDataPageCount": estimatedDataPageCount
+         "estimatedDataPageCount": estimatedDataPageCount,
+         "dataPageSize": dataPageSize
       };
+   }
+
+   function waveBatches(stats, dataPageSize, concurrencyCap) {
+      // Stay inside existing reusable bytes so WT does not extend the file.
+      const reusable = +stats.freeStorageSize;
+      const leaf = Number(dataPageSize) > 0 ? dataPageSize : 32 * 1024;
+      const cap = Math.max(1, Math.ceil(+concurrencyCap) || 1);
+      if (!Number.isFinite(reusable)) return cap; // reuse hidden (e.g. some Atlas tiers)
+      if (reusable <= 0) return 0;
+      const n = Math.floor((reusable * dirtyBudgetRatio) / leaf);
+      return Math.max(0, Math.min(n, cap));
    }
 
    async function* batchesFromCursor(cursor, batchSize = 1) {
@@ -314,19 +329,31 @@
    }
 
    async function main() {
-      const initial = collSnapshot();
-      const { iterations = 1, concurrentUpdates = 1, pageFillTarget = 1, documentCount = 1, pageFillActual = 1, estimatedDataPageCount = 0 } = pageStats(initial, pageFillRatio, concurrentUpdatesRatio, totalUpdatesRatio);
-      const sampleSize = pageFillTarget;
-      const sampleRate = 1 / pageFillActual;
+      let snap = collSnapshot();
+      const {
+         iterations = 1,
+         concurrentUpdates: concurrencyCap = 1,
+         estimatedDataPageCount = 0
+      } = pageStats(snap, pageFillRatio, concurrentUpdatesRatio, totalUpdatesRatio);
+      const targetPages = Math.max(1, Math.ceil((estimatedDataPageCount || 1) * totalUpdatesRatio));
+      const maxWaves = Math.max(1, iterations);
 
       console.log(`sampler: ${sampler}`);
-      console.log(EJSON.stringify({ "state": "initial storage", ...initial }));
-      for (let i = 1; i <= iterations; ++i) {
-         // console.clear();
-         console.log(`Iterative bulk updates round ${i} of ${iterations} with pageFillTarget ${pageFillTarget} and sampleRate 1/${pageFillActual}`);
+      console.log(EJSON.stringify({ "state": "initial storage", ...snap }));
+      let pagesDone = 0;
+      for (let wave = 1; wave <= maxWaves && pagesDone < targetPages; ++wave) {
+         const fill = pageStats(snap, pageFillRatio, concurrentUpdatesRatio, totalUpdatesRatio);
+         const sampleSize = fill.pageFillTarget;
+         const sampleRate = 1 / fill.pageFillActual;
+         const nBatches = waveBatches(snap, fill.dataPageSize, Number(maxConcurrent) > 0 ? maxConcurrent : concurrencyCap);
+         if (nBatches < 1) {
+            console.log('reusable-byte budget is empty; further rewrites would extend the file, stopping');
+            break;
+         }
+         console.log(`wave ${wave} batches ${nBatches} pageFillTarget ${sampleSize} sampleRate 1/${fill.pageFillActual} reusable ${snap.freeStorageSize} dirtyBudgetRatio ${dirtyBudgetRatio}`);
          let tasks = [];
          let update = 0;
-         for await (const ids of getIds(sampleSize, concurrentUpdates, sampleRate)) {
+         for await (const ids of getIds(sampleSize, nBatches, sampleRate)) {
             const updateOneIds = ids.map(id => id._id);
             if (!updateOneIds.length) continue;
             ++update;
@@ -334,9 +361,11 @@
             tasks.push(rewriteIds(updateOneIds));
          }
          await Promise.allSettled(tasks);
+         pagesDone += update;
          console.log(EJSON.stringify({ "state": "volatile storage", ...collSnapshot() }));
          waitForCheckpoint();
-         console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
+         snap = collSnapshot();
+         console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
       }
    }
 
