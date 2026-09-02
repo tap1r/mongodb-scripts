@@ -31,6 +31,9 @@
     *  - better sharding (per-shard WT vitals via listShards / discovery)
     *  - revise lowPriorityAdmissionBypassThreshold for backward compatibility
     *  - refine curation order (Policy B: compound equality→trailing sort probes)
+    *  - majority commit lag proxy when rs.status() is unavailable (M0/Flex:
+    *    serverStatus.repl.lastWrite lastWriteDate vs majorityWriteDate);
+    *    optional metrics.getLastError.wtime on dedicated (not in M0 allowlist)
     */
 
    // Syntax: mongosh [connection options] [--quiet] [--eval 'var dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>, interactive = <bool>;'] [-f|--file] </path/to/>niceDeleteMany.js
@@ -1289,7 +1292,8 @@
                  : (this.checkpointRuntimeRatio > 100) ? 'high'
                  : 'medium';
          },
-         get activeReplLag() { // calculate the highest repl-lag from healthy members
+         get activeReplLag() { // highest lag among healthy members (rs.status optimeDate)
+            // TBA: M0/Flex lastWrite vs majorityWriteDate; dedicated GLE wtime
             const members = this.rsStatus?.members;
             if (!Array.isArray(members) || members.length === 0) return 0;
             const opTimers = members.map(({

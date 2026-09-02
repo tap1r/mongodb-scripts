@@ -405,6 +405,7 @@ Remaining mongosh-line work (do not block the archive):
 - Better sharding: per-shard WT vitals via `listShards` / discovery.
 - `lowPriorityAdmissionBypassThreshold` backward compatibility.
 - Curation Policy B: compound equality → trailing sort probes.
+- Majority commit lag proxy when `rs.status()` is unavailable (Atlas M0/Flex: `serverStatus.repl.lastWrite` `lastWriteDate` vs `majorityWriteDate`). Optional `metrics.getLastError.wtime` on dedicated (not in the M0 `serverStatus` allowlist). Use with existing `activeReplLag` / AIMD throttle so majority WC wait and replication delay both gate admission.
 
 ### `connStats.js`
 
