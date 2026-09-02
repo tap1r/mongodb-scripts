@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.10"
+ *  Version: "0.1.11"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -35,7 +35,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.10" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.11" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -259,7 +259,7 @@
             console.log(`\tmodifiedCount: ${modifiedCount}`);
          }, {
             "readConcern": { "level": "local" },
-            "writeConcern": { "w": "majority", "j": false },
+            "writeConcern": { "w": 1, "j": false }, // ack in memory; rewrite is a no-op on data
             "comment": "online compacting updates"
          });
       } catch(error) {
