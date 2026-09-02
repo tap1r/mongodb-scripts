@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.20"
+ *  Version: "0.12.21"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -113,7 +113,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.20" };
+   const __script = { "name": "dbstats.js", "version": "0.12.21" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -410,22 +410,7 @@
       dbPath.databases = await Promise.all(dbFetchTasks);
       dbPath.databases = stableSort(dbPath.databases, sortBy('db'));
 
-      // If every namespace hid WT free-space, don't keep a db.stats() 0 as an empty free list.
-      dbPath.databases.forEach(database => {
-         if (database.collections.length && database.collections.every(c => c.freeStorageSize == null)) {
-            database.freeStorageSize = null;
-         }
-         if (database.collections.length && database.collections.every(c =>
-               c.totalIndexBytesReusable == null && (c.indexes || []).every(i => i.freeStorageSize == null))) {
-            database.totalIndexBytesReusable = null;
-         }
-      });
-      if (dbPath.databases.length && dbPath.databases.every(d => d.freeStorageSize == null)) {
-         dbPath.freeStorageSize = null;
-      }
-      if (dbPath.databases.length && dbPath.databases.every(d => d.totalIndexBytesReusable == null)) {
-         dbPath.totalIndexBytesReusable = null;
-      }
+      applyFreeStorageRollup(dbPath);
 
       return dbPath;
    }
@@ -446,11 +431,145 @@
 
    function sumNullable(values) {
       /*
-       *  Sum numbers; any null/undefined → null (Atlas hidden free-space propagates)
+       *  Sum numbers; any null/undefined → null (unknown free-space poisons the parent)
        */
       if (!values.length) return 0;
       if (values.some(v => v == null)) return null;
       return values.reduce((a, b) => a + b, 0);
+   }
+
+   function sumKnown(values) {
+      /*
+       *  Sum measured free-space; skip null/NaN (lower bound, not an empty free list)
+       */
+      const known = values.filter(v => freeStorageKnown(v)).map(v => +v);
+      if (!known.length) return null;
+      return known.reduce((a, b) => a + b, 0);
+   }
+
+   function isUnauthorizedCollection(collection = {}) {
+      return /\(unauthorized\)\s*$/.test(collection.name || '');
+   }
+
+   function catalogCoverageComplete(database) {
+      /*
+       *  Fetched collections cover db.stats() ncollections (no authz/filter holes).
+       *  Sharded ncollections is a per-shard array — skip the count check.
+       */
+      const collections = database.collections || [];
+      if (collections.some(isUnauthorizedCollection)) return false;
+      const ncoll = database.ncollections;
+      if (typeof ncoll === 'number' && Number.isFinite(ncoll) && collections.length !== ncoll) return false;
+      return true;
+   }
+
+   function collectionIndexFreeBytes(collection) {
+      if (isUnauthorizedCollection(collection)) return null;
+      if (freeStorageKnown(collection.totalIndexBytesReusable)) return +collection.totalIndexBytesReusable;
+      const indexes = collection.indexes || [];
+      if (!indexes.length) return (+collection.nindexes === 0) ? 0 : null;
+      return sumKnown(indexes.map(idx => idx.freeStorageSize));
+   }
+
+   function collectionIndexFreeComplete(collection) {
+      if (isUnauthorizedCollection(collection)) return false;
+      if (freeStorageKnown(collection.totalIndexBytesReusable)) return true;
+      const indexes = collection.indexes || [];
+      if (!indexes.length) return +collection.nindexes === 0;
+      return indexes.every(idx => freeStorageKnown(idx.freeStorageSize));
+   }
+
+   function tagDbStatsFree(database) {
+      database.freeStorageSizeSource = freeStorageKnown(database.freeStorageSize) ? 'dbStats' : 'unknown';
+      database.freeStorageComplete = database.freeStorageSizeSource === 'dbStats';
+      database.totalIndexBytesReusableSource = freeStorageKnown(database.totalIndexBytesReusable) ? 'dbStats' : 'unknown';
+      database.totalIndexBytesReusableComplete = database.totalIndexBytesReusableSource === 'dbStats';
+   }
+
+   function rollupDatabaseFreeFromCollStats(database) {
+      /*
+       *  db.stats() free-space is untrusted on this tier; sum collection WT.
+       */
+      const collections = database.collections || [];
+      const coverage = catalogCoverageComplete(database);
+
+      const collFree = collections.map(c => c.freeStorageSize);
+      const collRolled = sumKnown(collFree);
+      if (collRolled != null) {
+         database.freeStorageSize = collRolled;
+         database.freeStorageSizeSource = 'collStatsRollup';
+         database.freeStorageComplete = coverage && collections.length > 0 && collFree.every(freeStorageKnown);
+      } else {
+         database.freeStorageSize = null;
+         database.freeStorageSizeSource = 'unknown';
+         database.freeStorageComplete = false;
+      }
+
+      const idxFree = collections.map(collectionIndexFreeBytes);
+      const idxRolled = sumKnown(idxFree);
+      if (idxRolled != null) {
+         database.totalIndexBytesReusable = idxRolled;
+         database.totalIndexBytesReusableSource = 'collStatsRollup';
+         database.totalIndexBytesReusableComplete = coverage
+            && collections.length > 0
+            && collections.every(collectionIndexFreeComplete);
+      } else {
+         database.totalIndexBytesReusable = null;
+         database.totalIndexBytesReusableSource = 'unknown';
+         database.totalIndexBytesReusableComplete = false;
+      }
+   }
+
+   function applyFreeStorageRollup(dbPath) {
+      /*
+       *  db.stats() wins when it is a real measurement (dedicated / self-managed).
+       *  Atlas M0/Flex (and serverless) hide db-level reusable bytes — roll up
+       *  collection WT $collStats as a lower bound (authz / filters may omit NS).
+       */
+      const untrusted = hidesDbStatsFreeStorage();
+      const databases = dbPath.databases || [];
+      databases.forEach(database => {
+         if (untrusted) rollupDatabaseFreeFromCollStats(database);
+         else tagDbStatsFree(database);
+      });
+      if (!databases.length) return dbPath;
+
+      const dbFrees = databases.map(d => d.freeStorageSize);
+      const allDbStatsFree = databases.every(d => d.freeStorageSizeSource === 'dbStats');
+      const anyCollFree = databases.some(d => d.freeStorageSizeSource === 'collStatsRollup');
+      if (allDbStatsFree) {
+         dbPath.freeStorageSize = dbFrees.reduce((a, b) => a + +b, 0);
+         dbPath.freeStorageSizeSource = 'dbStats';
+         dbPath.freeStorageComplete = true;
+      } else if (dbFrees.some(freeStorageKnown)) {
+         dbPath.freeStorageSize = sumKnown(dbFrees);
+         dbPath.freeStorageSizeSource = anyCollFree ? 'collStatsRollup' : 'dbStats';
+         dbPath.freeStorageComplete = databases.every(d => d.freeStorageComplete && freeStorageKnown(d.freeStorageSize));
+      } else {
+         dbPath.freeStorageSize = null;
+         dbPath.freeStorageSizeSource = 'unknown';
+         dbPath.freeStorageComplete = false;
+      }
+
+      const dbIdx = databases.map(d => d.totalIndexBytesReusable);
+      const allDbStatsIdx = databases.every(d => d.totalIndexBytesReusableSource === 'dbStats');
+      const anyCollIdx = databases.some(d => d.totalIndexBytesReusableSource === 'collStatsRollup');
+      if (allDbStatsIdx) {
+         dbPath.totalIndexBytesReusable = dbIdx.reduce((a, b) => a + +b, 0);
+         dbPath.totalIndexBytesReusableSource = 'dbStats';
+         dbPath.totalIndexBytesReusableComplete = true;
+      } else if (dbIdx.some(freeStorageKnown)) {
+         dbPath.totalIndexBytesReusable = sumKnown(dbIdx);
+         dbPath.totalIndexBytesReusableSource = anyCollIdx ? 'collStatsRollup' : 'dbStats';
+         dbPath.totalIndexBytesReusableComplete = databases.every(
+            d => d.totalIndexBytesReusableComplete && freeStorageKnown(d.totalIndexBytesReusable)
+         );
+      } else {
+         dbPath.totalIndexBytesReusable = null;
+         dbPath.totalIndexBytesReusableSource = 'unknown';
+         dbPath.totalIndexBytesReusableComplete = false;
+      }
+      return dbPath;
    }
 
    function sumPerShard(arrays, nShards) {
@@ -465,6 +584,8 @@
       /*
        *  Aggregate database metas into dbPath totals (sharded arrays or scalars).
        *  Empty catalog: sharded → zero-filled per-shard arrays; unsharded → leave MetaStats defaults.
+       *  freeStorageSize / totalIndexBytesReusable here follow $stats; applyFreeStorageRollup
+       *  revises them after $collStats (M0/Flex collStats rollup).
        */
       const nShards = dbPath.shards.length;
       if (!databases.length) {
@@ -639,30 +760,35 @@
       return bytes != null && !Number.isNaN(+bytes);
    }
 
-   function formatFree(bytes, storageSize) {
+   function formatFree(bytes, storageSize, { lowerBound = false } = {}) {
       /*
        *  Free blocks │ reuse. Hidden WT free-space (Atlas M0/Flex) → n/a, not 0.
+       *  lowerBound: collStats rollup may omit unauthorized/filtered NS (*).
        */
       if (!freeStorageKnown(bytes)) {
          return (`n/a │${'n/a'.padStart(6)}`).padStart(columnWidth + 8);
       }
-      return (formatUnit(bytes) + ' │' + formatPct(bytes, storageSize).padStart(6)).padStart(columnWidth + 8);
+      const unit = formatUnit(bytes) + (lowerBound ? '*' : '');
+      return (unit + ' │' + formatPct(bytes, storageSize).padStart(6)).padStart(columnWidth + 8);
    }
 
-   function formatCompaction(kind, storageSize, freeStorageSize, { oplog = false, idIndex = false } = {}) {
+   function formatCompaction(kind, storageSize, freeStorageSize, { oplog = false, idIndex = false, incomplete = false } = {}) {
       if (!freeStorageKnown(freeStorageSize)) return 'n/a';
       if (kind === 'collection') {
          if (oplog && compactionHelper('collection', storageSize, freeStorageSize)) return 'wait';
-         return compactionHelper('collection', storageSize, freeStorageSize) ? 'compact' : '———— ';
+         if (compactionHelper('collection', storageSize, freeStorageSize)) return 'compact';
+         return incomplete ? 'n/a' : '———— ';
       }
       if (kind === 'index') {
          if (idIndex && compactionHelper('index', storageSize, freeStorageSize)) return 'compact';
-         return compactionHelper('index', storageSize, freeStorageSize) ? 'rebuild' : '———— ';
+         if (compactionHelper('index', storageSize, freeStorageSize)) return 'rebuild';
+         return incomplete ? 'n/a' : '———— ';
       }
       if (kind === 'dbPath') {
-         return compactionHelper('dbPath', storageSize, freeStorageSize) ? 'resync' : '———— ';
+         if (compactionHelper('dbPath', storageSize, freeStorageSize)) return 'resync';
+         return incomplete ? 'n/a' : '———— ';
       }
-      return '———— ';
+      return incomplete ? 'n/a' : '———— ';
    }
 
    function formatRatio(metric) {
@@ -707,40 +833,43 @@
 
    function metricsCols({
          dataSize = 0, compression = 0, compressor, storageSize = 0, freeStorageSize = 0,
-         objects, compaction = '———— ', mode = 'full'
+         objects, compaction = '———— ', mode = 'full', lowerBound = false
       } = {}) {
       /*
        *  Shared metric columns: full NS row | index rollup | index detail row
        */
       const compact = String(compaction).padStart(columnWidth - 2);
       if (mode === 'indexRow') {
-         return `${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize)} ${''.padStart(columnWidth)} [cyan]${compact}[/]`;
+         return `${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)} [cyan]${compact}[/]`;
       }
       if (mode === 'indexRollup') {
-         return `${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize)} ${''.padStart(columnWidth)} [cyan]${compact}[/]`;
+         return `${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)} [cyan]${compact}[/]`;
       }
       const obj = (objects == null ? '' : objects.toString()).padStart(columnWidth);
-      return `${formatUnit(dataSize).padStart(columnWidth)} ${formatCompressionCell(compression, compressor)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize)} ${obj} [cyan]${compact}[/]`;
+      return `${formatUnit(dataSize).padStart(columnWidth)} ${formatCompressionCell(compression, compressor)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj} [cyan]${compact}[/]`;
    }
 
    function printRollupRows({
          shards = [], dataSize, compression, storageSize, freeStorageSize, objects,
          namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
-         nsLabel, idxLabel, nsCompactionKind = 'collection'
+         nsLabel, idxLabel, nsCompactionKind = 'collection',
+         freeIncomplete = false, idxIncomplete = false
       } = {}) {
       /*
        *  Shared DB / dbPath namespace + index subtotal rows (sharded or not)
        */
-      const nsCompaction = formatCompaction(nsCompactionKind, storageSize, freeStorageSize);
-      const idxCompaction = formatCompaction('index', totalIndexSize, totalIndexBytesReusable);
+      const nsCompaction = formatCompaction(nsCompactionKind, storageSize, freeStorageSize, { "incomplete": freeIncomplete });
+      const idxCompaction = formatCompaction('index', totalIndexSize, totalIndexBytesReusable, { "incomplete": idxIncomplete });
       const nsMetrics = metricsCols({
-         dataSize, compression, storageSize, freeStorageSize, objects, "compaction": nsCompaction
+         dataSize, compression, storageSize, freeStorageSize, objects, "compaction": nsCompaction,
+         "lowerBound": freeIncomplete
       });
       const idxMetrics = metricsCols({
          "storageSize": totalIndexSize,
          "freeStorageSize": totalIndexBytesReusable,
          "compaction": idxCompaction,
-         "mode": 'indexRollup'
+         "mode": 'indexRollup',
+         "lowerBound": idxIncomplete
       });
       if (shards.length > 0) {
          console.log(`[bold][green]${`${nsLabel}:[/]`.padEnd(rowHeader + 4)}${nsMetrics}`);
@@ -811,7 +940,8 @@
    }
 
    function printDb({
-         shards, dataSize, compression, storageSize, freeStorageSize, objects, namespaces, nindexes, totalIndexSize, totalIndexBytesReusable
+         shards, dataSize, compression, storageSize, freeStorageSize, objects, namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
+         freeStorageComplete, totalIndexBytesReusableComplete
       } = {}) {
       printRule('light');
       printRollupRows({
@@ -819,15 +949,42 @@
          namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
          "nsLabel": 'Namespaces subtotal',
          "idxLabel": 'Indexes subtotal',
-         "nsCompactionKind": 'collection'
+         "nsCompactionKind": 'collection',
+         "freeIncomplete": freeStorageComplete === false,
+         "idxIncomplete": totalIndexBytesReusableComplete === false
       });
       printRule('heavy');
       return;
    }
 
-   function printDbPath({
-         dbPath, shards, proc, hostname, compression, dataSize, storageSize, freeStorageSize, objects, namespaces, nindexes, totalIndexSize, totalIndexBytesReusable
+   function printFreeStorageFootnote({
+         freeStorageSize, totalIndexBytesReusable,
+         freeStorageSizeSource, totalIndexBytesReusableSource,
+         freeStorageComplete, totalIndexBytesReusableComplete
       } = {}) {
+      const rolled = freeStorageSizeSource === 'collStatsRollup'
+                  || totalIndexBytesReusableSource === 'collStatsRollup';
+      const incomplete = freeStorageComplete === false || totalIndexBytesReusableComplete === false;
+      const unknown = !freeStorageKnown(freeStorageSize) || !freeStorageKnown(totalIndexBytesReusable);
+
+      if (rolled && incomplete) {
+         console.log('[yellow][NOTE] * Free blocks rolled up from collection WiredTiger stats; db.stats() omits reusable bytes on this tier. Totals may exclude unauthorized or filtered namespaces and are a lower bound.[/]');
+         return;
+      }
+      if (rolled) {
+         console.log('[yellow][NOTE] Free blocks rolled up from collection WiredTiger stats; db.stats() omits reusable bytes on this tier.[/]');
+         return;
+      }
+      if (unknown) {
+         console.log('[yellow][WARN] Free blocks │ reuse unavailable (WiredTiger free-space stats hidden on this tier)[/]');
+      }
+   }
+
+   function printDbPath(dbStats = {}) {
+      const {
+         dbPath, shards = [], proc, hostname, compression, dataSize, storageSize, freeStorageSize, objects, namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
+         freeStorageComplete, totalIndexBytesReusableComplete
+      } = dbStats;
       console.log('');
       printRule('heavy');
       console.log(`[bold][green]${'dbPath totals'.padEnd(rowHeader)} ${columnHeaders()}[/]`);
@@ -837,16 +994,16 @@
          namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
          "nsLabel": 'All namespaces',
          "idxLabel": 'All indexes',
-         "nsCompactionKind": 'dbPath'
+         "nsCompactionKind": 'dbPath',
+         "freeIncomplete": freeStorageComplete === false,
+         "idxIncomplete": totalIndexBytesReusableComplete === false
       });
       printRule('heavy');
       console.log(`[bold][green]Hostname:[/] [cyan]${hostname}[/]   [bold][green]Type:[/] [cyan]${proc}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]   [bold][green]dbPath:[/] [cyan]${dbPath}[/]`);
       if (shards.length > 0) {
          console.log(`[bold][green]Shards:[/] ${JSON.stringify(shards)}`);
       }
-      if (!freeStorageKnown(freeStorageSize) || !freeStorageKnown(totalIndexBytesReusable)) {
-         console.log('[yellow][WARN] Free blocks │ reuse unavailable (WiredTiger free-space stats hidden on this tier)[/]');
-      }
+      printFreeStorageFootnote(dbStats);
       printRule('heavy');
       console.log('');
       return;

@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.15.11"
+ *  Version: "0.15.12"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,7 +13,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.15.11"
+      "version": "0.15.12"
 });
 
 /*  Notes:
@@ -720,6 +720,15 @@ function isAtlasPlatform(type = null) {
         : (type === null && hostname == 'serverless') ? 'serverless'
         : (type == 'serverless' && hostname == 'serverless') ? true
         : false;
+}
+
+function hidesDbStatsFreeStorage() {
+   /*
+    *  Atlas M0/Flex (sharedTier) and serverless omit reusable bytes on db.stats().
+    *  A 0 from that command is not an empty free list. Collection $collStats may
+    *  still expose WT block-manager reuse; dbstats rolls those up as a lower bound.
+    */
+   return isAtlasPlatform('sharedTier') || isAtlasPlatform('serverless');
 }
 
 // Hoisted once — avoid rebuilding ~70-key maps on every serverStatus() call.
@@ -1517,7 +1526,7 @@ function $stats(dbName = db.getName()) {
    stats.name = dbName;
    delete stats.db;
    // Atlas M0/Flex hide WT free-space; a 0 here is not an empty free list.
-   const hideFree = isAtlasPlatform('sharedTier') || isAtlasPlatform('serverless');
+   const hideFree = hidesDbStatsFreeStorage();
    if (stats.hasOwnProperty('raw')) { // detect sharded db.stats()
       stats.collections = [];
       stats.views = [];
@@ -1616,7 +1625,8 @@ function $collStats(dbName = db.getName(), collName = '') {
                } }, 1024
          ] },
          // WT block-manager present (even with reuse omitted as 0) is a real measurement.
-         // Missing block-manager (Atlas M0/Flex) is unavailable unless official freeStorageSize > 0.
+         // db.stats() on Atlas M0/Flex still hides free-space; collection WT may report reuse.
+         // Missing block-manager is unavailable unless official freeStorageSize > 0.
          "storageStats.reuseKnown": {
             "$or": [
                { "$ne": [{ "$type": "$storageStats.wiredTiger.block-manager" }, "missing"] },
