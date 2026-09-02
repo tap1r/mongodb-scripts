@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.8"
+ *  Version: "0.1.9"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -34,7 +34,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.8" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.9" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -65,7 +65,28 @@
       "checkpointTimeoutMs": checkpointTimeoutMs
    } = userOptions;
 
+   function collSnapshot() {
+      const { indexes, ...stats } = $collStats(nsDb, nsColl) || {};
+      return stats;
+   }
+
+   function sampleDims(sampleSize = 1, concurrentUpdates = 1) {
+      const nBuckets = Math.max(1, Math.ceil(+concurrentUpdates) || 1);
+      const pageSize = Math.max(1, Math.ceil(+sampleSize) || 1);
+      return { "nBuckets": nBuckets, "pageSize": pageSize, "sampleN": Math.max(nBuckets * pageSize, nBuckets) };
+   }
+
+   function aggOpts(comment, extra = {}) {
+      return {
+         "allowDiskUse": true,
+         "readConcern": { "level": "local" },
+         "comment": comment,
+         ...extra
+      };
+   }
+
    function pageStats(
+         stats = {},
          pageFillRatio = 0.9, // 0.9 (default page fill ratio)
          concurrentUpdatesRatio = 0.01, // needs to be limited to a portion of reusableBytes target ~1%
          totalUpdatesRatio = 0.2 // 20% pass
@@ -77,7 +98,7 @@
          objects: documentCount,
          avgObjSize,
          dataPageSize: leafPageSize
-      } = $collStats(nsDb, nsColl) || {};
+      } = stats;
       const compression = dataSize / (storageSize - freeStorageSize);
       const dataPageSize = Number(leafPageSize) > 0 ? leafPageSize : 32 * 1024;
       const pageFillTarget = Math.ceil((pageFillRatio * dataPageSize * compression) / avgObjSize);
@@ -116,65 +137,43 @@
    }
 
    async function* rndSample(sampleSize = 1, concurrentUpdates = 1) {
-      const nBuckets = Math.max(1, Math.ceil(+concurrentUpdates) || 1);
-      const pageSize = Math.max(1, Math.ceil(+sampleSize) || 1);
-      const options = {
-         "allowDiskUse": true,
-         "readConcern": { "level": "local" },
-         "comment": "$sample technique"
-      };
+      const { nBuckets, pageSize } = sampleDims(sampleSize, concurrentUpdates);
       const pipeline = [
          { "$sample": { "size": nBuckets * pageSize } },
          { "$project": { "_id": 1 } }
       ];
-      yield* batchesFromCursor(namespace.aggregate(pipeline, options), pageSize);
+      yield* batchesFromCursor(namespace.aggregate(pipeline, aggOpts("$sample technique")), pageSize);
    }
 
    async function* adjacentSample(sampleSize = 1, concurrentUpdates = 1, sampleRate = 1) {
-      const nBuckets = Math.max(1, Math.ceil(+concurrentUpdates) || 1);
-      const pageSize = Math.max(1, Math.ceil(+sampleSize) || 1);
-      let options = {
-         "allowDiskUse": true,
-         "readConcern": { "level": "local" },
-         "comment": "fetching seed _id via $sample"
-      };
+      const { nBuckets, pageSize } = sampleDims(sampleSize, concurrentUpdates);
       const seedDocs = namespace.aggregate([
          { "$sample": { "size": 1 } },
          { "$project": { "_id": 1 } }
-      ], options).toArray();
+      ], aggOpts("fetching seed _id via $sample")).toArray();
       if (!seedDocs.length) return;
       const { '_id': seed } = seedDocs[0];
       const seeding = [
          { "$gte": seed },
          { "$lte": seed }
       ][Math.floor(Math.random() * 2)];
-      options = {
-         "allowDiskUse": true,
-         "readConcern": { "level": "local" },
-         "hint": { "$natural": -1 },
-         "comment": "get neighbouring documents by _id/recordId"
-      };
       const pipeline = [
          { "$match": { "_id": seeding } },
          { "$match": { "$sampleRate": sampleRate } },
          { "$limit": nBuckets * pageSize },
          { "$project": { "_id": 1 } }
       ];
-      yield* batchesFromCursor(namespace.aggregate(pipeline, options), pageSize);
+      yield* batchesFromCursor(
+         namespace.aggregate(pipeline, aggOpts("get neighbouring documents by _id/recordId", { "hint": { "$natural": -1 } })),
+         pageSize
+      );
    }
 
    async function* bucketedIds(sampleSize = 1, concurrentUpdates = 1, sampleRate = 1) {
       // Disjoint _id ranges (not a clone of adjacentSample). $sample bounds
       // the set so $bucketAuto $push cannot hit 16MB; sampleRate is accepted
       // for getIds() but $sample already caps cardinality.
-      const nBuckets = Math.max(1, Math.ceil(+concurrentUpdates) || 1);
-      const pageSize = Math.max(1, Math.ceil(+sampleSize) || 1);
-      const sampleN = Math.max(nBuckets * pageSize, nBuckets);
-      const options = {
-         "allowDiskUse": true,
-         "readConcern": { "level": "local" },
-         "comment": "bucketed _id samples for concurrent rewrites"
-      };
+      const { nBuckets, pageSize, sampleN } = sampleDims(sampleSize, concurrentUpdates);
       const pipeline = [
          { "$sample": { "size": sampleN } },
          { "$project": { "_id": 1 } },
@@ -184,7 +183,7 @@
             "output": { "ids": { "$push": "$_id" } }
          } }
       ];
-      for (const { ids = [] } of namespace.aggregate(pipeline, options).toArray()) {
+      for (const { ids = [] } of namespace.aggregate(pipeline, aggOpts("bucketed _id samples for concurrent rewrites")).toArray()) {
          yield ids.slice(0, pageSize).map(_id => ({ "_id": _id }));
       }
    }
@@ -205,50 +204,42 @@
       }
    }
 
-   async function bulkOps(ops, bulkOpts) {
-      const sessionOpts = {
+   const bulkOpts = {
+      "ordered": false // writeConcern belongs on the txn, not bulkWrite
+   };
+   const updatePipeline = [{ "$unset": "_id" }]; // leverages SERVER-36405
+   const updateManyOpts = {
+      "upsert": false, // must only update existing documents
+      "hint": { "_id": 1 } // must force hint to avoid $expr collscan
+   };
+
+   async function rewriteIds(ids) {
+      const session = db.getMongo().startSession({
          "readPreference": { "mode": "primary" },
          "causalConsistency": true
-      };
-      const txnOpts = {
-         "readConcern": { "level": "local" },
-         "writeConcern": {
-            "w": "majority",
-            "j": false
-         },
-         "comment": "online compacting updates"
-      };
-      const session = db.getMongo().startSession(sessionOpts);
-      const namespace = session.getDatabase(nsDb).getCollection(nsColl);
-      const bulkUpdate = async() => {
-         const { modifiedCount } = await namespace.bulkWrite(ops, bulkOpts);
-         console.log(`\tmodifiedCount: ${modifiedCount}`);
-      }
-      //
+      });
+      const coll = session.getDatabase(nsDb).getCollection(nsColl);
       try {
-         await session.withTransaction(bulkUpdate, txnOpts);
+         await session.withTransaction(async() => {
+            const { modifiedCount } = await coll.bulkWrite([{
+               "updateMany": {
+                  "filter": { "_id": { "$in": ids } },
+                  "update": updatePipeline,
+                  ...updateManyOpts
+               }
+            }], bulkOpts);
+            console.log(`\tmodifiedCount: ${modifiedCount}`);
+         }, {
+            "readConcern": { "level": "local" },
+            "writeConcern": { "w": "majority", "j": false },
+            "comment": "online compacting updates"
+         });
       } catch(error) {
          // console.log(`txn error:`, error);
          console.log(`\ttxn conflict detected, aborting op`);
       } finally {
          await session.endSession();
       }
-   }
-
-   async function iBulkUpdateMany(updateManyFilter, updatePipeline, updateManyOpts, bulkOpts) {
-      const ops = [
-         { "updateMany": {
-            "filter": updateManyFilter,
-            "update": updatePipeline,
-            ...updateManyOpts
-         } }
-      ];
-      await bulkOps(ops, bulkOpts);
-   }
-
-   function storageStats() {
-      const { indexes, ...stats } = $collStats(nsDb, nsColl) || {};
-      return stats;
    }
 
    function wtCheckpoint() {
@@ -295,20 +286,13 @@
    }
 
    async function main() {
-      const bulkOpts = {
-         "ordered": false // writeConcern belongs on the txn, not bulkWrite
-      };
-      const updatePipeline = [{ "$unset": "_id" }]; // leverages SERVER-36405
-      const updateManyOpts = {
-         "upsert": false, // must only update existing documents
-         "hint": { "_id": 1 } // must force hint to avoid $expr collscan
-      };
-      const { iterations = 1, concurrentUpdates = 1, pageFillTarget = 1, documentCount = 1, pageFillActual = 1, estimatedDataPageCount = 0 } = pageStats(pageFillRatio, concurrentUpdatesRatio, totalUpdatesRatio);
+      const initial = collSnapshot();
+      const { iterations = 1, concurrentUpdates = 1, pageFillTarget = 1, documentCount = 1, pageFillActual = 1, estimatedDataPageCount = 0 } = pageStats(initial, pageFillRatio, concurrentUpdatesRatio, totalUpdatesRatio);
       const sampleSize = pageFillTarget;
       const sampleRate = 1 / pageFillActual;
 
       console.log(`sampler: ${sampler}`);
-      console.log(EJSON.stringify({ "state": "initial storage", ...storageStats() }));
+      console.log(EJSON.stringify({ "state": "initial storage", ...initial }));
       for (let i = 1; i <= iterations; ++i) {
          // console.clear();
          console.log(`Iterative bulk updates round ${i} of ${iterations} with pageFillTarget ${pageFillTarget} and sampleRate 1/${pageFillActual}`);
@@ -317,18 +301,14 @@
          for await (const ids of getIds(sampleSize, concurrentUpdates, sampleRate)) {
             const updateOneIds = ids.map(id => id._id);
             if (!updateOneIds.length) continue;
-            const updateManyFilter = { "_id": { "$in": updateOneIds } };
             ++update;
             console.log(`\tforking concurrent update ${update} with ${updateOneIds.length} IDs`);
-            // await iBulkUpdateMany(concurrentUpdates, updateManyFilter, updatePipeline, updateManyOpts, bulkOpts);
-            const op = () => iBulkUpdateMany(updateManyFilter, updatePipeline, updateManyOpts, bulkOpts);
-            // console.log(`typeof iBulkdUpdateMany`, typeof op);
-            tasks.push(op());
+            tasks.push(rewriteIds(updateOneIds));
          }
          await Promise.allSettled(tasks);
-         console.log(EJSON.stringify({ "state": "volatile storage", ...storageStats() }));
+         console.log(EJSON.stringify({ "state": "volatile storage", ...collSnapshot() }));
          waitForCheckpoint();
-         console.log(EJSON.stringify({ "state": "settled storage", ...storageStats() }));
+         console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
       }
    }
 
