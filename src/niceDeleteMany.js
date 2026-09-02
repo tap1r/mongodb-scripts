@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.12"
+    *  Version: "0.4.13"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -21,7 +21,8 @@
     *  - Curation relies on a semi-blocking operator for bucket estimations
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
-    *  - Prefers index-ordered curation (avoids blocking sorts); optional user hint supported
+    *  - Prefers index-ordered curation (avoids blocking sorts / disk spill); optional user hint supported
+    *  - If explain has no IXSCAN (or $setWindowFields would block), walk _id via find() and bucket in-process
     *  - "pace" admission mode when WT cache vitals are unavailable (mongos/Atlas M0/Flex)
     *  - Progress HUD shows congestion, admission, and pool utilization only — ETA is not cheap
     *  - HUD is pinned below the log; emit lines persist and are never clobbered by redraws
@@ -62,7 +63,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.12" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.13" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -459,14 +460,14 @@
       }
    }
 
-   function planHasCollScanOrBlockingSort(explainResult) {
+   function inspectCurationPlan(explainResult) {
       /*
        *  Inspect winningPlan physical stages only. Do NOT walk the full explain doc —
        *  it can echo the command pipeline (including $sort), which falsely looks like
        *  a blocking SORT. A separate agg-stage $sort after $cursor is blocking only
        *  when that $sort was not absorbed into the $cursor query plan.
        */
-      let collScan = false, blockingSort = false;
+      let collScan = false, blockingSort = false, ixscan = false;
       const roots = [];
       const takeRoot = (obj) => {
          if (!obj || typeof obj !== 'object') return;
@@ -493,12 +494,28 @@
       takeRoot(explainResult);
       for (const root of roots) {
          walkPlanNodes(root, (node) => {
-            const stage = node.stage || node.nodeType;
-            if (stage === 'COLLSCAN') collScan = true;
-            if (stage === 'SORT' || stage === 'SORT_KEY_GENERATOR') blockingSort = true;
+            const stage = String(node.stage || node.nodeType || '');
+            const upper = stage.toUpperCase();
+            if (upper === 'COLLSCAN' || upper === 'COLLECTIONSCAN') collScan = true;
+            if (upper === 'SORT' || upper === 'SORT_KEY_GENERATOR') blockingSort = true;
+            if (
+               upper === 'IXSCAN' || upper === 'EXPRESS_IXSCAN' || upper === 'IDHACK'
+               || upper === 'CLUSTERED_IXSCAN' || upper === 'COUNT_SCAN'
+               || upper === 'INDEXSCAN'
+            ) ixscan = true;
          });
       }
+      return { collScan, blockingSort, ixscan };
+   }
+
+   function planHasCollScanOrBlockingSort(explainResult) {
+      const { collScan, blockingSort } = inspectCurationPlan(explainResult);
       return collScan || blockingSort;
+   }
+
+   function planIsIndexOrdered(explainResult) {
+      const { collScan, blockingSort, ixscan } = inspectCurationPlan(explainResult);
+      return ixscan && !collScan && !blockingSort;
    }
 
    function hasUserHint(h) {
@@ -514,12 +531,19 @@
    // adminCommand (serverStatus/getParameter) always targets the primary.
    function commandReadPreference(readPreference = { "mode": "primary" }) {
       /*
-       *  Shape for runCommand / aggregate / explain options. Document form carries
-       *  mode + tags (probed on Atlas); empty tags still fine.
+       *  Shape for runCommand / aggregate / find / explain options. Document
+       *  form carries mode + tags (probed on Atlas); empty tags still fine.
        */
       const mode = readPreference?.mode ?? 'primary';
       const tags = Array.isArray(readPreference?.tags) ? readPreference.tags : [];
       return { "mode": mode, "tags": tags };
+   }
+
+   function applyCursorReadPref(cursor, cmdRP) {
+      // Shell cursor.readPref(mode, tags) plus driver options.readPreference.
+      if (!cursor || typeof cursor.readPref !== 'function' || !cmdRP?.mode) return cursor;
+      const next = cursor.readPref(cmdRP.mode, cmdRP.tags);
+      return next ?? cursor;
    }
 
    function connectionHostsLabel() {
@@ -576,49 +600,76 @@
       /*
        *  Curation order (Policy A):
        *  - Derive sortBy from the filter ({} / non-field predicates → _id).
-       *  - Explain $match+$sort (queryPlanner). If the winning plan is index-ordered
-       *    (no COLLSCAN / blocking SORT), trust it and do not force a hint.
-       *  - Otherwise fall back to sortBy {_id:1} + hint {_id:1} so bucketing stays
-       *    non-blocking (filter selectivity may suffer — WARN).
-       *  - Non-empty user hint is always honored; we only WARN if explain still looks
-       *    blocking. Auto-hint of alternate indexes / compound sort probes = Policy B.
-       *  - Pass the same per-command readPreference as the follow-up aggregate so
-       *    server selection (and plan cache) can stay on that node.
+       *  - Explain $match+$sort (queryPlanner), with the candidate hint when one
+       *    is in play. Index-ordered (IXSCAN, no COLLSCAN / blocking SORT) may
+       *    use the $setWindowFields pipeline.
+       *  - Otherwise mode 'scan': find() hinted {_id:1} walk, residual filter,
+       *    bucket in-process. $setWindowFields would inject a blocking SORT
+       *    (32MiB / no spill on Atlas M0).
+       *  - User hint is honored only when that hinted explain is index-ordered;
+       *    otherwise WARN and take the _id scan. Policy B = alternate indexes.
        */
       const idSort = { "_id": 1 };
       const idHint = { "_id": 1 };
       const sortField = sortKeyFromFilter(filter);
       const sortBy = { [sortField]: 1 };
-      const explainPipeline = [{ "$match": filter }, { "$sort": sortBy }];
       const explainOpts = {};
       if (hasUserCollation(collation)) explainOpts.collation = collation;
       if (readPreference?.mode) explainOpts.readPreference = commandReadPreference(readPreference);
 
-      const runExplain = (opts) => namespace.explain('queryPlanner').aggregate(explainPipeline, opts);
+      const runExplain = (pipeline, opts) => namespace.explain('queryPlanner').aggregate(pipeline, opts);
 
-      if (hasUserHint(userHint)) {
+      const windowPrefix = sortSpec => [
+         { "$match": filter },
+         { "$sort": sortSpec },
+         { "$setWindowFields": {
+            "sortBy": sortSpec,
+            "output": { "ordinal": { "$documentNumber": {} } }
+         } }
+      ];
+
+      const idScan = () => {
          try {
-            const expl = runExplain({ ...explainOpts, "hint": userHint });
-            if (planHasCollScanOrBlockingSort(expl)) {
-               emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mcuration plan may use COLLSCAN/blocking SORT despite user hint\x1b[0m; sortBy:', JSON.stringify(sortBy));
+            const expl = runExplain(
+               [{ "$match": filter }, { "$sort": idSort }],
+               { ...explainOpts, "hint": idHint }
+            );
+            if (!planIsIndexOrdered(expl)) {
+               emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33m_id hint explain is not IXSCAN-without-SORT; find() will still force {_id:1}\x1b[0m');
             }
          } catch(e) {
-            emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mcuration explain failed (user hint)\x1b[0m:', e?.message ?? e);
+            emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration _id hint explain failed\x1b[0m:', e?.message ?? e);
          }
-         return { "sortBy": sortBy, "hint": userHint };
+         emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)\x1b[0m');
+         return { "sortBy": idSort, "hint": idHint, "mode": "scan" };
+      };
+
+      const tryWindow = (candidateSort, candidateHint) => {
+         const opts = { ...explainOpts };
+         if (hasUserHint(candidateHint)) opts.hint = candidateHint;
+         const prefix = [{ "$match": filter }, { "$sort": candidateSort }];
+         try {
+            const prefixExpl = runExplain(prefix, opts);
+            if (!planIsIndexOrdered(prefixExpl)) return null;
+            const winExpl = runExplain(windowPrefix(candidateSort), opts);
+            if (!planIsIndexOrdered(winExpl)) return null;
+            return { "sortBy": candidateSort, "hint": candidateHint, "mode": "window" };
+         } catch(e) {
+            emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration window explain failed\x1b[0m:', e?.message ?? e);
+            return null;
+         }
+      };
+
+      if (hasUserHint(userHint)) {
+         const win = tryWindow(sortBy, userHint);
+         if (win) return win;
+         emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mcuration plan may use COLLSCAN/blocking SORT despite user hint\x1b[0m; sortBy:', JSON.stringify(sortBy));
+         return idScan();
       }
 
-      try {
-         const expl = runExplain(explainOpts);
-         if (!planHasCollScanOrBlockingSort(expl)) {
-            return { "sortBy": sortBy, "hint": {} }; // trust winning plan; no forced hint
-         }
-      } catch(e) {
-         emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration explain failed\x1b[0m:', e?.message ?? e);
-      }
-
-      emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)\x1b[0m');
-      return { "sortBy": idSort, "hint": idHint };
+      const trusted = tryWindow(sortBy, {});
+      if (trusted) return trusted;
+      return idScan();
    }
 
    async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
@@ -643,11 +694,24 @@
       }
 
       const namespace = db.getSiblingDB(dbName).getCollection(collName);
-      const { "sortBy": curationSortBy, "hint": curationHint } = resolveCurationOrder(namespace, filter, hint, readPreference);
+      const {
+         "sortBy": curationSortBy,
+         "hint": curationHint,
+         "mode": curationMode
+      } = resolveCurationOrder(namespace, filter, hint, readPreference);
+
+      if (curationMode === 'scan') {
+         yield* getIdsByIdIndexScan(namespace, filter, bucketSizeLimit, cmdRP);
+         return;
+      }
+
       // const buckets = Math.pow(2, 31) - 1; // max 32bit Int
       const aggOpts = {
-         "allowDiskUse": true,
-         "cursor": { "batchSize": 1 }, // optimised for the prefetch concurrency
+         // Fail closed: a blocking SORT / spill means the plan is wrong (Policy A
+         // should have forced the _id find() walk). Do not opt in to external sort.
+         "allowDiskUse": false,
+         // 1 agg doc = 1 bucket of bucketSizeLimit (_id)s; prefetch pulls buckets.
+         "cursor": { "batchSize": 1 },
          "maxTimeMS": 0, // required to overide potential v8 defaultMaxTimeMS cluster settings
          "noCursorTimeout": true,
          "comment": "Bucketing IDs via niceDeleteMany.js",
@@ -657,8 +721,11 @@
       if (hasUserCollation(collation)) aggOpts.collation = collation;
       if (hasUserHint(curationHint)) aggOpts.hint = curationHint;
       // Streaming bucket pipeline (v3). History: Howto-streaming-sort.md
+      // $sort immediately after $match so an index can provide order.
+      // Do not $project before $sort. Scan mode is used when this would block.
       const pipeline = [
          { "$match": filter },
+         { "$sort": curationSortBy },
          { "$setWindowFields": { // assign ordinal numbers in curation order
             "sortBy": curationSortBy,
             "output": { "ordinal": { "$documentNumber": {} } }
@@ -694,6 +761,60 @@
       const cursor = namespace.aggregate(pipeline, aggOpts);
       try {
          yield* cursor;
+      } finally {
+         try { await cursor.close(); } catch(_) { /* exhausted or already closed */ }
+      }
+   }
+
+   async function* getIdsByIdIndexScan(namespace, filter = {}, bucketSizeLimit = 100, cmdRP = { "mode": "primary" }) {
+      /*
+       *  Hinted {_id:1} find walk. Residual filter is a FETCH (object scan);
+       *  no blocking SORT / $setWindowFields. Bucket in-process to the same
+       *  shape as the window pipeline ({ bucketId, ids, bucketSize, ... }).
+       */
+      emit('\x1b[34m[INFO]\x1b[0m Curation using hinted \x1b[33m_id\x1b[0m index walk (find); filter applied as residual');
+      // Same per-command RP as aggregate (secondaryPreferred + Atlas tags).
+      // Wire batchSize = bucketSizeLimit _id docs per getMore (= one yielded bucket).
+      // Agg path uses cursor.batchSize 1 because each agg doc is already that bucket.
+      const findOpts = {
+         "sort": { "_id": 1 },
+         "hint": { "_id": 1 },
+         "batchSize": bucketSizeLimit,
+         "maxTimeMS": 0,
+         "noCursorTimeout": true,
+         "comment": "Bucketing IDs via niceDeleteMany.js (_id index scan)",
+         "readPreference": cmdRP
+      };
+      if (hasUserCollation(collation)) findOpts.collation = collation;
+      let cursor = namespace.find(filter, { "_id": 1 }, findOpts);
+      if (cursor && typeof cursor.then === 'function') cursor = await cursor;
+      if (typeof cursor.sort === 'function') cursor = cursor.sort({ "_id": 1 }) ?? cursor;
+      if (typeof cursor.hint === 'function') cursor = cursor.hint({ "_id": 1 }) ?? cursor;
+      cursor = applyCursorReadPref(cursor, cmdRP);
+      try {
+         let bucketId = 1;
+         let ids = [];
+         for await (const doc of cursor) {
+            ids.push(doc._id);
+            if (ids.length >= bucketSizeLimit) {
+               yield {
+                  "bucketId": bucketId,
+                  "bucketSize": ids.length,
+                  "bucketSizeLimit": bucketSizeLimit,
+                  "ids": ids
+               };
+               bucketId += 1;
+               ids = [];
+            }
+         }
+         if (ids.length) {
+            yield {
+               "bucketId": bucketId,
+               "bucketSize": ids.length,
+               "bucketSizeLimit": bucketSizeLimit,
+               "ids": ids
+            };
+         }
       } finally {
          try { await cursor.close(); } catch(_) { /* exhausted or already closed */ }
       }
