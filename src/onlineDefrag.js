@@ -225,7 +225,8 @@
    }
 
    function storageStats() {
-      return $collStats(nsDb, nsColl);
+      const { indexes, ...stats } = $collStats(nsDb, nsColl) || {};
+      return stats;
    }
 
    function wtCheckpoint() {
@@ -258,7 +259,7 @@
       const sampleSize = pageFillTarget;
       const sampleRate = 1 / pageFillActual;
 
-      printjson({ "state": "initial storage", ...storageStats() });
+      console.log(EJSON.stringify({ "state": "initial storage", ...storageStats() }));
       for (let i = 1; i <= iterations; ++i) {
          // console.clear();
          console.log(`Iterative bulk updates round ${i} of ${iterations} with pageFillTarget ${pageFillTarget} and sampleRate 1/${pageFillActual}`);
@@ -275,7 +276,7 @@
             tasks.push(op());
          }
          await Promise.allSettled(tasks);
-         printjson({ "state": "volatile storage", ...storageStats() });
+         console.log(EJSON.stringify({ "state": "volatile storage", ...storageStats() }));
          let { available, running: checkpointState, minTimeMS } = wtCheckpoint();
          if (!available) {
             console.log('checkpoint metrics unavailable (no wiredTiger in serverStatus), skipping wait');
@@ -299,7 +300,7 @@
             } while (checkpointState || !checkpointCompleted);
             console.log('checkpoint completed');
          }
-         printjson({ "state": "settled storage", ...storageStats() });
+         console.log(EJSON.stringify({ "state": "settled storage", ...storageStats() }));
       }
    }
 
