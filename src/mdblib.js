@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.15.12"
+ *  Version: "0.15.13"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,7 +13,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.15.12"
+      "version": "0.15.13"
 });
 
 /*  Notes:
@@ -860,24 +860,26 @@ const int64MinVal = -Math.pow(2, 63);
 const int64MaxVal = Math.pow(2, 63) - 1;
 const dec128MinVal = -10 * Math.pow(2, 110);
 const dec128MaxVal = 10 * Math.pow(2, 110) - 1;
-const WIREDTIGER_MIN_RECLAIM_SIZE_V8 = 1048576;     // 1 MiB as WT ignores anything smaller (v8+)
-const WIREDTIGER_MIN_RECLAIM_SIZE_LEGACY = 2097152; // 2 MiB as WT ignores anything smaller
+const WIREDTIGER_MIN_RECLAIM_SIZE_V8 = 1048576;     // 1 MiB: WT skips compact when recoverable bytes are smaller (v8+)
+const WIREDTIGER_MIN_RECLAIM_SIZE_LEGACY = 2097152; // 2 MiB: same floor on pre-v8
 
 function compactionHelper(type = 'collection', storageSize = 4096, freeStorageSize = 0) {
    // Unknown/hidden free-space (Atlas M0/Flex) is not an empty free list.
    if (freeStorageSize == null || Number.isNaN(+freeStorageSize) || !(+storageSize > 0)) return false;
    const compactCollectionThreshold = 0.2; // 20% reusable collection bytes
    const compactIndexThreshold = 0.5;      // 50% reusable index bytes
-   const minSizeBytes = serverVer(8)
-                      ? WIREDTIGER_MIN_RECLAIM_SIZE_V8
-                      : WIREDTIGER_MIN_RECLAIM_SIZE_LEGACY;
+   const minReclaimBytes = serverVer(8)
+                         ? WIREDTIGER_MIN_RECLAIM_SIZE_V8
+                         : WIREDTIGER_MIN_RECLAIM_SIZE_LEGACY;
    const syncThreshold = 0.5;              // 50% total dbPath reusable bytes
-   const sizeThreshold = storageSize > minSizeBytes;
+   // WT skips when recoverable bytes are below this floor (block_compact: "can't recover at least 1MB").
+   // File size is implied: freeStorageSize ≤ storageSize, so a 1 MiB reclaim floor is also a 1 MiB file floor.
+   const reclaimThreshold = +freeStorageSize > minReclaimBytes;
    const freeThreshold = freeStorageSize / storageSize;
 
-   return (type == 'collection' && sizeThreshold && freeThreshold > compactCollectionThreshold) ? true
-        : (type == 'index'      && sizeThreshold && freeThreshold > compactIndexThreshold)      ? true
-        : (type == 'dbPath'     && sizeThreshold && freeThreshold > syncThreshold)              ? true
+   return (type == 'collection' && reclaimThreshold && freeThreshold > compactCollectionThreshold) ? true
+        : (type == 'index'      && reclaimThreshold && freeThreshold > compactIndexThreshold)      ? true
+        : (type == 'dbPath'     && reclaimThreshold && freeThreshold > syncThreshold)              ? true
         : false;
 };
 
