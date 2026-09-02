@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.12"
+ *  Version: "0.1.13"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,6 +18,7 @@
  *  - defragOptions.sampler: 'random' | 'adjacent' | 'bucketed' (default).
  *  - bucketed sampler streams _id-range batches (no $sort / $bucketAuto).
  *  - each wave dirties at most dirtyBudgetRatio of current reusable bytes, then checkpoints.
+ *  - throttle when repl lag exceeds maxLagSeconds (rs.status, else lastWrite vs majority).
  */
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>onlineDefrag.js
@@ -36,7 +37,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.12" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.13" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -66,6 +67,7 @@
       "totalUpdatesRatio": totalUpdatesRatio = 2,
       "dirtyBudgetRatio": dirtyBudgetRatio = 0.5, // max fraction of reusable bytes dirtied per wave
       "maxConcurrent": maxConcurrent,
+      "maxLagSeconds": maxLagSeconds = 10, // pause new batches when lag exceeds this
       "checkpointTimeoutMs": checkpointTimeoutMs
    } = userOptions;
 
@@ -302,6 +304,65 @@
       };
    }
 
+   async function delay(ms) {
+      await new Promise(resolve => setTimeout(resolve, ms));
+   }
+
+   function replLag() {
+      // Prefer member optime spread; M0/Flex: replSetGetStatus is unsupported.
+      try {
+         const { members = [] } = db.adminCommand({ "replSetGetStatus": 1 });
+         const dates = members.filter(({ health, stateStr }) =>
+            health && (stateStr === 'PRIMARY' || stateStr === 'SECONDARY')
+         ).map(({ optimeDate }) => optimeDate).filter(d => d != null);
+         if (dates.length >= 2) {
+            return {
+               "available": true,
+               "lagSeconds": Math.max(0, (Math.max(...dates) - Math.min(...dates)) / 1000),
+               "source": "replSetGetStatus"
+            };
+         }
+      } catch(_) { /* M0/Flex / unauthorized */ }
+      const { lastWrite } = serverStatus({ "repl": true }).repl || {};
+      const last = lastWrite?.lastWriteDate;
+      const maj = lastWrite?.majorityWriteDate;
+      if (last == null || maj == null) {
+         return { "available": false, "lagSeconds": 0, "source": null };
+      }
+      return {
+         "available": true,
+         "lagSeconds": Math.max(0, (new Date(last) - new Date(maj)) / 1000),
+         "source": "lastWrite"
+      };
+   }
+
+   let lagSkipLogged = false;
+   async function waitForReplLag() {
+      const cap = Number(maxLagSeconds) > 0 ? +maxLagSeconds : 10;
+      let { available, lagSeconds, source } = replLag();
+      if (!available) {
+         if (!lagSkipLogged) {
+            console.log('repl lag metrics unavailable, skipping lag throttle');
+            lagSkipLogged = true;
+         }
+         return;
+      }
+      if (lagSeconds <= cap) return;
+      const timeoutMs = Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000;
+      const deadline = Date.now() + timeoutMs;
+      console.log(`repl lag ${lagSeconds.toFixed(1)}s via ${source} > ${cap}s, throttling...`);
+      do {
+         await delay(Math.min(1000, Math.max(1, deadline - Date.now())));
+         ({ available, lagSeconds, source } = replLag());
+         if (!available) return;
+      } while (lagSeconds > cap && Date.now() < deadline);
+      if (lagSeconds > cap) {
+         console.log(`repl lag still ${lagSeconds.toFixed(1)}s after throttle timeout, continuing`);
+      } else {
+         console.log(`repl lag ${lagSeconds.toFixed(1)}s via ${source}, resuming`);
+      }
+   }
+
    function waitForCheckpoint() {
       let { available, running, minTimeMS, recentTimeMS } = wtCheckpoint();
       if (!available) {
@@ -356,6 +417,7 @@
          for await (const ids of getIds(sampleSize, nBatches, sampleRate)) {
             const updateOneIds = ids.map(id => id._id);
             if (!updateOneIds.length) continue;
+            await waitForReplLag();
             ++update;
             console.log(`\tforking concurrent update ${update} with ${updateOneIds.length} IDs`);
             tasks.push(rewriteIds(updateOneIds));
@@ -364,6 +426,7 @@
          pagesDone += update;
          console.log(EJSON.stringify({ "state": "volatile storage", ...collSnapshot() }));
          waitForCheckpoint();
+         await waitForReplLag();
          snap = collSnapshot();
          console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
       }
