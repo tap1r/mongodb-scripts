@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.7"
+ *  Version: "0.1.8"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -12,9 +12,10 @@
  *
  *  Notes:
  *  - mongosh only. Do not top-level-await this IIFE (rewriter SyntaxError).
- *  - --eval must use var (not let/const). Do not declare dbName/collName
+ *  - --eval must use var (not let/const). Do not declare dbName/collName/defragOptions
  *    in this file — IIFE const would shadow the overlay.
  *  - storage snapshots use mdblib $collStats (MDBLIB, ~/.mongodb, or cwd).
+ *  - defragOptions.sampler: 'random' | 'adjacent' | 'bucketed' (default).
  */
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>onlineDefrag.js
@@ -22,6 +23,9 @@
 /*
  *  Example:
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection';" [-f|--file] </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { sampler: 'adjacent' };" [-f|--file] </path/to/>onlineDefrag.js
+ *
+ *  We use 'var' to interoperate with mongosh's sloppy mode
  */
 
 /*
@@ -30,7 +34,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.7" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.8" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -51,9 +55,15 @@
    const nsColl = typeof collName === 'undefined' ? 'collection' : collName;
    const namespace = db.getSiblingDB(nsDb).getCollection(nsColl);
 
-   const pageFillRatio = 0.9;
-   const concurrentUpdatesRatio = 0.005;
-   const totalUpdatesRatio = 2; // 10;
+   // Caller: var defragOptions = { ... } (--eval or REPL). Do not declare or assign it in this file.
+   const userOptions = typeof defragOptions === 'undefined' ? {} : defragOptions;
+   const {
+      "sampler": sampler = 'bucketed', // 'random' | 'adjacent' | 'bucketed'
+      "pageFillRatio": pageFillRatio = 0.9,
+      "concurrentUpdatesRatio": concurrentUpdatesRatio = 0.005,
+      "totalUpdatesRatio": totalUpdatesRatio = 2,
+      "checkpointTimeoutMs": checkpointTimeoutMs
+   } = userOptions;
 
    function pageStats(
          pageFillRatio = 0.9, // 0.9 (default page fill ratio)
@@ -180,9 +190,19 @@
    }
 
    async function* getIds(sampleSize, concurrentUpdates, sampleRate) {
-      // yield* rndSample(sampleSize, concurrentUpdates);
-      // yield* adjacentSample(sampleSize, concurrentUpdates, sampleRate);
-      yield* bucketedIds(sampleSize, concurrentUpdates, sampleRate);
+      switch (sampler) {
+         case 'random':
+            yield* rndSample(sampleSize, concurrentUpdates);
+            break;
+         case 'adjacent':
+            yield* adjacentSample(sampleSize, concurrentUpdates, sampleRate);
+            break;
+         case 'bucketed':
+            yield* bucketedIds(sampleSize, concurrentUpdates, sampleRate);
+            break;
+         default:
+            throw new Error(`unknown defragOptions.sampler "${sampler}" (use random|adjacent|bucketed)`);
+      }
    }
 
    async function bulkOps(ops, bulkOpts) {
@@ -255,7 +275,9 @@
          return;
       }
       const pollMs = Math.max(1, Math.ceil(0.9 * (minTimeMS || 1000)));
-      const timeoutMs = Math.max(120000, 2 * (recentTimeMS || minTimeMS || 0));
+      const timeoutMs = Number(checkpointTimeoutMs) > 0
+                      ? +checkpointTimeoutMs
+                      : Math.max(120000, 2 * (recentTimeMS || minTimeMS || 0));
       const deadline = Date.now() + timeoutMs;
       if (running) {
          console.log(`checkpoint running, waiting to complete (timeout ${timeoutMs}ms)...`);
@@ -285,6 +307,7 @@
       const sampleSize = pageFillTarget;
       const sampleRate = 1 / pageFillActual;
 
+      console.log(`sampler: ${sampler}`);
       console.log(EJSON.stringify({ "state": "initial storage", ...storageStats() }));
       for (let i = 1; i <= iterations; ++i) {
          // console.clear();
