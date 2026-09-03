@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.15"
+ *  Version: "0.1.16"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,13 +17,15 @@
  *  - storage snapshots use mdblib $collStats (MDBLIB, ~/.mongodb, or cwd).
  *  - defragOptions.sampler: 'random' | 'adjacent' | 'bucketed' (default).
  *  - bucketed sampler streams _id-range batches (no $sort / $bucketAuto).
- *  - each wave dirties at most dirtyBudgetRatio of current reusable bytes.
+ *  - each wave dirties at most dirtyBudgetRatio of current reusable bytes (default 0.25).
  *  - do not start writes during a WT checkpoint; wait only while one is running.
+ *  - after the last wave, wait for a checkpoint cycle before settled stats.
  *  - throttle when repl lag exceeds maxLagSeconds (rs.status, else lastWrite vs majority).
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
  *    instead of a fixed 0.9 — next discussion
+ *  - inter-wave pause on WT dirty / updates bytes instead of checkpoint status
  */
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>onlineDefrag.js
@@ -42,7 +44,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.15" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.16" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -70,7 +72,7 @@
       "pageFillRatio": pageFillRatio = 0.9,
       "concurrentUpdatesRatio": concurrentUpdatesRatio = 0.005,
       "totalUpdatesRatio": totalUpdatesRatio = 2,
-      "dirtyBudgetRatio": dirtyBudgetRatio = 0.5, // max fraction of reusable bytes dirtied per wave
+      "dirtyBudgetRatio": dirtyBudgetRatio = 0.25, // max fraction of reusable bytes dirtied per wave
       "maxConcurrent": maxConcurrent,
       "maxLagSeconds": maxLagSeconds = 10, // pause new batches when lag exceeds this
       "checkpointTimeoutMs": checkpointTimeoutMs
@@ -369,9 +371,10 @@
    }
 
    let ckptSkipLogged = false;
-   async function waitForCheckpoint() {
-      // Wait only while a checkpoint is already running. Do not wait for the
-      // next one to start (that was an extra cycle after idle waves).
+   async function waitForCheckpoint({ settle = false } = {}) {
+      // settle=false: wait only while a checkpoint is already running.
+      // settle=true: wait for a falling edge (start+complete if idle) so
+      // block-manager reusable bytes are visible in collStats.
       let { available, running, minTimeMS, recentTimeMS } = wtCheckpoint();
       if (!available) {
          if (!ckptSkipLogged) {
@@ -380,18 +383,25 @@
          }
          return;
       }
-      if (!running) return;
+      if (!settle && !running) return;
       const pollMs = Math.max(1, Math.ceil(0.9 * (minTimeMS || 1000)));
       const timeoutMs = Number(checkpointTimeoutMs) > 0
                       ? +checkpointTimeoutMs
                       : Math.max(120000, 2 * (recentTimeMS || minTimeMS || 0));
       const deadline = Date.now() + timeoutMs;
-      console.log(`checkpoint running, waiting to complete (timeout ${timeoutMs}ms)...`);
+      if (running) {
+         console.log(`checkpoint running, waiting to complete (timeout ${timeoutMs}ms)...`);
+      } else {
+         console.log(`waiting for checkpoint to start and complete (settled stats, timeout ${timeoutMs}ms)...`);
+      }
+      let completed = false;
       do {
+         const wasRunning = running;
          await delay(Math.min(pollMs, Math.max(1, deadline - Date.now())));
          ({ running } = wtCheckpoint());
-      } while (running && Date.now() < deadline);
-      console.log(running ? 'checkpoint wait timed out, continuing' : 'checkpoint completed');
+         if (wasRunning && !running) completed = true;
+      } while ((running || (settle && !completed)) && Date.now() < deadline);
+      console.log(completed ? 'checkpoint completed' : 'checkpoint wait timed out, continuing');
    }
 
    async function main() {
@@ -405,6 +415,7 @@
       console.log(`sampler: ${sampler}`);
       console.log(`waves: ${maxWaves} (docs ${fill0.documentCount} / (batch ${fill0.pageFillTarget} * concurrency ${Math.max(1, nBatches0)}))`);
       console.log(EJSON.stringify({ "state": "initial storage", ...snap }));
+      let didWork = false;
       for (let wave = 1; wave <= maxWaves; ++wave) {
          const fill = pageStats(snap, pageFillRatio, concurrentUpdatesRatio, totalUpdatesRatio);
          const sampleSize = fill.pageFillTarget;
@@ -428,11 +439,16 @@
             tasks.push(rewriteIds(updateOneIds));
          }
          await Promise.allSettled(tasks);
+         if (update > 0) didWork = true;
          console.log(EJSON.stringify({ "state": "volatile storage", ...collSnapshot() }));
          await waitForCheckpoint();
          await waitForReplLag();
          snap = collSnapshot();
-         console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
+      }
+      if (didWork) {
+         await waitForCheckpoint({ "settle": true });
+         await waitForReplLag();
+         console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
       }
    }
 
