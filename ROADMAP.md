@@ -371,6 +371,7 @@ Remaining mongosh-line work (do not block the archive):
 - Later: point compact/rebuild at a single dbstats “compact” / “rebuild” row when autoCompact’s file walk is the wrong tool (one collection, dryRun estimate, `_id` rebuild).
 - `compact` is also [unsupported on Atlas M0/Flex](https://www.mongodb.com/docs/atlas/unsupported-commands/); same bounce as autoCompact. Pre-v8 `compact` has no `freeSpaceTargetMB` — no oplog trim path.
 - **onlineDefrag:** `dbstats.js` `main()` currently `return;`s so `dbStats = await main()` is `undefined` — `storageStats()` still reads `dbStats.databases[0].collections[0]`. Needs the JSON contract. WT checkpoint helpers are v8+ (`wiredTiger.checkpoint`); v7 path is commented. `session.withTransaction` may need `await`. No mdblib.
+- **onlineDefrag page fill:** autotune `pageFillRatio` / `pageFillTarget` from settled `$collStats` (compression, `avgObjSize`, leaf page size, reusable) instead of a fixed 0.9. Next discussion; wave count and dirty-byte budget already exist.
 
 ### `discovery.js`
 
