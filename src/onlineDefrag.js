@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.17"
+ *  Version: "0.1.18"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,7 +18,9 @@
  *  - defragOptions.sampler: 'random' | 'adjacent' | 'bucketed' (default) | 'doubleParked'.
  *  - bucketed sampler streams _id-range batches (no $sort / $bucketAuto).
  *  - one pass: waves = docs / (batch × concurrency). Batch = max(actual fill, 90% target).
- *  - concurrency = min(reusable pages, dirty fill headroom); M0 uses dirtyBudgetRatio × reusable.
+ *  - concurrency = min(reusable pages, dirty fill headroom). Dirty fill ~10% of
+ *    cache so eviction can write ahead of checkpoint (do not change mongod
+ *    eviction knobs; stay below ~20% trigger). M0: dirtyBudgetRatio × reusable.
  *  - do not start writes during a WT checkpoint; wait only while one is running.
  *  - after the last wave, wait for a checkpoint cycle before settled stats.
  *  - throttle when repl lag exceeds maxLagSeconds (rs.status, else lastWrite vs majority).
@@ -51,7 +53,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.17" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.18" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -77,7 +79,7 @@
    const {
       "sampler": sampler = 'bucketed', // 'random' | 'adjacent' | 'bucketed' | 'doubleParked'
       "pageFillRatio": pageFillRatio = 0.9, // dest leaf fill (WT spill threshold)
-      "dirtyFillTarget": dirtyFillTarget = 0.08, // WT cache dirty fraction (eviction_dirty_target)
+      "dirtyFillTarget": dirtyFillTarget = 0.10, // script cap (~10% cache); lets eviction flush, below ~20% trigger
       "dirtyBudgetRatio": dirtyBudgetRatio = 0.5, // fallback: fraction of reusable pages when cache stats are missing
       "maxConcurrent": maxConcurrent,
       "maxLagSeconds": maxLagSeconds = 10, // pause new batches when lag exceeds this
@@ -138,13 +140,15 @@
       const max = +cache['maximum bytes configured'];
       const dirty = +cache['tracked dirty bytes in the cache'];
       if (!(max > 0)) return null;
-      const headroom = max * dirtyFillTarget - (Number.isFinite(dirty) ? dirty : 0);
+      // Do not change mongod eviction_dirty_*; only how much dirty we create.
+      const frac = Math.min(+dirtyFillTarget || 0.10, 0.15);
+      const headroom = max * frac - (Number.isFinite(dirty) ? dirty : 0);
       return Math.max(0, Math.floor(headroom / leaf));
    }
 
    function waveBatches(stats, dataPageSize) {
-      // Concurrency = min(reusable pages, dirty fill headroom). Reusable
-      // avoids extending the file; dirty fill avoids a huge checkpoint.
+      // Reusable pages = hard cap (no file extend). Dirty fill = softer cap
+      // so eviction can write during the wave; checkpoint still required to settle.
       const leaf = Number(dataPageSize) > 0 ? dataPageSize : 32 * 1024;
       const reusable = +stats.freeStorageSize;
       const reusablePages = Number.isFinite(reusable) && reusable > 0
