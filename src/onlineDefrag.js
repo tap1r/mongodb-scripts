@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.18"
+ *  Version: "0.1.19"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -53,7 +53,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.18" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.19" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -83,6 +83,7 @@
       "dirtyBudgetRatio": dirtyBudgetRatio = 0.5, // fallback: fraction of reusable pages when cache stats are missing
       "maxConcurrent": maxConcurrent,
       "maxLagSeconds": maxLagSeconds = 10, // pause new batches when lag exceeds this
+      "passes": passes, // collection cover count; default 1
       "checkpointTimeoutMs": checkpointTimeoutMs
    } = userOptions;
 
@@ -146,7 +147,7 @@
       return Math.max(0, Math.floor(headroom / leaf));
    }
 
-   function waveBatches(stats, dataPageSize) {
+   function waveBudget(stats, dataPageSize) {
       // Reusable pages = hard cap (no file extend). Dirty fill = softer cap
       // so eviction can write during the wave; checkpoint still required to settle.
       const leaf = Number(dataPageSize) > 0 ? dataPageSize : 32 * 1024;
@@ -164,7 +165,11 @@
       else if (dirtyCap == null) n = reusablePages;
       else n = Math.min(reusablePages, dirtyCap);
       if (Number(maxConcurrent) > 0) n = Math.min(n, Math.ceil(maxConcurrent));
-      return Math.max(0, n);
+      return {
+         "nBatches": Math.max(0, n),
+         "reusablePages": reusablePages,
+         "dirtyPages": dirtyCap
+      };
    }
 
    async function* batchesFromCursor(cursor, batchSize = 1) {
@@ -234,38 +239,45 @@
       );
    }
 
-   async function* bucketedIds(sampleSize = 1, concurrentUpdates = 1, sampleRate = 1) {
+   async function* bucketedIds(sampleSize = 1, concurrentUpdates = 1, sampleRate = 1, afterId) {
       // Stream page-sized batches from an _id range. No $sort / $bucketAuto /
       // $setWindowFields — those block (or semi-block) before the first yield.
       const { nBuckets, pageSize } = sampleDims(sampleSize, concurrentUpdates);
-      const seedCursor = namespace.aggregate([
-         { "$sample": { "size": 1 } },
-         { "$project": { "_id": 1 } }
-      ], aggOpts("bucketedIds seed _id", { "cursor": { "batchSize": 1 } }));
-      let seed;
-      try {
-         for await (const doc of seedCursor) {
-            seed = doc._id;
-            break;
+      const pipeline = [];
+      if (afterId !== undefined) {
+         pipeline.push({ "$match": { "_id": { "$gt": afterId } } });
+      } else if (sampler !== 'doubleParked') {
+         const seedCursor = namespace.aggregate([
+            { "$sample": { "size": 1 } },
+            { "$project": { "_id": 1 } }
+         ], aggOpts("bucketedIds seed _id", { "cursor": { "batchSize": 1 } }));
+         let seed;
+         try {
+            for await (const doc of seedCursor) {
+               seed = doc._id;
+               break;
+            }
+         } finally {
+            try { seedCursor.close(); } catch(_) { /* exhausted or already closed */ }
          }
-      } finally {
-         try { seedCursor.close(); } catch(_) { /* exhausted or already closed */ }
+         if (seed === undefined) return;
+         const bound = Math.random() < 0.5 ? { "$gte": seed } : { "$lte": seed };
+         pipeline.push({ "$match": { "_id": bound } });
       }
-      if (seed === undefined) return;
-      const bound = Math.random() < 0.5 ? { "$gte": seed } : { "$lte": seed };
-      const pipeline = [
-         { "$match": { "_id": bound } },
-         ...(sampleRate < 1 ? [{ "$match": { "$sampleRate": sampleRate } }] : []),
+      pipeline.push(
          { "$limit": nBuckets * pageSize },
          { "$project": { "_id": 1 } }
-      ];
+      );
       yield* batchesFromCursor(
-         namespace.aggregate(pipeline, aggOpts("bucketed _id batches", { "cursor": { "batchSize": pageSize } })),
+         namespace.aggregate(pipeline, aggOpts("bucketed _id batches", {
+            "cursor": { "batchSize": pageSize },
+            "hint": { "_id": 1 }
+         })),
          pageSize
       );
    }
 
-   async function* getIds(sampleSize, concurrentUpdates, sampleRate) {
+   async function* getIds(sampleSize, concurrentUpdates, sampleRate, afterId) {
       switch (sampler) {
          case 'random':
             yield* rndSample(sampleSize, concurrentUpdates);
@@ -274,8 +286,10 @@
             yield* adjacentSample(sampleSize, concurrentUpdates, sampleRate);
             break;
          case 'bucketed':
-         case 'doubleParked':
             yield* bucketedIds(sampleSize, concurrentUpdates, sampleRate);
+            break;
+         case 'doubleParked':
+            yield* bucketedIds(sampleSize, concurrentUpdates, sampleRate, afterId);
             break;
          default:
             throw new Error(`unknown defragOptions.sampler "${sampler}" (use random|adjacent|bucketed|doubleParked)`);
@@ -433,23 +447,36 @@
    async function main() {
       let snap = collSnapshot();
       const fill0 = pageStats(snap);
-      const nBatches0 = waveBatches(snap, fill0.dataPageSize);
+      const budget0 = waveBudget(snap, fill0.dataPageSize);
+      const nBatches0 = budget0.nBatches;
       const batch0 = fill0.batchSize || 1;
       const docsPerWave = Math.max(1, batch0 * Math.max(1, nBatches0));
-      const maxWaves = Math.max(1, Math.ceil((fill0.documentCount || 0) / docsPerWave));
+      const wavesPerPass = Math.max(1, Math.ceil((fill0.documentCount || 0) / docsPerWave));
+      const coverPasses = Number(passes) > 0 ? Math.ceil(passes) : 1;
+      const maxWaves = wavesPerPass * coverPasses;
 
       console.log(`sampler: ${sampler}`);
       console.log(`pages: ${fill0.nPages} actualFill ${fill0.pageFillActual} targetFill ${fill0.pageFillTarget} batch ${batch0}`);
-      console.log(`waves: ${maxWaves} (docs ${fill0.documentCount} / (batch ${batch0} * concurrency ${Math.max(1, nBatches0)}))`);
+      console.log(`waves: ${maxWaves} (${coverPasses} pass(es) × ${wavesPerPass} waves/pass; docs ${fill0.documentCount} / (batch ${batch0} * concurrency ${Math.max(1, nBatches0)}))`);
       console.log(EJSON.stringify({ "state": "initial storage", ...snap }));
       let didWork = false;
-      for (let wave = 1; wave <= maxWaves; ++wave) {
+      let afterId;
+      for (let wave = 1; wave <= maxWaves; ) {
          const fill = pageStats(snap);
          const sampleSize = fill.batchSize;
          const sampleRate = 1 / fill.pageFillActual;
-         const nBatches = waveBatches(snap, fill.dataPageSize);
+         const budget = waveBudget(snap, fill.dataPageSize);
+         const nBatches = budget.nBatches;
          if (nBatches < 1) {
-            console.log('no reusable/dirty budget without extending the file, stopping');
+            if ((budget.reusablePages || 0) > 0) {
+               console.log('dirty fill headroom exhausted; waiting for checkpoint before resume');
+               await waitForCheckpoint({ "settle": true });
+               await waitForReplLag();
+               snap = collSnapshot();
+               if (waveBudget(snap, fill.dataPageSize).nBatches < 1) await delay(1000);
+               continue;
+            }
+            console.log('no reusable pages without extending the file, stopping');
             break;
          }
          console.log(`wave ${wave}/${maxWaves} batches ${nBatches} batchSize ${sampleSize} actualFill ${fill.pageFillActual} targetFill ${fill.pageFillTarget} reusable ${snap.freeStorageSize}`);
@@ -457,9 +484,11 @@
          let tasks = [];
          let update = 0;
          const parked = [];
-         for await (const ids of getIds(sampleSize, nBatches, sampleRate)) {
+         let lastId;
+         for await (const ids of getIds(sampleSize, nBatches, sampleRate, afterId)) {
             const updateOneIds = ids.map(id => id._id);
             if (!updateOneIds.length) continue;
+            lastId = updateOneIds[updateOneIds.length - 1];
             parked.push(updateOneIds);
             await waitForCheckpoint();
             await waitForReplLag();
@@ -467,6 +496,7 @@
             console.log(`\tforking concurrent update ${update} with ${updateOneIds.length} IDs`);
             tasks.push(rewriteIds(updateOneIds));
          }
+         console.log(`forked ${update} of ${nBatches} planned batches`);
          await Promise.allSettled(tasks);
          if (update > 0) didWork = true;
          console.log(EJSON.stringify({ "state": "volatile storage", ...collSnapshot() }));
@@ -489,6 +519,15 @@
          await waitForCheckpoint();
          await waitForReplLag();
          snap = collSnapshot();
+         if (update === 0) {
+            if (sampler === 'doubleParked' && afterId !== undefined) {
+               console.log('doubleParked reached end of _id, wrapping to start');
+               afterId = undefined;
+            }
+         } else {
+            afterId = lastId;
+         }
+         wave++;
       }
       if (didWork) {
          await waitForCheckpoint({ "settle": true });
