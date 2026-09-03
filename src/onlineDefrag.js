@@ -26,6 +26,13 @@
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
  *    instead of a fixed 0.9 — next discussion
  *  - inter-wave pause on WT dirty / updates bytes instead of checkpoint status
+ *  - AIMD dirtyBudgetRatio from settled density/reusable (stop ~10–20% reuse)
+ *  - sampler 'doubleParked': rewrite the same _id batch twice with a settle
+ *    between, to pull live data off EOF into the free list so the file
+ *    boundary can truncate organically (same trim compact uses; compact
+ *    only shuffles blocks, it does not raise intra-page fill)
+ *  - augmented pipeline: raise page occupancy here, then compact (or EOF
+ *    rewrite) to relocate the geometric tail — compact cannot change density
  */
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>onlineDefrag.js

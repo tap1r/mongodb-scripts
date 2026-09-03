@@ -372,6 +372,9 @@ Remaining mongosh-line work (do not block the archive):
 - `compact` is also [unsupported on Atlas M0/Flex](https://www.mongodb.com/docs/atlas/unsupported-commands/); same bounce as autoCompact. Pre-v8 `compact` has no `freeSpaceTargetMB` — no oplog trim path.
 - **onlineDefrag:** `dbstats.js` `main()` currently `return;`s so `dbStats = await main()` is `undefined` — `storageStats()` still reads `dbStats.databases[0].collections[0]`. Needs the JSON contract. WT checkpoint helpers are v8+ (`wiredTiger.checkpoint`); v7 path is commented. `session.withTransaction` may need `await`. No mdblib.
 - **onlineDefrag page fill:** autotune `pageFillRatio` / `pageFillTarget` from settled `$collStats` (compression, `avgObjSize`, leaf page size, reusable) instead of a fixed 0.9. Next discussion; wave count and dirty-byte budget already exist.
+- **onlineDefrag control loop:** AIMD on `dirtyBudgetRatio` from **settled** (post-checkpoint) density and reusable. Stop when reusable is ~10–20% or density plateaus. Do not treat packing-induced reusable **up** in a **fixed** `storageSize` as failure (that is compact-ready); treat `storageSize` **up** as failure (file extend).
+- **onlineDefrag `doubleParked`:** rewrite the same `_id` batch twice with a checkpoint settle between, so the second rewrite can consume the free list instead of appending again. File trim is **organic**: WT shortens the file when the **boundary page** is relocated (compact only *targets* the geometric tail, ~last 10%, and shuffles **blocks**; it does not raise intra-page fill). On M0/Flex `compact` is unavailable — EOF rewrite is the trim path.
+- **onlineDefrag then compact:** this script’s job is **page occupancy** (hard). `compact` / `autoCompact` then become more effective because they only move allocated pages. Do not expect compact to fix 1 KiB-in-32 KiB leaves.
 
 ### `discovery.js`
 
