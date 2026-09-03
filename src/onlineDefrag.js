@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.14"
+ *  Version: "0.1.15"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,7 +17,8 @@
  *  - storage snapshots use mdblib $collStats (MDBLIB, ~/.mongodb, or cwd).
  *  - defragOptions.sampler: 'random' | 'adjacent' | 'bucketed' (default).
  *  - bucketed sampler streams _id-range batches (no $sort / $bucketAuto).
- *  - each wave dirties at most dirtyBudgetRatio of current reusable bytes, then checkpoints.
+ *  - each wave dirties at most dirtyBudgetRatio of current reusable bytes.
+ *  - do not start writes during a WT checkpoint; wait only while one is running.
  *  - throttle when repl lag exceeds maxLagSeconds (rs.status, else lastWrite vs majority).
  *
  *  TODOs:
@@ -41,7 +42,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.14" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.15" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -367,30 +368,30 @@
       }
    }
 
-   function waitForCheckpoint() {
+   let ckptSkipLogged = false;
+   async function waitForCheckpoint() {
+      // Wait only while a checkpoint is already running. Do not wait for the
+      // next one to start (that was an extra cycle after idle waves).
       let { available, running, minTimeMS, recentTimeMS } = wtCheckpoint();
       if (!available) {
-         console.log('checkpoint metrics unavailable (no wiredTiger in serverStatus), skipping wait');
+         if (!ckptSkipLogged) {
+            console.log('checkpoint metrics unavailable (no wiredTiger in serverStatus), skipping wait');
+            ckptSkipLogged = true;
+         }
          return;
       }
+      if (!running) return;
       const pollMs = Math.max(1, Math.ceil(0.9 * (minTimeMS || 1000)));
       const timeoutMs = Number(checkpointTimeoutMs) > 0
                       ? +checkpointTimeoutMs
                       : Math.max(120000, 2 * (recentTimeMS || minTimeMS || 0));
       const deadline = Date.now() + timeoutMs;
-      if (running) {
-         console.log(`checkpoint running, waiting to complete (timeout ${timeoutMs}ms)...`);
-      } else {
-         console.log(`waiting for checkpoint to start and complete (timeout ${timeoutMs}ms)...`);
-      }
-      let completed = false;
+      console.log(`checkpoint running, waiting to complete (timeout ${timeoutMs}ms)...`);
       do {
-         const wasRunning = running;
-         sleep(Math.min(pollMs, Math.max(1, deadline - Date.now())));
+         await delay(Math.min(pollMs, Math.max(1, deadline - Date.now())));
          ({ running } = wtCheckpoint());
-         if (wasRunning && !running) completed = true;
-      } while ((running || !completed) && Date.now() < deadline);
-      console.log(completed ? 'checkpoint completed' : 'checkpoint wait timed out, continuing');
+      } while (running && Date.now() < deadline);
+      console.log(running ? 'checkpoint wait timed out, continuing' : 'checkpoint completed');
    }
 
    async function main() {
@@ -414,11 +415,13 @@
             break;
          }
          console.log(`wave ${wave}/${maxWaves} batches ${nBatches} pageFillTarget ${sampleSize} sampleRate 1/${fill.pageFillActual} reusable ${snap.freeStorageSize} dirtyBudgetRatio ${dirtyBudgetRatio}`);
+         await waitForCheckpoint();
          let tasks = [];
          let update = 0;
          for await (const ids of getIds(sampleSize, nBatches, sampleRate)) {
             const updateOneIds = ids.map(id => id._id);
             if (!updateOneIds.length) continue;
+            await waitForCheckpoint();
             await waitForReplLag();
             ++update;
             console.log(`\tforking concurrent update ${update} with ${updateOneIds.length} IDs`);
@@ -426,7 +429,7 @@
          }
          await Promise.allSettled(tasks);
          console.log(EJSON.stringify({ "state": "volatile storage", ...collSnapshot() }));
-         waitForCheckpoint();
+         await waitForCheckpoint();
          await waitForReplLag();
          snap = collSnapshot();
          console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
