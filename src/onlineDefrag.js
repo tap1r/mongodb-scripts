@@ -19,6 +19,10 @@
  *  - bucketed sampler streams _id-range batches (no $sort / $bucketAuto).
  *  - each wave dirties at most dirtyBudgetRatio of current reusable bytes, then checkpoints.
  *  - throttle when repl lag exceeds maxLagSeconds (rs.status, else lastWrite vs majority).
+ *
+ *  TODOs:
+ *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
+ *    instead of a fixed 0.9 — next discussion
  */
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>onlineDefrag.js
