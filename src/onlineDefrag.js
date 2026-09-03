@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.13"
+ *  Version: "0.1.14"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -37,7 +37,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.13" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.14" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -391,27 +391,25 @@
 
    async function main() {
       let snap = collSnapshot();
-      const {
-         iterations = 1,
-         concurrentUpdates: concurrencyCap = 1,
-         estimatedDataPageCount = 0
-      } = pageStats(snap, pageFillRatio, concurrentUpdatesRatio, totalUpdatesRatio);
-      const targetPages = Math.max(1, Math.ceil((estimatedDataPageCount || 1) * totalUpdatesRatio));
-      const maxWaves = Math.max(1, iterations);
+      const fill0 = pageStats(snap, pageFillRatio, concurrentUpdatesRatio, totalUpdatesRatio);
+      const concurrencyCap = Number(maxConcurrent) > 0 ? maxConcurrent : fill0.concurrentUpdates;
+      const nBatches0 = waveBatches(snap, fill0.dataPageSize, concurrencyCap);
+      const docsPerWave = Math.max(1, (fill0.pageFillTarget || 1) * Math.max(1, nBatches0));
+      const maxWaves = Math.max(1, Math.ceil((fill0.documentCount || 0) / docsPerWave));
 
       console.log(`sampler: ${sampler}`);
+      console.log(`waves: ${maxWaves} (docs ${fill0.documentCount} / (batch ${fill0.pageFillTarget} * concurrency ${Math.max(1, nBatches0)}))`);
       console.log(EJSON.stringify({ "state": "initial storage", ...snap }));
-      let pagesDone = 0;
-      for (let wave = 1; wave <= maxWaves && pagesDone < targetPages; ++wave) {
+      for (let wave = 1; wave <= maxWaves; ++wave) {
          const fill = pageStats(snap, pageFillRatio, concurrentUpdatesRatio, totalUpdatesRatio);
          const sampleSize = fill.pageFillTarget;
          const sampleRate = 1 / fill.pageFillActual;
-         const nBatches = waveBatches(snap, fill.dataPageSize, Number(maxConcurrent) > 0 ? maxConcurrent : concurrencyCap);
+         const nBatches = waveBatches(snap, fill.dataPageSize, concurrencyCap);
          if (nBatches < 1) {
             console.log('reusable-byte budget is empty; further rewrites would extend the file, stopping');
             break;
          }
-         console.log(`wave ${wave} batches ${nBatches} pageFillTarget ${sampleSize} sampleRate 1/${fill.pageFillActual} reusable ${snap.freeStorageSize} dirtyBudgetRatio ${dirtyBudgetRatio}`);
+         console.log(`wave ${wave}/${maxWaves} batches ${nBatches} pageFillTarget ${sampleSize} sampleRate 1/${fill.pageFillActual} reusable ${snap.freeStorageSize} dirtyBudgetRatio ${dirtyBudgetRatio}`);
          let tasks = [];
          let update = 0;
          for await (const ids of getIds(sampleSize, nBatches, sampleRate)) {
@@ -423,7 +421,6 @@
             tasks.push(rewriteIds(updateOneIds));
          }
          await Promise.allSettled(tasks);
-         pagesDone += update;
          console.log(EJSON.stringify({ "state": "volatile storage", ...collSnapshot() }));
          waitForCheckpoint();
          await waitForReplLag();
