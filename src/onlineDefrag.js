@@ -492,7 +492,7 @@
             parked.push(updateOneIds);
             await waitForCheckpoint();
             await waitForReplLag();
-            ++update;
+            update++;
             console.log(`\tforking concurrent update ${update} with ${updateOneIds.length} IDs`);
             tasks.push(rewriteIds(updateOneIds));
          }
@@ -509,7 +509,7 @@
             for (const ids of parked) {
                await waitForCheckpoint();
                await waitForReplLag();
-               ++replay;
+               replay++;
                console.log(`\tforking doubleParked replay ${replay} with ${ids.length} IDs`);
                replayTasks.push(rewriteIds(ids));
             }
