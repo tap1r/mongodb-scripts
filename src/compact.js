@@ -42,7 +42,8 @@ const options = {
    // "n": 25, // = % chance of being matched
    // "pattern": "random",
    "rounds": 1, // iterations of entropy
-   "compactions": 1 // iterations of compact
+   "compactions": 1, // iterations of compact
+   "filter": { db: "database", collection: "collection" } // query filter for dbstats
 };
 
 (({ dbName, collName, n = 25, rounds = 5, compactions = 1 } = options) => {
@@ -61,20 +62,20 @@ const options = {
       /*
        *  generate dataset with increased entropy
        */
-      console.log(`\nRound ${i} of ${rounds}:\tGenerating data`);
-      load('fuzzer.js');
+      // console.log(`\nRound ${i} of ${rounds}:\tGenerating data`);
+      //  load('fuzzer.js');
       console.log('Pruning data');
       // delete n% of existing documents
-      try { namespace.deleteMany(randFilter) }
-      catch(e) { console.log(e) }
+      // try { namespace.deleteMany(randFilter) }
+      // catch(e) { console.log(e) }
       /* console.log('\tUpdating data');
       try { namespace.updateMany(randFilter, update) }
       catch(e) { console.log(e) } */
    }
 
    // Report initial dbStats
-   console.log('Gathering initial dbStats');
-   load('dbstats.js');
+   // console.log('Gathering initial dbStats');
+   // load('dbstats.js');
 
    // Report dbStats pre-compaction
    console.log('Gathering pre-compaction dbStats');
