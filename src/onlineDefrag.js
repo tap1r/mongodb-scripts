@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.19"
+ *  Version: "0.1.22"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,6 +24,16 @@
  *  - do not start writes during a WT checkpoint; wait only while one is running.
  *  - after the last wave, wait for a checkpoint cycle before settled stats.
  *  - throttle when repl lag exceeds maxLagSeconds (rs.status, else lastWrite vs majority).
+ *  - strategy 'meetInMiddle': low-pass (_id: 1) while checkpoint idle, high-pass
+ *    (_id: -1) while it runs. After the first high pass completes, a reverse
+ *    high pass rewrites those buckets from the last (middle) boundary back
+ *    toward max _id. Writes are txn updateMany + $unset _id.
+ *  - strategy 'lowStressMode': single _id ascending pass (same ids/ranges
+ *    curator). Writes when checkpoint is idle; throttle by repl lag and
+ *    updates allocated: soft 7% / hard 8% (overshoot lowers soft).
+ *    Pause if dirty trigger or eviction_updates_trigger (10%) hits first.
+ *  - strategy 'updateOne': same walk/throttles as lowStressMode, but each txn
+ *    is updateOne on a single _id (curator batch size 1).
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -43,6 +53,9 @@
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection';" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { sampler: 'adjacent' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { sampler: 'doubleParked' };" [-f|--file] </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'meetInMiddle', curator: 'ids' };" [-f|--file] </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'lowStressMode', curator: 'ranges' };" [-f|--file] </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'updateOne' };" [-f|--file] </path/to/>onlineDefrag.js
  *
  *  We use 'var' to interoperate with mongosh's sloppy mode
  */
@@ -53,7 +66,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.19" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.22" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -78,10 +91,18 @@
    const userOptions = typeof defragOptions === 'undefined' ? {} : defragOptions;
    const {
       "sampler": sampler = 'bucketed', // 'random' | 'adjacent' | 'bucketed' | 'doubleParked'
-      "pageFillRatio": pageFillRatio = 0.9, // dest leaf fill (WT spill threshold)
-      "dirtyFillTarget": dirtyFillTarget = 0.10, // script cap (~10% cache); lets eviction flush, below ~20% trigger
+      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne'
+      "curator": curator = 'ids', // meetInMiddle: 'ids' | 'ranges'
+      "pageFillRatio": pageFillRatio = 0.9, // WT dest-leaf spill target (fixed)
+      "dirtyFillTarget": dirtyFillTarget = 0.08, // wave fill cap vs updates allocated % of cache
+      "dirtyTrigger": dirtyTrigger = 0.20, // meetInMiddle: stressed if dirty util >= this
+      "updatesTrigger": updatesTrigger = 0.10, // eviction_updates_trigger; stressed if updates util >= this
+      "lowStressDirtyMax": lowStressDirtyMax = 0.07, // updates allocated soft pause
+      "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
       "dirtyBudgetRatio": dirtyBudgetRatio = 0.5, // fallback: fraction of reusable pages when cache stats are missing
       "maxConcurrent": maxConcurrent,
+      "writeConcurrency": writeConcurrency = 4, // meetInMiddle / lowStressMode write forks
+      "curatorBatchSize": curatorBatchSize, // if set, overrides pageFillTarget for $in / $bucketAuto
       "maxLagSeconds": maxLagSeconds = 10, // pause new batches when lag exceeds this
       "passes": passes, // collection cover count; default 1
       "checkpointTimeoutMs": checkpointTimeoutMs
@@ -90,6 +111,16 @@
    function collSnapshot() {
       const { indexes, ...stats } = $collStats(nsDb, nsColl) || {};
       return stats;
+   }
+
+   let deferSettle = true;
+   function takeSettleSnapshot() {
+      if (deferSettle) {
+         deferSettle = false;
+         console.log('checkpoint complete; settle snapshot deferred to the following checkpoint');
+         return false;
+      }
+      return true;
    }
 
    function sampleDims(sampleSize = 1, concurrentUpdates = 1) {
@@ -122,7 +153,8 @@
       const avg = +avgObjSize > 0 ? +avgObjSize : 1;
       const nPages = Math.max(1, Math.ceil(live / dataPageSize));
       const pageFillActual = Math.max(1, Math.ceil((documentCount || 0) / nPages));
-      const pageFillTarget = Math.max(1, Math.ceil((pageFillRatio * dataPageSize * compression) / avg));
+      const leafFill = Math.max(1, Math.ceil((pageFillRatio * dataPageSize * compression) / avg));
+      const pageFillTarget = Math.max(1, Math.ceil(leafFill * 1.1));
       const batchSize = Math.max(pageFillTarget, pageFillActual);
 
       return {
@@ -136,14 +168,10 @@
    }
 
    function dirtyFillPages(leaf) {
-      const cache = serverStatus({ "wiredTiger": true }).wiredTiger?.cache;
-      if (!cache) return null;
-      const max = +cache['maximum bytes configured'];
-      const dirty = +cache['tracked dirty bytes in the cache'];
-      if (!(max > 0)) return null;
-      // Do not change mongod eviction_dirty_*; only how much dirty we create.
-      const frac = Math.min(+dirtyFillTarget || 0.10, 0.15);
-      const headroom = max * frac - (Number.isFinite(dirty) ? dirty : 0);
+      const c = wtCache();
+      if (!c) return null;
+      const frac = Math.min(+dirtyFillTarget || 0.08, 0.10);
+      const headroom = c.max * frac - c.updates;
       return Math.max(0, Math.floor(headroom / leaf));
    }
 
@@ -305,7 +333,7 @@
       "hint": { "_id": 1 } // must force hint to avoid $expr collscan
    };
 
-   async function rewriteIds(ids) {
+   async function rewriteFilter(filter, { one = false } = {}) {
       const session = db.getMongo().startSession({
          "readPreference": { "mode": "primary" },
          "causalConsistency": true
@@ -313,24 +341,477 @@
       const coll = session.getDatabase(nsDb).getCollection(nsColl);
       try {
          await session.withTransaction(async() => {
-            const { modifiedCount } = await coll.bulkWrite([{
-               "updateMany": {
-                  "filter": { "_id": { "$in": ids } },
-                  "update": updatePipeline,
-                  ...updateManyOpts
-               }
-            }], bulkOpts);
-            console.log(`\tmodifiedCount: ${modifiedCount}`);
+            const spec = one
+                       ? { "updateOne": { "filter": filter, "update": updatePipeline, ...updateManyOpts } }
+                       : { "updateMany": { "filter": filter, "update": updatePipeline, ...updateManyOpts } };
+            const { modifiedCount } = await coll.bulkWrite([spec], bulkOpts);
+            if (!one || modifiedCount !== 1) console.log(`\tmodifiedCount: ${modifiedCount}`);
          }, {
             "readConcern": { "level": "local" },
-            "writeConcern": { "w": 1, "j": false }, // ack in memory; rewrite is a no-op on data
+            "writeConcern": { "w": 1, "j": false },
             "comment": "online compacting updates"
          });
       } catch(error) {
-         // console.log(`txn error:`, error);
          console.log(`\ttxn conflict detected, aborting op`);
       } finally {
          await session.endSession();
+      }
+   }
+
+   function rewriteIds(ids) {
+      return rewriteFilter({ "_id": { "$in": ids } });
+   }
+
+   function rewriteOne(id) {
+      return rewriteFilter({ "_id": id }, { "one": true });
+   }
+
+   function jobIds(job) {
+      if (job.ids) return job.ids;
+      if (!job.range) return [];
+      return namespace.find({ "_id": job.range }, { "_id": 1 }).hint({ "_id": 1 }).toArray().map(d => d._id);
+   }
+
+   function jobFilter(job) {
+      return job.ids ? { "_id": { "$in": job.ids } } : { "_id": job.range };
+   }
+
+   function wtCache() {
+      const cache = serverStatus({ "wiredTiger": true }).wiredTiger?.cache;
+      if (!cache) return null;
+      const max = +cache['maximum bytes configured'];
+      if (!(max > 0)) return null;
+      return {
+         "max": max,
+         "dirty": +cache['tracked dirty bytes in the cache'] || 0,
+         "updates": +cache['bytes allocated for updates'] || 0,
+         "used": +cache['bytes currently in the cache'] || 0
+      };
+   }
+
+   function cacheUpdatesUtil() {
+      const c = wtCache();
+      return c ? c.updates / c.max : null;
+   }
+
+   function cacheStressed() {
+      const c = wtCache();
+      if (!c) return false;
+      const dirtyUtil = c.dirty / c.max;
+      const updatesUtil = c.updates / c.max;
+      const usedUtil = c.used / c.max;
+      return dirtyUtil >= dirtyTrigger || updatesUtil >= updatesTrigger || usedUtil >= 0.95;
+   }
+
+   function applyDirtyOvershoot(u, tune) {
+      if (u == null) return;
+      const over = Math.max(0, u - tune.hard);
+      const prev = tune.soft;
+      tune.soft = Math.max(0, tune.base - over);
+      if (tune.soft !== prev) {
+         console.log(`updates ${(u * 100).toFixed(2)}% hard ${(tune.hard * 100).toFixed(2)}%; soft ${(prev * 100).toFixed(2)}% -> ${(tune.soft * 100).toFixed(2)}%`);
+      }
+   }
+
+   async function waitForDirtyUnder(tune) {
+      let u = cacheUpdatesUtil();
+      if (u == null) return;
+      applyDirtyOvershoot(u, tune);
+      if (u < tune.soft) return;
+      console.log(`updates ${(u * 100).toFixed(2)}% >= soft ${(tune.soft * 100).toFixed(2)}%, pausing`);
+      while ((u = cacheUpdatesUtil()) != null) {
+         applyDirtyOvershoot(u, tune);
+         if (u < tune.soft) break;
+         await delay(1000);
+      }
+      console.log(`updates ${((u || 0) * 100).toFixed(2)}% (soft ${(tune.soft * 100).toFixed(2)}%), resuming`);
+   }
+
+   async function* curateIdBatches(direction, state) {
+      while (state.taken < state.maxDocs) {
+         const r = {};
+         if (direction === 1) {
+            if (state.afterId !== undefined) r.$gt = state.afterId;
+            if (state.meetHigh !== undefined) r.$lt = state.meetHigh;
+         } else {
+            if (state.beforeId !== undefined) r.$lt = state.beforeId;
+            if (state.meetLow !== undefined) r.$gt = state.meetLow;
+         }
+         const q = Object.keys(r).length ? { "_id": r } : {};
+         const n = Math.min(state.batchSize, state.maxDocs - state.taken);
+         const docs = namespace.find(q, { "_id": 1 }).sort({ "_id": direction })
+            .hint({ "_id": 1 }).limit(n).toArray();
+         if (!docs.length) return;
+         const ids = docs.map(d => d._id);
+         if (direction === 1) state.afterId = ids[ids.length - 1];
+         else state.beforeId = ids[ids.length - 1];
+         state.taken += ids.length;
+         yield { "ids": ids, "n": ids.length };
+      }
+   }
+
+   async function* curateRangeBatches(direction, state) {
+      const nBuckets = Math.max(1, Math.ceil(state.maxDocs / state.batchSize));
+      const pipeline = [
+         { "$sort": { "_id": direction } },
+         { "$limit": state.maxDocs },
+         { "$project": { "_id": 1 } },
+         { "$bucketAuto": {
+            "groupBy": "$_id",
+            "buckets": nBuckets,
+            "output": { "min": { "$min": "$_id" }, "max": { "$max": "$_id" }, "n": { "$sum": 1 } }
+         } }
+      ];
+      const rows = namespace.aggregate(pipeline, aggOpts("meetInMiddle $bucketAuto ranges", {
+         "hint": { "_id": 1 },
+         "allowDiskUse": true
+      })).toArray();
+      // $bucketAuto bounds are half-open: adjacent max === next min. Inclusive on
+      // both ends would rewrite the boundary _id twice. Last bucket in _id order
+      // is closed so the highest _id is not dropped.
+      const last = rows[rows.length - 1];
+      const ordered = direction === 1 ? rows : rows.slice().reverse();
+      for (const row of ordered) {
+         if (state.taken >= state.maxDocs) return;
+         state.taken += row.n || 0;
+         const range = (last && row === last)
+                     ? { "$gte": row.min, "$lte": row.max }
+                     : { "$gte": row.min, "$lt": row.max };
+         yield { "range": range, "n": row.n || 0 };
+      }
+   }
+
+   function scaledBatch(n) {
+      if (Number(curatorBatchSize) > 0) return Math.max(1, Math.ceil(+curatorBatchSize));
+      return Math.max(1, Math.ceil(n || 1));
+   }
+
+   function startCurator(direction, batchSize, maxDocs, kind = curator) {
+      const state = { "batchSize": scaledBatch(batchSize), "maxDocs": maxDocs, "taken": 0 };
+      const gen = kind === 'ranges'
+                ? curateRangeBatches(direction, state)
+                : curateIdBatches(direction, state);
+      return { state, gen };
+   }
+
+   async function meetInMiddleMain() {
+      let snap = collSnapshot();
+      let fill = pageStats(snap);
+      const half = Math.max(1, Math.ceil((fill.documentCount || 1) / 2));
+      const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
+      console.log(`strategy: meetInMiddle curator: ${curator} writeConcurrency: ${conc}`);
+      console.log(`half: ${half} batch: ${fill.batchSize} actualFill: ${fill.pageFillActual} targetFill: ${fill.pageFillTarget}`);
+      console.log(EJSON.stringify({ "state": "initial storage", ...snap }));
+
+      const low = startCurator(1, fill.pageFillTarget, half);
+      const high = startCurator(-1, fill.pageFillTarget, half);
+      const highClaimed = [];
+      let revJobs = null, revIdx = 0, met = false;
+      let prevRunning = false;
+      let didWork = false;
+      let idleLogged = false;
+      let inflight = [];
+
+      async function drainWrites() {
+         if (!inflight.length) return;
+         await Promise.allSettled(inflight);
+         inflight = [];
+      }
+
+      async function enqueueWrite(p, cap) {
+         inflight.push(p);
+         didWork = true;
+         while (inflight.length >= cap) await inflight.shift();
+      }
+
+      while (true) {
+         const lowDone = low.state.taken >= half;
+         const firstHighDone = high.state.taken >= half || met;
+         if (firstHighDone && revJobs == null) {
+            await drainWrites();
+            revJobs = highClaimed.slice().reverse();
+            revIdx = 0;
+            console.log(`high-reverse: ${revJobs.length} buckets from last high-pass boundary (middle) toward max _id`);
+         }
+         const reverseDone = firstHighDone && revJobs != null && revIdx >= revJobs.length;
+         if (lowDone && firstHighDone && reverseDone) break;
+
+         if (cacheStressed()) {
+            console.log('cache stressed, pausing meetInMiddle writes');
+            await drainWrites();
+            await delay(1000);
+            continue;
+         }
+         const ckpt = wtCheckpoint();
+         if (prevRunning && ckpt.available && !ckpt.running) {
+            await drainWrites();
+            if (takeSettleSnapshot()) {
+               console.log('checkpoint finished, refreshing settled collStats...');
+               snap = collSnapshot();
+               fill = pageStats(snap);
+               console.log(`settled targetFill ${fill.pageFillTarget} actualFill ${fill.pageFillActual} reusable ${snap.freeStorageSize}`);
+               console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
+               low.state.batchSize = scaledBatch(fill.pageFillTarget);
+               high.state.batchSize = scaledBatch(fill.pageFillTarget);
+            }
+         }
+         prevRunning = !!(ckpt.available && ckpt.running);
+
+         let ckptRunning = !!(ckpt.available && ckpt.running);
+         let wantLow = !ckptRunning && !lowDone;
+         let wantFirstHigh = ckptRunning && !firstHighDone;
+
+         // Lag throttle only when we are about to write on the idle path.
+         // Do not lag-wait while parked for the first high pass — that delayed
+         // noticing a checkpoint that started during the cool-off.
+         if (wantLow) await waitForReplLag({ "abortIfCheckpoint": true });
+         else if (firstHighDone && !reverseDone && !ckptRunning) {
+            await waitForReplLag({ "abortIfCheckpoint": true });
+         }
+         {
+            const again = wtCheckpoint();
+            ckptRunning = !!(again.available && again.running);
+            wantLow = !ckptRunning && !lowDone;
+            wantFirstHigh = ckptRunning && !firstHighDone;
+         }
+
+         if (wantLow || wantFirstHigh) {
+            idleLogged = false;
+            const pass = wantLow ? low : high;
+            const passName = wantLow ? 'low' : 'high';
+            if (wantFirstHigh) low.state.meetHigh = high.state.beforeId;
+            else high.state.meetLow = low.state.afterId;
+            const jobs = [];
+            for (let i = 0; i < conc && pass.state.taken < half; ++i) {
+               const { value, done } = await pass.gen.next();
+               if (done || value == null) break;
+               jobs.push(value);
+            }
+            if (!jobs.length) {
+               pass.state.taken = half;
+               continue;
+            }
+            for (const job of jobs) {
+               if (wantFirstHigh) highClaimed.push(job);
+               console.log(`\t${passName} n=${job.n} filter=${job.ids ? ('$in ' + job.ids.length) : 'range'} beforeId=${high.state.beforeId}`);
+               await enqueueWrite(rewriteFilter(jobFilter(job)), conc);
+            }
+            if (!met && low.state.afterId !== undefined && high.state.beforeId !== undefined) {
+               const gap = namespace.find({
+                  "_id": { "$gt": low.state.afterId, "$lt": high.state.beforeId }
+               }).hint({ "_id": 1 }).limit(1).toArray();
+               if (!gap.length) {
+                  console.log('meetInMiddle: low and high passes met');
+                  met = true;
+               }
+            }
+         } else if (firstHighDone && !reverseDone) {
+            idleLogged = false;
+            const job = revJobs[revIdx++];
+            console.log(`\thigh-reverse ${revIdx}/${revJobs.length} n=${job.n}`);
+            await enqueueWrite(rewriteFilter(jobFilter(job)), conc);
+         } else {
+            if (!idleLogged) {
+               if (ckptRunning) {
+                  console.log('high pass complete, waiting for checkpoint to finish for low pass');
+               } else if (high.state.taken > 0 || highClaimed.length) {
+                  console.log('waiting for checkpoint to continue high pass');
+               } else {
+                  console.log('waiting for checkpoint to start high pass');
+               }
+               idleLogged = true;
+            }
+            await delay(500);
+         }
+      }
+
+      await drainWrites();
+      if (didWork) {
+         await waitForCheckpoint();
+         snap = collSnapshot();
+         fill = pageStats(snap);
+         console.log(`final targetFill ${fill.pageFillTarget} actualFill ${fill.pageFillActual}`);
+         console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
+      }
+   }
+
+   async function lowStressModeMain() {
+      let snap = collSnapshot();
+      let fill = pageStats(snap);
+      const concExplicit = Object.prototype.hasOwnProperty.call(userOptions, 'writeConcurrency');
+      const concNow = () => (concExplicit && Number(writeConcurrency) > 0)
+                          ? Math.ceil(writeConcurrency)
+                          : 8;
+      let conc = concNow();
+      const dirtyTune = {
+         "base": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
+         "soft": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
+         "hard": Number(lowStressDirtyHard) > 0 ? +lowStressDirtyHard : 0.08
+      };
+      const coverPasses = Object.prototype.hasOwnProperty.call(userOptions, 'passes') && Number(passes) > 0
+                        ? Math.ceil(passes)
+                        : 3;
+      console.log(`strategy: lowStressMode curator: ${curator} writeConcurrency: ${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}%`);
+      console.log(`docs: ${fill.documentCount} batch: ${fill.batchSize} curatorBatch: ${scaledBatch(fill.pageFillTarget)} targetFill: ${fill.pageFillTarget} actualFill: ${fill.pageFillActual}`);
+      console.log(EJSON.stringify({ "state": "initial storage", ...snap }));
+
+      let prevRunning = false;
+      let didWork = false;
+      let inflight = [];
+
+      async function drainWrites() {
+         if (!inflight.length) return;
+         await Promise.allSettled(inflight);
+         inflight = [];
+      }
+
+      async function enqueueWrite(p, cap) {
+         inflight.push(p);
+         didWork = true;
+         while (inflight.length >= cap) await inflight.shift();
+      }
+
+      for (let pass = 1; pass <= coverPasses; ++pass) {
+         fill = pageStats(snap);
+         const direction = (pass % 2 === 1) ? 1 : -1;
+         const walk = startCurator(direction, fill.pageFillTarget, fill.documentCount || 1);
+         console.log(`lowStressMode pass ${pass}/${coverPasses} maxDocs ${walk.state.maxDocs} sort _id:${direction}`);
+         while (walk.state.taken < walk.state.maxDocs) {
+            await waitForDirtyUnder(dirtyTune);
+            await waitForReplLag({ "abortIfCheckpoint": true });
+            const beforeCkpt = wtCheckpoint();
+            await waitForCheckpoint();
+            const ckpt = wtCheckpoint();
+            if (ckpt.available && ckpt.running) continue;
+            if (ckpt.available && !ckpt.running && (prevRunning || beforeCkpt.running)) {
+               await drainWrites();
+               if (takeSettleSnapshot()) {
+                  snap = collSnapshot();
+                  fill = pageStats(snap);
+                  conc = concNow();
+                  walk.state.batchSize = scaledBatch(fill.pageFillTarget);
+                  console.log(`settled targetFill ${fill.pageFillTarget} actualFill ${fill.pageFillActual} reusable ${snap.freeStorageSize}`);
+                  console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
+               }
+            }
+            prevRunning = !!(ckpt.available && ckpt.running);
+
+            const jobs = [];
+            for (let i = 0; i < conc && walk.state.taken < walk.state.maxDocs; ++i) {
+               const { value, done } = await walk.gen.next();
+               if (done || value == null) break;
+               jobs.push(value);
+            }
+            if (!jobs.length) break;
+            for (const job of jobs) {
+               console.log(`\tlowStress n=${job.n} filter=${job.ids ? ('$in ' + job.ids.length) : 'range'}`);
+               await enqueueWrite(rewriteFilter(jobFilter(job)), conc);
+            }
+         }
+         if (pass < coverPasses) {
+            await drainWrites();
+            console.log(`pass ${pass} complete; waiting for next checkpoint to start and finish before pass ${pass + 1}`);
+            await waitForCheckpoint({ "settle": true });
+            snap = collSnapshot();
+            fill = pageStats(snap);
+            conc = concNow();
+            console.log(`between-pass settled targetFill ${fill.pageFillTarget} actualFill ${fill.pageFillActual} reusable ${snap.freeStorageSize}`);
+            console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
+         }
+      }
+
+      await drainWrites();
+      if (didWork) {
+         snap = collSnapshot();
+         fill = pageStats(snap);
+         console.log(`final targetFill ${fill.pageFillTarget} actualFill ${fill.pageFillActual}`);
+         console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
+      }
+   }
+
+   async function updateOneModeMain() {
+      let snap = collSnapshot();
+      let fill = pageStats(snap);
+      const concExplicit = Object.prototype.hasOwnProperty.call(userOptions, 'writeConcurrency');
+      const concNow = () => (concExplicit && Number(writeConcurrency) > 0)
+                          ? Math.ceil(writeConcurrency)
+                          : Math.max(1, fill.pageFillTarget || 1);
+      let conc = concNow();
+      const dirtyTune = {
+         "base": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
+         "soft": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
+         "hard": Number(lowStressDirtyHard) > 0 ? +lowStressDirtyHard : 0.08
+      };
+      const coverPasses = Number(passes) > 0 ? Math.ceil(passes) : 1;
+      console.log(`strategy: updateOne writeConcurrency: ${conc} (pageFillTarget) updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}%`);
+      console.log(`docs: ${fill.documentCount} (1 doc per updateOne) actualFill: ${fill.pageFillActual} targetFill: ${fill.pageFillTarget}`);
+      console.log(EJSON.stringify({ "state": "initial storage", ...snap }));
+
+      let prevRunning = false;
+      let didWork = false;
+      let written = 0;
+      let inflight = [];
+
+      async function drainWrites() {
+         if (!inflight.length) return;
+         await Promise.allSettled(inflight);
+         inflight = [];
+      }
+
+      async function enqueueWrite(p, cap) {
+         inflight.push(p);
+         didWork = true;
+         while (inflight.length >= cap) await inflight.shift();
+      }
+
+      for (let pass = 1; pass <= coverPasses; ++pass) {
+         fill = pageStats(snap);
+         const walk = startCurator(1, 1, fill.documentCount || 1, 'ids');
+         walk.state.batchSize = 1;
+         console.log(`updateOne pass ${pass}/${coverPasses} maxDocs ${walk.state.maxDocs}`);
+         while (walk.state.taken < walk.state.maxDocs) {
+            await waitForDirtyUnder(dirtyTune);
+            await waitForReplLag({ "abortIfCheckpoint": true });
+            const beforeCkpt = wtCheckpoint();
+            await waitForCheckpoint();
+            const ckpt = wtCheckpoint();
+            if (ckpt.available && ckpt.running) continue;
+            if (ckpt.available && !ckpt.running && (prevRunning || beforeCkpt.running)) {
+               await drainWrites();
+               if (takeSettleSnapshot()) {
+                  snap = collSnapshot();
+                  fill = pageStats(snap);
+                  conc = concNow();
+                  walk.state.batchSize = 1;
+                  console.log(`settled targetFill ${fill.pageFillTarget} actualFill ${fill.pageFillActual} reusable ${snap.freeStorageSize} writeConcurrency ${conc}`);
+                  console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
+               }
+            }
+            prevRunning = !!(ckpt.available && ckpt.running);
+
+            const jobs = [];
+            for (let i = 0; i < conc && walk.state.taken < walk.state.maxDocs; ++i) {
+               const { value, done } = await walk.gen.next();
+               if (done || value == null) break;
+               jobs.push(value);
+            }
+            if (!jobs.length) break;
+            for (const job of jobs) {
+               for (const id of jobIds(job)) {
+                  written++;
+                  if (written % 100 === 0) console.log(`\tupdateOne written ${written}`);
+                  await enqueueWrite(rewriteOne(id), conc);
+               }
+            }
+         }
+      }
+
+      await drainWrites();
+      if (didWork) {
+         snap = collSnapshot();
+         fill = pageStats(snap);
+         console.log(`final targetFill ${fill.pageFillTarget} actualFill ${fill.pageFillActual} written ${written}`);
+         console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
       }
    }
 
@@ -355,36 +836,63 @@
       await new Promise(resolve => setTimeout(resolve, ms));
    }
 
-   function replLag() {
-      // Prefer member optime spread; M0/Flex: replSetGetStatus is unsupported.
+   let lagSample = { "at": 0, "value": null };
+
+   function timestampSec(ts) {
+      if (ts == null) return null;
+      if (typeof ts.t === 'number') return ts.t;
+      if (ts.t != null && ts.i != null) return Number(ts.t);
+      return null;
+   }
+
+   function replLag(fresh = false) {
+      // Seconds the commit point / secondaries trail this node's applied optime.
+      // Do not use optimeDate min/max (heartbeat alignment → false 0).
+      if (!fresh && lagSample.value && Date.now() - lagSample.at < 1000) return lagSample.value;
+      let value;
       try {
-         const { members = [] } = db.adminCommand({ "replSetGetStatus": 1 });
-         const dates = members.filter(({ health, stateStr }) =>
-            health && (stateStr === 'PRIMARY' || stateStr === 'SECONDARY')
-         ).map(({ optimeDate }) => optimeDate).filter(d => d != null);
-         if (dates.length >= 2) {
-            return {
-               "available": true,
-               "lagSeconds": Math.max(0, (Math.max(...dates) - Math.min(...dates)) / 1000),
-               "source": "replSetGetStatus"
-            };
+         const st = db.adminCommand({ "replSetGetStatus": 1 });
+         let lag = 0, n = 0;
+         const applied = timestampSec(st.optimes?.appliedOpTime?.ts ?? st.optimes?.writtenOpTime?.ts);
+         const committed = timestampSec(st.optimes?.lastCommittedOpTime?.ts);
+         if (applied != null && committed != null) {
+            n++;
+            lag = Math.max(lag, applied - committed);
          }
+         const members = st.members || [];
+         const now = st.date ? +new Date(st.date) : Date.now();
+         const primary = members.find(m => m.health && m.stateStr === 'PRIMARY');
+         const p = timestampSec(primary?.optime?.ts ?? primary?.optime) ?? (primary?.optimeDate != null ? +new Date(primary.optimeDate) / 1000 : null);
+         if (p != null) {
+            for (const m of members) {
+               if (!m.health || m.stateStr !== 'SECONDARY') continue;
+               if (m.lastHeartbeat && now - +new Date(m.lastHeartbeat) > 4000) continue;
+               const s = timestampSec(m.optime?.ts ?? m.optime) ?? (m.optimeDate != null ? +new Date(m.optimeDate) / 1000 : null);
+               if (s == null) continue;
+               n++;
+               lag = Math.max(lag, p - s);
+            }
+         }
+         if (n) value = { "available": true, "lagSeconds": Math.max(0, lag), "source": "replSetGetStatus" };
       } catch(_) { /* M0/Flex / unauthorized */ }
-      const { lastWrite } = serverStatus({ "repl": true }).repl || {};
-      const last = lastWrite?.lastWriteDate;
-      const maj = lastWrite?.majorityWriteDate;
-      if (last == null || maj == null) {
-         return { "available": false, "lagSeconds": 0, "source": null };
+      if (!value) {
+         const { lastWrite } = serverStatus({ "repl": true }).repl || {};
+         const last = lastWrite?.lastWriteDate;
+         const maj = lastWrite?.majorityWriteDate;
+         value = (last == null || maj == null)
+               ? { "available": false, "lagSeconds": 0, "source": null }
+               : {
+                  "available": true,
+                  "lagSeconds": Math.max(0, (new Date(last) - new Date(maj)) / 1000),
+                  "source": "lastWrite"
+               };
       }
-      return {
-         "available": true,
-         "lagSeconds": Math.max(0, (new Date(last) - new Date(maj)) / 1000),
-         "source": "lastWrite"
-      };
+      lagSample = { "at": Date.now(), "value": value };
+      return value;
    }
 
    let lagSkipLogged = false;
-   async function waitForReplLag() {
+   async function waitForReplLag({ abortIfCheckpoint = false } = {}) {
       const cap = Number(maxLagSeconds) > 0 ? +maxLagSeconds : 10;
       let { available, lagSeconds, source } = replLag();
       if (!available) {
@@ -398,10 +906,21 @@
       const timeoutMs = Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000;
       const deadline = Date.now() + timeoutMs;
       console.log(`repl lag ${lagSeconds.toFixed(1)}s via ${source} > ${cap}s, throttling...`);
+      // Optime lag is not a wall-clock countdown: with writes paused, secondaries
+      // can apply the backlog in one interval (14s → 0s). Wait at least (lag-cap)
+      // before the first resume check, then poll every 1s.
+      const minCoolMs = Math.max(1000, (lagSeconds - cap) * 1000);
+      await delay(Math.min(minCoolMs, Math.max(1, deadline - Date.now())));
       do {
-         await delay(Math.min(1000, Math.max(1, deadline - Date.now())));
-         ({ available, lagSeconds, source } = replLag());
+         if (abortIfCheckpoint && wtCheckpoint().running) {
+            console.log('checkpoint running, ending lag throttle for high pass');
+            return;
+         }
+         ({ available, lagSeconds, source } = replLag(true));
          if (!available) return;
+         if (lagSeconds <= cap) break;
+         console.log(`repl lag ${lagSeconds.toFixed(1)}s via ${source}, still throttling`);
+         await delay(Math.min(1000, Math.max(1, deadline - Date.now())));
       } while (lagSeconds > cap && Date.now() < deadline);
       if (lagSeconds > cap) {
          console.log(`repl lag still ${lagSeconds.toFixed(1)}s after throttle timeout, continuing`);
@@ -537,7 +1056,10 @@
    }
 
    try {
-      await main();
+      if (strategy === 'meetInMiddle' || sampler === 'meetInMiddle') await meetInMiddleMain();
+      else if (strategy === 'lowStressMode' || sampler === 'lowStressMode') await lowStressModeMain();
+      else if (strategy === 'updateOne' || sampler === 'updateOne') await updateOneModeMain();
+      else await main();
    } catch(e) {
       console.log('[red][ERROR][/]', e.errmsg || e.message || String(e));
       throw e;
