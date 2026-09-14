@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.22"
+ *  Version: "0.1.23"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -34,6 +34,10 @@
  *    Pause if dirty trigger or eviction_updates_trigger (10%) hits first.
  *  - strategy 'updateOne': same walk/throttles as lowStressMode, but each txn
  *    is updateOne on a single _id (curator batch size 1).
+ *  - strategy 'slidingShuffle': calibrate TFR from $sample+$merge into a temp
+ *    collection (same compressor); TFR passes, each taking _id ranks
+ *    p, p+TFR, p+2TFR, … in batches of TFR. Writes only when checkpoint idle
+ *    and repl lag is in bounds. TFR is fixed after calibration.
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -56,6 +60,7 @@
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'meetInMiddle', curator: 'ids' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'lowStressMode', curator: 'ranges' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'updateOne' };" [-f|--file] </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'slidingShuffle' };" [-f|--file] </path/to/>onlineDefrag.js
  *
  *  We use 'var' to interoperate with mongosh's sloppy mode
  */
@@ -66,7 +71,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.22" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.23" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -91,7 +96,8 @@
    const userOptions = typeof defragOptions === 'undefined' ? {} : defragOptions;
    const {
       "sampler": sampler = 'bucketed', // 'random' | 'adjacent' | 'bucketed' | 'doubleParked'
-      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne'
+      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle'
+      "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default ~16 leaves
       "curator": curator = 'ids', // meetInMiddle: 'ids' | 'ranges'
       "pageFillRatio": pageFillRatio = 0.9, // WT dest-leaf spill target (fixed)
       "dirtyFillTarget": dirtyFillTarget = 0.08, // wave fill cap vs updates allocated % of cache
@@ -815,6 +821,124 @@
       }
    }
 
+   async function calibrateTFR() {
+      const src = collSnapshot();
+      const fill = pageStats(src);
+      const compressor = (src.compressor && src.compressor !== 'mixed') ? src.compressor : 'snappy';
+      const avg = +src.avgObjSize > 0 ? +src.avgObjSize : 256;
+      const leaf = fill.dataPageSize || 32 * 1024;
+      const sampleN = Math.min(src.objects || 0, Number(shuffleSampleSize) > 0
+         ? Math.ceil(+shuffleSampleSize)
+         : Math.max(1000, Math.ceil((leaf * 16) / avg)));
+      if (sampleN < 1) throw new Error('slidingShuffle: empty namespace, cannot calibrate TFR');
+      const oid = new ObjectId();
+      const hex = typeof oid.toHexString === 'function'
+                ? oid.toHexString()
+                : String(oid).replace(/[^a-f0-9]/gi, '').slice(-24);
+      const tmpName = `ss_${hex}`;
+      const tmpDb = db.getSiblingDB(nsDb);
+      console.log(`slidingShuffle calibrate: $sample ${sampleN} compressor=${compressor} -> ${nsDb}.${tmpName}`);
+      try {
+         tmpDb.createCollection(tmpName, {
+            "storageEngine": { "wiredTiger": { "configString": `block_compressor=${compressor}` } }
+         });
+      } catch(_) {
+         tmpDb.createCollection(tmpName);
+      }
+      console.log(`calibrate collection created (kept until strategy ends): ${nsDb}.${tmpName}`);
+      namespace.aggregate([
+         { "$sample": { "size": sampleN } },
+         { "$merge": {
+            "into": { "db": nsDb, "coll": tmpName },
+            "whenMatched": "replace",
+            "whenNotMatched": "insert"
+         } }
+      ], aggOpts("slidingShuffle calibrate $merge")).toArray();
+      console.log('calibrate: waiting for checkpoint before packed $collStats');
+      await waitForCheckpoint({ "settle": true });
+      const packed = $collStats(nsDb, tmpName) || {};
+      const { indexes, ...stats } = packed;
+      const ps = pageStats(stats);
+      const live = Math.max(0, (stats.storageSize || 0) - (stats.freeStorageSize || 0));
+      const compression = live > 0 ? (stats.dataSize || 0) / live : 1;
+      const leafFill = Math.max(1, Math.ceil((0.9 * (ps.dataPageSize || leaf) * compression) / (stats.avgObjSize > 0 ? stats.avgObjSize : avg)));
+      let tfr = Math.max(1, ps.pageFillActual);
+      if (ps.nPages <= 1) {
+         tfr = leafFill;
+         console.log(`packed nPages=${ps.nPages} (unsettled or tiny file); TFR from 0.9 leaf fill = ${tfr}`);
+      }
+      console.log(`calibrated TFR=${tfr} compression=${compression.toFixed(3)} packedFill=${ps.pageFillActual} packedPages=${ps.nPages} objects=${ps.documentCount} storageSize=${stats.storageSize} keep ${nsDb}.${tmpName}`);
+      return { "tfr": tfr, "tmpName": tmpName, "tmpDb": tmpDb, "compression": compression, "ps": ps };
+   }
+
+   async function slidingShuffleMain() {
+      const srcSnap = collSnapshot();
+      console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
+      let cal;
+      try {
+      cal = await calibrateTFR();
+      const tfr = cal.tfr;
+      const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 2);
+      console.log(`strategy: slidingShuffle TFR=${tfr} passes=${tfr} batch=${tfr} writeConcurrency=${conc}`);
+
+      let inflight = [];
+      async function drainWrites() {
+         if (!inflight.length) return;
+         await Promise.allSettled(inflight);
+         inflight = [];
+      }
+      async function enqueueWrite(p, cap) {
+         inflight.push(p);
+         while (inflight.length >= cap) await inflight.shift();
+      }
+
+      for (let p = 0; p < tfr; ++p) {
+         console.log(`slidingShuffle pass ${p + 1}/${tfr} (ranks ${p}, ${p + tfr}, ${p + 2 * tfr}, …)`);
+         let afterId, i = 0;
+         for (;;) {
+            await waitForReplLag({ "abortIfCheckpoint": true });
+            await waitForCheckpoint();
+            const ckpt = wtCheckpoint();
+            if (ckpt.available && ckpt.running) continue;
+            const ids = [];
+            const q = afterId !== undefined ? { "_id": { "$gt": afterId } } : {};
+            const cursor = namespace.find(q, { "_id": 1 }).sort({ "_id": 1 }).hint({ "_id": 1 });
+            let eof = true;
+            try {
+               for await (const doc of cursor) {
+                  if (i % tfr === p) {
+                     ids.push(doc._id);
+                     afterId = doc._id;
+                  }
+                  i++;
+                  if (ids.length >= tfr) {
+                     eof = false;
+                     break;
+                  }
+               }
+            } finally {
+               try { cursor.close(); } catch(_) { /* exhausted */ }
+            }
+            if (!ids.length) break;
+            console.log(`\tslidingShuffle n=${ids.length} filter=$in ${ids.length}`);
+            await enqueueWrite(rewriteFilter({ "_id": { "$in": ids } }), conc);
+            if (eof) break;
+         }
+         await drainWrites();
+      }
+
+      await drainWrites();
+      console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
+      } finally {
+         if (cal?.tmpName) {
+            try {
+               cal.tmpDb.getCollection(cal.tmpName).drop();
+               console.log(`dropped calibrate collection ${nsDb}.${cal.tmpName}`);
+            } catch(_) { /* ignore */ }
+         }
+      }
+   }
+
    function wtCheckpoint() {
       // WT-11171: v8+ wiredTiger.checkpoint; v7 wiredTiger.transaction.
       // mongos / Atlas M0/Flex / non-WT: no wiredTiger section.
@@ -1059,6 +1183,7 @@
       if (strategy === 'meetInMiddle' || sampler === 'meetInMiddle') await meetInMiddleMain();
       else if (strategy === 'lowStressMode' || sampler === 'lowStressMode') await lowStressModeMain();
       else if (strategy === 'updateOne' || sampler === 'updateOne') await updateOneModeMain();
+      else if (strategy === 'slidingShuffle' || sampler === 'slidingShuffle') await slidingShuffleMain();
       else await main();
    } catch(e) {
       console.log('[red][ERROR][/]', e.errmsg || e.message || String(e));
