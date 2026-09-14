@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.23"
+ *  Version: "0.1.25"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -35,9 +35,11 @@
  *  - strategy 'updateOne': same walk/throttles as lowStressMode, but each txn
  *    is updateOne on a single _id (curator batch size 1).
  *  - strategy 'slidingShuffle': calibrate TFR from $sample+$merge into a temp
- *    collection (same compressor). One cover: ceil(docs/TFR) adjacent
- *    non-overlapping _id batches of TFR docs each (each _id once). Writes
- *    only when checkpoint idle and repl lag is in bounds. TFR is fixed.
+ *    collection (same compressor). TFR passes; pass p takes _id ranks
+ *    p, p+TFR, p+2TFR, … in batches of TFR (adjacent stride ordinals).
+ *    Each _id once. Writes when checkpoint idle, lag and updates % in bounds.
+ *  - strategy 'slidingWindow': calibrate TFR like slidingShuffle; adjacent
+ *    consecutive _id batches of TFR (1–TFR, TFR+1–2TFR, …). Same gates.
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -61,6 +63,7 @@
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'lowStressMode', curator: 'ranges' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'updateOne' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'slidingShuffle' };" [-f|--file] </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'slidingWindow' };" [-f|--file] </path/to/>onlineDefrag.js
  *
  *  We use 'var' to interoperate with mongosh's sloppy mode
  */
@@ -71,7 +74,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.23" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.25" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -96,7 +99,7 @@
    const userOptions = typeof defragOptions === 'undefined' ? {} : defragOptions;
    const {
       "sampler": sampler = 'bucketed', // 'random' | 'adjacent' | 'bucketed' | 'doubleParked'
-      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle'
+      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow'
       "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default ~16 leaves
       "curator": curator = 'ids', // meetInMiddle: 'ids' | 'ranges'
       "pageFillRatio": pageFillRatio = 0.9, // WT dest-leaf spill target (fixed)
@@ -107,11 +110,12 @@
       "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
       "dirtyBudgetRatio": dirtyBudgetRatio = 0.5, // fallback: fraction of reusable pages when cache stats are missing
       "maxConcurrent": maxConcurrent,
-      "writeConcurrency": writeConcurrency = 2, // meetInMiddle / lowStressMode / slidingShuffle write forks
+      "writeConcurrency": writeConcurrency = 1, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow write forks
       "curatorBatchSize": curatorBatchSize, // if set, overrides pageFillTarget for $in / $bucketAuto
       "maxLagSeconds": maxLagSeconds = 10, // pause new batches when lag exceeds this
       "passes": passes, // collection cover count; default 1
-      "checkpointTimeoutMs": checkpointTimeoutMs
+      "checkpointTimeoutMs": checkpointTimeoutMs,
+      "updateDelayMs": updateDelayMs = 100 // pause before every rewrite
    } = userOptions;
 
    function collSnapshot() {
@@ -340,6 +344,7 @@
    };
 
    async function rewriteFilter(filter, { one = false } = {}) {
+      if (Number(updateDelayMs) > 0) await delay(updateDelayMs);
       const session = db.getMongo().startSession({
          "readPreference": { "mode": "primary" },
          "causalConsistency": true
@@ -354,7 +359,7 @@
             if (!one || modifiedCount !== 1) console.log(`\tmodifiedCount: ${modifiedCount}`);
          }, {
             "readConcern": { "level": "local" },
-            "writeConcern": { "w": 1, "j": false },
+            "writeConcern": { "w": "majority", "j": true },
             "comment": "online compacting updates"
          });
       } catch(error) {
@@ -647,7 +652,7 @@
       const concExplicit = Object.prototype.hasOwnProperty.call(userOptions, 'writeConcurrency');
       const concNow = () => (concExplicit && Number(writeConcurrency) > 0)
                           ? Math.ceil(writeConcurrency)
-                          : 2;
+                          : 1;
       let conc = concNow();
       const dirtyTune = {
          "base": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
@@ -856,7 +861,28 @@
       ], aggOpts("slidingShuffle calibrate $merge")).toArray();
       console.log('calibrate: waiting for checkpoint before packed $collStats');
       await waitForCheckpoint({ "settle": true });
-      const packed = $collStats(nsDb, tmpName) || {};
+      let packed = $collStats(nsDb, tmpName) || {};
+      if (!wtCheckpoint().available) {
+         const timeoutMs = Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000;
+         const minWaitMs = Math.min(60000, timeoutMs);
+         console.log(`M0: no checkpoint metrics; waiting ${minWaitMs}ms then polling packed $collStats until nPages>1 or ${timeoutMs}ms`);
+         await delay(minWaitMs);
+         const deadline = Date.now() + Math.max(0, timeoutMs - minWaitMs);
+         let prevSz, stable = 0;
+         for (;;) {
+            packed = $collStats(nsDb, tmpName) || {};
+            const nPages = pageStats(packed).nPages;
+            console.log(`calibrate poll nPages=${nPages} storageSize=${packed.storageSize} objects=${packed.objects}`);
+            if (nPages > 1 && packed.storageSize === prevSz) break;
+            if (packed.storageSize === prevSz) {
+               stable++;
+               if (stable >= 2) break;
+            } else stable = 0;
+            prevSz = packed.storageSize;
+            if (Date.now() >= deadline) break;
+            await delay(5000);
+         }
+      }
       const { indexes, ...stats } = packed;
       const ps = pageStats(stats);
       const live = Math.max(0, (stats.storageSize || 0) - (stats.freeStorageSize || 0));
@@ -867,7 +893,8 @@
          tfr = leafFill;
          console.log(`packed nPages=${ps.nPages} (unsettled or tiny file); TFR from 0.9 leaf fill = ${tfr}`);
       }
-      console.log(`calibrated TFR=${tfr} compression=${compression.toFixed(3)} packedFill=${ps.pageFillActual} packedPages=${ps.nPages} objects=${ps.documentCount} storageSize=${stats.storageSize} keep ${nsDb}.${tmpName}`);
+      tfr = Math.max(1, Math.ceil(tfr * 0.9));
+      console.log(`calibrated TFR=${tfr} (0.9x packed) compression=${compression.toFixed(3)} packedFill=${ps.pageFillActual} packedPages=${ps.nPages} objects=${ps.documentCount} storageSize=${stats.storageSize} keep ${nsDb}.${tmpName}`);
       return { "tfr": tfr, "tmpName": tmpName, "tmpDb": tmpDb, "compression": compression, "ps": ps };
    }
 
@@ -879,14 +906,14 @@
       cal = await calibrateTFR();
       const tfr = cal.tfr;
       const nDocs = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
-      const totalPasses = Math.max(1, Math.ceil(nDocs / tfr));
-      const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 2);
+      const totalBatches = Math.max(1, Math.ceil(nDocs / tfr));
+      const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
       const dirtyTune = {
          "base": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
          "soft": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
          "hard": Number(lowStressDirtyHard) > 0 ? +lowStressDirtyHard : 0.08
       };
-      console.log(`strategy: slidingShuffle TFR=${tfr} passes=${totalPasses} (docs ${nDocs} / TFR) batch=${tfr} writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}%`);
+      console.log(`strategy: slidingShuffle TFR=${tfr} stridePasses=${tfr} coverBatches=${totalBatches} (docs ${nDocs} / TFR) idsPerBatch=${tfr} writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}%`);
 
       let inflight = [];
       async function drainWrites() {
@@ -899,23 +926,103 @@
          while (inflight.length >= cap) await inflight.shift();
       }
 
-      let afterId;
-      for (let pass = 1; pass <= totalPasses; ++pass) {
+      let globalBatch = 0;
+      for (let p = 0; p < tfr; ++p) {
+         console.log(`slidingShuffle stride ${p + 1}/${tfr} (ranks ${p}, ${p + tfr}, ${p + 2 * tfr}, …) until EOF`);
+         let afterId, i = 0, strideBatch = 0;
+         for (;;) {
+            await waitForDirtyUnder(dirtyTune);
+            await waitForReplLag({ "abortIfCheckpoint": true });
+            await waitForCheckpoint();
+            const ckpt = wtCheckpoint();
+            if (ckpt.available && ckpt.running) continue;
+            const ids = [];
+            const q = afterId !== undefined ? { "_id": { "$gt": afterId } } : {};
+            const cursor = namespace.find(q, { "_id": 1 }).sort({ "_id": 1 }).hint({ "_id": 1 });
+            let eof = true;
+            try {
+               for await (const doc of cursor) {
+                  if (i % tfr === p) {
+                     ids.push(doc._id);
+                     afterId = doc._id;
+                  }
+                  i++;
+                  if (ids.length >= tfr) {
+                     eof = false;
+                     break;
+                  }
+               }
+            } finally {
+               try { cursor.close(); } catch(_) { /* exhausted */ }
+            }
+            if (!ids.length) break;
+            strideBatch++;
+            globalBatch++;
+            console.log(`\tslidingShuffle stride ${p + 1}/${tfr} batch ${strideBatch} global ${globalBatch}/${totalBatches} n=${ids.length} filter=$in ${ids.length}`);
+            await enqueueWrite(rewriteFilter({ "_id": { "$in": ids } }), conc);
+            if (eof) break;
+         }
+         await drainWrites();
+      }
+
+      await drainWrites();
+      console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
+      } finally {
+         if (cal?.tmpName) {
+            try {
+               cal.tmpDb.getCollection(cal.tmpName).drop();
+               console.log(`dropped calibrate collection ${nsDb}.${cal.tmpName}`);
+            } catch(_) { /* ignore */ }
+         }
+      }
+   }
+
+   async function slidingWindowMain() {
+      const srcSnap = collSnapshot();
+      console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
+      let cal;
+      try {
+      cal = await calibrateTFR();
+      const nDocs = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
+      const batch = Object.prototype.hasOwnProperty.call(userOptions, 'curatorBatchSize') && Number(curatorBatchSize) > 0
+                  ? Math.ceil(+curatorBatchSize)
+                  : cal.tfr;
+      const totalBatches = Math.max(1, Math.ceil(nDocs / batch));
+      const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
+      const dirtyTune = {
+         "base": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
+         "soft": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
+         "hard": Number(lowStressDirtyHard) > 0 ? +lowStressDirtyHard : 0.08
+      };
+      console.log(`strategy: slidingWindow TFR=${cal.tfr} batch=${batch} buckets=${totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}%`);
+
+      let inflight = [];
+      async function drainWrites() {
+         if (!inflight.length) return;
+         await Promise.allSettled(inflight);
+         inflight = [];
+      }
+      async function enqueueWrite(p, cap) {
+         inflight.push(p);
+         while (inflight.length >= cap) await inflight.shift();
+      }
+
+      const walk = startCurator(1, batch, nDocs, 'ranges');
+      let pass = 0;
+      while (walk.state.taken < walk.state.maxDocs) {
          await waitForDirtyUnder(dirtyTune);
          await waitForReplLag({ "abortIfCheckpoint": true });
          await waitForCheckpoint();
          const ckpt = wtCheckpoint();
-         if (ckpt.available && ckpt.running) {
-            pass--;
-            continue;
-         }
-         const q = afterId !== undefined ? { "_id": { "$gt": afterId } } : {};
-         const ids = namespace.find(q, { "_id": 1 }).sort({ "_id": 1 }).hint({ "_id": 1 })
-            .limit(tfr).toArray().map(d => d._id);
-         if (!ids.length) break;
-         afterId = ids[ids.length - 1];
-         console.log(`slidingShuffle pass ${pass}/${totalPasses} n=${ids.length} filter=$in ${ids.length}`);
-         await enqueueWrite(rewriteFilter({ "_id": { "$in": ids } }), conc);
+         if (ckpt.available && ckpt.running) continue;
+         const { value, done } = await walk.gen.next();
+         if (done || value == null) break;
+         pass++;
+         const bounds = value.range.$lte !== undefined
+                      ? `[${value.range.$gte}, ${value.range.$lte}]`
+                      : `[${value.range.$gte}, ${value.range.$lt})`;
+         console.log(`slidingWindow ${pass}/${totalBatches} n=${value.n} filter=_id ${bounds}`);
+         await enqueueWrite(rewriteFilter({ "_id": value.range }), conc);
       }
 
       await drainWrites();
@@ -1175,6 +1282,7 @@
       else if (strategy === 'lowStressMode' || sampler === 'lowStressMode') await lowStressModeMain();
       else if (strategy === 'updateOne' || sampler === 'updateOne') await updateOneModeMain();
       else if (strategy === 'slidingShuffle' || sampler === 'slidingShuffle') await slidingShuffleMain();
+      else if (strategy === 'slidingWindow' || sampler === 'slidingWindow') await slidingWindowMain();
       else await main();
    } catch(e) {
       console.log('[red][ERROR][/]', e.errmsg || e.message || String(e));
