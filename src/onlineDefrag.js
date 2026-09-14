@@ -35,9 +35,9 @@
  *  - strategy 'updateOne': same walk/throttles as lowStressMode, but each txn
  *    is updateOne on a single _id (curator batch size 1).
  *  - strategy 'slidingShuffle': calibrate TFR from $sample+$merge into a temp
- *    collection (same compressor); TFR passes, each taking _id ranks
- *    p, p+TFR, p+2TFR, … in batches of TFR. Writes only when checkpoint idle
- *    and repl lag is in bounds. TFR is fixed after calibration.
+ *    collection (same compressor). One cover: ceil(docs/TFR) adjacent
+ *    non-overlapping _id batches of TFR docs each (each _id once). Writes
+ *    only when checkpoint idle and repl lag is in bounds. TFR is fixed.
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -107,7 +107,7 @@
       "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
       "dirtyBudgetRatio": dirtyBudgetRatio = 0.5, // fallback: fraction of reusable pages when cache stats are missing
       "maxConcurrent": maxConcurrent,
-      "writeConcurrency": writeConcurrency = 4, // meetInMiddle / lowStressMode write forks
+      "writeConcurrency": writeConcurrency = 2, // meetInMiddle / lowStressMode / slidingShuffle write forks
       "curatorBatchSize": curatorBatchSize, // if set, overrides pageFillTarget for $in / $bucketAuto
       "maxLagSeconds": maxLagSeconds = 10, // pause new batches when lag exceeds this
       "passes": passes, // collection cover count; default 1
@@ -647,7 +647,7 @@
       const concExplicit = Object.prototype.hasOwnProperty.call(userOptions, 'writeConcurrency');
       const concNow = () => (concExplicit && Number(writeConcurrency) > 0)
                           ? Math.ceil(writeConcurrency)
-                          : 8;
+                          : 2;
       let conc = concNow();
       const dirtyTune = {
          "base": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
@@ -878,8 +878,15 @@
       try {
       cal = await calibrateTFR();
       const tfr = cal.tfr;
+      const nDocs = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
+      const totalPasses = Math.max(1, Math.ceil(nDocs / tfr));
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 2);
-      console.log(`strategy: slidingShuffle TFR=${tfr} passes=${tfr} batch=${tfr} writeConcurrency=${conc}`);
+      const dirtyTune = {
+         "base": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
+         "soft": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
+         "hard": Number(lowStressDirtyHard) > 0 ? +lowStressDirtyHard : 0.08
+      };
+      console.log(`strategy: slidingShuffle TFR=${tfr} passes=${totalPasses} (docs ${nDocs} / TFR) batch=${tfr} writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}%`);
 
       let inflight = [];
       async function drainWrites() {
@@ -892,39 +899,23 @@
          while (inflight.length >= cap) await inflight.shift();
       }
 
-      for (let p = 0; p < tfr; ++p) {
-         console.log(`slidingShuffle pass ${p + 1}/${tfr} (ranks ${p}, ${p + tfr}, ${p + 2 * tfr}, …)`);
-         let afterId, i = 0;
-         for (;;) {
-            await waitForReplLag({ "abortIfCheckpoint": true });
-            await waitForCheckpoint();
-            const ckpt = wtCheckpoint();
-            if (ckpt.available && ckpt.running) continue;
-            const ids = [];
-            const q = afterId !== undefined ? { "_id": { "$gt": afterId } } : {};
-            const cursor = namespace.find(q, { "_id": 1 }).sort({ "_id": 1 }).hint({ "_id": 1 });
-            let eof = true;
-            try {
-               for await (const doc of cursor) {
-                  if (i % tfr === p) {
-                     ids.push(doc._id);
-                     afterId = doc._id;
-                  }
-                  i++;
-                  if (ids.length >= tfr) {
-                     eof = false;
-                     break;
-                  }
-               }
-            } finally {
-               try { cursor.close(); } catch(_) { /* exhausted */ }
-            }
-            if (!ids.length) break;
-            console.log(`\tslidingShuffle n=${ids.length} filter=$in ${ids.length}`);
-            await enqueueWrite(rewriteFilter({ "_id": { "$in": ids } }), conc);
-            if (eof) break;
+      let afterId;
+      for (let pass = 1; pass <= totalPasses; ++pass) {
+         await waitForDirtyUnder(dirtyTune);
+         await waitForReplLag({ "abortIfCheckpoint": true });
+         await waitForCheckpoint();
+         const ckpt = wtCheckpoint();
+         if (ckpt.available && ckpt.running) {
+            pass--;
+            continue;
          }
-         await drainWrites();
+         const q = afterId !== undefined ? { "_id": { "$gt": afterId } } : {};
+         const ids = namespace.find(q, { "_id": 1 }).sort({ "_id": 1 }).hint({ "_id": 1 })
+            .limit(tfr).toArray().map(d => d._id);
+         if (!ids.length) break;
+         afterId = ids[ids.length - 1];
+         console.log(`slidingShuffle pass ${pass}/${totalPasses} n=${ids.length} filter=$in ${ids.length}`);
+         await enqueueWrite(rewriteFilter({ "_id": { "$in": ids } }), conc);
       }
 
       await drainWrites();
