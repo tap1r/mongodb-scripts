@@ -47,6 +47,10 @@
  *    cumulative estimated rewrite bytes per checkpoint at that fraction of
  *    freeStorageSize. After each checkpoint falling edge, collStats refreshes
  *    R and the cap (no extra checkpoint wait).
+ *  - strategy 'quantile': same write/throttle/budget path as slidingWindow.
+ *    Curator is equi-packed _id ranges: $bsonSize / sample compression, running
+ *    sum via $setWindowFields, cut every pageFillRatio × leaf of packed bytes.
+ *    Bucket n and _id span vary with the size distribution.
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -71,6 +75,7 @@
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'updateOne' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'slidingShuffle' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'slidingWindow' };" [-f|--file] </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'quantile' };" [-f|--file] </path/to/>onlineDefrag.js
  *
  *  We use 'var' to interoperate with mongosh's sloppy mode
  */
@@ -106,7 +111,7 @@
    const userOptions = typeof defragOptions === 'undefined' ? {} : defragOptions;
    const {
       "sampler": sampler = 'bucketed', // 'random' | 'adjacent' | 'bucketed' | 'doubleParked'
-      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow'
+      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile'
       "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default 10000
       "curator": curator = 'ids', // meetInMiddle: 'ids' | 'ranges'
       "pageFillRatio": pageFillRatio = 1, // 0.9, // WT dest-leaf spill target (fixed)
@@ -115,9 +120,9 @@
       "updatesTrigger": updatesTrigger = 0.10, // eviction_updates_trigger; stressed if updates util >= this
       "lowStressDirtyMax": lowStressDirtyMax = 0.07, // updates allocated soft pause
       "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
-      "dirtyBudgetRatio": dirtyBudgetRatio = 0.05, // slidingWindow: max estimated rewrite bytes per checkpoint / initial freeStorageSize; waves fallback if no cache stats
+      "dirtyBudgetRatio": dirtyBudgetRatio = 0.05, // slidingWindow/quantile: max packed rewrite bytes per checkpoint / freeStorageSize; waves fallback if no cache stats
       "maxConcurrent": maxConcurrent,
-      "writeConcurrency": writeConcurrency = 4, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow write forks
+      "writeConcurrency": writeConcurrency = 4, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow / quantile write forks
       "curatorBatchSize": curatorBatchSize, // if set, overrides pageFillTarget for $in / $bucketAuto
       "maxLagSeconds": maxLagSeconds = 10, // pause new batches when lag exceeds this
       "passes": passes, // collection cover count; default 1
@@ -551,6 +556,85 @@
                 ? curateRangeBatches(direction, state)
                 : curateIdBatches(direction, state);
       return { state, gen };
+   }
+
+   function packedPageBudget(cal) {
+      // Dest-leaf BSON budget is pageFillRatio × leaf. Packed on-disk budget
+      // is that divided by sample compression (dataSize/live). With a uniform
+      // compressor the cuts match summing $bsonSize to the leaf; packed units
+      // match freeStorageSize for the dirty budget debit.
+      const leaf = cal?.ps?.dataPageSize || 32 * 1024;
+      const fillRatio = Number(pageFillRatio) > 0 ? +pageFillRatio : 1;
+      const compression = Number(cal?.compression) > 0 ? +cal.compression : 1;
+      const bsonBudget = Math.max(1, fillRatio * leaf);
+      const packedBudget = Math.max(1, bsonBudget / Math.max(compression, 0.01));
+      return { "leaf": leaf, "fillRatio": fillRatio, "compression": compression, "bsonBudget": bsonBudget, "packedBudget": packedBudget };
+   }
+
+   function startQuantileCurator(cal, maxDocs) {
+      // Equi-packed ranges along _id (not equal count, not $bucket size-classes).
+      // $setWindowFields running packed sum; bucket = floor(runBefore / packedBudget).
+      // $bucket (docSizes.js) histograms size classes — wrong axis for rewrite ranges.
+      const { compression, bsonBudget, packedBudget, leaf, fillRatio } = packedPageBudget(cal);
+      const pipeline = [
+         { "$sort": { "_id": 1 } },
+         { "$limit": Math.max(1, maxDocs) },
+         { "$project": {
+            "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] },
+            "packed": {
+               "$divide": [
+                  { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] },
+                  compression
+               ]
+            }
+         } },
+         { "$setWindowFields": {
+            "sortBy": { "_id": 1 },
+            "output": {
+               "run": {
+                  "$sum": "$packed",
+                  "window": { "documents": ["unbounded", "current"] }
+               }
+            }
+         } },
+         { "$set": {
+            "bucket": {
+               "$floor": {
+                  "$divide": [
+                     { "$max": [0, { "$subtract": ["$run", "$packed"] }] },
+                     packedBudget
+                  ]
+               }
+            }
+         } },
+         { "$group": {
+            "_id": "$bucket",
+            "min": { "$min": "$_id" },
+            "max": { "$max": "$_id" },
+            "n": { "$sum": 1 },
+            "packed": { "$sum": "$packed" },
+            "bson": { "$sum": "$bson" }
+         } },
+         { "$sort": { "_id": 1 } }
+      ];
+      console.log(`quantile curator: packedBudget=${Math.round(packedBudget)} bsonBudget=${Math.round(bsonBudget)} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)}`);
+      const rows = namespace.aggregate(pipeline, aggOpts("quantile $setWindowFields packed ranges", {
+         "hint": { "_id": 1 },
+         "allowDiskUse": true
+      })).toArray();
+      const state = { "batchSize": packedBudget, "maxDocs": maxDocs, "taken": 0 };
+      async function* gen() {
+         const last = rows[rows.length - 1];
+         for (const row of rows) {
+            if (state.taken >= state.maxDocs) return;
+            state.taken += row.n || 0;
+            const range = (last && row === last)
+                        ? { "$gte": row.min, "$lte": row.max }
+                        : { "$gte": row.min, "$lt": row.max };
+            yield { "range": range, "n": row.n || 0, "packed": row.packed || 0, "bson": row.bson || 0 };
+         }
+      }
+      return { "state": state, "gen": gen(), "totalBatches": rows.length, "packedBudget": packedBudget, "bsonBudget": bsonBudget };
    }
 
    async function meetInMiddleMain() {
@@ -1063,7 +1147,7 @@
       console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
    }
 
-   async function slidingWindowMain() {
+   async function slidingPackedMain(label, startWalk) {
       const srcSnap = collSnapshot();
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
       const cal = await calibrateTFR();
@@ -1071,7 +1155,8 @@
       const batch = Object.prototype.hasOwnProperty.call(userOptions, 'curatorBatchSize') && Number(curatorBatchSize) > 0
                   ? Math.ceil(+curatorBatchSize)
                   : cal.tfr;
-      const totalBatches = Math.max(1, Math.ceil(nDocs / batch));
+      const walk = startWalk({ "nDocs": nDocs, "batch": batch, "cal": cal });
+      const totalBatches = walk.totalBatches > 0 ? walk.totalBatches : Math.max(1, Math.ceil(nDocs / batch));
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
       const dirtyTune = {
          "base": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
@@ -1085,7 +1170,7 @@
       const packedCover = estimateRewriteBytes(nDocs, cal);
       const packedPctR = R0 > 0 ? 100 * packedCover / R0 : 0;
       const live0 = Math.max(0, (budgetSnap.storageSize || 0) - (Number.isFinite(R0) ? R0 : 0));
-      console.log(`strategy: slidingWindow TFR=${cal.tfr} batch=${batch} buckets=${totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}% dirtyBudgetRatio=${frac} reusable=${Number.isFinite(R0) ? R0 : 0} cap=${Math.round(cap0)} packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${live0} storageSize=${budgetSnap.storageSize || 0}`);
+      console.log(`strategy: ${label} TFR=${cal.tfr} batch=${batch} buckets=${totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}% dirtyBudgetRatio=${frac} reusable=${Number.isFinite(R0) ? R0 : 0} cap=${Math.round(cap0)} packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${live0} storageSize=${budgetSnap.storageSize || 0}`);
 
       let inflight = [];
       async function drainWrites() {
@@ -1098,7 +1183,6 @@
          while (inflight.length >= cap) await inflight.shift();
       }
 
-      const walk = startCurator(1, batch, nDocs, 'ranges');
       let pass = 0;
       const writeWindow = { "snap": budgetSnap, "bytes": 0 };
       while (walk.state.taken < walk.state.maxDocs) {
@@ -1114,18 +1198,29 @@
          const { value, done } = await walk.gen.next();
          if (done || value == null) break;
          pass++;
-         const nextBytes = estimateRewriteBytes(value.n || batch, cal);
+         const nextBytes = Number(value.packed) > 0
+                         ? +value.packed
+                         : estimateRewriteBytes(value.n || batch, cal);
          await ensureReusableRoom(writeWindow, nextBytes, { "refreshSnap": true, "beforeWait": drainWrites });
          writeWindow.bytes += nextBytes;
          const bounds = value.range.$lte !== undefined
                       ? `[${value.range.$gte}, ${value.range.$lte}]`
                       : `[${value.range.$gte}, ${value.range.$lt}]`;
-         console.log(`slidingWindow ${pass}/${totalBatches} n=${value.n} filter=_id ${bounds}`);
+         const packedNote = Number(value.packed) > 0 ? ` packed=${Math.round(value.packed)}` : '';
+         console.log(`${label} ${pass}/${totalBatches} n=${value.n}${packedNote} filter=_id ${bounds}`);
          await enqueueWrite(rewriteFilter({ "_id": value.range }), conc);
       }
 
       await drainWrites();
       console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
+   }
+
+   async function slidingWindowMain() {
+      await slidingPackedMain('slidingWindow', ({ nDocs, batch }) => startCurator(1, batch, nDocs, 'ranges'));
+   }
+
+   async function quantileMain() {
+      await slidingPackedMain('quantile', ({ nDocs, cal }) => startQuantileCurator(cal, nDocs));
    }
 
    function wtCheckpoint() {
@@ -1378,6 +1473,7 @@
       else if (strategy === 'updateOne' || sampler === 'updateOne') await updateOneModeMain();
       else if (strategy === 'slidingShuffle' || sampler === 'slidingShuffle') await slidingShuffleMain();
       else if (strategy === 'slidingWindow' || sampler === 'slidingWindow') await slidingWindowMain();
+      else if (strategy === 'quantile' || sampler === 'quantile') await quantileMain();
       else await main();
    } catch(e) {
       console.log('[red][ERROR][/]', e.errmsg || e.message || String(e));
