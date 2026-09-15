@@ -35,9 +35,12 @@
  *  - strategy 'updateOne': same walk/throttles as lowStressMode, but each txn
  *    is updateOne on a single _id (curator batch size 1).
  *  - strategy 'slidingShuffle': calibrate TFR from $sample+$merge into a temp
- *    collection (same compressor). TFR passes; pass p takes _id ranks
- *    p, p+TFR, p+2TFR, … in batches of TFR (adjacent stride ordinals).
- *    Each _id once. Writes when checkpoint idle, lag and updates % in bounds.
+ *    collection (same compressor) named _tmp_<collName>_<oid>. Drop it as
+ *    soon as packed $collStats is taken. Preflight drops leftovers matching
+ *    _tmp_<collName>. TFR is packed pageFillActual. TFR passes; pass p
+ *    takes _id ranks p, p+TFR, p+2TFR, … in batches of TFR (adjacent stride
+ *    ordinals). Each _id once. Writes when checkpoint idle, lag and updates
+ *    % in bounds.
  *  - strategy 'slidingWindow': calibrate TFR like slidingShuffle; adjacent
  *    consecutive _id batches of TFR (1–TFR, TFR+1–2TFR, …). Writes when
  *    checkpoint idle, lag and updates % in bounds. No settle-checkpoint
@@ -102,17 +105,17 @@
    const {
       "sampler": sampler = 'bucketed', // 'random' | 'adjacent' | 'bucketed' | 'doubleParked'
       "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow'
-      "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default ~16 leaves
+      "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default 10000
       "curator": curator = 'ids', // meetInMiddle: 'ids' | 'ranges'
-      "pageFillRatio": pageFillRatio = 0.9, // WT dest-leaf spill target (fixed)
+      "pageFillRatio": pageFillRatio = 1, // 0.9, // WT dest-leaf spill target (fixed)
       "dirtyFillTarget": dirtyFillTarget = 0.08, // wave fill cap vs updates allocated % of cache
       "dirtyTrigger": dirtyTrigger = 0.20, // meetInMiddle: stressed if dirty util >= this
       "updatesTrigger": updatesTrigger = 0.10, // eviction_updates_trigger; stressed if updates util >= this
       "lowStressDirtyMax": lowStressDirtyMax = 0.07, // updates allocated soft pause
       "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
-      "dirtyBudgetRatio": dirtyBudgetRatio = 0.2, // fallback: fraction of reusable pages when cache stats are missing
+      "dirtyBudgetRatio": dirtyBudgetRatio = 0.05, // fallback: fraction of reusable pages when cache stats are missing
       "maxConcurrent": maxConcurrent,
-      "writeConcurrency": writeConcurrency = 2, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow write forks
+      "writeConcurrency": writeConcurrency = 4, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow write forks
       "curatorBatchSize": curatorBatchSize, // if set, overrides pageFillTarget for $in / $bucketAuto
       "maxLagSeconds": maxLagSeconds = 10, // pause new batches when lag exceeds this
       "passes": passes, // collection cover count; default 1
@@ -166,7 +169,7 @@
       const nPages = Math.max(1, Math.ceil(live / dataPageSize));
       const pageFillActual = Math.max(1, Math.ceil((documentCount || 0) / nPages));
       const leafFill = Math.max(1, Math.ceil((pageFillRatio * dataPageSize * compression) / avg));
-      const pageFillTarget = Math.max(1, Math.ceil(leafFill * 1.1));
+      const pageFillTarget = Math.max(1, Math.ceil(leafFill));
       const batchSize = Math.max(pageFillTarget, pageFillActual);
 
       return {
@@ -456,7 +459,7 @@
    async function ensureReusableRoom(window, nextBytes) {
       const R = +window.snap.freeStorageSize;
       if (!Number.isFinite(R) || R <= 0) return;
-      const frac = Number(dirtyBudgetRatio) > 0 ? dirtyBudgetRatio : 0.2;
+      const frac = Number(dirtyBudgetRatio) > 0 ? dirtyBudgetRatio : 0.05;
       const cap = frac * R;
       if (window.bytes + nextBytes <= cap) return;
       console.log(`reusable budget ${Math.round(window.bytes)}+${Math.round(nextBytes)} > ${Math.round(cap)} (${frac}*freeStorageSize ${R}); waiting for checkpoint`);
@@ -857,6 +860,50 @@
       }
    }
 
+   function tmpSamplePrefix() {
+      return `_tmp_${nsColl}`;
+   }
+
+   function isTmpSampleName(name) {
+      const prefix = tmpSamplePrefix();
+      return typeof name === 'string' && (name === prefix || name.startsWith(prefix + '_'));
+   }
+
+   function tmpSampleName() {
+      const oid = new ObjectId();
+      const hex = typeof oid.toHexString === 'function'
+                ? oid.toHexString()
+                : String(oid).replace(/[^a-f0-9]/gi, '').slice(-24);
+      return `${tmpSamplePrefix()}_${hex}`;
+   }
+
+   function dropTmpSample(tmpDb, name, reason = 'drop') {
+      try {
+         tmpDb.getCollection(name).drop();
+         console.log(`${reason}: dropped ${nsDb}.${name}`);
+         return true;
+      } catch(_) {
+         return false;
+      }
+   }
+
+   function preflightDropTmpSamples() {
+      const tmpDb = db.getSiblingDB(nsDb);
+      let names = [];
+      try {
+         names = tmpDb.getCollectionNames().filter(isTmpSampleName);
+      } catch(e) {
+         console.log(`preflight: list collections failed, ${e.message || e}`);
+         return;
+      }
+      let n = 0;
+      for (const name of names) {
+         if (dropTmpSample(tmpDb, name, 'preflight')) n++;
+      }
+      if (n) console.log(`preflight: removed ${n} leftover sample collection(s) matching ${tmpSamplePrefix()}`);
+      else console.log(`preflight: no leftover sample collections matching ${tmpSamplePrefix()}`);
+   }
+
    async function calibrateTFR() {
       const src = collSnapshot();
       const fill = pageStats(src);
@@ -865,76 +912,74 @@
       const leaf = fill.dataPageSize || 32 * 1024;
       const sampleN = Math.min(src.objects || 0, Number(shuffleSampleSize) > 0
          ? Math.ceil(+shuffleSampleSize)
-         : Math.max(1000, Math.ceil((leaf * 16) / avg)));
+         : 10000);
       if (sampleN < 1) throw new Error('slidingShuffle: empty namespace, cannot calibrate TFR');
-      const oid = new ObjectId();
-      const hex = typeof oid.toHexString === 'function'
-                ? oid.toHexString()
-                : String(oid).replace(/[^a-f0-9]/gi, '').slice(-24);
-      const tmpName = `ss_${hex}`;
+      const tmpName = tmpSampleName();
       const tmpDb = db.getSiblingDB(nsDb);
       console.log(`slidingShuffle calibrate: $sample ${sampleN} compressor=${compressor} -> ${nsDb}.${tmpName}`);
       try {
-         tmpDb.createCollection(tmpName, {
-            "storageEngine": { "wiredTiger": { "configString": `block_compressor=${compressor}` } }
-         });
-      } catch(_) {
-         tmpDb.createCollection(tmpName);
-      }
-      console.log(`calibrate collection created (kept until strategy ends): ${nsDb}.${tmpName}`);
-      namespace.aggregate([
-         { "$sample": { "size": sampleN } },
-         { "$merge": {
-            "into": { "db": nsDb, "coll": tmpName },
-            "whenMatched": "replace",
-            "whenNotMatched": "insert"
-         } }
-      ], aggOpts("slidingShuffle calibrate $merge")).toArray();
-      console.log('calibrate: waiting for checkpoint before packed $collStats');
-      await waitForCheckpoint({ "settle": true });
-      let packed = $collStats(nsDb, tmpName) || {};
-      if (!wtCheckpoint().available) {
-         const timeoutMs = Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000;
-         const minWaitMs = Math.min(60000, timeoutMs);
-         console.log(`M0: no checkpoint metrics; waiting ${minWaitMs}ms then polling packed $collStats until nPages>1 or ${timeoutMs}ms`);
-         await delay(minWaitMs);
-         const deadline = Date.now() + Math.max(0, timeoutMs - minWaitMs);
-         let prevSz, stable = 0;
-         for (;;) {
-            packed = $collStats(nsDb, tmpName) || {};
-            const nPages = pageStats(packed).nPages;
-            console.log(`calibrate poll nPages=${nPages} storageSize=${packed.storageSize} objects=${packed.objects}`);
-            if (nPages > 1 && packed.storageSize === prevSz) break;
-            if (packed.storageSize === prevSz) {
-               stable++;
-               if (stable >= 2) break;
-            } else stable = 0;
-            prevSz = packed.storageSize;
-            if (Date.now() >= deadline) break;
-            await delay(5000);
+         try {
+            tmpDb.createCollection(tmpName, {
+               "storageEngine": { "wiredTiger": { "configString": `block_compressor=${compressor}` } }
+            });
+         } catch(_) {
+            tmpDb.createCollection(tmpName);
          }
+         console.log(`calibrate collection created: ${nsDb}.${tmpName}`);
+         namespace.aggregate([
+            { "$sample": { "size": sampleN } },
+            { "$merge": {
+               "into": { "db": nsDb, "coll": tmpName },
+               "whenMatched": "replace",
+               "whenNotMatched": "insert"
+            } }
+         ], aggOpts("slidingShuffle calibrate $merge")).toArray();
+         console.log('calibrate: waiting for checkpoint before packed $collStats');
+         await waitForCheckpoint({ "settle": true });
+         let packed = $collStats(nsDb, tmpName) || {};
+         if (!wtCheckpoint().available) {
+            const timeoutMs = Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000;
+            const minWaitMs = Math.min(60000, timeoutMs);
+            console.log(`M0: no checkpoint metrics; waiting ${minWaitMs}ms then polling packed $collStats until nPages>1 or ${timeoutMs}ms`);
+            await delay(minWaitMs);
+            const deadline = Date.now() + Math.max(0, timeoutMs - minWaitMs);
+            let prevSz, stable = 0;
+            for (;;) {
+               packed = $collStats(nsDb, tmpName) || {};
+               const nPages = pageStats(packed).nPages;
+               console.log(`calibrate poll nPages=${nPages} storageSize=${packed.storageSize} objects=${packed.objects}`);
+               if (nPages > 1 && packed.storageSize === prevSz) break;
+               if (packed.storageSize === prevSz) {
+                  stable++;
+                  if (stable >= 2) break;
+               } else stable = 0;
+               prevSz = packed.storageSize;
+               if (Date.now() >= deadline) break;
+               await delay(5000);
+            }
+         }
+         const { indexes, ...stats } = packed;
+         const ps = pageStats(stats);
+         const live = Math.max(0, (stats.storageSize || 0) - (stats.freeStorageSize || 0));
+         const compression = live > 0 ? (stats.dataSize || 0) / live : 1;
+         const ratio = Number(pageFillRatio) > 0 ? +pageFillRatio : 1;
+         const leafFill = Math.max(1, Math.ceil((ratio * (ps.dataPageSize || leaf) * compression) / (stats.avgObjSize > 0 ? stats.avgObjSize : avg)));
+         let tfr = Math.max(1, ps.pageFillActual);
+         if (ps.nPages <= 1) {
+            tfr = leafFill;
+            console.log(`packed nPages=${ps.nPages} (unsettled or tiny file); TFR from leaf fill = ${tfr}`);
+         }
+         console.log(`calibrated TFR=${tfr} (packedFill) compression=${compression.toFixed(3)} packedFill=${ps.pageFillActual} packedPages=${ps.nPages} objects=${ps.documentCount} avgObjSize=${stats.avgObjSize} storageSize=${stats.storageSize}`);
+         return { "tfr": tfr, "compression": compression, "ps": ps };
+      } finally {
+         dropTmpSample(tmpDb, tmpName, 'calibrate');
       }
-      const { indexes, ...stats } = packed;
-      const ps = pageStats(stats);
-      const live = Math.max(0, (stats.storageSize || 0) - (stats.freeStorageSize || 0));
-      const compression = live > 0 ? (stats.dataSize || 0) / live : 1;
-      const leafFill = Math.max(1, Math.ceil((0.9 * (ps.dataPageSize || leaf) * compression) / (stats.avgObjSize > 0 ? stats.avgObjSize : avg)));
-      let tfr = Math.max(1, ps.pageFillActual);
-      if (ps.nPages <= 1) {
-         tfr = leafFill;
-         console.log(`packed nPages=${ps.nPages} (unsettled or tiny file); TFR from 0.9 leaf fill = ${tfr}`);
-      }
-      tfr = Math.max(1, Math.ceil(tfr * 0.9));
-      console.log(`calibrated TFR=${tfr} (0.9x packed) compression=${compression.toFixed(3)} packedFill=${ps.pageFillActual} packedPages=${ps.nPages} objects=${ps.documentCount} storageSize=${stats.storageSize} keep ${nsDb}.${tmpName}`);
-      return { "tfr": tfr, "tmpName": tmpName, "tmpDb": tmpDb, "compression": compression, "ps": ps };
    }
 
    async function slidingShuffleMain() {
       const srcSnap = collSnapshot();
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
-      let cal;
-      try {
-      cal = await calibrateTFR();
+      const cal = await calibrateTFR();
       const tfr = cal.tfr;
       const nDocs = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
       const totalBatches = Math.max(1, Math.ceil(nDocs / tfr));
@@ -1002,22 +1047,12 @@
 
       await drainWrites();
       console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
-      } finally {
-         if (cal?.tmpName) {
-            try {
-               cal.tmpDb.getCollection(cal.tmpName).drop();
-               console.log(`dropped calibrate collection ${nsDb}.${cal.tmpName}`);
-            } catch(_) { /* ignore */ }
-         }
-      }
    }
 
    async function slidingWindowMain() {
       const srcSnap = collSnapshot();
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
-      let cal;
-      try {
-      cal = await calibrateTFR();
+      const cal = await calibrateTFR();
       const nDocs = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
       const batch = Object.prototype.hasOwnProperty.call(userOptions, 'curatorBatchSize') && Number(curatorBatchSize) > 0
                   ? Math.ceil(+curatorBatchSize)
@@ -1062,14 +1097,6 @@
 
       await drainWrites();
       console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
-      } finally {
-         if (cal?.tmpName) {
-            try {
-               cal.tmpDb.getCollection(cal.tmpName).drop();
-               console.log(`dropped calibrate collection ${nsDb}.${cal.tmpName}`);
-            } catch(_) { /* ignore */ }
-         }
-      }
    }
 
    function wtCheckpoint() {
@@ -1313,6 +1340,7 @@
    }
 
    try {
+      preflightDropTmpSamples();
       if (strategy === 'meetInMiddle' || sampler === 'meetInMiddle') await meetInMiddleMain();
       else if (strategy === 'lowStressMode' || sampler === 'lowStressMode') await lowStressModeMain();
       else if (strategy === 'updateOne' || sampler === 'updateOne') await updateOneModeMain();
