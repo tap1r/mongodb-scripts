@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.26"
+ *  Version: "0.1.27"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -48,9 +48,10 @@
  *    freeStorageSize. After each checkpoint falling edge, collStats refreshes
  *    R and the cap (no extra checkpoint wait).
  *  - strategy 'quantile': same write/throttle/budget path as slidingWindow.
- *    Curator is equi-packed _id ranges: $bsonSize / sample compression, running
- *    sum via $setWindowFields, cut every pageFillRatio × leaf of packed bytes.
- *    Bucket n and _id span vary with the size distribution.
+ *    Curator is equi-fill _id ranges: running $bsonSize via $setWindowFields,
+ *    cut every pageFillRatio × 32KiB leaf (WT spill target). Block compression
+ *    does not shrink the page; packed = bson/compression is only the on-disk
+ *    debit vs freeStorageSize. Bucket n and _id span vary with doc sizes.
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -86,7 +87,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.26" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.27" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -559,10 +560,11 @@
    }
 
    function packedPageBudget(cal) {
-      // Dest-leaf BSON budget is pageFillRatio × leaf. Packed on-disk budget
-      // is that divided by sample compression (dataSize/live). With a uniform
-      // compressor the cuts match summing $bsonSize to the leaf; packed units
-      // match freeStorageSize for the dirty budget debit.
+      // WT leaf_page_max (32KiB) is the fill/spill unit. Reconciliation packs
+      // cells until ~pageFillRatio of that page; the block compressor then
+      // encodes the page for the file. It does not produce a smaller page
+      // (3:1 snappy does not mean a 10KiB leaf). packed = bson/compression
+      // is the on-disk block estimate for dirtyBudgetRatio vs freeStorageSize.
       const leaf = cal?.ps?.dataPageSize || 32 * 1024;
       const fillRatio = Number(pageFillRatio) > 0 ? +pageFillRatio : 1;
       const compression = Number(cal?.compression) > 0 ? +cal.compression : 1;
@@ -572,9 +574,9 @@
    }
 
    function startQuantileCurator(cal, maxDocs) {
-      // Equi-packed ranges along _id (not equal count, not $bucket size-classes).
-      // $setWindowFields running packed sum; bucket = floor(runBefore / packedBudget).
-      // $bucket (docSizes.js) histograms size classes — wrong axis for rewrite ranges.
+      // Equi-fill ranges along _id: running $bsonSize cut every bsonBudget
+      // (pageFillRatio × 32KiB). $bucket (docSizes.js) histograms size classes
+      // — wrong axis for rewrite ranges.
       const { compression, bsonBudget, packedBudget, leaf, fillRatio } = packedPageBudget(cal);
       const pipeline = [
          { "$sort": { "_id": 1 } },
@@ -592,7 +594,7 @@
             "sortBy": { "_id": 1 },
             "output": {
                "run": {
-                  "$sum": "$packed",
+                  "$sum": "$bson",
                   "window": { "documents": ["unbounded", "current"] }
                }
             }
@@ -601,8 +603,8 @@
             "bucket": {
                "$floor": {
                   "$divide": [
-                     { "$max": [0, { "$subtract": ["$run", "$packed"] }] },
-                     packedBudget
+                     { "$max": [0, { "$subtract": ["$run", "$bson"] }] },
+                     bsonBudget
                   ]
                }
             }
@@ -617,21 +619,25 @@
          } },
          { "$sort": { "_id": 1 } }
       ];
-      console.log(`quantile curator: packedBudget=${Math.round(packedBudget)} bsonBudget=${Math.round(bsonBudget)} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)}`);
+      console.log(`quantile curator: bsonBudget=${Math.round(bsonBudget)} packedEst=${Math.round(packedBudget)} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)}`);
       const rows = namespace.aggregate(pipeline, aggOpts("quantile $setWindowFields packed ranges", {
          "hint": { "_id": 1 },
          "allowDiskUse": true
       })).toArray();
       const state = { "batchSize": packedBudget, "maxDocs": maxDocs, "taken": 0 };
       async function* gen() {
-         const last = rows[rows.length - 1];
+         // $group min/max are actual _ids in that bucket and disjoint from the
+         // next (max_i < min_{i+1}). Inclusive both ends. $bucketAuto shares
+         // the boundary (max === next min) and needs half-open; this does not.
          for (const row of rows) {
             if (state.taken >= state.maxDocs) return;
             state.taken += row.n || 0;
-            const range = (last && row === last)
-                        ? { "$gte": row.min, "$lte": row.max }
-                        : { "$gte": row.min, "$lt": row.max };
-            yield { "range": range, "n": row.n || 0, "packed": row.packed || 0, "bson": row.bson || 0 };
+            yield {
+               "range": { "$gte": row.min, "$lte": row.max },
+               "n": row.n || 0,
+               "packed": row.packed || 0,
+               "bson": row.bson || 0
+            };
          }
       }
       return { "state": state, "gen": gen(), "totalBatches": rows.length, "packedBudget": packedBudget, "bsonBudget": bsonBudget };
@@ -1207,7 +1213,8 @@
                       ? `[${value.range.$gte}, ${value.range.$lte}]`
                       : `[${value.range.$gte}, ${value.range.$lt}]`;
          const packedNote = Number(value.packed) > 0 ? ` packed=${Math.round(value.packed)}` : '';
-         console.log(`${label} ${pass}/${totalBatches} n=${value.n}${packedNote} filter=_id ${bounds}`);
+         const bsonNote = Number(value.bson) > 0 ? ` bson=${Math.round(value.bson)}` : '';
+         console.log(`${label} ${pass}/${totalBatches} n=${value.n}${bsonNote}${packedNote} filter=_id ${bounds}`);
          await enqueueWrite(rewriteFilter({ "_id": value.range }), conc);
       }
 
