@@ -110,9 +110,9 @@
       "updatesTrigger": updatesTrigger = 0.10, // eviction_updates_trigger; stressed if updates util >= this
       "lowStressDirtyMax": lowStressDirtyMax = 0.07, // updates allocated soft pause
       "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
-      "dirtyBudgetRatio": dirtyBudgetRatio = 0.05, // fallback: fraction of reusable pages when cache stats are missing
+      "dirtyBudgetRatio": dirtyBudgetRatio = 0.2, // fallback: fraction of reusable pages when cache stats are missing
       "maxConcurrent": maxConcurrent,
-      "writeConcurrency": writeConcurrency = 1, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow write forks
+      "writeConcurrency": writeConcurrency = 2, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow write forks
       "curatorBatchSize": curatorBatchSize, // if set, overrides pageFillTarget for $in / $bucketAuto
       "maxLagSeconds": maxLagSeconds = 10, // pause new batches when lag exceeds this
       "passes": passes, // collection cover count; default 1
@@ -456,7 +456,7 @@
    async function ensureReusableRoom(window, nextBytes) {
       const R = +window.snap.freeStorageSize;
       if (!Number.isFinite(R) || R <= 0) return;
-      const frac = Number(dirtyBudgetRatio) > 0 ? dirtyBudgetRatio : 0.05;
+      const frac = Number(dirtyBudgetRatio) > 0 ? dirtyBudgetRatio : 0.2;
       const cap = frac * R;
       if (window.bytes + nextBytes <= cap) return;
       console.log(`reusable budget ${Math.round(window.bytes)}+${Math.round(nextBytes)} > ${Math.round(cap)} (${frac}*freeStorageSize ${R}); waiting for checkpoint`);
