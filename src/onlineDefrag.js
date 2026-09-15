@@ -45,7 +45,8 @@
  *    consecutive _id batches of TFR (1–TFR, TFR+1–2TFR, …). Writes when
  *    checkpoint idle, lag and updates % in bounds. dirtyBudgetRatio caps
  *    cumulative estimated rewrite bytes per checkpoint at that fraction of
- *    the initial (post-calibrate) freeStorageSize; R is not refreshed.
+ *    freeStorageSize. After each checkpoint falling edge, collStats refreshes
+ *    R and the cap (no extra checkpoint wait).
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -453,9 +454,22 @@
       return nDocs * avg / Math.max(compression, 0.01);
    }
 
+   function refreshReusableCap(window, reason = 'checkpoint') {
+      // Caller has just observed a checkpoint falling edge (or M0 proxy wait).
+      // collStats is settled; do not wait for another checkpoint.
+      window.snap = collSnapshot();
+      window.bytes = 0;
+      const R = +window.snap.freeStorageSize;
+      const frac = Number(dirtyBudgetRatio) > 0 ? dirtyBudgetRatio : 0.05;
+      const cap = Number.isFinite(R) && R > 0 ? frac * R : 0;
+      const live = Math.max(0, (window.snap.storageSize || 0) - (Number.isFinite(R) ? R : 0));
+      console.log(`${reason}: settled stats reusable=${Number.isFinite(R) ? R : 0} cap=${Math.round(cap)} live=${live} storageSize=${window.snap.storageSize || 0}`);
+      return cap;
+   }
+
    async function ensureReusableRoom(window, nextBytes, { refreshSnap = true, beforeWait } = {}) {
       // Cap cumulative estimated rewrite bytes at dirtyBudgetRatio * R per
-      // checkpoint. R comes from window.snap (slidingWindow: frozen initial).
+      // checkpoint. R comes from window.snap (refreshed on falling edge).
       const R = +window.snap.freeStorageSize;
       if (!Number.isFinite(R) || R <= 0) return;
       const frac = Number(dirtyBudgetRatio) > 0 ? dirtyBudgetRatio : 0.05;
@@ -463,13 +477,13 @@
       if (window.bytes + nextBytes <= cap) return;
       if (typeof beforeWait === 'function') await beforeWait();
       console.log(`reusable budget ${Math.round(window.bytes)}+${Math.round(nextBytes)} > ${Math.round(cap)} (${frac}*freeStorageSize ${R}); waiting for checkpoint`);
-      await waitForCheckpoint({ "settle": true });
-      if (!wtCheckpoint().available) {
+      const waited = await waitForCheckpoint({ "settle": true });
+      if (!waited.available) {
          const ms = Math.min(60000, Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000);
          await delay(ms);
       }
-      if (refreshSnap) window.snap = collSnapshot();
       window.bytes = 0;
+      if (refreshSnap && (waited.completed || !waited.available)) refreshReusableCap(window, 'reusable budget');
    }
 
    async function* curateIdBatches(direction, state) {
@@ -1090,14 +1104,18 @@
       while (walk.state.taken < walk.state.maxDocs) {
          await waitForDirtyUnder(dirtyTune);
          await waitForReplLag({ "abortIfCheckpoint": true });
-         await waitForCheckpoint();
+         const waited = await waitForCheckpoint();
          const ckpt = wtCheckpoint();
          if (ckpt.available && ckpt.running) continue;
+         if (waited.completed) {
+            await drainWrites();
+            refreshReusableCap(writeWindow, 'checkpoint');
+         }
          const { value, done } = await walk.gen.next();
          if (done || value == null) break;
          pass++;
          const nextBytes = estimateRewriteBytes(value.n || batch, cal);
-         await ensureReusableRoom(writeWindow, nextBytes, { "refreshSnap": false, "beforeWait": drainWrites });
+         await ensureReusableRoom(writeWindow, nextBytes, { "refreshSnap": true, "beforeWait": drainWrites });
          writeWindow.bytes += nextBytes;
          const bounds = value.range.$lte !== undefined
                       ? `[${value.range.$gte}, ${value.range.$lte}]`
@@ -1229,15 +1247,17 @@
       // settle=false: wait only while a checkpoint is already running.
       // settle=true: wait for a falling edge (start+complete if idle) so
       // block-manager reusable bytes are visible in collStats.
+      // Returns { available, running, completed } — completed is a falling edge
+      // this call observed. Callers may collSnapshot() then; do not wait again.
       let { available, running, minTimeMS, recentTimeMS } = wtCheckpoint();
       if (!available) {
          if (!ckptSkipLogged) {
             console.log('checkpoint metrics unavailable (no wiredTiger in serverStatus), skipping wait');
             ckptSkipLogged = true;
          }
-         return;
+         return { "available": false, "running": false, "completed": false };
       }
-      if (!settle && !running) return;
+      if (!settle && !running) return { "available": true, "running": false, "completed": false };
       const pollMs = Math.max(1, Math.ceil(0.9 * (minTimeMS || 1000)));
       const timeoutMs = Number(checkpointTimeoutMs) > 0
                       ? +checkpointTimeoutMs
@@ -1256,6 +1276,7 @@
          if (wasRunning && !running) completed = true;
       } while ((running || (settle && !completed)) && Date.now() < deadline);
       console.log(completed ? 'checkpoint completed' : 'checkpoint wait timed out, continuing');
+      return { "available": true, "running": running, "completed": completed };
    }
 
    async function main() {
