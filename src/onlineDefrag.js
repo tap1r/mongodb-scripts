@@ -43,8 +43,9 @@
  *    % in bounds.
  *  - strategy 'slidingWindow': calibrate TFR like slidingShuffle; adjacent
  *    consecutive _id batches of TFR (1–TFR, TFR+1–2TFR, …). Writes when
- *    checkpoint idle, lag and updates % in bounds. No settle-checkpoint
- *    wait between batches (reusable-budget pause is slidingShuffle only).
+ *    checkpoint idle, lag and updates % in bounds. dirtyBudgetRatio caps
+ *    cumulative estimated rewrite bytes per checkpoint at that fraction of
+ *    the initial (post-calibrate) freeStorageSize; R is not refreshed.
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -113,7 +114,7 @@
       "updatesTrigger": updatesTrigger = 0.10, // eviction_updates_trigger; stressed if updates util >= this
       "lowStressDirtyMax": lowStressDirtyMax = 0.07, // updates allocated soft pause
       "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
-      "dirtyBudgetRatio": dirtyBudgetRatio = 0.05, // fallback: fraction of reusable pages when cache stats are missing
+      "dirtyBudgetRatio": dirtyBudgetRatio = 0.05, // slidingWindow: max estimated rewrite bytes per checkpoint / initial freeStorageSize; waves fallback if no cache stats
       "maxConcurrent": maxConcurrent,
       "writeConcurrency": writeConcurrency = 4, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow write forks
       "curatorBatchSize": curatorBatchSize, // if set, overrides pageFillTarget for $in / $bucketAuto
@@ -443,32 +444,31 @@
       console.log(`updates ${((u || 0) * 100).toFixed(2)}% (soft ${(tune.soft * 100).toFixed(2)}%), resuming`);
    }
 
-   function estimateRewriteBytes(nDocs, tfr, stats) {
-      // Packed on-disk size of nDocs, and whole-leaf allocation (rewrites cannot
-      // reuse the page they still occupy). Use the larger as the budget debit.
-      const fill = pageStats(stats);
-      const leaf = fill.dataPageSize || 32 * 1024;
-      const avg = +stats.avgObjSize > 0 ? +stats.avgObjSize : 256;
-      const live = Math.max(1, (stats.storageSize || 0) - (stats.freeStorageSize || 0));
-      const compression = stats.dataSize > 0 ? stats.dataSize / live : 1;
-      const packedBytes = nDocs * avg / Math.max(compression, 0.01);
-      const pageBytes = Math.max(1, Math.ceil(nDocs / Math.max(1, tfr))) * leaf;
-      return Math.max(packedBytes, pageBytes);
+   function estimateRewriteBytes(nDocs, packed) {
+      // On-disk bytes after block compression, from the packed sample:
+      // n * avgObjSize (BSON) / (dataSize / live). Do not debit uncompressed
+      // 32KiB leaves — freeStorageSize is compressed block-manager units.
+      const avg = +packed?.avgObjSize > 0 ? +packed.avgObjSize : 256;
+      const compression = Number(packed?.compression) > 0 ? +packed.compression : 1;
+      return nDocs * avg / Math.max(compression, 0.01);
    }
 
-   async function ensureReusableRoom(window, nextBytes) {
+   async function ensureReusableRoom(window, nextBytes, { refreshSnap = true, beforeWait } = {}) {
+      // Cap cumulative estimated rewrite bytes at dirtyBudgetRatio * R per
+      // checkpoint. R comes from window.snap (slidingWindow: frozen initial).
       const R = +window.snap.freeStorageSize;
       if (!Number.isFinite(R) || R <= 0) return;
       const frac = Number(dirtyBudgetRatio) > 0 ? dirtyBudgetRatio : 0.05;
       const cap = frac * R;
       if (window.bytes + nextBytes <= cap) return;
+      if (typeof beforeWait === 'function') await beforeWait();
       console.log(`reusable budget ${Math.round(window.bytes)}+${Math.round(nextBytes)} > ${Math.round(cap)} (${frac}*freeStorageSize ${R}); waiting for checkpoint`);
       await waitForCheckpoint({ "settle": true });
       if (!wtCheckpoint().available) {
          const ms = Math.min(60000, Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000);
          await delay(ms);
       }
-      window.snap = collSnapshot();
+      if (refreshSnap) window.snap = collSnapshot();
       window.bytes = 0;
    }
 
@@ -970,7 +970,7 @@
             console.log(`packed nPages=${ps.nPages} (unsettled or tiny file); TFR from leaf fill = ${tfr}`);
          }
          console.log(`calibrated TFR=${tfr} (packedFill) compression=${compression.toFixed(3)} packedFill=${ps.pageFillActual} packedPages=${ps.nPages} objects=${ps.documentCount} avgObjSize=${stats.avgObjSize} storageSize=${stats.storageSize}`);
-         return { "tfr": tfr, "compression": compression, "ps": ps };
+         return { "tfr": tfr, "compression": compression, "avgObjSize": stats.avgObjSize, "ps": ps };
       } finally {
          dropTmpSample(tmpDb, tmpName, 'calibrate');
       }
@@ -1033,7 +1033,7 @@
                try { cursor.close(); } catch(_) { /* exhausted */ }
             }
             if (!ids.length) break;
-            const nextBytes = estimateRewriteBytes(ids.length, tfr, writeWindow.snap);
+            const nextBytes = estimateRewriteBytes(ids.length, cal);
             await ensureReusableRoom(writeWindow, nextBytes);
             writeWindow.bytes += nextBytes;
             strideBatch++;
@@ -1064,7 +1064,11 @@
          "soft": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
          "hard": Number(lowStressDirtyHard) > 0 ? +lowStressDirtyHard : 0.08
       };
-      console.log(`strategy: slidingWindow TFR=${cal.tfr} batch=${batch} buckets=${totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}%`);
+      const budgetSnap = collSnapshot();
+      const R0 = +budgetSnap.freeStorageSize;
+      const frac = Number(dirtyBudgetRatio) > 0 ? dirtyBudgetRatio : 0.05;
+      const cap0 = Number.isFinite(R0) && R0 > 0 ? frac * R0 : 0;
+      console.log(`strategy: slidingWindow TFR=${cal.tfr} batch=${batch} buckets=${totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}% dirtyBudgetRatio=${frac} reusable=${Number.isFinite(R0) ? R0 : 0} cap=${Math.round(cap0)}`);
 
       let inflight = [];
       async function drainWrites() {
@@ -1079,6 +1083,7 @@
 
       const walk = startCurator(1, batch, nDocs, 'ranges');
       let pass = 0;
+      const writeWindow = { "snap": budgetSnap, "bytes": 0 };
       while (walk.state.taken < walk.state.maxDocs) {
          await waitForDirtyUnder(dirtyTune);
          await waitForReplLag({ "abortIfCheckpoint": true });
@@ -1088,6 +1093,9 @@
          const { value, done } = await walk.gen.next();
          if (done || value == null) break;
          pass++;
+         const nextBytes = estimateRewriteBytes(value.n || batch, cal);
+         await ensureReusableRoom(writeWindow, nextBytes, { "refreshSnap": false, "beforeWait": drainWrites });
+         writeWindow.bytes += nextBytes;
          const bounds = value.range.$lte !== undefined
                       ? `[${value.range.$gte}, ${value.range.$lte}]`
                       : `[${value.range.$gte}, ${value.range.$lt})`;
