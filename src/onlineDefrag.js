@@ -930,7 +930,7 @@
             { "$sample": { "size": sampleN } },
             { "$merge": {
                "into": { "db": nsDb, "coll": tmpName },
-               "whenMatched": "replace",
+               "whenMatched": "keepExisting",
                "whenNotMatched": "insert"
             } }
          ], aggOpts("slidingShuffle calibrate $merge")).toArray();
@@ -1098,7 +1098,7 @@
          writeWindow.bytes += nextBytes;
          const bounds = value.range.$lte !== undefined
                       ? `[${value.range.$gte}, ${value.range.$lte}]`
-                      : `[${value.range.$gte}, ${value.range.$lt})`;
+                      : `[${value.range.$gte}, ${value.range.$lt}]`;
          console.log(`slidingWindow ${pass}/${totalBatches} n=${value.n} filter=_id ${bounds}`);
          await enqueueWrite(rewriteFilter({ "_id": value.range }), conc);
       }
