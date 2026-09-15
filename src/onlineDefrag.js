@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.25"
+ *  Version: "0.1.26"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -39,7 +39,9 @@
  *    p, p+TFR, p+2TFR, … in batches of TFR (adjacent stride ordinals).
  *    Each _id once. Writes when checkpoint idle, lag and updates % in bounds.
  *  - strategy 'slidingWindow': calibrate TFR like slidingShuffle; adjacent
- *    consecutive _id batches of TFR (1–TFR, TFR+1–2TFR, …). Same gates.
+ *    consecutive _id batches of TFR (1–TFR, TFR+1–2TFR, …). Writes when
+ *    checkpoint idle, lag and updates % in bounds. No settle-checkpoint
+ *    wait between batches (reusable-budget pause is slidingShuffle only).
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -74,7 +76,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.25" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.26" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -108,7 +110,7 @@
       "updatesTrigger": updatesTrigger = 0.10, // eviction_updates_trigger; stressed if updates util >= this
       "lowStressDirtyMax": lowStressDirtyMax = 0.07, // updates allocated soft pause
       "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
-      "dirtyBudgetRatio": dirtyBudgetRatio = 0.5, // fallback: fraction of reusable pages when cache stats are missing
+      "dirtyBudgetRatio": dirtyBudgetRatio = 0.05, // fallback: fraction of reusable pages when cache stats are missing
       "maxConcurrent": maxConcurrent,
       "writeConcurrency": writeConcurrency = 1, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow write forks
       "curatorBatchSize": curatorBatchSize, // if set, overrides pageFillTarget for $in / $bucketAuto
@@ -436,6 +438,35 @@
          await delay(1000);
       }
       console.log(`updates ${((u || 0) * 100).toFixed(2)}% (soft ${(tune.soft * 100).toFixed(2)}%), resuming`);
+   }
+
+   function estimateRewriteBytes(nDocs, tfr, stats) {
+      // Packed on-disk size of nDocs, and whole-leaf allocation (rewrites cannot
+      // reuse the page they still occupy). Use the larger as the budget debit.
+      const fill = pageStats(stats);
+      const leaf = fill.dataPageSize || 32 * 1024;
+      const avg = +stats.avgObjSize > 0 ? +stats.avgObjSize : 256;
+      const live = Math.max(1, (stats.storageSize || 0) - (stats.freeStorageSize || 0));
+      const compression = stats.dataSize > 0 ? stats.dataSize / live : 1;
+      const packedBytes = nDocs * avg / Math.max(compression, 0.01);
+      const pageBytes = Math.max(1, Math.ceil(nDocs / Math.max(1, tfr))) * leaf;
+      return Math.max(packedBytes, pageBytes);
+   }
+
+   async function ensureReusableRoom(window, nextBytes) {
+      const R = +window.snap.freeStorageSize;
+      if (!Number.isFinite(R) || R <= 0) return;
+      const frac = Number(dirtyBudgetRatio) > 0 ? dirtyBudgetRatio : 0.05;
+      const cap = frac * R;
+      if (window.bytes + nextBytes <= cap) return;
+      console.log(`reusable budget ${Math.round(window.bytes)}+${Math.round(nextBytes)} > ${Math.round(cap)} (${frac}*freeStorageSize ${R}); waiting for checkpoint`);
+      await waitForCheckpoint({ "settle": true });
+      if (!wtCheckpoint().available) {
+         const ms = Math.min(60000, Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000);
+         await delay(ms);
+      }
+      window.snap = collSnapshot();
+      window.bytes = 0;
    }
 
    async function* curateIdBatches(direction, state) {
@@ -927,6 +958,7 @@
       }
 
       let globalBatch = 0;
+      const writeWindow = { "snap": srcSnap, "bytes": 0 };
       for (let p = 0; p < tfr; ++p) {
          console.log(`slidingShuffle stride ${p + 1}/${tfr} (ranks ${p}, ${p + tfr}, ${p + 2 * tfr}, …) until EOF`);
          let afterId, i = 0, strideBatch = 0;
@@ -956,6 +988,9 @@
                try { cursor.close(); } catch(_) { /* exhausted */ }
             }
             if (!ids.length) break;
+            const nextBytes = estimateRewriteBytes(ids.length, tfr, writeWindow.snap);
+            await ensureReusableRoom(writeWindow, nextBytes);
+            writeWindow.bytes += nextBytes;
             strideBatch++;
             globalBatch++;
             console.log(`\tslidingShuffle stride ${p + 1}/${tfr} batch ${strideBatch} global ${globalBatch}/${totalBatches} n=${ids.length} filter=$in ${ids.length}`);
