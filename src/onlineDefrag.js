@@ -1068,7 +1068,10 @@
       const R0 = +budgetSnap.freeStorageSize;
       const frac = Number(dirtyBudgetRatio) > 0 ? dirtyBudgetRatio : 0.05;
       const cap0 = Number.isFinite(R0) && R0 > 0 ? frac * R0 : 0;
-      console.log(`strategy: slidingWindow TFR=${cal.tfr} batch=${batch} buckets=${totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}% dirtyBudgetRatio=${frac} reusable=${Number.isFinite(R0) ? R0 : 0} cap=${Math.round(cap0)}`);
+      const packedCover = estimateRewriteBytes(nDocs, cal);
+      const packedPctR = R0 > 0 ? 100 * packedCover / R0 : 0;
+      const live0 = Math.max(0, (budgetSnap.storageSize || 0) - (Number.isFinite(R0) ? R0 : 0));
+      console.log(`strategy: slidingWindow TFR=${cal.tfr} batch=${batch} buckets=${totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}% dirtyBudgetRatio=${frac} reusable=${Number.isFinite(R0) ? R0 : 0} cap=${Math.round(cap0)} packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${live0} storageSize=${budgetSnap.storageSize || 0}`);
 
       let inflight = [];
       async function drainWrites() {
