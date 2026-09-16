@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.27"
+ *  Version: "0.1.28"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -87,7 +87,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.27" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.1.28" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -994,10 +994,10 @@
       const sampleN = Math.min(src.objects || 0, Number(shuffleSampleSize) > 0
          ? Math.ceil(+shuffleSampleSize)
          : 10000);
-      if (sampleN < 1) throw new Error('slidingShuffle: empty namespace, cannot calibrate TFR');
+      if (sampleN < 1) throw new Error(`${strategy}: empty namespace, cannot calibrate TFR`);
       const tmpName = tmpSampleName();
       const tmpDb = db.getSiblingDB(nsDb);
-      console.log(`slidingShuffle calibrate: $sample ${sampleN} compressor=${compressor} -> ${nsDb}.${tmpName}`);
+      console.log(`${strategy} calibrate: $sample ${sampleN} compressor=${compressor} -> ${nsDb}.${tmpName}`);
       try {
          try {
             tmpDb.createCollection(tmpName, {
@@ -1014,7 +1014,7 @@
                "whenMatched": "keepExisting",
                "whenNotMatched": "insert"
             } }
-         ], aggOpts("slidingShuffle calibrate $merge")).toArray();
+         ], aggOpts(`${strategy} calibrate $merge`)).toArray();
          console.log('calibrate: waiting for checkpoint before packed $collStats');
          await waitForCheckpoint({ "settle": true });
          let packed = $collStats(nsDb, tmpName) || {};
