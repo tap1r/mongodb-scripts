@@ -113,7 +113,7 @@
    const {
       "sampler": sampler = 'bucketed', // 'random' | 'adjacent' | 'bucketed' | 'doubleParked'
       "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile'
-      "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default 10000
+      "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default 5000
       "curator": curator = 'ids', // meetInMiddle: 'ids' | 'ranges'
       "pageFillRatio": pageFillRatio = 0.9, // WT dest-leaf spill target (fixed)
       "dirtyFillTarget": dirtyFillTarget = 0.08, // wave fill cap vs updates allocated % of cache
@@ -121,9 +121,9 @@
       "updatesTrigger": updatesTrigger = 0.10, // eviction_updates_trigger; stressed if updates util >= this
       "lowStressDirtyMax": lowStressDirtyMax = 0.07, // updates allocated soft pause
       "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
-      "dirtyBudgetRatio": dirtyBudgetRatio = 0.05, // slidingWindow/quantile: max packed rewrite bytes per checkpoint / freeStorageSize; waves fallback if no cache stats
+      "dirtyBudgetRatio": dirtyBudgetRatio = 0.01, // slidingWindow/quantile: max packed rewrite bytes per checkpoint / freeStorageSize; waves fallback if no cache stats
       "maxConcurrent": maxConcurrent,
-      "writeConcurrency": writeConcurrency = 4, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow / quantile write forks
+      "writeConcurrency": writeConcurrency = 1, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow / quantile write forks
       "curatorBatchSize": curatorBatchSize, // if set, overrides pageFillTarget for $in / $bucketAuto
       "maxLagSeconds": maxLagSeconds = 10, // pause new batches when lag exceeds this
       "passes": passes, // collection cover count; default 1
@@ -993,7 +993,7 @@
       const leaf = fill.dataPageSize || 32 * 1024;
       const sampleN = Math.min(src.objects || 0, Number(shuffleSampleSize) > 0
          ? Math.ceil(+shuffleSampleSize)
-         : 10000);
+         : 5000);
       if (sampleN < 1) throw new Error(`${strategy}: empty namespace, cannot calibrate TFR`);
       const tmpName = tmpSampleName();
       const tmpDb = db.getSiblingDB(nsDb);
