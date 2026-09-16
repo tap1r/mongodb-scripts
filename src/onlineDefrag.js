@@ -48,10 +48,10 @@
  *    freeStorageSize. After each checkpoint falling edge, collStats refreshes
  *    R and the cap (no extra checkpoint wait).
  *  - strategy 'quantile': same write/throttle/budget path as slidingWindow.
- *    Curator is equi-fill _id ranges: running $bsonSize via $setWindowFields,
- *    cut every pageFillRatio × 32KiB leaf (WT spill target). Block compression
- *    does not shrink the page; packed = bson/compression is only the on-disk
- *    debit vs freeStorageSize. Bucket n and _id span vary with doc sizes.
+ *    First-fit _id ranges: add docs while Σ ($bsonSize / compression) ≤
+ *    floor(pageFillRatio × 32KiB) (spill target, default 0.9). A doc that
+ *    would exceed starts a new bucket (jumbo docs get their own). Packed
+ *    debit vs R uses that sum. Bucket n and _id span vary with doc sizes.
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -115,7 +115,7 @@
       "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile'
       "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default 10000
       "curator": curator = 'ids', // meetInMiddle: 'ids' | 'ranges'
-      "pageFillRatio": pageFillRatio = 1, // 0.9, // WT dest-leaf spill target (fixed)
+      "pageFillRatio": pageFillRatio = 0.9, // WT dest-leaf spill target (fixed)
       "dirtyFillTarget": dirtyFillTarget = 0.08, // wave fill cap vs updates allocated % of cache
       "dirtyTrigger": dirtyTrigger = 0.20, // meetInMiddle: stressed if dirty util >= this
       "updatesTrigger": updatesTrigger = 0.10, // eviction_updates_trigger; stressed if updates util >= this
@@ -560,75 +560,52 @@
    }
 
    function packedPageBudget(cal) {
-      // WT leaf_page_max (32KiB) is the fill/spill unit. Reconciliation packs
-      // cells until ~pageFillRatio of that page; the block compressor then
-      // encodes the page for the file. It does not produce a smaller page
-      // (3:1 snappy does not mean a 10KiB leaf). packed = bson/compression
-      // is the on-disk block estimate for dirtyBudgetRatio vs freeStorageSize.
+      // First-fit fill: Σ ($bsonSize / compression) ≤ floor(pageFillRatio × leaf).
+      // compression = dataSize/live (>1). Equivalently Σ bson ≤ packedBudget × compression.
+      // packedBudget is the 32KiB leaf at the spill ratio, in on-disk bytes.
       const leaf = cal?.ps?.dataPageSize || 32 * 1024;
-      const fillRatio = Number(pageFillRatio) > 0 ? +pageFillRatio : 1;
+      const fillRatio = Number(pageFillRatio) > 0 ? +pageFillRatio : 0.9;
       const compression = Number(cal?.compression) > 0 ? +cal.compression : 1;
-      const bsonBudget = Math.max(1, fillRatio * leaf);
-      const packedBudget = Math.max(1, bsonBudget / Math.max(compression, 0.01));
-      return { "leaf": leaf, "fillRatio": fillRatio, "compression": compression, "bsonBudget": bsonBudget, "packedBudget": packedBudget };
+      const packedBudget = Math.max(1, Math.floor(fillRatio * leaf));
+      const bsonCap = packedBudget * Math.max(compression, 0.01);
+      return { "leaf": leaf, "fillRatio": fillRatio, "compression": compression, "packedBudget": packedBudget, "bsonCap": bsonCap };
    }
 
    function startQuantileCurator(cal, maxDocs) {
-      // Equi-fill ranges along _id: running $bsonSize cut every bsonBudget
-      // (pageFillRatio × 32KiB). $bucket (docSizes.js) histograms size classes
-      // — wrong axis for rewrite ranges.
-      const { compression, bsonBudget, packedBudget, leaf, fillRatio } = packedPageBudget(cal);
+      // First-fit along _id: add a doc while packed stays ≤ packedBudget;
+      // otherwise close the bucket and start another. Jumbo (> budget) gets
+      // its own bucket. $bucket (docSizes.js) histograms size classes — wrong axis.
+      const { compression, packedBudget, bsonCap, leaf, fillRatio } = packedPageBudget(cal);
       const pipeline = [
          { "$sort": { "_id": 1 } },
          { "$limit": Math.max(1, maxDocs) },
-         { "$project": {
-            "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] },
-            "packed": {
-               "$divide": [
-                  { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] },
-                  compression
-               ]
-            }
-         } },
-         { "$setWindowFields": {
-            "sortBy": { "_id": 1 },
-            "output": {
-               "run": {
-                  "$sum": "$bson",
-                  "window": { "documents": ["unbounded", "current"] }
-               }
-            }
-         } },
-         { "$set": {
-            "bucket": {
-               "$floor": {
-                  "$divide": [
-                     { "$max": [0, { "$subtract": ["$run", "$bson"] }] },
-                     bsonBudget
-                  ]
-               }
-            }
-         } },
-         { "$group": {
-            "_id": "$bucket",
-            "min": { "$min": "$_id" },
-            "max": { "$max": "$_id" },
-            "n": { "$sum": 1 },
-            "packed": { "$sum": "$packed" },
-            "bson": { "$sum": "$bson" }
-         } },
-         { "$sort": { "_id": 1 } }
+         { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } }
       ];
-      console.log(`quantile curator: bsonBudget=${Math.round(bsonBudget)} packedEst=${Math.round(packedBudget)} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)}`);
-      const rows = namespace.aggregate(pipeline, aggOpts("quantile $setWindowFields packed ranges", {
+      console.log(`quantile curator: first-fit packedBudget=${packedBudget} bsonCap≈${Math.round(bsonCap)} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)}`);
+      const cursor = namespace.aggregate(pipeline, aggOpts("quantile first-fit packed ranges", {
          "hint": { "_id": 1 },
          "allowDiskUse": true
-      })).toArray();
+      }));
+      const rows = [];
+      let cur = null;
+      const consume = (doc) => {
+         const bson = +doc.bson || 0;
+         const packed = bson / Math.max(compression, 0.01);
+         if (cur && cur.n > 0 && cur.packed + packed > packedBudget) {
+            rows.push(cur);
+            cur = null;
+         }
+         if (!cur) cur = { "min": doc._id, "max": doc._id, "n": 0, "bson": 0, "packed": 0 };
+         else cur.max = doc._id;
+         cur.n++;
+         cur.bson += bson;
+         cur.packed += packed;
+      };
+      if (typeof cursor.forEach === 'function') cursor.forEach(consume);
+      else for (const doc of cursor) consume(doc);
+      if (cur && cur.n) rows.push(cur);
       const state = { "batchSize": packedBudget, "maxDocs": maxDocs, "taken": 0 };
       async function* gen() {
-         // $group min/max are actual _ids in that bucket and disjoint from the
-         // next (max_i < min_{i+1}). Inclusive both ends. $bucketAuto shares
-         // the boundary (max === next min) and needs half-open; this does not.
          for (const row of rows) {
             if (state.taken >= state.maxDocs) return;
             state.taken += row.n || 0;
@@ -640,7 +617,7 @@
             };
          }
       }
-      return { "state": state, "gen": gen(), "totalBatches": rows.length, "packedBudget": packedBudget, "bsonBudget": bsonBudget };
+      return { "state": state, "gen": gen(), "totalBatches": rows.length, "packedBudget": packedBudget, "bsonCap": bsonCap };
    }
 
    async function meetInMiddleMain() {
