@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.2.1"
+ *  Version: "0.2.2"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -50,8 +50,9 @@
  *  - strategy 'quantile': same write/throttle/budget path as slidingWindow.
  *    First-fit _id ranges: add docs while Σ ($bsonSize / C_mode) ≤
  *    floor(pageFillRatio × 32KiB). Calibrate may split the sample into size
- *    modes and measure per-mode compression; a mode change closes the bucket.
- *    Jumbo docs get their own. Packed debit vs R uses that sum.
+ *    modes and measure per-mode compression. Packed debit is per-doc
+ *    bson/C_mode; mixed modes along _id stay in one leaf until the packed
+ *    cap. Jumbo docs get their own.
  *  - strategy 'rndQuantile': same first-fit / throttle / budget / modes as
  *    quantile, but the doc stream is repeated $sample of ~TFR (PFT) until N
  *    draws. Small $sample uses a random cursor (non-blocking). $sample of N
@@ -92,7 +93,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.2.1" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.2.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -118,7 +119,7 @@
    const {
       "sampler": sampler = 'bucketed', // 'random' | 'adjacent' | 'bucketed' | 'doubleParked'
       "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile'
-      "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default 5000
+      "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default 10000
       "curator": curator = 'ids', // meetInMiddle: 'ids' | 'ranges'
       "pageFillRatio": pageFillRatio = 0.9, // WT dest-leaf spill target (fixed)
       "dirtyFillTarget": dirtyFillTarget = 0.08, // wave fill cap vs updates allocated % of cache
@@ -622,12 +623,11 @@
       const consume = (doc) => {
          const bson = +doc.bson || 0;
          const packed = packedOf(bson, cal);
-         const mode = modeIndex(bson, cal);
-         if (cur && cur.n > 0 && (cur.packed + packed > packedBudget || cur.mode !== mode)) {
+         if (cur && cur.n > 0 && cur.packed + packed > packedBudget) {
             rows.push(cur);
             cur = null;
          }
-         if (!cur) cur = { "min": doc._id, "max": doc._id, "n": 0, "bson": 0, "packed": 0, "mode": mode };
+         if (!cur) cur = { "min": doc._id, "max": doc._id, "n": 0, "bson": 0, "packed": 0 };
          else cur.max = doc._id;
          cur.n++;
          cur.bson += bson;
@@ -677,13 +677,12 @@
                drawn++;
                const bson = +doc.bson || 0;
                const packed = packedOf(bson, cal);
-               const mode = modeIndex(bson, cal);
-               if (cur && cur.n > 0 && (cur.packed + packed > packedBudget || cur.mode !== mode)) {
+               if (cur && cur.n > 0 && cur.packed + packed > packedBudget) {
                   state.taken += cur.n;
                   yield { "ids": cur.ids, "n": cur.n, "packed": cur.packed, "bson": cur.bson };
                   cur = null;
                }
-               if (!cur) cur = { "ids": [], "n": 0, "bson": 0, "packed": 0, "mode": mode };
+               if (!cur) cur = { "ids": [], "n": 0, "bson": 0, "packed": 0 };
                cur.ids.push(doc._id);
                cur.n++;
                cur.bson += bson;
@@ -1136,11 +1135,26 @@
             "avg": n > 0 ? avgSum / n : 0
          });
       }
-      console.log(`calibrate modes: ${modes.length} bands ` + modes.map((m, k) => {
-         const close = k === modes.length - 1 ? ']' : ')';
+      const merged = [];
+      for (const m of modes) {
+         const p = merged[merged.length - 1];
+         if (p && m.min < p.max) {
+            const n2 = p.n + m.n;
+            p.avg = n2 > 0 ? (p.avg * p.n + m.avg * m.n) / n2 : p.avg;
+            p.n = n2;
+            if (m.max > p.max) p.max = m.max;
+            if (m.min < p.min) p.min = m.min;
+         } else merged.push({ "min": m.min, "max": m.max, "n": m.n, "avg": m.avg });
+      }
+      if (merged.length < 2) {
+         console.log(`calibrate modes: unimodal after merge (${modes.length} overlapping peaks)`);
+         return [];
+      }
+      console.log(`calibrate modes: ${merged.length} bands ` + merged.map((m, k) => {
+         const close = k === merged.length - 1 ? ']' : ')';
          return `[${m.min}, ${m.max}${close} n=${m.n} avg=${Math.round(m.avg)}`;
       }).join('; '));
-      return modes;
+      return merged;
    }
 
    async function measureModeCompression(tmpDb, srcName, modes, compressor, fallbackC) {
@@ -1211,7 +1225,7 @@
       const leaf = fill.dataPageSize || 32 * 1024;
       const sampleN = Math.min(src.objects || 0, Number(shuffleSampleSize) > 0
          ? Math.ceil(+shuffleSampleSize)
-         : 5000);
+         : 10000);
       if (sampleN < 1) throw new Error(`${strategy}: empty namespace, cannot calibrate TFR`);
       const tmpName = tmpSampleName();
       const tmpDb = db.getSiblingDB(nsDb);
@@ -1254,7 +1268,7 @@
                } else stable = 0;
                prevSz = packed.storageSize;
                if (Date.now() >= deadline) break;
-               await delay(5000);
+               await delay(10000);
             }
          }
          const { indexes, ...stats } = packed;
