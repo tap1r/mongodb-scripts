@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.2.0"
+ *  Version: "0.2.1"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -48,14 +48,14 @@
  *    freeStorageSize. After each checkpoint falling edge, collStats refreshes
  *    R and the cap (no extra checkpoint wait).
  *  - strategy 'quantile': same write/throttle/budget path as slidingWindow.
- *    First-fit _id ranges: add docs while Σ ($bsonSize / compression) ≤
- *    floor(pageFillRatio × 32KiB) (spill target, default 0.9). A doc that
- *    would exceed starts a new bucket (jumbo docs get their own). Packed
- *    debit vs R uses that sum. Bucket n and _id span vary with doc sizes.
- *  - strategy 'rndQuantile': same first-fit / throttle / budget as quantile,
- *    but the doc stream is repeated $sample of ~TFR (PFT) until N draws.
- *    Small $sample uses a random cursor (non-blocking). $sample of N would
- *    collscan+sort and block. Random ids are rewritten with $in, not a range.
+ *    First-fit _id ranges: add docs while Σ ($bsonSize / C_mode) ≤
+ *    floor(pageFillRatio × 32KiB). Calibrate may split the sample into size
+ *    modes and measure per-mode compression; a mode change closes the bucket.
+ *    Jumbo docs get their own. Packed debit vs R uses that sum.
+ *  - strategy 'rndQuantile': same first-fit / throttle / budget / modes as
+ *    quantile, but the doc stream is repeated $sample of ~TFR (PFT) until N
+ *    draws. Small $sample uses a random cursor (non-blocking). $sample of N
+ *    would collscan+sort and block. Random ids are rewritten with $in.
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -92,7 +92,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.2.0" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.2.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -567,15 +567,38 @@
    }
 
    function packedPageBudget(cal) {
-      // First-fit fill: Σ ($bsonSize / compression) ≤ floor(pageFillRatio × leaf).
-      // compression = dataSize/live (>1). Equivalently Σ bson ≤ packedBudget × compression.
-      // packedBudget is the 32KiB leaf at the spill ratio, in on-disk bytes.
+      // First-fit fill: Σ ($bsonSize / C_mode) ≤ floor(pageFillRatio × leaf).
+      // C_mode from calibrate size-band temps, else global dataSize/live.
       const leaf = cal?.ps?.dataPageSize || 32 * 1024;
       const fillRatio = Number(pageFillRatio) > 0 ? +pageFillRatio : 0.9;
       const compression = Number(cal?.compression) > 0 ? +cal.compression : 1;
       const packedBudget = Math.max(1, Math.floor(fillRatio * leaf));
       const bsonCap = packedBudget * Math.max(compression, 0.01);
       return { "leaf": leaf, "fillRatio": fillRatio, "compression": compression, "packedBudget": packedBudget, "bsonCap": bsonCap };
+   }
+
+   function modeIndex(bson, cal) {
+      const modes = cal?.modes;
+      if (!Array.isArray(modes) || modes.length < 2) return -1;
+      for (let k = 0; k < modes.length; k++) {
+         const m = modes[k];
+         if (k === modes.length - 1) {
+            if (bson >= m.min) return k;
+         } else if (bson >= m.min && bson < m.max) return k;
+      }
+      return -1;
+   }
+
+   function modeCompression(bson, cal) {
+      const fallback = Number(cal?.compression) > 0 ? +cal.compression : 1;
+      const k = modeIndex(bson, cal);
+      if (k < 0) return fallback;
+      const C = Number(cal.modes[k].compression);
+      return C > 0 ? C : fallback;
+   }
+
+   function packedOf(bson, cal) {
+      return bson / Math.max(modeCompression(bson, cal), 0.01);
    }
 
    function startQuantileCurator(cal, maxDocs) {
@@ -588,7 +611,8 @@
          { "$limit": Math.max(1, maxDocs) },
          { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } }
       ];
-      console.log(`quantile curator: first-fit packedBudget=${packedBudget} bsonCap≈${Math.round(bsonCap)} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)}`);
+      const nModes = Array.isArray(cal?.modes) ? cal.modes.length : 0;
+      console.log(`quantile curator: first-fit packedBudget=${packedBudget} bsonCap≈${Math.round(bsonCap)} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)} modes=${nModes >= 2 ? nModes : 'unimodal'}`);
       const cursor = namespace.aggregate(pipeline, aggOpts("quantile first-fit packed ranges", {
          "hint": { "_id": 1 },
          "allowDiskUse": true
@@ -597,12 +621,13 @@
       let cur = null;
       const consume = (doc) => {
          const bson = +doc.bson || 0;
-         const packed = bson / Math.max(compression, 0.01);
-         if (cur && cur.n > 0 && cur.packed + packed > packedBudget) {
+         const packed = packedOf(bson, cal);
+         const mode = modeIndex(bson, cal);
+         if (cur && cur.n > 0 && (cur.packed + packed > packedBudget || cur.mode !== mode)) {
             rows.push(cur);
             cur = null;
          }
-         if (!cur) cur = { "min": doc._id, "max": doc._id, "n": 0, "bson": 0, "packed": 0 };
+         if (!cur) cur = { "min": doc._id, "max": doc._id, "n": 0, "bson": 0, "packed": 0, "mode": mode };
          else cur.max = doc._id;
          cur.n++;
          cur.bson += bson;
@@ -634,7 +659,8 @@
       const { compression, packedBudget, bsonCap, leaf, fillRatio } = packedPageBudget(cal);
       const pft = Math.max(1, Number(cal.tfr) > 0 ? Math.ceil(cal.tfr) : 1);
       const state = { "batchSize": packedBudget, "maxDocs": maxDocs, "taken": 0 };
-      console.log(`rndQuantile curator: first-fit packedBudget=${packedBudget} bsonCap≈${Math.round(bsonCap)} $sample=${pft} (PFT/TFR) draws=${maxDocs} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)}`);
+      const nModes = Array.isArray(cal?.modes) ? cal.modes.length : 0;
+      console.log(`rndQuantile curator: first-fit packedBudget=${packedBudget} bsonCap≈${Math.round(bsonCap)} $sample=${pft} (PFT/TFR) draws=${maxDocs} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)} modes=${nModes >= 2 ? nModes : 'unimodal'}`);
       async function* gen() {
          let drawn = 0;
          let cur = null;
@@ -650,13 +676,14 @@
                if (drawn >= maxDocs) break;
                drawn++;
                const bson = +doc.bson || 0;
-               const packed = bson / Math.max(compression, 0.01);
-               if (cur && cur.n > 0 && cur.packed + packed > packedBudget) {
+               const packed = packedOf(bson, cal);
+               const mode = modeIndex(bson, cal);
+               if (cur && cur.n > 0 && (cur.packed + packed > packedBudget || cur.mode !== mode)) {
                   state.taken += cur.n;
                   yield { "ids": cur.ids, "n": cur.n, "packed": cur.packed, "bson": cur.bson };
                   cur = null;
                }
-               if (!cur) cur = { "ids": [], "n": 0, "bson": 0, "packed": 0 };
+               if (!cur) cur = { "ids": [], "n": 0, "bson": 0, "packed": 0, "mode": mode };
                cur.ids.push(doc._id);
                cur.n++;
                cur.bson += bson;
@@ -1043,6 +1070,139 @@
       else console.log(`preflight: no leftover sample collections matching ${tmpSamplePrefix()}`);
    }
 
+   function detectSizeModes(tmpDb, tmpName) {
+      // $bucketAuto is equal-count, so raw n is ~flat. Modes are high *density*
+      // bins: n / max(1, bsonMax-bsonMin). 16–24 bins resolve 2–3 separated modes.
+      const nBins = 24;
+      let bins = [];
+      try {
+         bins = tmpDb.getCollection(tmpName).aggregate([
+            { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } },
+            { "$bucketAuto": {
+               "groupBy": "$bson",
+               "buckets": nBins,
+               "output": { "n": { "$sum": 1 }, "avg": { "$avg": "$bson" } }
+            } }
+         ], aggOpts("calibrate size-mode histogram")).toArray();
+      } catch(e) {
+         console.log(`calibrate modes: histogram failed, ${e.message || e}`);
+         return [];
+      }
+      const density = (b) => {
+         const lo = Number(b?._id?.min), hi = Number(b?._id?.max);
+         const span = Number.isFinite(lo) && Number.isFinite(hi) ? Math.max(1, hi - lo) : 1;
+         return (b.n || 0) / span;
+      };
+      if (bins.length < 3) {
+         console.log(`calibrate modes: unimodal (${bins.length} bins)`);
+         return [];
+      }
+      const d = bins.map(density);
+      const peaks = [];
+      for (let i = 0; i < bins.length; i++) {
+         const prev = i > 0 ? d[i - 1] : 0;
+         const next = i < bins.length - 1 ? d[i + 1] : 0;
+         if ((bins[i].n || 0) >= 20 && d[i] >= prev && d[i] >= next) peaks.push(i);
+      }
+      const groups = [];
+      for (const i of peaks) {
+         if (groups.length && i <= groups[groups.length - 1].hi + 1) groups[groups.length - 1].hi = i;
+         else groups.push({ "lo": i, "hi": i });
+      }
+      const densNote = d.map((x, i) => `${Math.round(bins[i]._id.min)}:${x.toFixed(2)}`).join(',');
+      if (groups.length < 2) {
+         console.log(`calibrate modes: unimodal (${bins.length} bins, density-peaks=${groups.length}) ${densNote}`);
+         return [];
+      }
+      const modes = [];
+      for (let g = 0; g < groups.length; g++) {
+         const { lo, hi } = groups[g];
+         let peakD = 0;
+         for (let i = lo; i <= hi; i++) peakD = Math.max(peakD, d[i]);
+         const prevHi = g > 0 ? groups[g - 1].hi : -1;
+         const nextLo = g + 1 < groups.length ? groups[g + 1].lo : bins.length;
+         let a = lo, b = hi;
+         while (a - 1 > prevHi && d[a - 1] >= peakD * 0.25) a--;
+         while (b + 1 < nextLo && d[b + 1] >= peakD * 0.25) b++;
+         let n = 0, avgSum = 0;
+         for (let i = a; i <= b; i++) {
+            n += bins[i].n || 0;
+            avgSum += (bins[i].avg || 0) * (bins[i].n || 0);
+         }
+         modes.push({
+            "min": bins[a]._id.min,
+            "max": bins[b]._id.max,
+            "n": n,
+            "avg": n > 0 ? avgSum / n : 0
+         });
+      }
+      console.log(`calibrate modes: ${modes.length} bands ` + modes.map((m, k) => {
+         const close = k === modes.length - 1 ? ']' : ')';
+         return `[${m.min}, ${m.max}${close} n=${m.n} avg=${Math.round(m.avg)}`;
+      }).join('; '));
+      return modes;
+   }
+
+   async function measureModeCompression(tmpDb, srcName, modes, compressor, fallbackC) {
+      const created = [];
+      try {
+         for (let k = 0; k < modes.length; k++) {
+            const m = modes[k];
+            const oid = new ObjectId();
+            const hex = typeof oid.toHexString === 'function'
+                      ? oid.toHexString()
+                      : String(oid).replace(/[^a-f0-9]/gi, '').slice(-24);
+            const name = `${tmpSamplePrefix()}_m${k}_${hex}`;
+            try {
+               tmpDb.createCollection(name, {
+                  "storageEngine": { "wiredTiger": { "configString": `block_compressor=${compressor}` } }
+               });
+            } catch(_) {
+               tmpDb.createCollection(name);
+            }
+            created.push(name);
+            const bound = k === modes.length - 1
+                        ? { "$lte": [{ "$bsonSize": "$$ROOT" }, m.max] }
+                        : { "$lt": [{ "$bsonSize": "$$ROOT" }, m.max] };
+            tmpDb.getCollection(srcName).aggregate([
+               { "$match": { "$expr": { "$and": [
+                  { "$gte": [{ "$bsonSize": "$$ROOT" }, m.min] },
+                  bound
+               ] } } },
+               { "$merge": {
+                  "into": { "db": nsDb, "coll": name },
+                  "whenMatched": "replace",
+                  "whenNotMatched": "insert"
+               } }
+            ], aggOpts(`${strategy} calibrate mode ${k} $merge`)).toArray();
+         }
+         console.log('calibrate modes: waiting for checkpoint before per-mode $collStats');
+         await waitForCheckpoint({ "settle": true });
+         if (!wtCheckpoint().available) {
+            const timeoutMs = Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000;
+            const minWaitMs = Math.min(60000, timeoutMs);
+            console.log(`M0: waiting ${minWaitMs}ms for mode temps to pack`);
+            await delay(minWaitMs);
+         }
+         for (let k = 0; k < modes.length; k++) {
+            const packed = $collStats(nsDb, created[k]) || {};
+            const { indexes, ...stats } = packed;
+            const ps = pageStats(stats);
+            const live = Math.max(0, (stats.storageSize || 0) - (stats.freeStorageSize || 0));
+            const C = live > 0 && (stats.dataSize || 0) > 0 ? stats.dataSize / live : fallbackC;
+            modes[k].compression = Number(C) > 0 ? C : fallbackC;
+            modes[k].tfr = ps.pageFillActual;
+            modes[k].avgObjSize = stats.avgObjSize;
+            modes[k].objects = ps.documentCount;
+            const close = k === modes.length - 1 ? ']' : ')';
+            console.log(`calibrate mode ${k} bson=[${modes[k].min}, ${modes[k].max}${close} n=${modes[k].objects} C=${modes[k].compression.toFixed(3)} tfr=${modes[k].tfr} avgObjSize=${modes[k].avgObjSize}`);
+         }
+         return modes;
+      } finally {
+         for (const name of created) dropTmpSample(tmpDb, name, 'calibrate mode');
+      }
+   }
+
    async function calibrateTFR() {
       const src = collSnapshot();
       const fill = pageStats(src);
@@ -1109,7 +1269,17 @@
             console.log(`packed nPages=${ps.nPages} (unsettled or tiny file); TFR from leaf fill = ${tfr}`);
          }
          console.log(`calibrated TFR=${tfr} (packedFill) compression=${compression.toFixed(3)} packedFill=${ps.pageFillActual} packedPages=${ps.nPages} objects=${ps.documentCount} avgObjSize=${stats.avgObjSize} storageSize=${stats.storageSize}`);
-         return { "tfr": tfr, "compression": compression, "avgObjSize": stats.avgObjSize, "ps": ps };
+         let modes = [];
+         try {
+            modes = detectSizeModes(tmpDb, tmpName);
+            if (modes.length >= 2) {
+               modes = await measureModeCompression(tmpDb, tmpName, modes, compressor, compression);
+            }
+         } catch(e) {
+            console.log(`calibrate modes skipped: ${e.message || e}`);
+            modes = [];
+         }
+         return { "tfr": tfr, "compression": compression, "avgObjSize": stats.avgObjSize, "ps": ps, "modes": modes };
       } finally {
          dropTmpSample(tmpDb, tmpName, 'calibrate');
       }
