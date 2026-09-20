@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.2.2"
+ *  Version: "0.2.3"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -57,16 +57,18 @@
  *    quantile, but the doc stream is repeated $sample of ~TFR (PFT) until N
  *    draws. Small $sample uses a random cursor (non-blocking). $sample of N
  *    would collscan+sort and block. Random ids are rewritten with $in.
+ *  - strategy 'doubleParked': shrink the WT file by rewriting the current
+ *    record-store tail ($natural: -1, ~one packed leaf). First rewrite may
+ *    append; settle a checkpoint; replay the same _ids onto the free list.
+ *    Cycles until Σ packed ≥ 25% of initial freeStorageSize (`passes` is an
+ *    optional cap). Heuristic for file-EOF, not a block address.
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
  *    instead of a fixed 0.9 — next discussion
  *  - inter-wave pause on WT dirty / updates bytes instead of checkpoint status
  *  - AIMD dirtyBudgetRatio from settled density/reusable (stop ~10–20% reuse)
- *  - sampler 'doubleParked': first rewrite (may append), settle one checkpoint,
- *    rewrite the same _ids so they can consume the free list (prototype)
- *  - augmented pipeline: raise page occupancy here, then compact (or EOF
- *    rewrite) to relocate the geometric tail — compact cannot change density
+ *  - compact after a density pass to relocate the geometric tail
  */
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>onlineDefrag.js
@@ -75,7 +77,7 @@
  *  Example:
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection';" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { sampler: 'adjacent' };" [-f|--file] </path/to/>onlineDefrag.js
- *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { sampler: 'doubleParked' };" [-f|--file] </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'doubleParked' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'meetInMiddle', curator: 'ids' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'lowStressMode', curator: 'ranges' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'updateOne' };" [-f|--file] </path/to/>onlineDefrag.js
@@ -93,7 +95,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.2.2" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.2.3" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -118,7 +120,7 @@
    const userOptions = typeof defragOptions === 'undefined' ? {} : defragOptions;
    const {
       "sampler": sampler = 'bucketed', // 'random' | 'adjacent' | 'bucketed' | 'doubleParked'
-      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile'
+      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile' | 'doubleParked'
       "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default 10000
       "curator": curator = 'ids', // meetInMiddle: 'ids' | 'ranges'
       "pageFillRatio": pageFillRatio = 0.9, // WT dest-leaf spill target (fixed)
@@ -127,7 +129,7 @@
       "updatesTrigger": updatesTrigger = 0.10, // eviction_updates_trigger; stressed if updates util >= this
       "lowStressDirtyMax": lowStressDirtyMax = 0.07, // updates allocated soft pause
       "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
-      "dirtyBudgetRatio": dirtyBudgetRatio = 0.01, // slidingWindow/quantile/rndQuantile: max packed rewrite bytes per checkpoint / freeStorageSize; waves fallback if no cache stats
+      "dirtyBudgetRatio": dirtyBudgetRatio = 0.5, // slidingWindow/quantile/rndQuantile: max packed rewrite bytes per checkpoint / freeStorageSize; waves fallback if no cache stats
       "maxConcurrent": maxConcurrent,
       "writeConcurrency": writeConcurrency = 1, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow / quantile / rndQuantile write forks
       "curatorBatchSize": curatorBatchSize, // if set, overrides pageFillTarget for $in / $bucketAuto
@@ -600,6 +602,40 @@
 
    function packedOf(bson, cal) {
       return bson / Math.max(modeCompression(bson, cal), 0.01);
+   }
+
+   function docBsonSize(doc) {
+      try {
+         if (typeof Object.bsonsize === 'function') return Object.bsonsize(doc);
+      } catch(_) { /* fall through */ }
+      try {
+         if (typeof BSON !== 'undefined' && typeof BSON.calculateObjectSize === 'function') {
+            return BSON.calculateObjectSize(doc);
+         }
+      } catch(_) { /* fall through */ }
+      return 0;
+   }
+
+   function takeEofPackedLeaf(cal) {
+      // Rightmost record-store leaf ≈ max RecordId ≈ $natural: -1.
+      // Not a guaranteed file-offset EOF page (block manager may reuse holes).
+      const { packedBudget } = packedPageBudget(cal);
+      const pft = Math.max(1, Number(cal.tfr) > 0 ? Math.ceil(cal.tfr) : 1);
+      const limit = Math.max(512, pft * 8);
+      const cursor = namespace.find().sort({ "$natural": -1 }).limit(limit);
+      const cur = { "ids": [], "n": 0, "bson": 0, "packed": 0 };
+      for (const doc of cursor) {
+         const bson = docBsonSize(doc);
+         if (bson < 1) continue;
+         const packed = packedOf(bson, cal);
+         if (cur.n > 0 && cur.packed + packed > packedBudget) break;
+         cur.ids.push(doc._id);
+         cur.n++;
+         cur.bson += bson;
+         cur.packed += packed;
+      }
+      try { cursor.close(); } catch(_) { /* exhausted */ }
+      return cur;
    }
 
    function startQuantileCurator(cal, maxDocs) {
@@ -1462,6 +1498,76 @@
       await slidingPackedMain('rndQuantile', ({ nDocs, cal }) => startRndQuantileCurator(cal, nDocs));
    }
 
+   async function doubleParkedMain() {
+      const srcSnap = collSnapshot();
+      console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
+      const cal = await calibrateTFR();
+      const { packedBudget, fillRatio, leaf } = packedPageBudget(cal);
+      const dirtyTune = {
+         "base": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
+         "soft": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
+         "hard": Number(lowStressDirtyHard) > 0 ? +lowStressDirtyHard : 0.08
+      };
+      const eofRatio = 0.25;
+      const budgetSnap = collSnapshot();
+      let R0 = +budgetSnap.freeStorageSize;
+      if (!Number.isFinite(R0) || R0 < 0) R0 = 0;
+      let target = R0 > 0 ? eofRatio * R0 : packedBudget;
+      const cycleCap = Number(passes) > 0 ? Math.ceil(+passes) : Number.MAX_SAFE_INTEGER;
+      const estCycles = packedBudget > 0 ? Math.max(1, Math.ceil(target / packedBudget)) : 1;
+      console.log(`strategy: doubleParked TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} reusable=${R0} eofBudget=${eofRatio} targetPacked=${Math.round(target)} estCycles≈${estCycles} $natural:-1 then replay after checkpoint`);
+
+      let prevSz = budgetSnap.storageSize;
+      let packedDone = 0;
+      let cycle = 0;
+      while (packedDone < target && cycle < cycleCap) {
+         await waitForDirtyUnder(dirtyTune);
+         await waitForReplLag({ "abortIfCheckpoint": true });
+         await waitForCheckpoint();
+         const ckpt = wtCheckpoint();
+         if (ckpt.available && ckpt.running) continue;
+         const leafDocs = takeEofPackedLeaf(cal);
+         if (!leafDocs.n) {
+            console.log('doubleParked: no tail documents, stopping');
+            break;
+         }
+         cycle++;
+         const snap0 = collSnapshot();
+         console.log(`doubleParked ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} n=${leafDocs.n} bson=${Math.round(leafDocs.bson)} packed=${Math.round(leafDocs.packed)} storageSize=${snap0.storageSize} reusable=${snap0.freeStorageSize || 0} rewrite 1 (may append)`);
+         await rewriteIds(leafDocs.ids, { "expect": leafDocs.n });
+         console.log('doubleParked: waiting for checkpoint before replay');
+         await waitForCheckpoint({ "settle": true });
+         await waitForReplLag();
+         const snap1 = collSnapshot();
+         console.log(`doubleParked ${cycle} replay n=${leafDocs.n} storageSize=${snap1.storageSize} reusable=${snap1.freeStorageSize || 0} rewrite 2 (free list)`);
+         await rewriteIds(leafDocs.ids, { "expect": leafDocs.n });
+         await waitForCheckpoint({ "settle": true });
+         await waitForReplLag();
+         packedDone += leafDocs.packed;
+         const snap2 = collSnapshot();
+         if (R0 <= 0) {
+            const R1 = +snap2.freeStorageSize;
+            if (Number.isFinite(R1) && R1 > 0) {
+               R0 = R1;
+               target = Math.max(target, eofRatio * R0);
+               console.log(`doubleParked: reusable now ${R0}, targetPacked=${Math.round(target)}`);
+            }
+         }
+         const dSz = (snap2.storageSize || 0) - (prevSz || 0);
+         console.log(EJSON.stringify({
+            "state": "doubleParked cycle",
+            "cycle": cycle,
+            "packedDone": Math.round(packedDone),
+            "targetPacked": Math.round(target),
+            "dStorageSize": dSz,
+            ...snap2
+         }));
+         prevSz = snap2.storageSize;
+      }
+      console.log(`doubleParked done cycles=${cycle} packedDone=${Math.round(packedDone)} targetPacked=${Math.round(target)}`);
+      console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
+   }
+
    function wtCheckpoint() {
       // WT-11171: v8+ wiredTiger.checkpoint; v7 wiredTiger.transaction.
       // mongos / Atlas M0/Flex / non-WT: no wiredTiger section.
@@ -1714,6 +1820,7 @@
       else if (strategy === 'slidingWindow' || sampler === 'slidingWindow') await slidingWindowMain();
       else if (strategy === 'quantile' || sampler === 'quantile') await quantileMain();
       else if (strategy === 'rndQuantile' || sampler === 'rndQuantile') await rndQuantileMain();
+      else if (strategy === 'doubleParked' || sampler === 'doubleParked') await doubleParkedMain();
       else await main();
    } catch(e) {
       console.log('[red][ERROR][/]', e.errmsg || e.message || String(e));
