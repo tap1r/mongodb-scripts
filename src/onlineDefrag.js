@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.1.28"
+ *  Version: "0.2.0"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -52,6 +52,10 @@
  *    floor(pageFillRatio × 32KiB) (spill target, default 0.9). A doc that
  *    would exceed starts a new bucket (jumbo docs get their own). Packed
  *    debit vs R uses that sum. Bucket n and _id span vary with doc sizes.
+ *  - strategy 'rndQuantile': same first-fit / throttle / budget as quantile,
+ *    but the doc stream is repeated $sample of ~TFR (PFT) until N draws.
+ *    Small $sample uses a random cursor (non-blocking). $sample of N would
+ *    collscan+sort and block. Random ids are rewritten with $in, not a range.
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -77,6 +81,7 @@
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'slidingShuffle' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'slidingWindow' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'quantile' };" [-f|--file] </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'rndQuantile' };" [-f|--file] </path/to/>onlineDefrag.js
  *
  *  We use 'var' to interoperate with mongosh's sloppy mode
  */
@@ -87,7 +92,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.1.28" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.2.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -100,7 +105,7 @@
    let __comment = `#### Running script ${__script.name} v${__script.version}`;
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
-   console.log(`\n\n[yellow]${__comment}[/]`);
+   console.log(`\n\n[yellow]${__comment}[/]\n`);
 })();
 
 (async() => {
@@ -112,7 +117,7 @@
    const userOptions = typeof defragOptions === 'undefined' ? {} : defragOptions;
    const {
       "sampler": sampler = 'bucketed', // 'random' | 'adjacent' | 'bucketed' | 'doubleParked'
-      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile'
+      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile'
       "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default 5000
       "curator": curator = 'ids', // meetInMiddle: 'ids' | 'ranges'
       "pageFillRatio": pageFillRatio = 0.9, // WT dest-leaf spill target (fixed)
@@ -121,9 +126,9 @@
       "updatesTrigger": updatesTrigger = 0.10, // eviction_updates_trigger; stressed if updates util >= this
       "lowStressDirtyMax": lowStressDirtyMax = 0.07, // updates allocated soft pause
       "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
-      "dirtyBudgetRatio": dirtyBudgetRatio = 0.01, // slidingWindow/quantile: max packed rewrite bytes per checkpoint / freeStorageSize; waves fallback if no cache stats
+      "dirtyBudgetRatio": dirtyBudgetRatio = 0.01, // slidingWindow/quantile/rndQuantile: max packed rewrite bytes per checkpoint / freeStorageSize; waves fallback if no cache stats
       "maxConcurrent": maxConcurrent,
-      "writeConcurrency": writeConcurrency = 1, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow / quantile write forks
+      "writeConcurrency": writeConcurrency = 1, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow / quantile / rndQuantile write forks
       "curatorBatchSize": curatorBatchSize, // if set, overrides pageFillTarget for $in / $bucketAuto
       "maxLagSeconds": maxLagSeconds = 10, // pause new batches when lag exceeds this
       "passes": passes, // collection cover count; default 1
@@ -356,7 +361,7 @@
       "hint": { "_id": 1 } // must force hint to avoid $expr collscan
    };
 
-   async function rewriteFilter(filter, { one = false } = {}) {
+   async function rewriteFilter(filter, { one = false, expect } = {}) {
       if (Number(updateDelayMs) > 0) await delay(updateDelayMs);
       const session = db.getMongo().startSession({
          "readPreference": { "mode": "primary" },
@@ -369,7 +374,9 @@
                        ? { "updateOne": { "filter": filter, "update": updatePipeline, ...updateManyOpts } }
                        : { "updateMany": { "filter": filter, "update": updatePipeline, ...updateManyOpts } };
             const { modifiedCount } = await coll.bulkWrite([spec], bulkOpts);
-            if (!one || modifiedCount !== 1) console.log(`\tmodifiedCount: ${modifiedCount}`);
+            if (!((expect != null && modifiedCount === expect) || (one && modifiedCount === 1))) {
+               console.log(`\tmodifiedCount: ${modifiedCount}`);
+            }
          }, {
             "readConcern": { "level": "local" },
             "writeConcern": { "w": "majority", "j": true },
@@ -382,8 +389,8 @@
       }
    }
 
-   function rewriteIds(ids) {
-      return rewriteFilter({ "_id": { "$in": ids } });
+   function rewriteIds(ids, opts) {
+      return rewriteFilter({ "_id": { "$in": ids } }, opts);
    }
 
    function rewriteOne(id) {
@@ -618,6 +625,57 @@
          }
       }
       return { "state": state, "gen": gen(), "totalBatches": rows.length, "packedBudget": packedBudget, "bsonCap": bsonCap };
+   }
+
+   function startRndQuantileCurator(cal, maxDocs) {
+      // Stream $sample(TFR) until N draws. Each chunk is << 5% of the
+      // collection so mongod uses a random cursor, not a blocking collscan+sort.
+      // First-fit is the same packed-page rule as quantile; rewrite is $in.
+      const { compression, packedBudget, bsonCap, leaf, fillRatio } = packedPageBudget(cal);
+      const pft = Math.max(1, Number(cal.tfr) > 0 ? Math.ceil(cal.tfr) : 1);
+      const state = { "batchSize": packedBudget, "maxDocs": maxDocs, "taken": 0 };
+      console.log(`rndQuantile curator: first-fit packedBudget=${packedBudget} bsonCap≈${Math.round(bsonCap)} $sample=${pft} (PFT/TFR) draws=${maxDocs} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)}`);
+      async function* gen() {
+         let drawn = 0;
+         let cur = null;
+         while (drawn < maxDocs) {
+            const size = Math.min(pft, maxDocs - drawn);
+            const cursor = namespace.aggregate([
+               { "$sample": { "size": size } },
+               { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } }
+            ], aggOpts(`${strategy} $sample ${size}`, { "cursor": { "batchSize": size } }));
+            const docs = typeof cursor.toArray === 'function' ? cursor.toArray() : [...cursor];
+            if (!docs.length) break;
+            for (const doc of docs) {
+               if (drawn >= maxDocs) break;
+               drawn++;
+               const bson = +doc.bson || 0;
+               const packed = bson / Math.max(compression, 0.01);
+               if (cur && cur.n > 0 && cur.packed + packed > packedBudget) {
+                  state.taken += cur.n;
+                  yield { "ids": cur.ids, "n": cur.n, "packed": cur.packed, "bson": cur.bson };
+                  cur = null;
+               }
+               if (!cur) cur = { "ids": [], "n": 0, "bson": 0, "packed": 0 };
+               cur.ids.push(doc._id);
+               cur.n++;
+               cur.bson += bson;
+               cur.packed += packed;
+            }
+         }
+         if (cur && cur.n) {
+            state.taken += cur.n;
+            yield { "ids": cur.ids, "n": cur.n, "packed": cur.packed, "bson": cur.bson };
+         }
+      }
+      return {
+         "state": state,
+         "gen": gen(),
+         "totalBatches": 0,
+         "streaming": true,
+         "packedBudget": packedBudget,
+         "bsonCap": bsonCap
+      };
    }
 
    async function meetInMiddleMain() {
@@ -1139,6 +1197,7 @@
                   ? Math.ceil(+curatorBatchSize)
                   : cal.tfr;
       const walk = startWalk({ "nDocs": nDocs, "batch": batch, "cal": cal });
+      const streaming = !!walk.streaming;
       const totalBatches = walk.totalBatches > 0 ? walk.totalBatches : Math.max(1, Math.ceil(nDocs / batch));
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
       const dirtyTune = {
@@ -1153,7 +1212,7 @@
       const packedCover = estimateRewriteBytes(nDocs, cal);
       const packedPctR = R0 > 0 ? 100 * packedCover / R0 : 0;
       const live0 = Math.max(0, (budgetSnap.storageSize || 0) - (Number.isFinite(R0) ? R0 : 0));
-      console.log(`strategy: ${label} TFR=${cal.tfr} batch=${batch} buckets=${totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}% dirtyBudgetRatio=${frac} reusable=${Number.isFinite(R0) ? R0 : 0} cap=${Math.round(cap0)} packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${live0} storageSize=${budgetSnap.storageSize || 0}`);
+      console.log(`strategy: ${label} TFR=${cal.tfr} batch=${batch} buckets=${streaming ? 'first-fit' : totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}% dirtyBudgetRatio=${frac} reusable=${Number.isFinite(R0) ? R0 : 0} cap=${Math.round(cap0)} packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${live0} storageSize=${budgetSnap.storageSize || 0}`);
 
       let inflight = [];
       async function drainWrites() {
@@ -1168,7 +1227,7 @@
 
       let pass = 0;
       const writeWindow = { "snap": budgetSnap, "bytes": 0 };
-      while (walk.state.taken < walk.state.maxDocs) {
+      for (;;) {
          await waitForDirtyUnder(dirtyTune);
          await waitForReplLag({ "abortIfCheckpoint": true });
          const waited = await waitForCheckpoint();
@@ -1186,16 +1245,24 @@
                          : estimateRewriteBytes(value.n || batch, cal);
          await ensureReusableRoom(writeWindow, nextBytes, { "refreshSnap": true, "beforeWait": drainWrites });
          writeWindow.bytes += nextBytes;
-         const bounds = value.range.$lte !== undefined
-                      ? `[${value.range.$gte}, ${value.range.$lte}]`
-                      : `[${value.range.$gte}, ${value.range.$lt}]`;
          const packedNote = Number(value.packed) > 0 ? ` packed=${Math.round(value.packed)}` : '';
          const bsonNote = Number(value.bson) > 0 ? ` bson=${Math.round(value.bson)}` : '';
-         console.log(`${label} ${pass}/${totalBatches} n=${value.n}${bsonNote}${packedNote} filter=_id ${bounds}`);
-         await enqueueWrite(rewriteFilter({ "_id": value.range }), conc);
+         const passTag = streaming ? `${label} ${pass}` : `${label} ${pass}/${totalBatches}`;
+         const expect = value.n;
+         if (value.ids) {
+            console.log(`${passTag} n=${value.n}${bsonNote}${packedNote}`);
+            await enqueueWrite(rewriteIds(value.ids, { "expect": expect }), conc);
+         } else {
+            const bounds = value.range.$lte !== undefined
+                         ? `[${value.range.$gte}, ${value.range.$lte}]`
+                         : `[${value.range.$gte}, ${value.range.$lt}]`;
+            console.log(`${passTag} n=${value.n}${bsonNote}${packedNote} filter=_id ${bounds}`);
+            await enqueueWrite(rewriteFilter({ "_id": value.range }, { "expect": expect }), conc);
+         }
       }
 
       await drainWrites();
+      if (streaming) console.log(`${label} done batches=${pass}`);
       console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
    }
 
@@ -1205,6 +1272,10 @@
 
    async function quantileMain() {
       await slidingPackedMain('quantile', ({ nDocs, cal }) => startQuantileCurator(cal, nDocs));
+   }
+
+   async function rndQuantileMain() {
+      await slidingPackedMain('rndQuantile', ({ nDocs, cal }) => startRndQuantileCurator(cal, nDocs));
    }
 
    function wtCheckpoint() {
@@ -1458,6 +1529,7 @@
       else if (strategy === 'slidingShuffle' || sampler === 'slidingShuffle') await slidingShuffleMain();
       else if (strategy === 'slidingWindow' || sampler === 'slidingWindow') await slidingWindowMain();
       else if (strategy === 'quantile' || sampler === 'quantile') await quantileMain();
+      else if (strategy === 'rndQuantile' || sampler === 'rndQuantile') await rndQuantileMain();
       else await main();
    } catch(e) {
       console.log('[red][ERROR][/]', e.errmsg || e.message || String(e));
