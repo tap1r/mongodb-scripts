@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.3.0"
+ *  Version: "0.3.1"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -22,6 +22,8 @@
  *  - defragOptions.ignoreCheckpoint: skip checkpoint waits; $collStats is
  *    fetched without blocking and applied on the next write round. Calibrate
  *    still settles. Reusable/R caps and doubleParked replay use stale stats.
+ *  - defragOptions.naturalDir: naturalWindow scan, 1 (default, oldest RecordId
+ *    first) or -1 (newest first). doubleParked stays -1.
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -57,7 +59,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.3.0" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.3.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -91,7 +93,7 @@
       "updatesTrigger": updatesTrigger = 0.10, // eviction_updates_trigger; stressed if updates util >= this
       "lowStressDirtyMax": lowStressDirtyMax = 0.07, // updates allocated soft pause
       "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
-      "dirtyBudgetRatio": dirtyBudgetRatio = 0.5, // slidingWindow/quantile/rndQuantile/shapeQuantile: max packed rewrite bytes per checkpoint / freeStorageSize; waves fallback if no cache stats
+      "dirtyBudgetRatio": dirtyBudgetRatio = 0.5, // slidingWindow/quantile/rndQuantile/shapeQuantile/naturalWindow: max packed rewrite bytes per checkpoint / freeStorageSize; waves fallback if no cache stats
       "maxConcurrent": maxConcurrent,
       "writeConcurrency": writeConcurrency = 1, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow / quantile / rndQuantile write forks
       "curatorBatchSize": curatorBatchSize, // if set, overrides pageFillTarget for $in / $bucketAuto
@@ -99,6 +101,7 @@
       "passes": passes, // collection cover count; default 1
       "checkpointTimeoutMs": checkpointTimeoutMs,
       "ignoreCheckpoint": ignoreCheckpoint = false, // skip ckpt waits; async $collStats next round
+      "naturalDir": naturalDir = 1, // naturalWindow: 1 = oldest RecordId first, -1 = newest first
       "updateDelayMs": updateDelayMs = 100 // pause before every rewrite
    } = userOptions;
 
@@ -714,12 +717,15 @@
    }
 
    async function startNaturalWindowCurator(cal, maxDocs) {
-      // strategy 'naturalWindow': freeze a $natural:1 + $bsonSize cover ($limit
-      // nDocs) then first-fit like quantile. Writes are $in in RecordId order
-      // (not _id ranges). Schema grouping would reorder; C_mode still applies.
+      // strategy 'naturalWindow': freeze a $natural + $bsonSize cover ($limit
+      // nDocs) then first-fit like quantile. naturalDir 1 = oldest RecordId
+      // first; -1 = newest first. Writes are $in in that order. $limit nDocs
+      // with dir=1 excludes concurrent tail inserts; dir=-1 is newest n (a
+      // concurrent insert can displace the oldest).
       const { packedBudget, bsonCap, leaf, fillRatio, compression } = packedPageBudget(cal);
-      console.log(`naturalWindow curator: $natural:1 scan nDocs=${maxDocs} packedBudget=${packedBudget} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)}`);
-      const batches = await naturalPackedBatches(cal, maxDocs, 1);
+      const dir = Number(naturalDir) >= 0 ? 1 : -1;
+      console.log(`naturalWindow curator: $natural:${dir} scan nDocs=${maxDocs} packedBudget=${packedBudget} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)}`);
+      const batches = await naturalPackedBatches(cal, maxDocs, dir);
       const state = { "batchSize": packedBudget, "maxDocs": maxDocs, "taken": 0 };
       async function* gen() {
          for (const b of batches) {
