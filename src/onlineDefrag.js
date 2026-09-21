@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.2.4"
+ *  Version: "0.2.5"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -15,57 +15,10 @@
  *  - --eval must use var (not let/const). Do not declare dbName/collName/defragOptions
  *    in this file — IIFE const would shadow the overlay.
  *  - storage snapshots use mdblib $collStats (MDBLIB, ~/.mongodb, or cwd).
- *  - defragOptions.sampler: 'random' | 'adjacent' | 'bucketed' (default) | 'doubleParked'.
- *  - bucketed sampler streams _id-range batches (no $sort / $bucketAuto).
- *  - one pass: waves = docs / (batch × concurrency). Batch = max(actual fill, 90% target).
- *  - concurrency = min(reusable pages, dirty fill headroom). Dirty fill ~10% of
- *    cache so eviction can write ahead of checkpoint (do not change mongod
- *    eviction knobs; stay below ~20% trigger). M0: dirtyBudgetRatio × reusable.
- *  - do not start writes during a WT checkpoint; wait only while one is running.
- *  - after the last wave, wait for a checkpoint cycle before settled stats.
- *  - throttle when repl lag exceeds maxLagSeconds (rs.status, else lastWrite vs majority).
- *  - strategy 'meetInMiddle': low-pass (_id: 1) while checkpoint idle, high-pass
- *    (_id: -1) while it runs. After the first high pass completes, a reverse
- *    high pass rewrites those buckets from the last (middle) boundary back
- *    toward max _id. Writes are txn updateMany + $unset _id.
- *  - strategy 'lowStressMode': single _id ascending pass (same ids/ranges
- *    curator). Writes when checkpoint is idle; throttle by repl lag and
- *    updates allocated: soft 7% / hard 8% (overshoot lowers soft).
- *    Pause if dirty trigger or eviction_updates_trigger (10%) hits first.
- *  - strategy 'updateOne': same walk/throttles as lowStressMode, but each txn
- *    is updateOne on a single _id (curator batch size 1).
- *  - strategy 'slidingShuffle': calibrate TFR from $sample+$merge into a temp
- *    collection (same compressor) named _tmp_<collName>_<oid>. Drop it as
- *    soon as packed $collStats is taken. Preflight drops leftovers matching
- *    _tmp_<collName>. TFR is packed pageFillActual. TFR passes; pass p
- *    takes _id ranks p, p+TFR, p+2TFR, … in batches of TFR (adjacent stride
- *    ordinals). Each _id once. Writes when checkpoint idle, lag and updates
- *    % in bounds.
- *  - strategy 'slidingWindow': calibrate TFR like slidingShuffle; adjacent
- *    consecutive _id batches of TFR (1–TFR, TFR+1–2TFR, …). Writes when
- *    checkpoint idle, lag and updates % in bounds. dirtyBudgetRatio caps
- *    cumulative estimated rewrite bytes per checkpoint at that fraction of
- *    freeStorageSize. After each checkpoint falling edge, collStats refreshes
- *    R and the cap (no extra checkpoint wait).
- *  - strategy 'quantile': same write/throttle/budget path as slidingWindow.
- *    First-fit _id ranges: add docs while Σ ($bsonSize / C_mode) ≤
- *    floor(pageFillRatio × 32KiB). Calibrate may split the sample into size
- *    modes and measure per-mode compression. Packed debit is per-doc
- *    bson/C_mode; mixed modes along _id stay in one leaf until the packed
- *    cap. Jumbo docs get their own.
- *  - strategy 'rndQuantile': same first-fit / throttle / budget / modes as
- *    quantile, but the doc stream is repeated $sample of ~TFR (PFT) until N
- *    draws. Small $sample uses a random cursor (non-blocking). $sample of N
- *    would collscan+sort and block. Random ids are rewritten with $in.
- *  - strategy 'doubleParked': one $natural:-1 $bsonSize cover of the whole
- *    collection, first-fit packed $in leaves. Each checkpoint window is
- *    dirtyBudgetRatio × R: rewrite, settle, replay those _ids, settle. Unique
- *    cover (scan once so rewritten docs are not recaptured at the new tail).
- *  - strategy 'shapeQuantile': first-fit packed $in batches per top-level
- *    field-name shape (sorted keys, exclude _id). Homogeneous $in so dest
- *    leaves share key bytes for snappy. Per-shape C from the calibrate sample
- *    when 2+ shapes. $objectToArray stays on the server; client sees
- *    {_id, bson, keys} only.
+ *  - defragOptions.sampler: 'random' | 'adjacent' | 'bucketed' (default) | 'doubleParked'
+ *  - defragOptions.strategy: 'waves' (default) | 'meetInMiddle' | 'lowStressMode' |
+ *    'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile' |
+ *    'shapeQuantile' | 'doubleParked'
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -100,7 +53,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.2.4" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.2.5" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -144,6 +97,7 @@
       "updateDelayMs": updateDelayMs = 100 // pause before every rewrite
    } = userOptions;
 
+   // mdblib $collStats for the target namespace (indexes stripped).
    function collSnapshot() {
       const { indexes, ...stats } = $collStats(nsDb, nsColl) || {};
       return stats;
@@ -174,6 +128,7 @@
       };
    }
 
+   // Wave batch = max(actual fill, pageFillRatio × dest leaf). nPages from live/32KiB.
    function pageStats(stats = {}) {
       const {
          dataSize,
@@ -203,6 +158,7 @@
       };
    }
 
+   // Soft cap: ~dirtyFillTarget of cache as updates-allocated headroom (stay below ~20% dirty trigger).
    function dirtyFillPages(leaf) {
       const c = wtCache();
       if (!c) return null;
@@ -212,8 +168,10 @@
    }
 
    function waveBudget(stats, dataPageSize) {
+      // Wave concurrency = min(reusable pages, dirty fill headroom).
       // Reusable pages = hard cap (no file extend). Dirty fill = softer cap
       // so eviction can write during the wave; checkpoint still required to settle.
+      // M0 (no cache stats): dirtyBudgetRatio × reusable pages.
       const leaf = Number(dataPageSize) > 0 ? dataPageSize : 32 * 1024;
       const reusable = +stats.freeStorageSize;
       const reusablePages = Number.isFinite(reusable) && reusable > 0
@@ -255,6 +213,7 @@
       }
    }
 
+   // sampler 'random': blocking $sample of nBuckets × pageSize, then stream page-sized _id batches.
    async function* rndSample(sampleSize = 1, concurrentUpdates = 1) {
       const { nBuckets, pageSize } = sampleDims(sampleSize, concurrentUpdates);
       const pipeline = [
@@ -268,6 +227,7 @@
       );
    }
 
+   // sampler 'adjacent': random seed _id, walk $gte or $lte with $sampleRate (≈1/actualFill), $natural:-1.
    async function* adjacentSample(sampleSize = 1, concurrentUpdates = 1, sampleRate = 1) {
       const { nBuckets, pageSize } = sampleDims(sampleSize, concurrentUpdates);
       const seedCursor = namespace.aggregate([
@@ -304,13 +264,13 @@
    }
 
    async function* bucketedIds(sampleSize = 1, concurrentUpdates = 1, sampleRate = 1, afterId) {
-      // Stream page-sized batches from an _id range. No $sort / $bucketAuto /
-      // $setWindowFields — those block (or semi-block) before the first yield.
+      // sampler 'bucketed' (default): stream page-sized _id-range batches.
+      // No $sort / $bucketAuto / $setWindowFields — those block before the first yield.
       const { nBuckets, pageSize } = sampleDims(sampleSize, concurrentUpdates);
       const pipeline = [];
       if (afterId !== undefined) {
          pipeline.push({ "$match": { "_id": { "$gt": afterId } } });
-      } else if (sampler !== 'doubleParked') {
+      } else {
          const seedCursor = namespace.aggregate([
             { "$sample": { "size": 1 } },
             { "$project": { "_id": 1 } }
@@ -341,7 +301,8 @@
       );
    }
 
-   async function* getIds(sampleSize, concurrentUpdates, sampleRate, afterId) {
+   // Waves sampler switch. sampler 'doubleParked' is dispatched to doubleParkedMain.
+   async function* getIds(sampleSize, concurrentUpdates, sampleRate) {
       switch (sampler) {
          case 'random':
             yield* rndSample(sampleSize, concurrentUpdates);
@@ -352,11 +313,8 @@
          case 'bucketed':
             yield* bucketedIds(sampleSize, concurrentUpdates, sampleRate);
             break;
-         case 'doubleParked':
-            yield* bucketedIds(sampleSize, concurrentUpdates, sampleRate, afterId);
-            break;
          default:
-            throw new Error(`unknown defragOptions.sampler "${sampler}" (use random|adjacent|bucketed|doubleParked)`);
+            throw new Error(`unknown defragOptions.sampler "${sampler}" (use random|adjacent|bucketed)`);
       }
    }
 
@@ -369,6 +327,7 @@
       "hint": { "_id": 1 } // must force hint to avoid $expr collscan
    };
 
+   // Txn updateMany (or updateOne) + $unset _id. updateDelayMs before each rewrite.
    async function rewriteFilter(filter, { one = false, expect } = {}) {
       if (Number(updateDelayMs) > 0) await delay(updateDelayMs);
       const session = db.getMongo().startSession({
@@ -403,6 +362,22 @@
 
    function rewriteOne(id) {
       return rewriteFilter({ "_id": id }, { "one": true });
+   }
+
+   function makeWritePool({ onEnqueue } = {}) {
+      let inflight = [];
+      return {
+         async drain() {
+            if (!inflight.length) return;
+            await Promise.allSettled(inflight);
+            inflight = [];
+         },
+         async enqueue(p, cap) {
+            if (typeof onEnqueue === 'function') onEnqueue();
+            inflight.push(p);
+            while (inflight.length >= cap) await inflight.shift();
+         }
+      };
    }
 
    function jobIds(job) {
@@ -452,6 +427,7 @@
       }
    }
 
+   // Pause while updates-allocated % ≥ soft; hard overshoot lowers the soft floor.
    async function waitForDirtyUnder(tune) {
       let u = cacheUpdatesUtil();
       if (u == null) return;
@@ -656,8 +632,9 @@
    }
 
    async function naturalPackedBatches(cal, maxDocs) {
-      // One reverse record-store cover; $bsonSize on the server. First-fit every
-      // doc into packed $in leaves. Client only sees {_id, bson}.
+      // One reverse record-store cover ($natural:-1); $bsonSize on the server.
+      // First-fit every doc into packed $in leaves. Client only sees {_id, bson}.
+      // Unique cover: scan once so rewritten docs are not recaptured at the new tail.
       const { packedBudget } = packedPageBudget(cal);
       const pipeline = [
          { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } },
@@ -698,9 +675,11 @@
    }
 
    function startQuantileCurator(cal, maxDocs) {
-      // First-fit along _id: add a doc while packed stays ≤ packedBudget;
-      // otherwise close the bucket and start another. Jumbo (> budget) gets
-      // its own bucket. $bucket (docSizes.js) histograms size classes — wrong axis.
+      // strategy 'quantile': first-fit _id ranges while Σ ($bsonSize / C_mode)
+      // ≤ packedBudget. Calibrate may split the sample into size modes and
+      // measure per-mode C. Mixed modes along _id stay in one leaf until the
+      // packed cap. Jumbo docs get their own. $bucket (docSizes.js) histograms
+      // size classes — wrong axis for rewrite ranges.
       const { compression, packedBudget, bsonCap, leaf, fillRatio } = packedPageBudget(cal);
       const pipeline = [
          { "$sort": { "_id": 1 } },
@@ -748,9 +727,10 @@
    }
 
    function startRndQuantileCurator(cal, maxDocs) {
-      // Stream $sample(TFR) until N draws. Each chunk is << 5% of the
-      // collection so mongod uses a random cursor, not a blocking collscan+sort.
-      // First-fit is the same packed-page rule as quantile; rewrite is $in.
+      // strategy 'rndQuantile': same first-fit / C_mode as quantile, but the
+      // stream is repeated $sample of ~TFR until N draws. Small $sample uses a
+      // random cursor (non-blocking). $sample of N would collscan+sort and
+      // block. Random ids are rewritten with $in.
       const { compression, packedBudget, bsonCap, leaf, fillRatio } = packedPageBudget(cal);
       const pft = Math.max(1, Number(cal.tfr) > 0 ? Math.ceil(cal.tfr) : 1);
       const state = { "batchSize": packedBudget, "maxDocs": maxDocs, "taken": 0 };
@@ -799,6 +779,10 @@
       };
    }
 
+   // strategy 'shapeQuantile': first-fit packed $in per top-level field-name
+   // shape (sorted keys, exclude _id). Homogeneous $in so dest leaves share
+   // key bytes for snappy. Per-shape C from the calibrate sample when 2+
+   // shapes. $objectToArray stays on the server; client sees {_id, bson, keys}.
    function startShapeQuantileCurator(cal, maxDocs) {
       const { packedBudget, bsonCap, leaf, fillRatio, compression } = packedPageBudget(cal);
       const nShapes = Array.isArray(cal?.shapes) ? cal.shapes.length : 0;
@@ -878,6 +862,10 @@
       };
    }
 
+   // strategy 'meetInMiddle': low-pass (_id: 1) while checkpoint idle, high-pass
+   // (_id: -1) while it runs. After the first high pass completes, a reverse
+   // high pass rewrites those buckets from the last (middle) boundary back
+   // toward max _id. Writes are txn updateMany + $unset _id.
    async function meetInMiddleMain() {
       let snap = collSnapshot();
       let fill = pageStats(snap);
@@ -894,19 +882,9 @@
       let prevRunning = false;
       let didWork = false;
       let idleLogged = false;
-      let inflight = [];
-
-      async function drainWrites() {
-         if (!inflight.length) return;
-         await Promise.allSettled(inflight);
-         inflight = [];
-      }
-
-      async function enqueueWrite(p, cap) {
-         inflight.push(p);
-         didWork = true;
-         while (inflight.length >= cap) await inflight.shift();
-      }
+      const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool({
+         "onEnqueue": () => { didWork = true; }
+      });
 
       while (true) {
          const lowDone = low.state.taken >= half;
@@ -1019,6 +997,10 @@
       }
    }
 
+   // strategy 'lowStressMode': single _id ascending pass (ids/ranges curator).
+   // Writes when checkpoint idle; throttle by repl lag and updates allocated
+   // (soft 7% / hard 8%, overshoot lowers soft). Pause if dirty trigger or
+   // eviction_updates_trigger (10%) hits first.
    async function lowStressModeMain() {
       let snap = collSnapshot();
       let fill = pageStats(snap);
@@ -1041,19 +1023,9 @@
 
       let prevRunning = false;
       let didWork = false;
-      let inflight = [];
-
-      async function drainWrites() {
-         if (!inflight.length) return;
-         await Promise.allSettled(inflight);
-         inflight = [];
-      }
-
-      async function enqueueWrite(p, cap) {
-         inflight.push(p);
-         didWork = true;
-         while (inflight.length >= cap) await inflight.shift();
-      }
+      const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool({
+         "onEnqueue": () => { didWork = true; }
+      });
 
       for (let pass = 1; pass <= coverPasses; ++pass) {
          fill = pageStats(snap);
@@ -1113,6 +1085,8 @@
       }
    }
 
+   // strategy 'updateOne': same walk/throttles as lowStressMode, but each txn
+   // is updateOne on a single _id (curator batch size 1).
    async function updateOneModeMain() {
       let snap = collSnapshot();
       let fill = pageStats(snap);
@@ -1134,19 +1108,9 @@
       let prevRunning = false;
       let didWork = false;
       let written = 0;
-      let inflight = [];
-
-      async function drainWrites() {
-         if (!inflight.length) return;
-         await Promise.allSettled(inflight);
-         inflight = [];
-      }
-
-      async function enqueueWrite(p, cap) {
-         inflight.push(p);
-         didWork = true;
-         while (inflight.length >= cap) await inflight.shift();
-      }
+      const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool({
+         "onEnqueue": () => { didWork = true; }
+      });
 
       for (let pass = 1; pass <= coverPasses; ++pass) {
          fill = pageStats(snap);
@@ -1208,6 +1172,7 @@
       return typeof name === 'string' && (name === prefix || name.startsWith(prefix + '_'));
    }
 
+   // Packed-sample temp: _tmp_<collName>_<oid>. Drop after packed $collStats.
    function tmpSampleName() {
       const oid = new ObjectId();
       const hex = typeof oid.toHexString === 'function'
@@ -1226,6 +1191,7 @@
       }
    }
 
+   // Drop leftover _tmp_<collName> / _tmp_<collName>_* before work.
    function preflightDropTmpSamples() {
       const tmpDb = db.getSiblingDB(nsDb);
       let names = [];
@@ -1475,6 +1441,8 @@
       }
    }
 
+   // $sample+$merge into a same-compressor temp; TFR = packed pageFillActual.
+   // Optional size-mode or (shapeQuantile) shape-hash C from extra temps.
    async function calibrateTFR() {
       const src = collSnapshot();
       const fill = pageStats(src);
@@ -1567,6 +1535,9 @@
       }
    }
 
+   // strategy 'slidingShuffle': TFR stride passes; pass p takes _id ranks
+   // p, p+TFR, p+2TFR, … in batches of TFR. Each _id once. Writes when
+   // checkpoint idle, lag and updates % in bounds.
    async function slidingShuffleMain() {
       const srcSnap = collSnapshot();
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
@@ -1582,16 +1553,7 @@
       };
       console.log(`strategy: slidingShuffle TFR=${tfr} stridePasses=${tfr} coverBatches=${totalBatches} (docs ${nDocs} / TFR) idsPerBatch=${tfr} writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}%`);
 
-      let inflight = [];
-      async function drainWrites() {
-         if (!inflight.length) return;
-         await Promise.allSettled(inflight);
-         inflight = [];
-      }
-      async function enqueueWrite(p, cap) {
-         inflight.push(p);
-         while (inflight.length >= cap) await inflight.shift();
-      }
+      const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
 
       let globalBatch = 0;
       const writeWindow = { "snap": srcSnap, "bytes": 0 };
@@ -1640,6 +1602,9 @@
       console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
    }
 
+   // Shared write/throttle/budget path for slidingWindow, quantile, rndQuantile,
+   // shapeQuantile. dirtyBudgetRatio caps packed rewrite bytes per checkpoint
+   // at that fraction of freeStorageSize. Falling-edge collStats refreshes R.
    async function slidingPackedMain(label, startWalk) {
       const srcSnap = collSnapshot();
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
@@ -1666,16 +1631,7 @@
       const live0 = Math.max(0, (budgetSnap.storageSize || 0) - (Number.isFinite(R0) ? R0 : 0));
       console.log(`strategy: ${label} TFR=${cal.tfr} batch=${batch} buckets=${streaming ? 'first-fit' : totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}% dirtyBudgetRatio=${frac} reusable=${Number.isFinite(R0) ? R0 : 0} cap=${Math.round(cap0)} packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${live0} storageSize=${budgetSnap.storageSize || 0}`);
 
-      let inflight = [];
-      async function drainWrites() {
-         if (!inflight.length) return;
-         await Promise.allSettled(inflight);
-         inflight = [];
-      }
-      async function enqueueWrite(p, cap) {
-         inflight.push(p);
-         while (inflight.length >= cap) await inflight.shift();
-      }
+      const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
 
       let pass = 0;
       const writeWindow = { "snap": budgetSnap, "bytes": 0 };
@@ -1721,22 +1677,30 @@
       console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
    }
 
+   // strategy 'slidingWindow': calibrate TFR; adjacent consecutive _id batches
+   // of TFR (1–TFR, TFR+1–2TFR, …). Same gates as slidingPackedMain.
    async function slidingWindowMain() {
       await slidingPackedMain('slidingWindow', ({ nDocs, batch }) => startCurator(1, batch, nDocs, 'ranges'));
    }
 
+   // strategy 'quantile': slidingPackedMain + startQuantileCurator.
    async function quantileMain() {
       await slidingPackedMain('quantile', ({ nDocs, cal }) => startQuantileCurator(cal, nDocs));
    }
 
+   // strategy 'rndQuantile': slidingPackedMain + startRndQuantileCurator.
    async function rndQuantileMain() {
       await slidingPackedMain('rndQuantile', ({ nDocs, cal }) => startRndQuantileCurator(cal, nDocs));
    }
 
+   // strategy 'shapeQuantile': slidingPackedMain + startShapeQuantileCurator.
    async function shapeQuantileMain() {
       await slidingPackedMain('shapeQuantile', ({ nDocs, cal }) => startShapeQuantileCurator(cal, nDocs));
    }
 
+   // strategy 'doubleParked': one $natural:-1 $bsonSize cover, first-fit packed
+   // $in leaves. Each checkpoint window is dirtyBudgetRatio × R: rewrite, settle,
+   // replay those _ids, settle. Unique cover (scan once).
    async function doubleParkedMain() {
       const srcSnap = collSnapshot();
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
@@ -1760,16 +1724,7 @@
       const estWindows = window0 > 0 ? Math.max(1, Math.ceil(target / window0)) : 1;
       console.log(`strategy: doubleParked TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} docs=${nDocs} batches=${allBatches.length} packedCover=${Math.round(target)} reusable=${R0} dirtyBudgetRatio=${frac} windowPacked=${Math.round(window0)} estWindows≈${estWindows} writeConcurrency=${conc}`);
 
-      let inflight = [];
-      async function drainWrites() {
-         if (!inflight.length) return;
-         await Promise.allSettled(inflight);
-         inflight = [];
-      }
-      async function enqueueWrite(p, cap) {
-         inflight.push(p);
-         while (inflight.length >= cap) await inflight.shift();
-      }
+      const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
 
       let prevSz = budgetSnap.storageSize;
       let packedDone = 0;
@@ -1898,6 +1853,7 @@
    }
 
    let lagSkipLogged = false;
+   // Throttle when repl lag exceeds maxLagSeconds (rs.status, else lastWrite vs majority).
    async function waitForReplLag({ abortIfCheckpoint = false } = {}) {
       const cap = Number(maxLagSeconds) > 0 ? +maxLagSeconds : 10;
       let { available, lagSeconds, source } = replLag();
@@ -1937,6 +1893,7 @@
 
    let ckptSkipLogged = false;
    async function waitForCheckpoint({ settle = false } = {}) {
+      // Do not start writes during a WT checkpoint.
       // settle=false: wait only while a checkpoint is already running.
       // settle=true: wait for a falling edge (start+complete if idle) so
       // block-manager reusable bytes are visible in collStats.
@@ -1972,6 +1929,9 @@
       return { "available": true, "running": running, "completed": completed };
    }
 
+   // strategy 'waves' (default): waves = docs / (batch × concurrency) per cover
+   // pass. Batch = max(actual fill, pageFill target). After the last wave, wait
+   // for a checkpoint cycle before settled stats.
    async function main() {
       let snap = collSnapshot();
       const fill0 = pageStats(snap);
@@ -1988,7 +1948,6 @@
       console.log(`waves: ${maxWaves} (${coverPasses} pass(es) × ${wavesPerPass} waves/pass; docs ${fill0.documentCount} / (batch ${batch0} * concurrency ${Math.max(1, nBatches0)}))`);
       console.log(EJSON.stringify({ "state": "initial storage", ...snap }));
       let didWork = false;
-      let afterId;
       for (let wave = 1; wave <= maxWaves; ) {
          const fill = pageStats(snap);
          const sampleSize = fill.batchSize;
@@ -2011,13 +1970,9 @@
          await waitForCheckpoint();
          let tasks = [];
          let update = 0;
-         const parked = [];
-         let lastId;
-         for await (const ids of getIds(sampleSize, nBatches, sampleRate, afterId)) {
+         for await (const ids of getIds(sampleSize, nBatches, sampleRate)) {
             const updateOneIds = ids.map(id => id._id);
             if (!updateOneIds.length) continue;
-            lastId = updateOneIds[updateOneIds.length - 1];
-            parked.push(updateOneIds);
             await waitForCheckpoint();
             await waitForReplLag();
             update++;
@@ -2028,33 +1983,9 @@
          await Promise.allSettled(tasks);
          if (update > 0) didWork = true;
          console.log(EJSON.stringify({ "state": "volatile storage", ...collSnapshot() }));
-         if (sampler === 'doubleParked' && parked.length) {
-            console.log(`doubleParked settle then replay ${parked.length} batches`);
-            await waitForCheckpoint({ "settle": true });
-            await waitForReplLag();
-            const replayTasks = [];
-            let replay = 0;
-            for (const ids of parked) {
-               await waitForCheckpoint();
-               await waitForReplLag();
-               replay++;
-               console.log(`\tforking doubleParked replay ${replay} with ${ids.length} IDs`);
-               replayTasks.push(rewriteIds(ids));
-            }
-            await Promise.allSettled(replayTasks);
-            console.log(EJSON.stringify({ "state": "volatile storage (replay)", ...collSnapshot() }));
-         }
          await waitForCheckpoint();
          await waitForReplLag();
          snap = collSnapshot();
-         if (update === 0) {
-            if (sampler === 'doubleParked' && afterId !== undefined) {
-               console.log('doubleParked reached end of _id, wrapping to start');
-               afterId = undefined;
-            }
-         } else {
-            afterId = lastId;
-         }
          wave++;
       }
       if (didWork) {
