@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.2.8"
+ *  Version: "0.3.0"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,7 +18,7 @@
  *  - defragOptions.sampler: 'random' | 'adjacent' | 'bucketed' (default) | 'doubleParked'
  *  - defragOptions.strategy: 'waves' (default) | 'meetInMiddle' | 'lowStressMode' |
  *    'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile' |
- *    'shapeQuantile' | 'doubleParked'
+ *    'shapeQuantile' | 'doubleParked' | 'naturalWindow'
  *  - defragOptions.ignoreCheckpoint: skip checkpoint waits; $collStats is
  *    fetched without blocking and applied on the next write round. Calibrate
  *    still settles. Reusable/R caps and doubleParked replay use stale stats.
@@ -46,6 +46,7 @@
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'quantile' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'rndQuantile' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'shapeQuantile' };" [-f|--file] </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalWindow' };" [-f|--file] </path/to/>onlineDefrag.js
  *
  *  We use 'var' to interoperate with mongosh's sloppy mode
  */
@@ -56,7 +57,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.2.8" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.3.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -81,7 +82,7 @@
    const userOptions = typeof defragOptions === 'undefined' ? {} : defragOptions;
    const {
       "sampler": sampler = 'bucketed', // 'random' | 'adjacent' | 'bucketed' | 'doubleParked'
-      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile' | 'doubleParked' | 'shapeQuantile'
+      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile' | 'doubleParked' | 'shapeQuantile' | 'naturalWindow'
       "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default 10000
       "curator": curator = 'ids', // meetInMiddle: 'ids' | 'ranges'
       "pageFillRatio": pageFillRatio = 0.9, // WT dest-leaf spill target (fixed)
@@ -668,17 +669,18 @@
       return fallback;
    }
 
-   async function naturalPackedBatches(cal, maxDocs) {
-      // One reverse record-store cover ($natural:-1); $bsonSize on the server.
-      // First-fit every doc into packed $in leaves. Client only sees {_id, bson}.
-      // Unique cover: scan once so rewritten docs are not recaptured at the new tail.
+   async function naturalPackedBatches(cal, maxDocs, naturalDir = -1) {
+      // Record-store cover in $natural order; $bsonSize on the server.
+      // $limit maxDocs (pre-update count) excludes inserts appended during the
+      // scan (Halloween). First-fit packed $in leaves. Client sees {_id, bson}.
       const { packedBudget } = packedPageBudget(cal);
+      const dir = Number(naturalDir) >= 0 ? 1 : -1;
       const pipeline = [
          { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } },
          { "$limit": Math.max(1, maxDocs) }
       ];
-      const cursor = namespace.aggregate(pipeline, aggOpts("doubleParked $natural $bsonSize", {
-         "hint": { "$natural": -1 },
+      const cursor = namespace.aggregate(pipeline, aggOpts(`natural ${dir} $bsonSize`, {
+         "hint": { "$natural": dir },
          "allowDiskUse": true,
          "cursor": { "batchSize": 256 }
       }));
@@ -709,6 +711,29 @@
       }
       if (cur && cur.n) batches.push(cur);
       return batches;
+   }
+
+   async function startNaturalWindowCurator(cal, maxDocs) {
+      // strategy 'naturalWindow': freeze a $natural:1 + $bsonSize cover ($limit
+      // nDocs) then first-fit like quantile. Writes are $in in RecordId order
+      // (not _id ranges). Schema grouping would reorder; C_mode still applies.
+      const { packedBudget, bsonCap, leaf, fillRatio, compression } = packedPageBudget(cal);
+      console.log(`naturalWindow curator: $natural:1 scan nDocs=${maxDocs} packedBudget=${packedBudget} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)}`);
+      const batches = await naturalPackedBatches(cal, maxDocs, 1);
+      const state = { "batchSize": packedBudget, "maxDocs": maxDocs, "taken": 0 };
+      async function* gen() {
+         for (const b of batches) {
+            state.taken += b.n || 0;
+            yield { "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson };
+         }
+      }
+      return {
+         "state": state,
+         "gen": gen(),
+         "totalBatches": batches.length,
+         "packedBudget": packedBudget,
+         "bsonCap": bsonCap
+      };
    }
 
    function startQuantileCurator(cal, maxDocs) {
@@ -1691,7 +1716,8 @@
       const batch = Object.prototype.hasOwnProperty.call(userOptions, 'curatorBatchSize') && Number(curatorBatchSize) > 0
                   ? Math.ceil(+curatorBatchSize)
                   : cal.tfr;
-      const walk = startWalk({ "nDocs": nDocs, "batch": batch, "cal": cal });
+      let walk = startWalk({ "nDocs": nDocs, "batch": batch, "cal": cal });
+      if (walk && typeof walk.then === 'function') walk = await walk;
       const streaming = !!walk.streaming;
       const totalBatches = walk.totalBatches > 0 ? walk.totalBatches : Math.max(1, Math.ceil(nDocs / batch));
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
@@ -1779,6 +1805,10 @@
    // strategy 'shapeQuantile': slidingPackedMain + startShapeQuantileCurator.
    async function shapeQuantileMain() {
       await slidingPackedMain('shapeQuantile', ({ nDocs, cal }) => startShapeQuantileCurator(cal, nDocs));
+   }
+
+   async function naturalWindowMain() {
+      await slidingPackedMain('naturalWindow', async({ nDocs, cal }) => startNaturalWindowCurator(cal, nDocs));
    }
 
    // strategy 'doubleParked': one $natural:-1 $bsonSize cover, first-fit packed
@@ -2107,6 +2137,7 @@
       else if (strategy === 'quantile' || sampler === 'quantile') await quantileMain();
       else if (strategy === 'rndQuantile' || sampler === 'rndQuantile') await rndQuantileMain();
       else if (strategy === 'shapeQuantile' || sampler === 'shapeQuantile') await shapeQuantileMain();
+      else if (strategy === 'naturalWindow' || sampler === 'naturalWindow') await naturalWindowMain();
       else if (strategy === 'doubleParked' || sampler === 'doubleParked') await doubleParkedMain();
       else await main();
    } catch(e) {
