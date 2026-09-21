@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.3.2"
+ *  Version: "0.3.3"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -59,7 +59,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.3.2" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.3.3" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -1291,7 +1291,7 @@
       // spill to their own leaf (TFR=1) and are excluded from C-band hunt.
       const C = Math.max(Number(compression) > 0 ? +compression : 1, 0.01);
       const cap = Math.max(1, Math.floor(Number(packedBudget) > 0 ? +packedBudget : 0.9 * 32768));
-      const nBins = 24;
+      const nBins = 128;
       const step = cap / nBins;
       const boundaries = [];
       for (let i = 0; i <= nBins; i++) {
