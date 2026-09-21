@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.2.7"
+ *  Version: "0.2.8"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -56,7 +56,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.2.7" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.2.8" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -1200,8 +1200,17 @@
       }
    }
 
+   // Packed-sample temps live in __tmpdb_for_collection_stats so we do not
+   // create collections in the source db (may lack createCollection). Names
+   // are <sourceDb>.<sourceColl>_<oid> (dots allowed; no $). Needs readWrite
+   // on that tmp db.
+   const tmpStatsDbName = '__tmpdb_for_collection_stats';
+   function tmpStatsDb() {
+      return db.getSiblingDB(tmpStatsDbName);
+   }
+
    function tmpSamplePrefix() {
-      return `_tmp_${nsColl}`;
+      return `${nsDb}.${nsColl}`;
    }
 
    function isTmpSampleName(name) {
@@ -1209,7 +1218,6 @@
       return typeof name === 'string' && (name === prefix || name.startsWith(prefix + '_'));
    }
 
-   // Packed-sample temp: _tmp_<collName>_<oid>. Drop after packed $collStats.
    function tmpSampleName() {
       const oid = new ObjectId();
       const hex = typeof oid.toHexString === 'function'
@@ -1221,16 +1229,16 @@
    function dropTmpSample(tmpDb, name, reason = 'drop') {
       try {
          tmpDb.getCollection(name).drop();
-         console.log(`${reason}: dropped ${nsDb}.${name}`);
+         console.log(`${reason}: dropped ${tmpStatsDbName}.${name}`);
          return true;
       } catch(_) {
          return false;
       }
    }
 
-   // Drop leftover _tmp_<collName> / _tmp_<collName>_* before work.
+   // Drop leftover temps for this source ns in __tmpdb_for_collection_stats.
    function preflightDropTmpSamples() {
-      const tmpDb = db.getSiblingDB(nsDb);
+      const tmpDb = tmpStatsDb();
       let names = [];
       try {
          names = tmpDb.getCollectionNames().filter(isTmpSampleName);
@@ -1393,7 +1401,7 @@
                   bound
                ] } } },
                { "$merge": {
-                  "into": { "db": nsDb, "coll": name },
+                  "into": { "db": tmpStatsDbName, "coll": name },
                   "whenMatched": "replace",
                   "whenNotMatched": "insert"
                } }
@@ -1408,7 +1416,7 @@
             await delay(minWaitMs);
          }
          for (let k = 0; k < modes.length; k++) {
-            const packed = $collStats(nsDb, created[k]) || {};
+            const packed = $collStats(tmpStatsDbName, created[k]) || {};
             const { indexes, ...stats } = packed;
             const ps = pageStats(stats);
             const live = Math.max(0, (stats.storageSize || 0) - (stats.freeStorageSize || 0));
@@ -1478,7 +1486,7 @@
                { "$match": { "keys": s.keys } },
                { "$unset": "keys" },
                { "$merge": {
-                  "into": { "db": nsDb, "coll": name },
+                  "into": { "db": tmpStatsDbName, "coll": name },
                   "whenMatched": "replace",
                   "whenNotMatched": "insert"
                } }
@@ -1493,7 +1501,7 @@
             await delay(minWaitMs);
          }
          for (let k = 0; k < todo.length; k++) {
-            const packed = $collStats(nsDb, created[k]) || {};
+            const packed = $collStats(tmpStatsDbName, created[k]) || {};
             const { indexes, ...stats } = packed;
             const ps = pageStats(stats);
             const live = Math.max(0, (stats.storageSize || 0) - (stats.freeStorageSize || 0));
@@ -1510,8 +1518,9 @@
       }
    }
 
-   // $sample+$merge into a same-compressor temp; TFR = packed pageFillActual.
-   // Optional size-mode or (shapeQuantile) shape-hash C from extra temps.
+   // $sample+$merge into __tmpdb_for_collection_stats.<db>.<coll>_<oid>
+   // (same compressor). TFR = packed pageFillActual. Optional size-mode or
+   // shape-hash C from extra temps in the same tmp db.
    async function calibrateTFR() {
       const src = collSnapshot();
       const fill = pageStats(src);
@@ -1523,8 +1532,8 @@
          : 10000);
       if (sampleN < 1) throw new Error(`${strategy}: empty namespace, cannot calibrate TFR`);
       const tmpName = tmpSampleName();
-      const tmpDb = db.getSiblingDB(nsDb);
-      console.log(`${strategy} calibrate: $sample ${sampleN} compressor=${compressor} -> ${nsDb}.${tmpName}`);
+      const tmpDb = tmpStatsDb();
+      console.log(`${strategy} calibrate: $sample ${sampleN} compressor=${compressor} -> ${tmpStatsDbName}.${tmpName}`);
       try {
          try {
             tmpDb.createCollection(tmpName, {
@@ -1533,18 +1542,18 @@
          } catch(_) {
             tmpDb.createCollection(tmpName);
          }
-         console.log(`calibrate collection created: ${nsDb}.${tmpName}`);
+         console.log(`calibrate collection created: ${tmpStatsDbName}.${tmpName}`);
          namespace.aggregate([
             { "$sample": { "size": sampleN } },
             { "$merge": {
-               "into": { "db": nsDb, "coll": tmpName },
+               "into": { "db": tmpStatsDbName, "coll": tmpName },
                "whenMatched": "keepExisting",
                "whenNotMatched": "insert"
             } }
          ], aggOpts(`${strategy} calibrate $merge`)).toArray();
          console.log('calibrate: waiting for checkpoint before packed $collStats');
          await waitForCheckpoint({ "settle": true, "force": true });
-         let packed = $collStats(nsDb, tmpName) || {};
+         let packed = $collStats(tmpStatsDbName, tmpName) || {};
          if (!wtCheckpoint().available) {
             const timeoutMs = Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000;
             const minWaitMs = Math.min(60000, timeoutMs);
@@ -1553,7 +1562,7 @@
             const deadline = Date.now() + Math.max(0, timeoutMs - minWaitMs);
             let prevSz, stable = 0;
             for (;;) {
-               packed = $collStats(nsDb, tmpName) || {};
+               packed = $collStats(tmpStatsDbName, tmpName) || {};
                const nPages = pageStats(packed).nPages;
                console.log(`calibrate poll nPages=${nPages} storageSize=${packed.storageSize} objects=${packed.objects}`);
                if (nPages > 1 && packed.storageSize === prevSz) break;
