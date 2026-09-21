@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.3.1"
+ *  Version: "0.3.2"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -59,7 +59,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.3.1" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.3.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -647,19 +647,23 @@
       };
    }
 
+   function shapeHashExpr() {
+      return { "$toHashedIndexKey": shapeKeysExpr() };
+   }
+
    function shapeProjectStage() {
       return {
          "$project": {
             "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] },
-            "keys": shapeKeysExpr()
+            "shape": shapeHashExpr()
          }
       };
    }
 
-   function keysSig(keys) {
-      if (Array.isArray(keys)) return keys.join('\0');
-      if (keys == null) return '';
-      return String(keys);
+   function keysSig(v) {
+      if (v == null) return '';
+      if (typeof v === 'object' && typeof v.toString === 'function') return String(v);
+      return String(v);
    }
 
    function shapeCompression(sig, cal) {
@@ -847,10 +851,8 @@
       };
    }
 
-   // strategy 'shapeQuantile': first-fit packed $in per top-level field-name
-   // shape (sorted keys, exclude _id). Homogeneous $in so dest leaves share
-   // key bytes for snappy. Per-shape C from the calibrate sample when 2+
-   // shapes. $objectToArray stays on the server; client sees {_id, bson, keys}.
+   // strategy 'shapeQuantile': first-fit packed $in per server-side hash of
+   // sorted top-level keys ($toHashedIndexKey). Client sees {_id, bson, shape}.
    function startShapeQuantileCurator(cal, maxDocs) {
       const { packedBudget, bsonCap, leaf, fillRatio, compression } = packedPageBudget(cal);
       const nShapes = Array.isArray(cal?.shapes) ? cal.shapes.length : 0;
@@ -859,7 +861,7 @@
       async function* gen() {
          const cursor = namespace.aggregate([
             shapeProjectStage()
-         ], aggOpts("shapeQuantile $bsonSize $objectToArray", {
+         ], aggOpts("shapeQuantile $bsonSize $toHashedIndexKey", {
             "hint": { "_id": 1 },
             "allowDiskUse": true,
             "cursor": { "batchSize": 256 }
@@ -867,8 +869,7 @@
          const open = new Map();
          const pending = [];
          const consider = (doc) => {
-            const keys = Array.isArray(doc.keys) ? doc.keys.slice().sort() : [];
-            const sig = keysSig(keys);
+            const sig = keysSig(doc.shape);
             const bson = +doc.bson || 0;
             const packed = bson / Math.max(shapeCompression(sig, cal), 0.01);
             let cur = open.get(sig);
@@ -878,7 +879,7 @@
                cur = null;
             }
             if (!cur) {
-               cur = { "ids": [], "n": 0, "bson": 0, "packed": 0, "keys": keys, "sig": sig };
+               cur = { "ids": [], "n": 0, "bson": 0, "packed": 0, "sig": sig };
                open.set(sig, cur);
             }
             cur.ids.push(doc._id);
@@ -893,7 +894,7 @@
                   while (pending.length) {
                      const b = pending.shift();
                      state.taken += b.n;
-                     yield { "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson, "shape": b.keys };
+                     yield { "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson, "shape": b.sig };
                   }
                }
             } else {
@@ -908,7 +909,7 @@
                   while (pending.length) {
                      const b = pending.shift();
                      state.taken += b.n;
-                     yield { "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson, "shape": b.keys };
+                     yield { "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson, "shape": b.sig };
                   }
                }
             }
@@ -917,7 +918,7 @@
          for (const cur of open.values()) {
             if (!cur.n) continue;
             state.taken += cur.n;
-            yield { "ids": cur.ids, "n": cur.n, "packed": cur.packed, "bson": cur.bson, "shape": cur.keys };
+            yield { "ids": cur.ids, "n": cur.n, "packed": cur.packed, "bson": cur.bson, "shape": cur.sig };
          }
       }
       return {
@@ -1470,7 +1471,7 @@
       try {
          rows = tmpDb.getCollection(tmpName).aggregate([
             shapeProjectStage(),
-            { "$group": { "_id": "$keys", "n": { "$sum": 1 }, "avg": { "$avg": "$bson" } } },
+            { "$group": { "_id": "$shape", "n": { "$sum": 1 }, "avg": { "$avg": "$bson" } } },
             { "$sort": { "n": -1 } }
          ], aggOpts("calibrate shape histogram")).toArray();
       } catch(e) {
@@ -1478,7 +1479,7 @@
          return [];
       }
       const shapes = (rows || []).map(r => ({
-         "keys": Array.isArray(r._id) ? r._id : [],
+         "hash": r._id,
          "sig": keysSig(r._id),
          "n": r.n || 0,
          "avg": r.avg || 0
@@ -1487,7 +1488,7 @@
          console.log('calibrate shapes: none');
          return [];
       }
-      const shown = shapes.slice(0, 8).map(s => `{${s.keys.join(',')}} n=${s.n} avg=${Math.round(s.avg)}`);
+      const shown = shapes.slice(0, 8).map(s => `h=${s.sig} n=${s.n} avg=${Math.round(s.avg)}`);
       console.log(`calibrate shapes: ${shapes.length}` + (shapes.length > 8 ? ` (top 8)` : '') + ' ' + shown.join('; '));
       return shapes;
    }
@@ -1513,9 +1514,9 @@
             }
             created.push(name);
             tmpDb.getCollection(srcName).aggregate([
-               { "$set": { "keys": shapeKeysExpr() } },
-               { "$match": { "keys": s.keys } },
-               { "$unset": "keys" },
+               { "$set": { "shape": shapeHashExpr() } },
+               { "$match": { "shape": s.hash } },
+               { "$unset": "shape" },
                { "$merge": {
                   "into": { "db": tmpStatsDbName, "coll": name },
                   "whenMatched": "replace",
@@ -1541,7 +1542,7 @@
             todo[k].tfr = ps.pageFillActual;
             todo[k].avgObjSize = stats.avgObjSize;
             todo[k].objects = ps.documentCount;
-            console.log(`calibrate shape ${k} {${todo[k].keys.join(',')}} n=${todo[k].objects} C=${todo[k].compression.toFixed(3)} tfr=${todo[k].tfr} avgObjSize=${todo[k].avgObjSize}`);
+            console.log(`calibrate shape ${k} h=${todo[k].sig} n=${todo[k].objects} C=${todo[k].compression.toFixed(3)} tfr=${todo[k].tfr} avgObjSize=${todo[k].avgObjSize}`);
          }
          return shapes;
       } finally {
@@ -1772,9 +1773,7 @@
          const passTag = streaming ? `${label} ${pass}` : `${label} ${pass}/${totalBatches}`;
          const expect = value.n;
          if (value.ids) {
-            const shapeNote = Array.isArray(value.shape) && value.shape.length
-                            ? ` shape={${value.shape.slice(0, 8).join(',')}${value.shape.length > 8 ? ',…' : ''}}`
-                            : '';
+            const shapeNote = value.shape != null && value.shape !== '' ? ` shape=${value.shape}` : '';
             console.log(`${passTag} n=${value.n}${bsonNote}${packedNote}${shapeNote}`);
             await enqueueWrite(rewriteIds(value.ids, { "expect": expect }), conc);
          } else {
