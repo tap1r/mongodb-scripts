@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.2.5"
+ *  Version: "0.2.6"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -53,7 +53,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.2.5" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.2.6" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -562,13 +562,18 @@
    }
 
    function modeIndex(bson, cal) {
+      // Classify by packed bytes (bson / global C). Packed > spill cap is jumbo (TFR=1).
       const modes = cal?.modes;
       if (!Array.isArray(modes) || modes.length < 2) return -1;
+      const C0 = Number(cal?.compression) > 0 ? +cal.compression : 1;
+      const packed = bson / Math.max(C0, 0.01);
+      const cap = packedPageBudget(cal).packedBudget;
+      if (packed > cap) return -1;
       for (let k = 0; k < modes.length; k++) {
          const m = modes[k];
          if (k === modes.length - 1) {
-            if (bson >= m.min) return k;
-         } else if (bson >= m.min && bson < m.max) return k;
+            if (packed >= m.min) return k;
+         } else if (packed >= m.min && packed < m.max) return k;
       }
       return -1;
    }
@@ -944,7 +949,7 @@
             if (wantFirstHigh) low.state.meetHigh = high.state.beforeId;
             else high.state.meetLow = low.state.afterId;
             const jobs = [];
-            for (let i = 0; i < conc && pass.state.taken < half; ++i) {
+            for (let i = 0; i < conc && pass.state.taken < half; i++) {
                const { value, done } = await pass.gen.next();
                if (done || value == null) break;
                jobs.push(value);
@@ -1027,7 +1032,7 @@
          "onEnqueue": () => { didWork = true; }
       });
 
-      for (let pass = 1; pass <= coverPasses; ++pass) {
+      for (let pass = 1; pass <= coverPasses; pass++) {
          fill = pageStats(snap);
          const direction = (pass % 2 === 1) ? 1 : -1;
          const walk = startCurator(direction, fill.pageFillTarget, fill.documentCount || 1);
@@ -1053,7 +1058,7 @@
             prevRunning = !!(ckpt.available && ckpt.running);
 
             const jobs = [];
-            for (let i = 0; i < conc && walk.state.taken < walk.state.maxDocs; ++i) {
+            for (let i = 0; i < conc && walk.state.taken < walk.state.maxDocs; i++) {
                const { value, done } = await walk.gen.next();
                if (done || value == null) break;
                jobs.push(value);
@@ -1112,7 +1117,7 @@
          "onEnqueue": () => { didWork = true; }
       });
 
-      for (let pass = 1; pass <= coverPasses; ++pass) {
+      for (let pass = 1; pass <= coverPasses; pass++) {
          fill = pageStats(snap);
          const walk = startCurator(1, 1, fill.documentCount || 1, 'ids');
          walk.state.batchSize = 1;
@@ -1138,7 +1143,7 @@
             prevRunning = !!(ckpt.available && ckpt.running);
 
             const jobs = [];
-            for (let i = 0; i < conc && walk.state.taken < walk.state.maxDocs; ++i) {
+            for (let i = 0; i < conc && walk.state.taken < walk.state.maxDocs; i++) {
                const { value, done } = await walk.gen.next();
                if (done || value == null) break;
                jobs.push(value);
@@ -1209,34 +1214,59 @@
       else console.log(`preflight: no leftover sample collections matching ${tmpSamplePrefix()}`);
    }
 
-   function detectSizeModes(tmpDb, tmpName) {
-      // $bucketAuto is equal-count, so raw n is ~flat. Modes are high *density*
-      // bins: n / max(1, bsonMax-bsonMin). 16–24 bins resolve 2–3 separated modes.
+   function detectSizeModes(tmpDb, tmpName, compression, packedBudget) {
+      // Packed (bson/C) equal-width bins on [0, pageFillRatio×32KiB]. Larger docs
+      // spill to their own leaf (TFR=1) and are excluded from C-band hunt.
+      const C = Math.max(Number(compression) > 0 ? +compression : 1, 0.01);
+      const cap = Math.max(1, Math.floor(Number(packedBudget) > 0 ? +packedBudget : 0.9 * 32768));
       const nBins = 24;
-      let bins = [];
+      const step = cap / nBins;
+      const boundaries = [];
+      for (let i = 0; i <= nBins; i++) {
+         const v = Math.round(i * step);
+         if (!boundaries.length || v > boundaries[boundaries.length - 1]) boundaries.push(v);
+      }
+      if (boundaries[boundaries.length - 1] <= cap) boundaries.push(cap + 1);
+      if (boundaries.length < 2) return [];
+      let facet = [];
       try {
-         bins = tmpDb.getCollection(tmpName).aggregate([
-            { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } },
-            { "$bucketAuto": {
-               "groupBy": "$bson",
-               "buckets": nBins,
-               "output": { "n": { "$sum": 1 }, "avg": { "$avg": "$bson" } }
+         facet = tmpDb.getCollection(tmpName).aggregate([
+            { "$project": {
+               "packed": {
+                  "$divide": [
+                     { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] },
+                     C
+                  ]
+               }
+            } },
+            { "$facet": {
+               "inLeaf": [
+                  { "$match": { "packed": { "$lte": cap } } },
+                  { "$bucket": {
+                     "groupBy": "$packed",
+                     "boundaries": boundaries,
+                     "default": "overflow",
+                     "output": { "n": { "$sum": 1 }, "avg": { "$avg": "$packed" } }
+                  } }
+               ],
+               "jumbo": [
+                  { "$match": { "packed": { "$gt": cap } } },
+                  { "$count": "n" }
+               ]
             } }
-         ], aggOpts("calibrate size-mode histogram")).toArray();
+         ], aggOpts("calibrate packed-size histogram")).toArray();
       } catch(e) {
          console.log(`calibrate modes: histogram failed, ${e.message || e}`);
          return [];
       }
-      const density = (b) => {
-         const lo = Number(b?._id?.min), hi = Number(b?._id?.max);
-         const span = Number.isFinite(lo) && Number.isFinite(hi) ? Math.max(1, hi - lo) : 1;
-         return (b.n || 0) / span;
-      };
+      const jumboN = facet[0]?.jumbo?.[0]?.n || 0;
+      if (jumboN) console.log(`calibrate modes: jumbos n=${jumboN} packed>${cap} TFR=1 (own leaf, skip C bands)`);
+      const bins = (facet[0]?.inLeaf || []).filter(b => b._id !== 'overflow');
       if (bins.length < 3) {
-         console.log(`calibrate modes: unimodal (${bins.length} bins)`);
+         console.log(`calibrate modes: unimodal (${bins.length} in-leaf bins, cap=${cap})`);
          return [];
       }
-      const d = bins.map(density);
+      const d = bins.map(b => (b.n || 0) / Math.max(step, 1));
       const peaks = [];
       for (let i = 0; i < bins.length; i++) {
          const prev = i > 0 ? d[i - 1] : 0;
@@ -1248,11 +1278,16 @@
          if (groups.length && i <= groups[groups.length - 1].hi + 1) groups[groups.length - 1].hi = i;
          else groups.push({ "lo": i, "hi": i });
       }
-      const densNote = d.map((x, i) => `${Math.round(bins[i]._id.min)}:${x.toFixed(2)}`).join(',');
+      const densNote = bins.map((b, i) => `${Math.round(Number(b._id))}:${d[i].toFixed(2)}`).join(',');
       if (groups.length < 2) {
-         console.log(`calibrate modes: unimodal (${bins.length} bins, density-peaks=${groups.length}) ${densNote}`);
+         console.log(`calibrate modes: unimodal (${bins.length} packed bins 0–${cap}, density-peaks=${groups.length}) ${densNote}`);
          return [];
       }
+      const binHi = (i) => {
+         const lo = Number(bins[i]._id);
+         const nxt = i + 1 < bins.length ? Number(bins[i + 1]._id) : cap;
+         return Number.isFinite(nxt) ? nxt : cap;
+      };
       const modes = [];
       for (let g = 0; g < groups.length; g++) {
          const { lo, hi } = groups[g];
@@ -1269,8 +1304,8 @@
             avgSum += (bins[i].avg || 0) * (bins[i].n || 0);
          }
          modes.push({
-            "min": bins[a]._id.min,
-            "max": bins[b]._id.max,
+            "min": Number(bins[a]._id),
+            "max": binHi(b),
             "n": n,
             "avg": n > 0 ? avgSum / n : 0
          });
@@ -1287,12 +1322,12 @@
          } else merged.push({ "min": m.min, "max": m.max, "n": m.n, "avg": m.avg });
       }
       if (merged.length < 2) {
-         console.log(`calibrate modes: unimodal after merge (${modes.length} overlapping peaks)`);
+         console.log(`calibrate modes: unimodal after merge (${modes.length} overlapping packed peaks)`);
          return [];
       }
-      console.log(`calibrate modes: ${merged.length} bands ` + merged.map((m, k) => {
+      console.log(`calibrate modes: ${merged.length} packed bands (0–${cap}) ` + merged.map((m, k) => {
          const close = k === merged.length - 1 ? ']' : ')';
-         return `[${m.min}, ${m.max}${close} n=${m.n} avg=${Math.round(m.avg)}`;
+         return `[${Math.round(m.min)}, ${Math.round(m.max)}${close} n=${m.n} avg=${Math.round(m.avg)}`;
       }).join('; '));
       return merged;
    }
@@ -1315,12 +1350,14 @@
                tmpDb.createCollection(name);
             }
             created.push(name);
+            const C0 = Math.max(Number(fallbackC) > 0 ? +fallbackC : 1, 0.01);
+            const packedExpr = { "$divide": [{ "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] }, C0] };
             const bound = k === modes.length - 1
-                        ? { "$lte": [{ "$bsonSize": "$$ROOT" }, m.max] }
-                        : { "$lt": [{ "$bsonSize": "$$ROOT" }, m.max] };
+                        ? { "$lte": [packedExpr, m.max] }
+                        : { "$lt": [packedExpr, m.max] };
             tmpDb.getCollection(srcName).aggregate([
                { "$match": { "$expr": { "$and": [
-                  { "$gte": [{ "$bsonSize": "$$ROOT" }, m.min] },
+                  { "$gte": [packedExpr, m.min] },
                   bound
                ] } } },
                { "$merge": {
@@ -1349,7 +1386,7 @@
             modes[k].avgObjSize = stats.avgObjSize;
             modes[k].objects = ps.documentCount;
             const close = k === modes.length - 1 ? ']' : ')';
-            console.log(`calibrate mode ${k} bson=[${modes[k].min}, ${modes[k].max}${close} n=${modes[k].objects} C=${modes[k].compression.toFixed(3)} tfr=${modes[k].tfr} avgObjSize=${modes[k].avgObjSize}`);
+            console.log(`calibrate mode ${k} packed=[${Math.round(modes[k].min)}, ${Math.round(modes[k].max)}${close} n=${modes[k].objects} C=${modes[k].compression.toFixed(3)} tfr=${modes[k].tfr} avgObjSize=${modes[k].avgObjSize}`);
          }
          return modes;
       } finally {
@@ -1519,7 +1556,7 @@
                   shapes = await measureShapeCompression(tmpDb, tmpName, shapes, compressor, compression);
                }
             } else {
-               modes = detectSizeModes(tmpDb, tmpName);
+               modes = detectSizeModes(tmpDb, tmpName, compression, Math.floor((Number(pageFillRatio) > 0 ? +pageFillRatio : 0.9) * (ps.dataPageSize || 32 * 1024)));
                if (modes.length >= 2) {
                   modes = await measureModeCompression(tmpDb, tmpName, modes, compressor, compression);
                }
@@ -1557,7 +1594,7 @@
 
       let globalBatch = 0;
       const writeWindow = { "snap": srcSnap, "bytes": 0 };
-      for (let p = 0; p < tfr; ++p) {
+      for (let p = 0; p < tfr; p++) {
          console.log(`slidingShuffle stride ${p + 1}/${tfr} (ranks ${p}, ${p + tfr}, ${p + 2 * tfr}, …) until EOF`);
          let afterId, i = 0, strideBatch = 0;
          for (;;) {
