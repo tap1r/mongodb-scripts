@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.5.1"
+ *  Version: "0.5.2"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -60,7 +60,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.5.1" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.5.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -596,6 +596,15 @@
       const packedBudget = Math.max(1, Math.floor(fillRatio * leaf));
       const bsonCap = packedBudget * Math.max(compression, 0.01);
       return { "leaf": leaf, "fillRatio": fillRatio, "compression": compression, "packedBudget": packedBudget, "bsonCap": bsonCap };
+   }
+
+   function batchAllocBytes(b, leaf, fillRatio) {
+      // Conservative dest allocation vs R: WT split is ~fillRatio × 32KiB of
+      // page image, not packed/on-disk bytes. ceil(bson / fill) whole leaves.
+      const fill = Math.max(1, (Number(fillRatio) > 0 ? +fillRatio : 0.9) * (leaf || 32 * 1024));
+      const bson = Number(b?.bson) > 0 ? +b.bson : (Number(b?.packed) > 0 ? +b.packed : fill);
+      const nPages = Math.max(1, Math.ceil(bson / fill));
+      return nPages * (leaf || 32 * 1024);
    }
 
    function modeIndex(bson, cal) {
@@ -1781,8 +1790,8 @@
          const { value, done } = await walk.gen.next();
          if (done || value == null) break;
          pass++;
-         const nextBytes = Number(value.packed) > 0
-                         ? +value.packed
+         const nextBytes = (Number(value.bson) > 0 || Number(value.packed) > 0)
+                         ? batchAllocBytes(value, (cal.ps && cal.ps.dataPageSize) || 32 * 1024, pageFillRatio)
                          : estimateRewriteBytes(value.n || batch, cal);
          await ensureReusableRoom(writeWindow, nextBytes, { "refreshSnap": true, "beforeWait": drainWrites });
          writeWindow.bytes += nextBytes;
@@ -1846,12 +1855,13 @@
       const frac = Number(dirtyBudgetRatio) > 0 ? +dirtyBudgetRatio : 0.05;
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
       const target = allBatches.reduce((s, b) => s + (b.packed || 0), 0);
+      const allocCover = allBatches.reduce((s, b) => s + batchAllocBytes(b, leaf, fillRatio), 0);
       const budgetSnap = collSnapshot();
       let R0 = +budgetSnap.freeStorageSize;
       if (!Number.isFinite(R0) || R0 < 0) R0 = 0;
-      const window0 = R0 > 0 ? Math.max(packedBudget, frac * R0) : packedBudget;
-      const estWindows = window0 > 0 ? Math.max(1, Math.ceil(target / window0)) : 1;
-      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} docs=${nDocs} batches=${allBatches.length} packedCover=${Math.round(target)} reusable=${R0} dirtyBudgetRatio=${frac} windowPacked=${Math.round(window0)} estWindows≈${estWindows} writeConcurrency=${conc} updateDelayMs=${Number(updateDelayMs) > 0 ? +updateDelayMs : 0} replay=per-window`);
+      const window0 = R0 > 0 ? Math.max(leaf, frac * R0) : leaf;
+      const estWindows = window0 > 0 ? Math.max(1, Math.ceil(allocCover / window0)) : 1;
+      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} docs=${nDocs} batches=${allBatches.length} packedCover=${Math.round(target)} allocCover=${Math.round(allocCover)} reusable=${R0} dirtyBudgetRatio=${frac} windowCap=${Math.round(window0)} estWindows≈${estWindows} writeConcurrency=${conc} updateDelayMs=${Number(updateDelayMs) > 0 ? +updateDelayMs : 0} replay=per-window`);
 
       const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
 
@@ -1867,19 +1877,20 @@
          if (ckpt.available && ckpt.running) continue;
          const snap0 = collSnapshot();
          const Rnow = +snap0.freeStorageSize;
-         const windowCap = Math.max(packedBudget, (Number.isFinite(Rnow) && Rnow > 0 ? Rnow : R0) * frac);
+         const windowCap = Math.max(leaf, (Number.isFinite(Rnow) && Rnow > 0 ? Rnow : R0) * frac);
          const batches = [];
-         let windowPacked = 0, windowN = 0;
-         while (bi < allBatches.length && (windowPacked < windowCap || !batches.length)) {
+         let windowPacked = 0, windowAlloc = 0, windowN = 0;
+         while (bi < allBatches.length && (windowAlloc < windowCap || !batches.length)) {
             const b = allBatches[bi++];
             batches.push(b);
             windowPacked += b.packed || 0;
+            windowAlloc += batchAllocBytes(b, leaf, fillRatio);
             windowN += b.n || 0;
          }
          cycle++;
          const sz0 = snap0.storageSize || 0;
          const Rbefore = +snap0.freeStorageSize;
-         console.log(`${label} ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} window n=${windowN} batches=${batches.length}/${allBatches.length} packed=${Math.round(windowPacked)} cap=${Math.round(windowCap)} storageSize=${sz0} reusable=${Number.isFinite(Rbefore) ? Rbefore : 0} rewrite 1`);
+         console.log(`${label} ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} window n=${windowN} batches=${batches.length}/${allBatches.length} packed=${Math.round(windowPacked)} alloc=${Math.round(windowAlloc)} R=${Number.isFinite(Rbefore) ? Rbefore : 0} cap=${Math.round(windowCap)} storageSize=${sz0} rewrite 1`);
          for (const b of batches) {
             await waitForDirtyUnder(dirtyTune);
             await enqueueWrite(rewriteIds(b.ids, { "expect": b.n }), conc);
@@ -1907,7 +1918,8 @@
          packedDone += windowPacked;
          const snap2 = collSnapshot();
          const dSz = (snap2.storageSize || 0) - (prevSz || 0);
-         console.log(`${label} cycle ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} dStorageSize=${dSz} storageSize=${snap2.storageSize} reusable=${snap2.freeStorageSize || 0}`);
+         const Rafter = +snap2.freeStorageSize;
+         console.log(`${label} cycle ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} packed=${Math.round(windowPacked)} alloc=${Math.round(windowAlloc)} R=${Number.isFinite(Rbefore) ? Rbefore : 0} dStorageSize=${dSz} storageSize=${snap2.storageSize} reusable=${Number.isFinite(Rafter) ? Rafter : 0}${dSz > 0 ? ' EXTEND' : ''}`);
          prevSz = snap2.storageSize;
       }
       console.log(`${label} done cycles=${cycle} packedDone=${Math.round(packedDone)} targetPacked=${Math.round(target)}`);
