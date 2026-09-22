@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.3.4"
+ *  Version: "0.4.0"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,12 +18,12 @@
  *  - defragOptions.sampler: 'random' | 'adjacent' | 'bucketed' (default) | 'doubleParked'
  *  - defragOptions.strategy: 'waves' (default) | 'meetInMiddle' | 'lowStressMode' |
  *    'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile' |
- *    'shapeQuantile' | 'doubleParked' | 'naturalWindow'
+ *    'shapeQuantile' | 'doubleParked' | 'naturalWindow' | 'naturalReply'
  *  - defragOptions.ignoreCheckpoint: skip checkpoint waits; $collStats is
  *    fetched without blocking and applied on the next write round. Calibrate
  *    still settles. Reusable/R caps and doubleParked replay use stale stats.
- *  - defragOptions.naturalDir: naturalWindow scan, 1 (default, oldest RecordId
- *    first) or -1 (newest first). doubleParked stays -1.
+ *  - defragOptions.naturalDir: naturalWindow / naturalReply scan, 1 (default,
+ *    oldest RecordId first) or -1 (newest first). doubleParked stays -1.
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -49,6 +49,7 @@
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'rndQuantile' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'shapeQuantile' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalWindow' };" [-f|--file] </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReply', updateDelayMs: 0 };" [-f|--file] </path/to/>onlineDefrag.js
  *
  *  We use 'var' to interoperate with mongosh's sloppy mode
  */
@@ -59,7 +60,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.3.4" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.4.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -84,7 +85,7 @@
    const userOptions = typeof defragOptions === 'undefined' ? {} : defragOptions;
    const {
       "sampler": sampler = 'bucketed', // 'random' | 'adjacent' | 'bucketed' | 'doubleParked'
-      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile' | 'doubleParked' | 'shapeQuantile' | 'naturalWindow'
+      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile' | 'doubleParked' | 'shapeQuantile' | 'naturalWindow' | 'naturalReply'
       "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default 10000
       "curator": curator = 'ids', // meetInMiddle: 'ids' | 'ranges'
       "pageFillRatio": pageFillRatio = 0.9, // WT dest-leaf spill target (fixed)
@@ -101,7 +102,7 @@
       "passes": passes, // collection cover count; default 1
       "checkpointTimeoutMs": checkpointTimeoutMs,
       "ignoreCheckpoint": ignoreCheckpoint = false, // skip ckpt waits; async $collStats next round
-      "naturalDir": naturalDir = 1, // naturalWindow: 1 = oldest RecordId first, -1 = newest first
+      "naturalDir": naturalDir = 1, // naturalWindow/naturalReply: 1 = oldest RecordId first, -1 = newest first
       "updateDelayMs": updateDelayMs = 100 // pause before every rewrite
    } = userOptions;
 
@@ -1816,14 +1817,9 @@
       await slidingPackedMain('naturalWindow', async({ nDocs, cal }) => startNaturalWindowCurator(cal, nDocs));
    }
 
-   // strategy 'doubleParked': one $natural:-1 $bsonSize cover, first-fit packed
-   // $in leaves. Each checkpoint window is dirtyBudgetRatio × R: rewrite, settle.
-   // Replay the same frozen _ids only if write 1 extended storageSize or R was 0
-   // (relocate a new EOF onto the free list). Skip replay when holes were reused.
-   async function doubleParkedMain() {
-      const srcSnap = collSnapshot();
-      console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
-      const cal = await calibrateTFR();
+   // Windowed rewrite of frozen $in batches; replay the same _ids only if write 1
+   // extended storageSize or R was 0. Halloween-safe (parked _id list, not $natural).
+   async function parkedWindowReplay(label, cal, allBatches, nDocs) {
       const { packedBudget, fillRatio, leaf } = packedPageBudget(cal);
       const dirtyTune = {
          "base": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
@@ -1832,16 +1828,13 @@
       };
       const frac = Number(dirtyBudgetRatio) > 0 ? +dirtyBudgetRatio : 0.05;
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
-      const nDocs = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
-      console.log(`doubleParked: scanning ${nDocs} docs $natural:-1 $bsonSize (full cover)`);
-      const allBatches = await naturalPackedBatches(cal, nDocs);
       const target = allBatches.reduce((s, b) => s + (b.packed || 0), 0);
       const budgetSnap = collSnapshot();
       let R0 = +budgetSnap.freeStorageSize;
       if (!Number.isFinite(R0) || R0 < 0) R0 = 0;
       const window0 = R0 > 0 ? Math.max(packedBudget, frac * R0) : packedBudget;
       const estWindows = window0 > 0 ? Math.max(1, Math.ceil(target / window0)) : 1;
-      console.log(`strategy: doubleParked TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} docs=${nDocs} batches=${allBatches.length} packedCover=${Math.round(target)} reusable=${R0} dirtyBudgetRatio=${frac} windowPacked=${Math.round(window0)} estWindows≈${estWindows} writeConcurrency=${conc}`);
+      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} docs=${nDocs} batches=${allBatches.length} packedCover=${Math.round(target)} reusable=${R0} dirtyBudgetRatio=${frac} windowPacked=${Math.round(window0)} estWindows≈${estWindows} writeConcurrency=${conc} updateDelayMs=${Number(updateDelayMs) > 0 ? +updateDelayMs : 0}`);
 
       const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
 
@@ -1869,7 +1862,7 @@
          cycle++;
          const sz0 = snap0.storageSize || 0;
          const Rbefore = +snap0.freeStorageSize;
-         console.log(`doubleParked ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} window n=${windowN} batches=${batches.length}/${allBatches.length} packed=${Math.round(windowPacked)} cap=${Math.round(windowCap)} storageSize=${sz0} reusable=${Number.isFinite(Rbefore) ? Rbefore : 0} rewrite 1`);
+         console.log(`${label} ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} window n=${windowN} batches=${batches.length}/${allBatches.length} packed=${Math.round(windowPacked)} cap=${Math.round(windowCap)} storageSize=${sz0} reusable=${Number.isFinite(Rbefore) ? Rbefore : 0} rewrite 1`);
          for (const b of batches) {
             await waitForDirtyUnder(dirtyTune);
             await enqueueWrite(rewriteIds(b.ids, { "expect": b.n }), conc);
@@ -1882,7 +1875,7 @@
          const extended = (snap1.storageSize || 0) > sz0;
          const noReusable = !(Number.isFinite(Rbefore) && Rbefore > 0);
          if (extended || noReusable) {
-            console.log(`doubleParked ${cycle} replay batches=${batches.length} n=${windowN} storageSize=${snap1.storageSize} reusable=${snap1.freeStorageSize || 0} rewrite 2 (${extended ? 'extended' : 'R=0'})`);
+            console.log(`${label} ${cycle} replay batches=${batches.length} n=${windowN} storageSize=${snap1.storageSize} reusable=${snap1.freeStorageSize || 0} rewrite 2 (${extended ? 'extended' : 'R=0'})`);
             for (const b of batches) {
                await waitForDirtyUnder(dirtyTune);
                await enqueueWrite(rewriteIds(b.ids, { "expect": b.n }), conc);
@@ -1892,16 +1885,40 @@
             await waitForCheckpoint({ "settle": true });
             await waitForReplLag();
          } else {
-            console.log(`doubleParked ${cycle} skip replay (no extend, R>0) storageSize=${snap1.storageSize} reusable=${snap1.freeStorageSize || 0}`);
+            console.log(`${label} ${cycle} skip replay (no extend, R>0) storageSize=${snap1.storageSize} reusable=${snap1.freeStorageSize || 0}`);
          }
          packedDone += windowPacked;
          const snap2 = collSnapshot();
          const dSz = (snap2.storageSize || 0) - (prevSz || 0);
-         console.log(`doubleParked cycle ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} dStorageSize=${dSz} storageSize=${snap2.storageSize} reusable=${snap2.freeStorageSize || 0}`);
+         console.log(`${label} cycle ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} dStorageSize=${dSz} storageSize=${snap2.storageSize} reusable=${snap2.freeStorageSize || 0}`);
          prevSz = snap2.storageSize;
       }
-      console.log(`doubleParked done cycles=${cycle} packedDone=${Math.round(packedDone)} targetPacked=${Math.round(target)}`);
+      console.log(`${label} done cycles=${cycle} packedDone=${Math.round(packedDone)} targetPacked=${Math.round(target)}`);
       console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
+   }
+
+   // strategy 'doubleParked': $natural:-1 cover, then parkedWindowReplay.
+   async function doubleParkedMain() {
+      const srcSnap = collSnapshot();
+      console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
+      const cal = await calibrateTFR();
+      const nDocs = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
+      console.log(`doubleParked: scanning ${nDocs} docs $natural:-1 $bsonSize (full cover)`);
+      const allBatches = await naturalPackedBatches(cal, nDocs, -1);
+      await parkedWindowReplay('doubleParked', cal, allBatches, nDocs);
+   }
+
+   // strategy 'naturalReply': naturalWindow cover ($natural via naturalDir, default
+   // 1) then same windowed rewrite + conditional replay as doubleParked (trim).
+   async function naturalReplyMain() {
+      const srcSnap = collSnapshot();
+      console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
+      const cal = await calibrateTFR();
+      const nDocs = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
+      const dir = Number(naturalDir) >= 0 ? 1 : -1;
+      console.log(`naturalReply: scanning ${nDocs} docs $natural:${dir} $bsonSize (full cover, then conditional replay)`);
+      const allBatches = await naturalPackedBatches(cal, nDocs, dir);
+      await parkedWindowReplay('naturalReply', cal, allBatches, nDocs);
    }
 
    function wtCheckpoint() {
@@ -2143,6 +2160,7 @@
       else if (strategy === 'rndQuantile' || sampler === 'rndQuantile') await rndQuantileMain();
       else if (strategy === 'shapeQuantile' || sampler === 'shapeQuantile') await shapeQuantileMain();
       else if (strategy === 'naturalWindow' || sampler === 'naturalWindow') await naturalWindowMain();
+      else if (strategy === 'naturalReply' || sampler === 'naturalReply') await naturalReplyMain();
       else if (strategy === 'doubleParked' || sampler === 'doubleParked') await doubleParkedMain();
       else await main();
    } catch(e) {
