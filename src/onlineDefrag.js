@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.5.2"
+ *  Version: "0.5.3"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,11 +19,17 @@
  *  - defragOptions.strategy: 'waves' (default) | 'meetInMiddle' | 'lowStressMode' |
  *    'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile' |
  *    'shapeQuantile' | 'doubleParked' | 'naturalWindow' | 'naturalReply'
+ *    (alias: naturalReplay → naturalReply)
+ *  - defragOptions.writeConcurrency: in-flight rewrite txns (default 8).
+ *    concurrentUpdates is an alias when writeConcurrency is omitted.
  *  - defragOptions.ignoreCheckpoint: skip checkpoint waits; $collStats is
  *    fetched without blocking and applied on the next write round. Calibrate
  *    still settles. Reusable/R caps and doubleParked replay use stale stats.
  *  - defragOptions.naturalDir: naturalWindow / naturalReply scan, 1 (default,
  *    oldest RecordId first) or -1 (newest first). doubleParked stays -1.
+ *  - Atlas M0/Flex ignore allowDiskUse and cap in-memory sorts at 32MiB.
+ *    $sample of >=5% of n (or n<=100) COLLSCAN+sorts the whole collection;
+ *    calibrate/$sample stay on the random-cursor path (chunks <5% of n).
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -50,6 +56,7 @@
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'shapeQuantile' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalWindow' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReply', updateDelayMs: 0 };" [-f|--file] </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReplay', concurrentUpdates: 32, updateDelayMs: 0 };" [-f|--file] </path/to/>onlineDefrag.js
  *
  *  We use 'var' to interoperate with mongosh's sloppy mode
  */
@@ -60,7 +67,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.5.2" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.5.3" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -84,8 +91,8 @@
    // Caller: var defragOptions = { ... } (--eval or REPL). Do not declare or assign it in this file.
    const userOptions = typeof defragOptions === 'undefined' ? {} : defragOptions;
    const {
-      "sampler": sampler = 'bucketed', // 'random' | 'adjacent' | 'bucketed' | 'doubleParked'
-      "strategy": strategy = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile' | 'doubleParked' | 'shapeQuantile' | 'naturalWindow' | 'naturalReply'
+      "sampler": samplerIn = 'bucketed', // 'random' | 'adjacent' | 'bucketed' | 'doubleParked'
+      "strategy": strategyIn = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile' | 'doubleParked' | 'shapeQuantile' | 'naturalWindow' | 'naturalReply'
       "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default 10000
       "curator": curator = 'ids', // meetInMiddle: 'ids' | 'ranges'
       "pageFillRatio": pageFillRatio = 0.9, // WT dest-leaf spill target (fixed)
@@ -96,7 +103,8 @@
       "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
       "dirtyBudgetRatio": dirtyBudgetRatio = 0.2, // slidingWindow/quantile/rndQuantile/shapeQuantile/naturalWindow: max packed rewrite bytes per checkpoint / freeStorageSize; waves fallback if no cache stats
       "maxConcurrent": maxConcurrent,
-      "writeConcurrency": writeConcurrency = 8, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow / quantile / rndQuantile write forks
+      "writeConcurrency": writeConcurrencyIn, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow / quantile / rndQuantile write forks
+      "concurrentUpdates": concurrentUpdates, // alias of writeConcurrency when that key is omitted
       "curatorBatchSize": curatorBatchSize, // if set, overrides pageFillTarget for $in / $bucketAuto
       "maxLagSeconds": maxLagSeconds = 10, // pause new batches when lag exceeds this
       "passes": passes, // collection cover count; default 1
@@ -105,6 +113,11 @@
       "naturalDir": naturalDir = 1, // naturalWindow/naturalReply: 1 = oldest RecordId first, -1 = newest first
       "updateDelayMs": updateDelayMs = 0 // pause before every rewrite
    } = userOptions;
+   const strategy = strategyIn === 'naturalReplay' ? 'naturalReply' : strategyIn;
+   const sampler = samplerIn === 'naturalReplay' ? 'naturalReply' : samplerIn;
+   const writeConcurrency = Number(writeConcurrencyIn) > 0
+      ? Math.ceil(writeConcurrencyIn)
+      : (Number(concurrentUpdates) > 0 ? Math.ceil(concurrentUpdates) : 8);
 
    // mdblib $collStats for the target namespace (indexes stripped).
    function collSnapshot() {
@@ -144,6 +157,14 @@
       const nBuckets = Math.max(1, Math.ceil(+concurrentUpdates) || 1);
       const pageSize = Math.max(1, Math.ceil(+sampleSize) || 1);
       return { "nBuckets": nBuckets, "pageSize": pageSize };
+   }
+
+   // $sample random-cursor path: n>100 and size <5% of n. Otherwise COLLSCAN,
+   // attach a random key, sort. Atlas M0/Flex ignore allowDiskUse (32MiB).
+   function randomCursorSampleCap(nObjs) {
+      const n = Math.max(0, Math.floor(Number(nObjs) || 0));
+      if (n <= 100) return n;
+      return Math.max(1, Math.floor(n * 0.049));
    }
 
    function aggOpts(comment, extra = {}) {
@@ -240,14 +261,21 @@
       }
    }
 
-   // sampler 'random': blocking $sample of nBuckets × pageSize, then stream page-sized _id batches.
+   // sampler 'random': $sample of nBuckets × pageSize, then stream page-sized _id batches.
+   // Cap at <5% of n so M0 does not COLLSCAN+sort the collection in 32MiB.
    async function* rndSample(sampleSize = 1, concurrentUpdates = 1) {
       const { nBuckets, pageSize } = sampleDims(sampleSize, concurrentUpdates);
+      const want = nBuckets * pageSize;
+      const nObjs = namespace.estimatedDocumentCount();
+      const cap = randomCursorSampleCap(nObjs);
+      const size = (nObjs > 100 && want > cap) ? cap : want;
+      if (size < want) {
+         console.log(`random sampler: $sample ${want} -> ${size} (<5% of ${nObjs}; M0 32MiB sort)`);
+      }
       const pipeline = [
-         { "$sample": { "size": nBuckets * pageSize } },
+         { "$sample": { "size": size } },
          { "$project": { "_id": 1 } }
       ];
-      // $sample is blocking; after it completes, batch the cursor (do not toArray / await it).
       yield* batchesFromCursor(
          namespace.aggregate(pipeline, aggOpts("$sample technique", { "cursor": { "batchSize": pageSize } })),
          pageSize
@@ -1586,12 +1614,17 @@
       const packedMin = minBson / assumeC;
       const perLowBin = Math.max(20, Math.ceil(2 * packedCap / packedMin));
       const sampleNeed = nBins * perLowBin;
-      const sampleN = Math.min(src.objects || 0, Number(shuffleSampleSize) > 0
+      const nObjs = src.objects || 0;
+      const sampleN = Math.min(nObjs, Number(shuffleSampleSize) > 0
          ? Math.ceil(+shuffleSampleSize)
          : sampleNeed);
       if (sampleN < 1) throw new Error(`${strategy}: empty namespace, cannot calibrate TFR`);
       const tmpName = tmpSampleName();
       const tmpDb = tmpStatsDb();
+      const sampleCap = randomCursorSampleCap(nObjs);
+      const sampleDraws = (nObjs > 100 && sampleN > sampleCap)
+         ? Math.ceil(sampleN / sampleCap)
+         : 1;
       console.log(`${strategy} calibrate: $sample ${sampleN} (${nBins} packed bins × ${perLowBin} docs; 2 leaves at bson>=${minBson} C=${assumeC}) compressor=${compressor} -> ${tmpStatsDbName}.${tmpName}`);
       try {
          try {
@@ -1602,14 +1635,25 @@
             tmpDb.createCollection(tmpName);
          }
          console.log(`calibrate collection created: ${tmpStatsDbName}.${tmpName}`);
-         namespace.aggregate([
-            { "$sample": { "size": sampleN } },
-            { "$merge": {
-               "into": { "db": tmpStatsDbName, "coll": tmpName },
-               "whenMatched": "keepExisting",
-               "whenNotMatched": "insert"
-            } }
-         ], aggOpts(`${strategy} calibrate $merge`)).toArray();
+         // One $sample >=5% of n COLLSCAN+sorts every document. M0 ignores
+         // allowDiskUse (32MiB), which is how 16k of ~204k threw here.
+         if (sampleDraws > 1) {
+            console.log(`calibrate: $sample ${sampleN} is >=5% of ${nObjs}; ${sampleDraws} random-cursor draws of <=${sampleCap}`);
+         }
+         let remaining = sampleN;
+         while (remaining > 0) {
+            const size = (nObjs > 100) ? Math.min(remaining, Math.max(1, sampleCap)) : remaining;
+            namespace.aggregate([
+               { "$sample": { "size": size } },
+               { "$merge": {
+                  "into": { "db": tmpStatsDbName, "coll": tmpName },
+                  "whenMatched": "keepExisting",
+                  "whenNotMatched": "insert"
+               } }
+            ], aggOpts(`${strategy} calibrate $merge`)).toArray();
+            remaining -= size;
+            if (nObjs <= 100) break;
+         }
          console.log('calibrate: waiting for checkpoint before packed $collStats');
          await waitForCheckpoint({ "settle": true, "force": true });
          let packed = $collStats(tmpStatsDbName, tmpName) || {};
