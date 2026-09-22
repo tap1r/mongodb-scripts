@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.5.0"
+ *  Version: "0.5.1"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -60,7 +60,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.5.0" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.5.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -94,16 +94,16 @@
       "updatesTrigger": updatesTrigger = 0.10, // eviction_updates_trigger; stressed if updates util >= this
       "lowStressDirtyMax": lowStressDirtyMax = 0.07, // updates allocated soft pause
       "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
-      "dirtyBudgetRatio": dirtyBudgetRatio = 0.5, // slidingWindow/quantile/rndQuantile/shapeQuantile/naturalWindow: max packed rewrite bytes per checkpoint / freeStorageSize; waves fallback if no cache stats
+      "dirtyBudgetRatio": dirtyBudgetRatio = 0.2, // slidingWindow/quantile/rndQuantile/shapeQuantile/naturalWindow: max packed rewrite bytes per checkpoint / freeStorageSize; waves fallback if no cache stats
       "maxConcurrent": maxConcurrent,
-      "writeConcurrency": writeConcurrency = 1, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow / quantile / rndQuantile write forks
+      "writeConcurrency": writeConcurrency = 8, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow / quantile / rndQuantile write forks
       "curatorBatchSize": curatorBatchSize, // if set, overrides pageFillTarget for $in / $bucketAuto
       "maxLagSeconds": maxLagSeconds = 10, // pause new batches when lag exceeds this
       "passes": passes, // collection cover count; default 1
       "checkpointTimeoutMs": checkpointTimeoutMs,
       "ignoreCheckpoint": ignoreCheckpoint = false, // skip ckpt waits; async $collStats next round
       "naturalDir": naturalDir = 1, // naturalWindow/naturalReply: 1 = oldest RecordId first, -1 = newest first
-      "updateDelayMs": updateDelayMs = 100 // pause before every rewrite
+      "updateDelayMs": updateDelayMs = 0 // pause before every rewrite
    } = userOptions;
 
    // mdblib $collStats for the target namespace (indexes stripped).
@@ -1834,11 +1834,9 @@
       await slidingPackedMain('naturalWindow', async({ nDocs, cal }) => startNaturalWindowCurator(cal, nDocs));
    }
 
-   // Frozen $in batches. replayEachBatch: write 1 then immediately replay that
-   // $in (trim that dest leaf) before the next batch. Otherwise park a dirty-
-   // budget window, rewrite all, settle, conditional replay of the whole slab.
-   // Halloween-safe (parked _id list, not $natural).
-   async function parkedWindowReplay(label, cal, allBatches, nDocs, { replayEachBatch = false } = {}) {
+   // Frozen $in batches: dirty-budget window, rewrite 1, settle, then replay
+   // the same _ids if write 1 extended or R was 0. Halloween-safe (parked _id).
+   async function parkedWindowReplay(label, cal, allBatches, nDocs) {
       const { packedBudget, fillRatio, leaf } = packedPageBudget(cal);
       const dirtyTune = {
          "base": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
@@ -1853,7 +1851,7 @@
       if (!Number.isFinite(R0) || R0 < 0) R0 = 0;
       const window0 = R0 > 0 ? Math.max(packedBudget, frac * R0) : packedBudget;
       const estWindows = window0 > 0 ? Math.max(1, Math.ceil(target / window0)) : 1;
-      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} docs=${nDocs} batches=${allBatches.length} packedCover=${Math.round(target)} reusable=${R0} dirtyBudgetRatio=${frac} windowPacked=${Math.round(window0)} estWindows≈${estWindows} writeConcurrency=${conc} updateDelayMs=${Number(updateDelayMs) > 0 ? +updateDelayMs : 0} replay=${replayEachBatch ? 'per-batch' : 'per-window'}`);
+      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} docs=${nDocs} batches=${allBatches.length} packedCover=${Math.round(target)} reusable=${R0} dirtyBudgetRatio=${frac} windowPacked=${Math.round(window0)} estWindows≈${estWindows} writeConcurrency=${conc} updateDelayMs=${Number(updateDelayMs) > 0 ? +updateDelayMs : 0} replay=per-window`);
 
       const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
 
@@ -1881,20 +1879,20 @@
          cycle++;
          const sz0 = snap0.storageSize || 0;
          const Rbefore = +snap0.freeStorageSize;
-         if (replayEachBatch) {
-            console.log(`${label} ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} window n=${windowN} batches=${batches.length}/${allBatches.length} packed=${Math.round(windowPacked)} cap=${Math.round(windowCap)} storageSize=${sz0} reusable=${Number.isFinite(Rbefore) ? Rbefore : 0} per-batch rewrite+replay`);
-            for (const b of batches) {
-               await waitForDirtyUnder(dirtyTune);
-               await enqueueWrite(rewriteIds(b.ids, { "expect": b.n }), conc);
-               await drainWrites();
-               await enqueueWrite(rewriteIds(b.ids, { "expect": b.n }), conc);
-               await drainWrites();
-            }
-            kickCollStats();
-            await waitForCheckpoint({ "settle": true });
-            await waitForReplLag();
-         } else {
-            console.log(`${label} ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} window n=${windowN} batches=${batches.length}/${allBatches.length} packed=${Math.round(windowPacked)} cap=${Math.round(windowCap)} storageSize=${sz0} reusable=${Number.isFinite(Rbefore) ? Rbefore : 0} rewrite 1`);
+         console.log(`${label} ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} window n=${windowN} batches=${batches.length}/${allBatches.length} packed=${Math.round(windowPacked)} cap=${Math.round(windowCap)} storageSize=${sz0} reusable=${Number.isFinite(Rbefore) ? Rbefore : 0} rewrite 1`);
+         for (const b of batches) {
+            await waitForDirtyUnder(dirtyTune);
+            await enqueueWrite(rewriteIds(b.ids, { "expect": b.n }), conc);
+         }
+         await drainWrites();
+         kickCollStats();
+         await waitForCheckpoint({ "settle": true });
+         await waitForReplLag();
+         const snap1 = consumeAsyncSnap() || collSnapshot();
+         const extended = (snap1.storageSize || 0) > sz0;
+         const noReusable = !(Number.isFinite(Rbefore) && Rbefore > 0);
+         if (extended || noReusable) {
+            console.log(`${label} ${cycle} replay batches=${batches.length} n=${windowN} storageSize=${snap1.storageSize} reusable=${snap1.freeStorageSize || 0} rewrite 2 (${extended ? 'extended' : 'R=0'})`);
             for (const b of batches) {
                await waitForDirtyUnder(dirtyTune);
                await enqueueWrite(rewriteIds(b.ids, { "expect": b.n }), conc);
@@ -1903,22 +1901,8 @@
             kickCollStats();
             await waitForCheckpoint({ "settle": true });
             await waitForReplLag();
-            const snap1 = consumeAsyncSnap() || collSnapshot();
-            const extended = (snap1.storageSize || 0) > sz0;
-            const noReusable = !(Number.isFinite(Rbefore) && Rbefore > 0);
-            if (extended || noReusable) {
-               console.log(`${label} ${cycle} replay batches=${batches.length} n=${windowN} storageSize=${snap1.storageSize} reusable=${snap1.freeStorageSize || 0} rewrite 2 (${extended ? 'extended' : 'R=0'})`);
-               for (const b of batches) {
-                  await waitForDirtyUnder(dirtyTune);
-                  await enqueueWrite(rewriteIds(b.ids, { "expect": b.n }), conc);
-               }
-               await drainWrites();
-               kickCollStats();
-               await waitForCheckpoint({ "settle": true });
-               await waitForReplLag();
-            } else {
-               console.log(`${label} ${cycle} skip replay (no extend, R>0) storageSize=${snap1.storageSize} reusable=${snap1.freeStorageSize || 0}`);
-            }
+         } else {
+            console.log(`${label} ${cycle} skip replay (no extend, R>0) storageSize=${snap1.storageSize} reusable=${snap1.freeStorageSize || 0}`);
          }
          packedDone += windowPacked;
          const snap2 = collSnapshot();
@@ -1941,18 +1925,17 @@
       await parkedWindowReplay('doubleParked', cal, allBatches, nDocs);
    }
 
-   // strategy 'naturalReply': naturalWindow cover, then per-batch rewrite +
-   // immediate replay of that $in (trim the dest leaf just created) before the
-   // next batch. Dirty-budget windows still settle once per slab.
+   // strategy 'naturalReply': naturalWindow cover, then per-window rewrite 1,
+   // settle, conditional replay of that slab (trim). Same loop as doubleParked.
    async function naturalReplyMain() {
       const srcSnap = collSnapshot();
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
       const cal = await calibrateTFR();
       const nDocs = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
       const dir = Number(naturalDir) >= 0 ? 1 : -1;
-      console.log(`naturalReply: scanning ${nDocs} docs $natural:${dir} $bsonSize (full cover, per-batch replay)`);
+      console.log(`naturalReply: scanning ${nDocs} docs $natural:${dir} $bsonSize (full cover, per-window replay)`);
       const allBatches = await naturalPackedBatches(cal, nDocs, dir);
-      await parkedWindowReplay('naturalReply', cal, allBatches, nDocs, { "replayEachBatch": true });
+      await parkedWindowReplay('naturalReply', cal, allBatches, nDocs);
    }
 
    function wtCheckpoint() {
