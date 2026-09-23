@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.5.3"
+ *  Version: "0.5.4"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,6 +25,10 @@
  *  - defragOptions.ignoreCheckpoint: skip checkpoint waits; $collStats is
  *    fetched without blocking and applied on the next write round. Calibrate
  *    still settles. Reusable/R caps and doubleParked replay use stale stats.
+ *  - Settle waits try {fsync:1, lock:false} so we do not sit out a 60s
+ *    checkpoint interval. Atlas M0/Flex deny fsync and omit WT checkpoint
+ *    metrics: poll $collStats instead of sleeping 60s. parkedWindowReplay
+ *    skip-replay (no extend, R>0) does not wait for a checkpoint.
  *  - defragOptions.naturalDir: naturalWindow / naturalReply scan, 1 (default,
  *    oldest RecordId first) or -1 (newest first). doubleParked stays -1.
  *  - Atlas M0/Flex ignore allowDiskUse and cap in-memory sorts at 32MiB.
@@ -67,7 +71,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.5.3" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.5.4" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -143,15 +147,12 @@
       return s;
    }
 
-   let deferSettle = true;
-   function takeSettleSnapshot() {
-      if (deferSettle) {
-         deferSettle = false;
-         console.log('checkpoint complete; settle snapshot deferred to the following checkpoint');
-         return false;
-      }
-      return true;
-   }
+   const ckptPollMs = 250;
+   const statsPollMs = 1000;
+   const statsSettleTimeoutMs = 15000;
+   const dirtyPollMs = 250;
+   const lagPollMs = 250;
+   const idlePollMs = 250;
 
    function sampleDims(sampleSize = 1, concurrentUpdates = 1) {
       const nBuckets = Math.max(1, Math.ceil(+concurrentUpdates) || 1);
@@ -495,7 +496,7 @@
       while ((u = cacheUpdatesUtil()) != null) {
          applyDirtyOvershoot(u, tune);
          if (u < tune.soft) break;
-         await delay(1000);
+         await delay(dirtyPollMs);
       }
       console.log(`updates ${((u || 0) * 100).toFixed(2)}% (soft ${(tune.soft * 100).toFixed(2)}%), resuming`);
    }
@@ -540,9 +541,8 @@
       }
       console.log(`reusable budget ${Math.round(window.bytes)}+${Math.round(nextBytes)} > ${Math.round(cap)} (${frac}*freeStorageSize ${R}); waiting for checkpoint`);
       const waited = await waitForCheckpoint({ "settle": true });
-      if (!waited.available) {
-         const ms = Math.min(60000, Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000);
-         await delay(ms);
+      if (!waited.available && !waited.completed) {
+         await delay(statsPollMs);
       }
       window.bytes = 0;
       if (refreshSnap && (waited.completed || !waited.available)) refreshReusableCap(window, 'reusable budget');
@@ -1008,21 +1008,19 @@
          if (cacheStressed()) {
             console.log('cache stressed, pausing meetInMiddle writes');
             await drainWrites();
-            await delay(1000);
+            await delay(idlePollMs);
             continue;
          }
          const ckpt = wtCheckpoint();
          if (prevRunning && ckpt.available && !ckpt.running) {
             await drainWrites();
-            if (takeSettleSnapshot()) {
-               console.log('checkpoint finished, refreshing settled collStats...');
-               snap = collSnapshot();
-               fill = pageStats(snap);
-               console.log(`settled targetFill ${fill.pageFillTarget} actualFill ${fill.pageFillActual} reusable ${snap.freeStorageSize}`);
-               console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
-               low.state.batchSize = scaledBatch(fill.pageFillTarget);
-               high.state.batchSize = scaledBatch(fill.pageFillTarget);
-            }
+            console.log('checkpoint finished, refreshing settled collStats...');
+            snap = collSnapshot();
+            fill = pageStats(snap);
+            console.log(`settled targetFill ${fill.pageFillTarget} actualFill ${fill.pageFillActual} reusable ${snap.freeStorageSize}`);
+            console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
+            low.state.batchSize = scaledBatch(fill.pageFillTarget);
+            high.state.batchSize = scaledBatch(fill.pageFillTarget);
          }
          prevRunning = !!(ckpt.available && ckpt.running);
 
@@ -1090,7 +1088,7 @@
                }
                idleLogged = true;
             }
-            await delay(500);
+            await delay(idlePollMs);
          }
       }
 
@@ -1148,14 +1146,12 @@
             if (ckpt.available && ckpt.running) continue;
             if (ckpt.available && !ckpt.running && (prevRunning || beforeCkpt.running)) {
                await drainWrites();
-               if (takeSettleSnapshot()) {
-                  snap = collSnapshot();
-                  fill = pageStats(snap);
-                  conc = concNow();
-                  walk.state.batchSize = scaledBatch(fill.pageFillTarget);
-                  console.log(`settled targetFill ${fill.pageFillTarget} actualFill ${fill.pageFillActual} reusable ${snap.freeStorageSize}`);
-                  console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
-               }
+               snap = collSnapshot();
+               fill = pageStats(snap);
+               conc = concNow();
+               walk.state.batchSize = scaledBatch(fill.pageFillTarget);
+               console.log(`settled targetFill ${fill.pageFillTarget} actualFill ${fill.pageFillActual} reusable ${snap.freeStorageSize}`);
+               console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
             }
             prevRunning = !!(ckpt.available && ckpt.running);
 
@@ -1233,14 +1229,12 @@
             if (ckpt.available && ckpt.running) continue;
             if (ckpt.available && !ckpt.running && (prevRunning || beforeCkpt.running)) {
                await drainWrites();
-               if (takeSettleSnapshot()) {
-                  snap = collSnapshot();
-                  fill = pageStats(snap);
-                  conc = concNow();
-                  walk.state.batchSize = 1;
-                  console.log(`settled targetFill ${fill.pageFillTarget} actualFill ${fill.pageFillActual} reusable ${snap.freeStorageSize} writeConcurrency ${conc}`);
-                  console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
-               }
+               snap = collSnapshot();
+               fill = pageStats(snap);
+               conc = concNow();
+               walk.state.batchSize = 1;
+               console.log(`settled targetFill ${fill.pageFillTarget} actualFill ${fill.pageFillActual} reusable ${snap.freeStorageSize} writeConcurrency ${conc}`);
+               console.log(EJSON.stringify({ "state": "settled storage", ...snap }));
             }
             prevRunning = !!(ckpt.available && ckpt.running);
 
@@ -1483,11 +1477,9 @@
          }
          console.log('calibrate modes: waiting for checkpoint before per-mode $collStats');
          await waitForCheckpoint({ "settle": true, "force": true });
-         if (!wtCheckpoint().available) {
-            const timeoutMs = Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000;
-            const minWaitMs = Math.min(60000, timeoutMs);
-            console.log(`M0: waiting ${minWaitMs}ms for mode temps to pack`);
-            await delay(minWaitMs);
+         if (!wtCheckpoint().available && created[0]) {
+            console.log('M0: polling mode temps for packed $collStats');
+            await waitForPackedStats(tmpStatsDbName, created[0]);
          }
          for (let k = 0; k < modes.length; k++) {
             const packed = $collStats(tmpStatsDbName, created[k]) || {};
@@ -1568,11 +1560,9 @@
          }
          console.log('calibrate shapes: waiting for checkpoint before per-shape $collStats');
          await waitForCheckpoint({ "settle": true, "force": true });
-         if (!wtCheckpoint().available) {
-            const timeoutMs = Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000;
-            const minWaitMs = Math.min(60000, timeoutMs);
-            console.log(`M0: waiting ${minWaitMs}ms for shape temps to pack`);
-            await delay(minWaitMs);
+         if (!wtCheckpoint().available && created[0]) {
+            console.log('M0: polling shape temps for packed $collStats');
+            await waitForPackedStats(tmpStatsDbName, created[0]);
          }
          for (let k = 0; k < todo.length; k++) {
             const packed = $collStats(tmpStatsDbName, created[k]) || {};
@@ -1658,25 +1648,8 @@
          await waitForCheckpoint({ "settle": true, "force": true });
          let packed = $collStats(tmpStatsDbName, tmpName) || {};
          if (!wtCheckpoint().available) {
-            const timeoutMs = Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000;
-            const minWaitMs = Math.min(60000, timeoutMs);
-            console.log(`M0: no checkpoint metrics; waiting ${minWaitMs}ms then polling packed $collStats until nPages>1 or ${timeoutMs}ms`);
-            await delay(minWaitMs);
-            const deadline = Date.now() + Math.max(0, timeoutMs - minWaitMs);
-            let prevSz, stable = 0;
-            for (;;) {
-               packed = $collStats(tmpStatsDbName, tmpName) || {};
-               const nPages = pageStats(packed).nPages;
-               console.log(`calibrate poll nPages=${nPages} storageSize=${packed.storageSize} objects=${packed.objects}`);
-               if (nPages > 1 && packed.storageSize === prevSz) break;
-               if (packed.storageSize === prevSz) {
-                  stable++;
-                  if (stable >= 2) break;
-               } else stable = 0;
-               prevSz = packed.storageSize;
-               if (Date.now() >= deadline) break;
-               await delay(10000);
-            }
+            console.log('M0: no checkpoint metrics; polling packed $collStats');
+            packed = await waitForPackedStats(tmpStatsDbName, tmpName);
          }
          const { indexes, ...stats } = packed;
          const ps = pageStats(stats);
@@ -1887,8 +1860,10 @@
       await slidingPackedMain('naturalWindow', async({ nDocs, cal }) => startNaturalWindowCurator(cal, nDocs));
    }
 
-   // Frozen $in batches: dirty-budget window, rewrite 1, settle, then replay
-   // the same _ids if write 1 extended or R was 0. Halloween-safe (parked _id).
+   // Frozen $in batches: dirty-budget window, rewrite 1, then replay the same
+   // _ids if write 1 extended or R was 0. Skip-replay (no extend) does not wait
+   // for a checkpoint; rBudget decrements until a settle replenishes R.
+   // Halloween-safe (parked _id).
    async function parkedWindowReplay(label, cal, allBatches, nDocs) {
       const { packedBudget, fillRatio, leaf } = packedPageBudget(cal);
       const dirtyTune = {
@@ -1913,15 +1888,24 @@
       let packedDone = 0;
       let cycle = 0;
       let bi = 0;
+      let rBudget = R0;
       while (bi < allBatches.length) {
          await waitForDirtyUnder(dirtyTune);
          await waitForReplLag({ "abortIfCheckpoint": true });
          await waitForCheckpoint();
          const ckpt = wtCheckpoint();
          if (ckpt.available && ckpt.running) continue;
+         if (!(rBudget >= leaf)) {
+            await waitForCheckpoint({ "settle": true });
+            await waitForReplLag();
+            const replenished = collSnapshot();
+            rBudget = +replenished.freeStorageSize;
+            if (!Number.isFinite(rBudget) || rBudget < 0) rBudget = 0;
+            prevSz = replenished.storageSize;
+            if (!(rBudget >= leaf)) rBudget = leaf;
+         }
          const snap0 = collSnapshot();
-         const Rnow = +snap0.freeStorageSize;
-         const windowCap = Math.max(leaf, (Number.isFinite(Rnow) && Rnow > 0 ? Rnow : R0) * frac);
+         const windowCap = Math.max(leaf, rBudget * frac);
          const batches = [];
          let windowPacked = 0, windowAlloc = 0, windowN = 0;
          while (bi < allBatches.length && (windowAlloc < windowCap || !batches.length)) {
@@ -1933,7 +1917,7 @@
          }
          cycle++;
          const sz0 = snap0.storageSize || 0;
-         const Rbefore = +snap0.freeStorageSize;
+         const Rbefore = rBudget;
          console.log(`${label} ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} window n=${windowN} batches=${batches.length}/${allBatches.length} packed=${Math.round(windowPacked)} alloc=${Math.round(windowAlloc)} R=${Number.isFinite(Rbefore) ? Rbefore : 0} cap=${Math.round(windowCap)} storageSize=${sz0} rewrite 1`);
          for (const b of batches) {
             await waitForDirtyUnder(dirtyTune);
@@ -1941,13 +1925,14 @@
          }
          await drainWrites();
          kickCollStats();
-         await waitForCheckpoint({ "settle": true });
-         await waitForReplLag();
          const snap1 = consumeAsyncSnap() || collSnapshot();
          const extended = (snap1.storageSize || 0) > sz0;
          const noReusable = !(Number.isFinite(Rbefore) && Rbefore > 0);
          if (extended || noReusable) {
-            console.log(`${label} ${cycle} replay batches=${batches.length} n=${windowN} storageSize=${snap1.storageSize} reusable=${snap1.freeStorageSize || 0} rewrite 2 (${extended ? 'extended' : 'R=0'})`);
+            await waitForCheckpoint({ "settle": true });
+            await waitForReplLag();
+            const snapReplay = collSnapshot();
+            console.log(`${label} ${cycle} replay batches=${batches.length} n=${windowN} storageSize=${snapReplay.storageSize} reusable=${snapReplay.freeStorageSize || 0} rewrite 2 (${extended ? 'extended' : 'R=0'})`);
             for (const b of batches) {
                await waitForDirtyUnder(dirtyTune);
                await enqueueWrite(rewriteIds(b.ids, { "expect": b.n }), conc);
@@ -1956,15 +1941,20 @@
             kickCollStats();
             await waitForCheckpoint({ "settle": true });
             await waitForReplLag();
+            const settled = collSnapshot();
+            rBudget = +settled.freeStorageSize;
+            if (!Number.isFinite(rBudget) || rBudget < 0) rBudget = 0;
+            prevSz = settled.storageSize;
          } else {
             console.log(`${label} ${cycle} skip replay (no extend, R>0) storageSize=${snap1.storageSize} reusable=${snap1.freeStorageSize || 0}`);
+            rBudget = Math.max(0, rBudget - windowAlloc);
          }
          packedDone += windowPacked;
          const snap2 = collSnapshot();
          const dSz = (snap2.storageSize || 0) - (prevSz || 0);
          const Rafter = +snap2.freeStorageSize;
-         console.log(`${label} cycle ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} packed=${Math.round(windowPacked)} alloc=${Math.round(windowAlloc)} R=${Number.isFinite(Rbefore) ? Rbefore : 0} dStorageSize=${dSz} storageSize=${snap2.storageSize} reusable=${Number.isFinite(Rafter) ? Rafter : 0}${dSz > 0 ? ' EXTEND' : ''}`);
-         prevSz = snap2.storageSize;
+         console.log(`${label} cycle ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} packed=${Math.round(windowPacked)} alloc=${Math.round(windowAlloc)} R=${Number.isFinite(Rbefore) ? Rbefore : 0} dStorageSize=${dSz} storageSize=${snap2.storageSize} reusable=${Number.isFinite(Rafter) ? Rafter : 0} rBudget=${Math.round(rBudget)}${dSz > 0 ? ' EXTEND' : ''}`);
+         if ((snap2.storageSize || 0) > (prevSz || 0)) prevSz = snap2.storageSize;
       }
       console.log(`${label} done cycles=${cycle} packedDone=${Math.round(packedDone)} targetPacked=${Math.round(target)}`);
       console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
@@ -1981,8 +1971,8 @@
       await parkedWindowReplay('doubleParked', cal, allBatches, nDocs);
    }
 
-   // strategy 'naturalReply': naturalWindow cover, then per-window rewrite 1,
-   // settle, conditional replay of that slab (trim). Same loop as doubleParked.
+   // strategy 'naturalReply': naturalWindow cover, then parkedWindowReplay
+   // (per-window rewrite 1, conditional replay). Same loop as doubleParked.
    async function naturalReplyMain() {
       const srcSnap = collSnapshot();
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
@@ -2089,7 +2079,7 @@
       // Optime lag is not a wall-clock countdown: with writes paused, secondaries
       // can apply the backlog in one interval (14s → 0s). Wait at least (lag-cap)
       // before the first resume check, then poll every 1s.
-      const minCoolMs = Math.max(1000, (lagSeconds - cap) * 1000);
+      const minCoolMs = Math.max(lagPollMs, (lagSeconds - cap) * 1000);
       await delay(Math.min(minCoolMs, Math.max(1, deadline - Date.now())));
       do {
          if (abortIfCheckpoint && wtCheckpoint().running) {
@@ -2100,7 +2090,7 @@
          if (!available) return;
          if (lagSeconds <= cap) break;
          console.log(`repl lag ${lagSeconds.toFixed(1)}s via ${source}, still throttling`);
-         await delay(Math.min(1000, Math.max(1, deadline - Date.now())));
+         await delay(Math.min(lagPollMs, Math.max(1, deadline - Date.now())));
       } while (lagSeconds > cap && Date.now() < deadline);
       if (lagSeconds > cap) {
          console.log(`repl lag still ${lagSeconds.toFixed(1)}s after throttle timeout, continuing`);
@@ -2109,15 +2099,54 @@
       }
    }
 
-   let ckptSkipLogged = false, ckptIgnoreLogged = false;
+   let ckptSkipLogged = false, ckptIgnoreLogged = false, fsyncDeniedLogged = false;
+
+   async function tryFsyncCheckpoint() {
+      // Kick a WT checkpoint instead of waiting up to 60s for the periodic one.
+      // Atlas M0/Flex / unauthorized: command fails; caller polls or waits.
+      try {
+         const r = await db.adminCommand({ "fsync": 1, "lock": false });
+         return r == null || r.ok !== 0;
+      } catch(e) {
+         if (!fsyncDeniedLogged) {
+            console.log(`checkpoint fsync unavailable, ${e.message || e}`);
+            fsyncDeniedLogged = true;
+         }
+         return false;
+      }
+   }
+
+   async function waitForPackedStats(tmpDbName, tmpName) {
+      // M0 proxy for a checkpoint: poll $collStats until storageSize is stable.
+      const timeoutMs = Number(checkpointTimeoutMs) > 0
+                      ? Math.min(+checkpointTimeoutMs, statsSettleTimeoutMs)
+                      : statsSettleTimeoutMs;
+      const deadline = Date.now() + timeoutMs;
+      let packed = $collStats(tmpDbName, tmpName) || {};
+      let prevSz = packed.storageSize, stable = 0;
+      console.log(`calibrate poll nPages=${pageStats(packed).nPages} storageSize=${packed.storageSize} objects=${packed.objects}`);
+      while (Date.now() < deadline) {
+         await delay(statsPollMs);
+         packed = $collStats(tmpDbName, tmpName) || {};
+         const nPages = pageStats(packed).nPages;
+         console.log(`calibrate poll nPages=${nPages} storageSize=${packed.storageSize} objects=${packed.objects}`);
+         if (packed.storageSize === prevSz) {
+            stable++;
+            if (nPages > 1 || stable >= 2) return packed;
+         } else stable = 0;
+         prevSz = packed.storageSize;
+      }
+      return packed;
+   }
+
    async function waitForCheckpoint({ settle = false, force = false } = {}) {
       // Do not start writes during a WT checkpoint.
       // settle=false: wait only while a checkpoint is already running.
-      // settle=true: wait for a falling edge (start+complete if idle) so
+      // settle=true: fsync if allowed, else wait for a falling edge so
       // block-manager reusable bytes are visible in collStats.
       // force=true: wait even when ignoreCheckpoint (calibrate packed stats).
       // Returns { available, running, completed } — completed is a falling edge
-      // this call observed. Callers may collSnapshot() then; do not wait again.
+      // this call observed (or fsync). Callers may collSnapshot() then.
       if (ignoreCheckpoint && !force) {
          if (!ckptIgnoreLogged) {
             console.log('ignoreCheckpoint: not pausing for checkpoints; $collStats applied next round');
@@ -2127,6 +2156,14 @@
          return { "available": wtCheckpoint().available, "running": false, "completed": false, "ignored": true };
       }
       let { available, running, minTimeMS, recentTimeMS } = wtCheckpoint();
+      if (settle && await tryFsyncCheckpoint()) {
+         ({ available, running } = wtCheckpoint());
+         if (!running) {
+            console.log('checkpoint fsync completed');
+            return { "available": available, "running": false, "completed": true, "fsync": true };
+         }
+         console.log('checkpoint fsync issued, waiting to complete...');
+      }
       if (!available) {
          if (!ckptSkipLogged) {
             console.log('checkpoint metrics unavailable (no wiredTiger in serverStatus), skipping wait');
@@ -2135,7 +2172,7 @@
          return { "available": false, "running": false, "completed": false };
       }
       if (!settle && !running) return { "available": true, "running": false, "completed": false };
-      const pollMs = Math.max(1, Math.ceil(0.9 * (minTimeMS || 1000)));
+      const pollMs = Math.min(ckptPollMs, Math.max(50, Math.ceil(0.9 * (minTimeMS || ckptPollMs))));
       const timeoutMs = Number(checkpointTimeoutMs) > 0
                       ? +checkpointTimeoutMs
                       : Math.max(120000, 2 * (recentTimeMS || minTimeMS || 0));
@@ -2197,7 +2234,7 @@
                await waitForCheckpoint({ "settle": true });
                await waitForReplLag();
                snap = collSnapshot();
-               if (waveBudget(snap, fill.dataPageSize).nBatches < 1) await delay(1000);
+               if (waveBudget(snap, fill.dataPageSize).nBatches < 1) await delay(idlePollMs);
                continue;
             }
             console.log('no reusable pages without extending the file, stopping');
