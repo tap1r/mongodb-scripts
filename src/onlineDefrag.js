@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.5.4"
+ *  Version: "0.5.5"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -31,6 +31,8 @@
  *    skip-replay (no extend, R>0) does not wait for a checkpoint.
  *  - defragOptions.naturalDir: naturalWindow / naturalReply scan, 1 (default,
  *    oldest RecordId first) or -1 (newest first). doubleParked stays -1.
+ *  - defragOptions.passes: collection cover count (default 1). naturalReply
+ *    / naturalReplay rescans $natural each pass (RecordIds changed).
  *  - Atlas M0/Flex ignore allowDiskUse and cap in-memory sorts at 32MiB.
  *    $sample of >=5% of n (or n<=100) COLLSCAN+sorts the whole collection;
  *    calibrate/$sample stay on the random-cursor path (chunks <5% of n).
@@ -71,7 +73,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.5.4" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.5.5" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -105,7 +107,7 @@
       "updatesTrigger": updatesTrigger = 0.10, // eviction_updates_trigger; stressed if updates util >= this
       "lowStressDirtyMax": lowStressDirtyMax = 0.07, // updates allocated soft pause
       "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
-      "dirtyBudgetRatio": dirtyBudgetRatio = 0.2, // slidingWindow/quantile/rndQuantile/shapeQuantile/naturalWindow: max packed rewrite bytes per checkpoint / freeStorageSize; waves fallback if no cache stats
+      "dirtyBudgetRatio": dirtyBudgetRatio = 0.2, // fraction of compressed freeStorageSize to dest-allocate per checkpoint. Not a target reusable%. Debit is nPages×leaf/C (same units as R).
       "maxConcurrent": maxConcurrent,
       "writeConcurrency": writeConcurrencyIn, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow / quantile / rndQuantile write forks
       "concurrentUpdates": concurrentUpdates, // alias of writeConcurrency when that key is omitted
@@ -626,13 +628,19 @@
       return { "leaf": leaf, "fillRatio": fillRatio, "compression": compression, "packedBudget": packedBudget, "bsonCap": bsonCap };
    }
 
-   function batchAllocBytes(b, leaf, fillRatio) {
-      // Conservative dest allocation vs R: WT split is ~fillRatio × 32KiB of
-      // page image, not packed/on-disk bytes. ceil(bson / fill) whole leaves.
-      const fill = Math.max(1, (Number(fillRatio) > 0 ? +fillRatio : 0.9) * (leaf || 32 * 1024));
-      const bson = Number(b?.bson) > 0 ? +b.bson : (Number(b?.packed) > 0 ? +b.packed : fill);
+   function batchAllocBytes(b, leaf, fillRatio, compression) {
+      // Dest on-disk vs freeStorageSize (compressed block-manager bytes).
+      // WT splits on uncompressed fillRatio×leaf images; those pages then
+      // compress by C. Debiting nPages×leaf (uncompressed) against R made
+      // the dirty window ~C/pageFill too small, so collStats reusable %
+      // sat ~that much above dirtyBudgetRatio.
+      const leafB = Number(leaf) > 0 ? +leaf : 32 * 1024;
+      const fill = Math.max(1, (Number(fillRatio) > 0 ? +fillRatio : 0.9) * leafB);
+      const C = Math.max(Number(compression) > 0 ? +compression : 1, 0.01);
+      const bson = Number(b?.bson) > 0 ? +b.bson
+                 : (Number(b?.packed) > 0 ? +b.packed * C : fill);
       const nPages = Math.max(1, Math.ceil(bson / fill));
-      return nPages * (leaf || 32 * 1024);
+      return nPages * leafB / C;
    }
 
    function modeIndex(bson, cal) {
@@ -1784,7 +1792,8 @@
       const packedCover = estimateRewriteBytes(nDocs, cal);
       const packedPctR = R0 > 0 ? 100 * packedCover / R0 : 0;
       const live0 = Math.max(0, (budgetSnap.storageSize || 0) - (Number.isFinite(R0) ? R0 : 0));
-      console.log(`strategy: ${label} TFR=${cal.tfr} batch=${batch} buckets=${streaming ? 'first-fit' : totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}% dirtyBudgetRatio=${frac} reusable=${Number.isFinite(R0) ? R0 : 0} cap=${Math.round(cap0)} packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${live0} storageSize=${budgetSnap.storageSize || 0}`);
+      const reusablePct = budgetSnap.storageSize > 0 && Number.isFinite(R0) ? 100 * R0 / budgetSnap.storageSize : 0;
+      console.log(`strategy: ${label} TFR=${cal.tfr} batch=${batch} buckets=${streaming ? 'first-fit' : totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}% C=${(Number(cal.compression) > 0 ? +cal.compression : 1).toFixed(3)} pageFill=${Number(pageFillRatio) > 0 ? +pageFillRatio : 0.9} dirtyBudgetRatio=${frac} reusable=${Number.isFinite(R0) ? R0 : 0} (${reusablePct.toFixed(1)}% of storageSize) cap=${Math.round(cap0)} (${(100 * frac).toFixed(0)}% of R, compressed) packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${live0} storageSize=${budgetSnap.storageSize || 0}`);
 
       const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
 
@@ -1808,7 +1817,7 @@
          if (done || value == null) break;
          pass++;
          const nextBytes = (Number(value.bson) > 0 || Number(value.packed) > 0)
-                         ? batchAllocBytes(value, (cal.ps && cal.ps.dataPageSize) || 32 * 1024, pageFillRatio)
+                         ? batchAllocBytes(value, (cal.ps && cal.ps.dataPageSize) || 32 * 1024, pageFillRatio, cal.compression)
                          : estimateRewriteBytes(value.n || batch, cal);
          await ensureReusableRoom(writeWindow, nextBytes, { "refreshSnap": true, "beforeWait": drainWrites });
          writeWindow.bytes += nextBytes;
@@ -1865,7 +1874,7 @@
    // for a checkpoint; rBudget decrements until a settle replenishes R.
    // Halloween-safe (parked _id).
    async function parkedWindowReplay(label, cal, allBatches, nDocs) {
-      const { packedBudget, fillRatio, leaf } = packedPageBudget(cal);
+      const { packedBudget, fillRatio, leaf, compression } = packedPageBudget(cal);
       const dirtyTune = {
          "base": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
          "soft": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
@@ -1874,13 +1883,14 @@
       const frac = Number(dirtyBudgetRatio) > 0 ? +dirtyBudgetRatio : 0.05;
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
       const target = allBatches.reduce((s, b) => s + (b.packed || 0), 0);
-      const allocCover = allBatches.reduce((s, b) => s + batchAllocBytes(b, leaf, fillRatio), 0);
+      const allocCover = allBatches.reduce((s, b) => s + batchAllocBytes(b, leaf, fillRatio, compression), 0);
       const budgetSnap = collSnapshot();
       let R0 = +budgetSnap.freeStorageSize;
       if (!Number.isFinite(R0) || R0 < 0) R0 = 0;
-      const window0 = R0 > 0 ? Math.max(leaf, frac * R0) : leaf;
+      const window0 = R0 > 0 ? Math.max(leaf / Math.max(compression, 0.01), frac * R0) : leaf;
       const estWindows = window0 > 0 ? Math.max(1, Math.ceil(allocCover / window0)) : 1;
-      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} docs=${nDocs} batches=${allBatches.length} packedCover=${Math.round(target)} allocCover=${Math.round(allocCover)} reusable=${R0} dirtyBudgetRatio=${frac} windowCap=${Math.round(window0)} estWindows≈${estWindows} writeConcurrency=${conc} updateDelayMs=${Number(updateDelayMs) > 0 ? +updateDelayMs : 0} replay=per-window`);
+      const reusablePct = budgetSnap.storageSize > 0 ? 100 * R0 / budgetSnap.storageSize : 0;
+      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} C=${compression.toFixed(3)} docs=${nDocs} batches=${allBatches.length} packedCover=${Math.round(target)} allocCover=${Math.round(allocCover)} (compressed, nPages×leaf/C) reusable=${R0} (${reusablePct.toFixed(1)}% of storageSize) dirtyBudgetRatio=${frac} windowCap=${Math.round(window0)} (${(100 * frac).toFixed(0)}% of R) estWindows≈${estWindows} writeConcurrency=${conc} updateDelayMs=${Number(updateDelayMs) > 0 ? +updateDelayMs : 0} replay=per-window`);
 
       const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
 
@@ -1912,7 +1922,7 @@
             const b = allBatches[bi++];
             batches.push(b);
             windowPacked += b.packed || 0;
-            windowAlloc += batchAllocBytes(b, leaf, fillRatio);
+            windowAlloc += batchAllocBytes(b, leaf, fillRatio, compression);
             windowN += b.n || 0;
          }
          cycle++;
@@ -1973,15 +1983,22 @@
 
    // strategy 'naturalReply': naturalWindow cover, then parkedWindowReplay
    // (per-window rewrite 1, conditional replay). Same loop as doubleParked.
+   // passes = how many unique $natural covers; each pass rescans (new RecordIds).
    async function naturalReplyMain() {
       const srcSnap = collSnapshot();
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
       const cal = await calibrateTFR();
-      const nDocs = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
       const dir = Number(naturalDir) >= 0 ? 1 : -1;
-      console.log(`naturalReply: scanning ${nDocs} docs $natural:${dir} $bsonSize (full cover, per-window replay)`);
-      const allBatches = await naturalPackedBatches(cal, nDocs, dir);
-      await parkedWindowReplay('naturalReply', cal, allBatches, nDocs);
+      const coverPasses = Number(passes) > 0 ? Math.ceil(passes) : 1;
+      for (let pass = 1; pass <= coverPasses; pass++) {
+         const snap = pass === 1 ? srcSnap : collSnapshot();
+         const nDocs = snap.objects || pageStats(snap).documentCount || 0;
+         const label = coverPasses > 1 ? `naturalReply ${pass}/${coverPasses}` : 'naturalReply';
+         console.log(`naturalReply: pass ${pass}/${coverPasses} scanning ${nDocs} docs $natural:${dir} $bsonSize (full cover, per-window replay)`);
+         const allBatches = await naturalPackedBatches(cal, nDocs, dir);
+         await parkedWindowReplay(label, cal, allBatches, nDocs);
+         if (pass < coverPasses) await waitForCheckpoint({ "settle": true });
+      }
    }
 
    function wtCheckpoint() {
