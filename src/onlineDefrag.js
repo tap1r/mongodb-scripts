@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "1.0.2"
+ *  Version: "1.0.3"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -47,7 +47,7 @@
  */
 
 (() => { // mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "1.0.2" };
+   const __script = { "name": "onlineDefrag.js", "version": "1.0.3" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -200,19 +200,7 @@
    async function* aggDocs(pipeline, opts) {
       const cursor = namespace.aggregate(pipeline, opts);
       try {
-         if (typeof cursor[Symbol.asyncIterator] === 'function') {
-            for await (const doc of cursor) yield doc;
-            return;
-         }
-         for (;;) {
-            let has = typeof cursor.hasNext === 'function' ? cursor.hasNext() : false;
-            if (has && typeof has.then === 'function') has = await has;
-            if (!has) break;
-            let doc = cursor.next();
-            if (doc && typeof doc.then === 'function') doc = await doc;
-            if (doc == null) break;
-            yield doc;
-         }
+         for await (const doc of cursor) yield doc;
       } finally {
          try { cursor.close(); } catch(_) { /* exhausted or already closed */ }
       }
@@ -568,11 +556,10 @@
       return fallback;
    }
 
-   function curatorState(cal, maxDocs) {
+   function logCurator(kind, cal, extra) {
       const b = packedPageBudget(cal);
-      return Object.assign({}, b, {
-         "state": { "batchSize": b.packedBudget, "maxDocs": maxDocs }
-      });
+      console.log(`${kind} curator: ${extra} packedBudget=${b.packedBudget} bsonCap≈${Math.round(b.bsonCap)} leaf=${b.leaf} pageFillRatio=${b.fillRatio} compression=${b.compression.toFixed(3)}`);
+      return b;
    }
 
    async function* naturalPackedBatches(cal, maxDocs, naturalDir = -1) {
@@ -598,23 +585,13 @@
       if (last) yield last;
    }
 
-   function startNaturalWindowCurator(cal, maxDocs) {
-      // Stream $natural first-fit batches into density writes. $limit nDocs
-      // with dir=1 excludes concurrent tail inserts; dir=-1 is newest n.
-      const { packedBudget, bsonCap, leaf, fillRatio, compression, state } = curatorState(cal, maxDocs);
-      const dir = Number(naturalDir) >= 0 ? 1 : -1;
-      console.log(`naturalWindow curator: $natural:${dir} scan nDocs=${maxDocs} packedBudget=${packedBudget} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)}`);
-      const gen = naturalPackedBatches(cal, maxDocs, dir);
-      return { "state": state, "gen": gen, "packedBudget": packedBudget, "bsonCap": bsonCap };
-   }
-
    function startQuantileCurator(cal, maxDocs) {
       // Stream first-fit _id ranges while Σ ($bsonSize / C_mode) ≤ packedBudget.
       // $sort _id first (IXSCAN), then $limit, then $bsonSize.
-      const { compression, packedBudget, bsonCap, leaf, fillRatio, state } = curatorState(cal, maxDocs);
+      const { packedBudget } = packedPageBudget(cal);
       const nModes = Array.isArray(cal?.modes) ? cal.modes.length : 0;
-      console.log(`quantile curator: first-fit packedBudget=${packedBudget} bsonCap≈${Math.round(bsonCap)} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)} modes=${nModes >= 2 ? nModes : 'unimodal'}`);
-      async function* gen() {
+      logCurator('quantile', cal, `first-fit modes=${nModes >= 2 ? nModes : 'unimodal'}`);
+      return (async function*() {
          const pipeline = [
             { "$sort": { "_id": 1 } },
             { "$limit": Math.max(1, maxDocs) },
@@ -635,17 +612,16 @@
          }
          const last = fit.flush();
          if (last) yield emit(last);
-      }
-      return { "state": state, "gen": gen(), "packedBudget": packedBudget, "bsonCap": bsonCap };
+      })();
    }
 
    // strategy 'shapeQuantile': first-fit packed $in per server-side hash of
    // sorted top-level keys ($toHashedIndexKey). Client sees {_id, bson, shape}.
    function startShapeQuantileCurator(cal, maxDocs) {
-      const { packedBudget, bsonCap, leaf, fillRatio, compression, state } = curatorState(cal, maxDocs);
+      const { packedBudget } = packedPageBudget(cal);
       const nShapes = Array.isArray(cal?.shapes) ? cal.shapes.length : 0;
-      console.log(`shapeQuantile curator: first-fit packedBudget=${packedBudget} bsonCap≈${Math.round(bsonCap)} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)} shapes=${nShapes || 'unmeasured'}`);
-      async function* gen() {
+      logCurator('shapeQuantile', cal, `first-fit shapes=${nShapes || 'unmeasured'}`);
+      return (async function*() {
          const fits = new Map();
          const pending = [];
          const fitFor = (sig) => {
@@ -674,13 +650,7 @@
             const last = fit.flush();
             if (last) yield emit(last);
          }
-      }
-      return {
-         "state": state,
-         "gen": gen(),
-         "packedBudget": packedBudget,
-         "bsonCap": bsonCap
-      };
+      })();
    }
 
    function wtCheckpoint() {
@@ -1304,8 +1274,7 @@
    async function packedWriteMain(label, startCuratorFn) {
       const { cal, nDocs } = await densityStart();
       const batch = tfrOverride > 0 ? tfrOverride : cal.tfr;
-      let walk = startCuratorFn(cal, nDocs);
-      if (walk && typeof walk.then === 'function') walk = await walk;
+      const gen = startCuratorFn(cal, nDocs);
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
       const tune = dirtyTune();
       const budgetSnap = collSnapshot();
@@ -1330,7 +1299,7 @@
                kickCollStats();
             }
          });
-         const { value, done } = await walk.gen.next();
+         const { value, done } = await gen.next();
          if (done || value == null) break;
          pass++;
          const nextBytes = (Number(value.bson) > 0 || Number(value.packed) > 0)
@@ -1507,7 +1476,11 @@
    try {
       preflightDropTmpSamples();
       const packedCurators = {
-         "naturalWindow": (cal, nDocs) => startNaturalWindowCurator(cal, nDocs),
+         "naturalWindow": (cal, nDocs) => {
+            const dir = Number(naturalDir) >= 0 ? 1 : -1;
+            logCurator('naturalWindow', cal, `$natural:${dir} scan nDocs=${nDocs}`);
+            return naturalPackedBatches(cal, nDocs, dir);
+         },
          "quantile": (cal, nDocs) => startQuantileCurator(cal, nDocs),
          "shapeQuantile": (cal, nDocs) => startShapeQuantileCurator(cal, nDocs)
       };
