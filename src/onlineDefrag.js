@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "1.0.0"
+ *  Version: "1.0.1"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,7 +19,7 @@
  *    $collStats; set to pin (default was 0.9).
  *  - Other knobs: writeConcurrency (default 8), dirtyBudgetRatio (default 0.2),
  *    passes, naturalDir (1 | -1), updateDelayMs, updatesSoft, updatesHard,
- *    ignoreCheckpoint, curatorBatchSize, shuffleSampleSize,
+ *    ignoreCheckpoint, tfrOverride (alias curatorBatchSize), shuffleSampleSize,
  *    maxLagSeconds, checkpointTimeoutMs.
  *
  *  TODOs:
@@ -47,7 +47,7 @@
  */
 
 (() => { // mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "1.0.0" };
+   const __script = { "name": "onlineDefrag.js", "version": "1.0.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -99,6 +99,8 @@
                         : (Number(o.lowStressDirtyHard) > 0 ? +o.lowStressDirtyHard : 0.08);
       const pageFillExplicit = Object.prototype.hasOwnProperty.call(o, 'pageFillRatio')
          && Number(o.pageFillRatio) > 0;
+      const tfrOverride = Number(o.tfrOverride) > 0 ? Math.ceil(o.tfrOverride)
+                        : (Number(o.curatorBatchSize) > 0 ? Math.ceil(o.curatorBatchSize) : 0);
       return Object.assign({}, o, {
          "strategy": strategy,
          "writeConcurrency": writeConcurrency,
@@ -107,7 +109,8 @@
          "coverPassesOpt": coverPassesOpt,
          "updatesSoft": updatesSoft,
          "updatesHard": updatesHard,
-         "pageFillExplicit": pageFillExplicit
+         "pageFillExplicit": pageFillExplicit,
+         "tfrOverride": tfrOverride
       });
    }
 
@@ -120,7 +123,7 @@
       "updatesHard": updatesHard,
       "dirtyBudgetRatio": dirtyBudgetRatio = 0.2,
       "writeConcurrency": writeConcurrency,
-      "curatorBatchSize": curatorBatchSize,
+      "tfrOverride": tfrOverride,
       "maxLagSeconds": maxLagSeconds = 10,
       "checkpointTimeoutMs": checkpointTimeoutMs,
       "ignoreCheckpoint": ignoreCheckpoint = false,
@@ -180,6 +183,18 @@
          "comment": comment,
          ...extra
       };
+   }
+
+   function bsonProjectStage() {
+      return { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } };
+   }
+
+   function scanOpts(comment, hint) {
+      return aggOpts(comment, {
+         "hint": hint,
+         "allowDiskUse": true,
+         "cursor": { "batchSize": 256 }
+      });
    }
 
    async function* aggDocs(pipeline, opts) {
@@ -547,6 +562,13 @@
       return fallback;
    }
 
+   function curatorState(cal, maxDocs) {
+      const b = packedPageBudget(cal);
+      return Object.assign({}, b, {
+         "state": { "batchSize": b.packedBudget, "maxDocs": maxDocs, "taken": 0 }
+      });
+   }
+
    async function* naturalPackedBatches(cal, maxDocs, naturalDir = -1) {
       // Record-store cover in $natural order; $limit then $bsonSize on the
       // server. Yield a first-fit $in when packedBudget fills. $limit maxDocs
@@ -555,14 +577,10 @@
       const dir = Number(naturalDir) >= 0 ? 1 : -1;
       const pipeline = [
          { "$limit": Math.max(1, maxDocs) },
-         { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } }
+         bsonProjectStage()
       ];
       const fit = firstFit(packedBudget);
-      for await (const doc of aggDocs(pipeline, aggOpts(`natural ${dir} $bsonSize`, {
-         "hint": { "$natural": dir },
-         "allowDiskUse": true,
-         "cursor": { "batchSize": 256 }
-      }))) {
+      for await (const doc of aggDocs(pipeline, scanOpts(`natural ${dir} $bsonSize`, { "$natural": dir }))) {
          const bson = +doc.bson || 0;
          if (bson < 1) continue;
          const packed = packedOf(bson, cal);
@@ -577,36 +595,24 @@
    function startNaturalWindowCurator(cal, maxDocs) {
       // Stream $natural first-fit batches into density writes. $limit nDocs
       // with dir=1 excludes concurrent tail inserts; dir=-1 is newest n.
-      const { packedBudget, bsonCap, leaf, fillRatio, compression } = packedPageBudget(cal);
+      const { packedBudget, bsonCap, leaf, fillRatio, compression, state } = curatorState(cal, maxDocs);
       const dir = Number(naturalDir) >= 0 ? 1 : -1;
       console.log(`naturalWindow curator: $natural:${dir} scan nDocs=${maxDocs} packedBudget=${packedBudget} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)}`);
-      const state = { "batchSize": packedBudget, "maxDocs": maxDocs, "taken": 0 };
-      async function* gen() {
-         for await (const b of naturalPackedBatches(cal, maxDocs, dir)) {
-            state.taken += b.n || 0;
-            yield { "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson };
-         }
-      }
-      return {
-         "state": state,
-         "gen": gen(),
-         "packedBudget": packedBudget,
-         "bsonCap": bsonCap
-      };
+      const gen = naturalPackedBatches(cal, maxDocs, dir);
+      return { "state": state, "gen": gen, "packedBudget": packedBudget, "bsonCap": bsonCap };
    }
 
    function startQuantileCurator(cal, maxDocs) {
       // Stream first-fit _id ranges while Σ ($bsonSize / C_mode) ≤ packedBudget.
       // $sort _id first (IXSCAN), then $limit, then $bsonSize.
-      const { compression, packedBudget, bsonCap, leaf, fillRatio } = packedPageBudget(cal);
+      const { compression, packedBudget, bsonCap, leaf, fillRatio, state } = curatorState(cal, maxDocs);
       const nModes = Array.isArray(cal?.modes) ? cal.modes.length : 0;
       console.log(`quantile curator: first-fit packedBudget=${packedBudget} bsonCap≈${Math.round(bsonCap)} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)} modes=${nModes >= 2 ? nModes : 'unimodal'}`);
-      const state = { "batchSize": packedBudget, "maxDocs": maxDocs, "taken": 0 };
       async function* gen() {
          const pipeline = [
             { "$sort": { "_id": 1 } },
             { "$limit": Math.max(1, maxDocs) },
-            { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } }
+            bsonProjectStage()
          ];
          const fit = firstFit(packedBudget);
          const emit = (row) => {
@@ -616,11 +622,7 @@
                "n": row.n, "packed": row.packed, "bson": row.bson
             };
          };
-         for await (const doc of aggDocs(pipeline, aggOpts("quantile first-fit packed ranges", {
-            "hint": { "_id": 1 },
-            "allowDiskUse": true,
-            "cursor": { "batchSize": 256 }
-         }))) {
+         for await (const doc of aggDocs(pipeline, scanOpts("quantile first-fit packed ranges", { "_id": 1 }))) {
             const bson = +doc.bson || 0;
             const packed = packedOf(bson, cal);
             const closed = fit.offer(packed, () => ({ "min": doc._id, "max": doc._id, "n": 0, "bson": 0, "packed": 0 }));
@@ -637,10 +639,9 @@
    // strategy 'shapeQuantile': first-fit packed $in per server-side hash of
    // sorted top-level keys ($toHashedIndexKey). Client sees {_id, bson, shape}.
    function startShapeQuantileCurator(cal, maxDocs) {
-      const { packedBudget, bsonCap, leaf, fillRatio, compression } = packedPageBudget(cal);
+      const { packedBudget, bsonCap, leaf, fillRatio, compression, state } = curatorState(cal, maxDocs);
       const nShapes = Array.isArray(cal?.shapes) ? cal.shapes.length : 0;
       console.log(`shapeQuantile curator: first-fit packedBudget=${packedBudget} bsonCap≈${Math.round(bsonCap)} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)} shapes=${nShapes || 'unmeasured'}`);
-      const state = { "batchSize": packedBudget, "maxDocs": maxDocs, "taken": 0 };
       async function* gen() {
          const fits = new Map();
          const pending = [];
@@ -659,11 +660,7 @@
          for await (const doc of aggDocs([
             { "$limit": Math.max(1, maxDocs) },
             shapeProjectStage()
-         ], aggOpts("shapeQuantile $bsonSize $toHashedIndexKey", {
-            "hint": { "_id": 1 },
-            "allowDiskUse": true,
-            "cursor": { "batchSize": 256 }
-         }))) {
+         ], scanOpts("shapeQuantile $bsonSize $toHashedIndexKey", { "_id": 1 }))) {
             const sig = keysSig(doc.shape);
             const bson = +doc.bson || 0;
             const packed = bson / Math.max(shapeCompression(sig, cal), 0.01);
@@ -913,12 +910,50 @@
       return typeof name === 'string' && (name === prefix || name.startsWith(prefix + '_'));
    }
 
-   function tmpSampleName() {
+   function tmpOidHex() {
       const oid = new ObjectId();
-      const hex = typeof oid.toHexString === 'function'
-                ? oid.toHexString()
-                : String(oid).replace(/[^a-f0-9]/gi, '').slice(-24);
-      return `${tmpSamplePrefix()}_${hex}`;
+      return typeof oid.toHexString === 'function'
+           ? oid.toHexString()
+           : String(oid).replace(/[^a-f0-9]/gi, '').slice(-24);
+   }
+
+   function tmpSampleName() {
+      return `${tmpSamplePrefix()}_${tmpOidHex()}`;
+   }
+
+   function createPackedTemp(tmpDb, suffix, compressor) {
+      const name = `${tmpSamplePrefix()}_${suffix}_${tmpOidHex()}`;
+      try {
+         tmpDb.createCollection(name, {
+            "storageEngine": { "wiredTiger": { "configString": `block_compressor=${compressor}` } }
+         });
+      } catch(_) {
+         tmpDb.createCollection(name);
+      }
+      return name;
+   }
+
+   function packedTempStats(name, fallbackC) {
+      const packed = $collStats(tmpStatsDbName, name) || {};
+      const { indexes, ...stats } = packed;
+      const ps = pageStats(stats);
+      const live = Math.max(0, (stats.storageSize || 0) - (stats.freeStorageSize || 0));
+      const C = live > 0 && (stats.dataSize || 0) > 0 ? stats.dataSize / live : fallbackC;
+      return {
+         "compression": Number(C) > 0 ? C : fallbackC,
+         "tfr": ps.pageFillActual,
+         "avgObjSize": stats.avgObjSize,
+         "objects": ps.documentCount
+      };
+   }
+
+   async function settlePackedTemps(created, label) {
+      console.log(`calibrate ${label}: waiting for checkpoint before packed $collStats`);
+      await waitForCheckpoint({ "settle": true, "force": true });
+      if (!wtCheckpoint().available && created[0]) {
+         console.log(`M0: polling ${label} temps for packed $collStats`);
+         await waitForPackedStats(tmpStatsDbName, created[0]);
+      }
    }
 
    function mergeInto(srcColl, stages, intoName, comment, whenMatched = 'keepExisting') {
@@ -1102,18 +1137,7 @@
       try {
          for (let k = 0; k < modes.length; k++) {
             const m = modes[k];
-            const oid = new ObjectId();
-            const hex = typeof oid.toHexString === 'function'
-                      ? oid.toHexString()
-                      : String(oid).replace(/[^a-f0-9]/gi, '').slice(-24);
-            const name = `${tmpSamplePrefix()}_m${k}_${hex}`;
-            try {
-               tmpDb.createCollection(name, {
-                  "storageEngine": { "wiredTiger": { "configString": `block_compressor=${compressor}` } }
-               });
-            } catch(_) {
-               tmpDb.createCollection(name);
-            }
+            const name = createPackedTemp(tmpDb, `m${k}`, compressor);
             created.push(name);
             const C0 = Math.max(Number(fallbackC) > 0 ? +fallbackC : 1, 0.01);
             const packedExpr = { "$divide": [{ "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] }, C0] };
@@ -1127,22 +1151,9 @@
                ] } } }
             ], name, `${strategy} calibrate mode ${k} $merge`, 'replace');
          }
-         console.log('calibrate modes: waiting for checkpoint before per-mode $collStats');
-         await waitForCheckpoint({ "settle": true, "force": true });
-         if (!wtCheckpoint().available && created[0]) {
-            console.log('M0: polling mode temps for packed $collStats');
-            await waitForPackedStats(tmpStatsDbName, created[0]);
-         }
+         await settlePackedTemps(created, 'modes');
          for (let k = 0; k < modes.length; k++) {
-            const packed = $collStats(tmpStatsDbName, created[k]) || {};
-            const { indexes, ...stats } = packed;
-            const ps = pageStats(stats);
-            const live = Math.max(0, (stats.storageSize || 0) - (stats.freeStorageSize || 0));
-            const C = live > 0 && (stats.dataSize || 0) > 0 ? stats.dataSize / live : fallbackC;
-            modes[k].compression = Number(C) > 0 ? C : fallbackC;
-            modes[k].tfr = ps.pageFillActual;
-            modes[k].avgObjSize = stats.avgObjSize;
-            modes[k].objects = ps.documentCount;
+            Object.assign(modes[k], packedTempStats(created[k], fallbackC));
             const close = k === modes.length - 1 ? ']' : ')';
             console.log(`calibrate mode ${k} packed=[${Math.round(modes[k].min)}, ${Math.round(modes[k].max)}${close} n=${modes[k].objects} C=${modes[k].compression.toFixed(3)} tfr=${modes[k].tfr} avgObjSize=${modes[k].avgObjSize}`);
          }
@@ -1180,47 +1191,21 @@
    }
 
    async function measureShapeCompression(tmpDb, srcName, shapes, compressor, fallbackC) {
-      const maxMeasure = 12;
-      const todo = shapes.slice(0, maxMeasure);
+      const todo = shapes.slice(0, 12);
       const created = [];
       try {
          for (let k = 0; k < todo.length; k++) {
-            const s = todo[k];
-            const oid = new ObjectId();
-            const hex = typeof oid.toHexString === 'function'
-                      ? oid.toHexString()
-                      : String(oid).replace(/[^a-f0-9]/gi, '').slice(-24);
-            const name = `${tmpSamplePrefix()}_s${k}_${hex}`;
-            try {
-               tmpDb.createCollection(name, {
-                  "storageEngine": { "wiredTiger": { "configString": `block_compressor=${compressor}` } }
-               });
-            } catch(_) {
-               tmpDb.createCollection(name);
-            }
+            const name = createPackedTemp(tmpDb, `s${k}`, compressor);
             created.push(name);
             mergeInto(tmpDb.getCollection(srcName), [
                { "$set": { "shape": shapeProjectStage().$project.shape } },
-               { "$match": { "shape": s.hash } },
+               { "$match": { "shape": todo[k].hash } },
                { "$unset": "shape" }
             ], name, `${strategy} calibrate shape ${k} $merge`, 'replace');
          }
-         console.log('calibrate shapes: waiting for checkpoint before per-shape $collStats');
-         await waitForCheckpoint({ "settle": true, "force": true });
-         if (!wtCheckpoint().available && created[0]) {
-            console.log('M0: polling shape temps for packed $collStats');
-            await waitForPackedStats(tmpStatsDbName, created[0]);
-         }
+         await settlePackedTemps(created, 'shapes');
          for (let k = 0; k < todo.length; k++) {
-            const packed = $collStats(tmpStatsDbName, created[k]) || {};
-            const { indexes, ...stats } = packed;
-            const ps = pageStats(stats);
-            const live = Math.max(0, (stats.storageSize || 0) - (stats.freeStorageSize || 0));
-            const C = live > 0 && (stats.dataSize || 0) > 0 ? stats.dataSize / live : fallbackC;
-            todo[k].compression = Number(C) > 0 ? C : fallbackC;
-            todo[k].tfr = ps.pageFillActual;
-            todo[k].avgObjSize = stats.avgObjSize;
-            todo[k].objects = ps.documentCount;
+            Object.assign(todo[k], packedTempStats(created[k], fallbackC));
             console.log(`calibrate shape ${k} h=${todo[k].sig} n=${todo[k].objects} C=${todo[k].compression.toFixed(3)} tfr=${todo[k].tfr} avgObjSize=${todo[k].avgObjSize}`);
          }
          return shapes;
@@ -1328,9 +1313,7 @@
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
       const cal = await calibrateTFR();
       const nDocs = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
-      const batch = Object.prototype.hasOwnProperty.call(userOptions, 'curatorBatchSize') && Number(curatorBatchSize) > 0
-                  ? Math.ceil(+curatorBatchSize)
-                  : cal.tfr;
+      const batch = tfrOverride > 0 ? tfrOverride : cal.tfr;
       let walk = startCuratorFn(cal, nDocs);
       if (walk && typeof walk.then === 'function') walk = await walk;
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
