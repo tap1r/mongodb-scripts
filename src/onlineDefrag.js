@@ -1,30 +1,28 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.5.8"
+ *  Version: "0.5.9"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
- *  Legacy archive line: v0.1.4 is the snapshot for this script. mongosh-only
- *  (async IIFE, process/fs; incompatible with legacy mongo).
- *  Still the demarked version for the whole-tree freeze. Further feature
- *  work targets mongosh; see ROADMAP.md → Legacy mongo shell retirement.
- *
  *  Notes:
- *  - mongosh only. Do not top-level-await this IIFE (rewriter SyntaxError).
- *  - --eval must use var (not let/const). Do not declare dbName/collName/defragOptions
- *    in this file — IIFE const would shadow the overlay.
- *  - storage snapshots use mdblib $collStats (MDBLIB, ~/.mongodb, or cwd).
+ *  - mongosh only. Do not top-level-await this file.
+ *  - --eval must use var (not let/const) for dbName, collName, defragOptions.
+ *  - Requires mdblib.js on $MDBLIB, ~/.mongodb, or cwd.
  *  - strategy: naturalReply (default) | naturalWindow | quantile | shapeQuantile
- *  - Aliases: naturalReplay → naturalReply; doubleParked → naturalReply + naturalDir:-1;
- *    concurrentUpdates → writeConcurrency when writeConcurrency is omitted;
+ *  - Aliases: naturalReplay → naturalReply; doubleParked → naturalReply with
+ *    naturalDir:-1; concurrentUpdates → writeConcurrency;
  *    lowStressDirtyMax/Hard → updatesSoft/updatesHard.
- *  - defragOptions.replay: 'onExtend' (default) | 'never' | 'always' (naturalReply)
- *  - naturalWindow freezes a $natural cover then density-writes (not a live stream).
+ *  - defragOptions.replay: 'onExtend' (default) | 'never' | 'always'
+ *    (naturalReply only)
+ *  - pageFillRatio: omit to autotune from the packed sample's settled
+ *    $collStats; set to pin (default was 0.9).
+ *  - Other knobs: writeConcurrency (default 8), dirtyBudgetRatio (default 0.2),
+ *    passes, naturalDir (1 | -1), updateDelayMs, updatesSoft, updatesHard,
+ *    ignoreCheckpoint, curatorBatchSize, shuffleSampleSize,
+ *    maxLagSeconds, checkpointTimeoutMs.
  *
  *  TODOs:
- *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
- *    instead of a fixed 0.9 — next discussion
  *  - compact after a density pass to reclaim G / relocate the geometric tail.
  *    dirtyBudgetRatio is a per-generation fraction of R, not a target reuse%.
  */
@@ -33,12 +31,12 @@
 
 /*
  *  Example:
- *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection';" [-f|--file] </path/to/>onlineDefrag.js
- *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReplay', concurrentUpdates: 32, updateDelayMs: 0, replay: 'onExtend' };" [-f|--file] </path/to/>onlineDefrag.js
- *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReply', naturalDir: -1 };" [-f|--file] </path/to/>onlineDefrag.js
- *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalWindow' };" [-f|--file] </path/to/>onlineDefrag.js
- *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'quantile' };" [-f|--file] </path/to/>onlineDefrag.js
- *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'shapeQuantile' };" [-f|--file] </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection';" -f </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReplay', concurrentUpdates: 32, updateDelayMs: 0, replay: 'onExtend' };" -f </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReply', naturalDir: -1 };" -f </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalWindow' };" -f </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'quantile' };" -f </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'shapeQuantile' };" -f </path/to/>onlineDefrag.js
  *
  *  We use 'var' to interoperate with mongosh's sloppy mode
  */
@@ -48,8 +46,8 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-(() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.5.8" };
+(() => { // mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
+   const __script = { "name": "onlineDefrag.js", "version": "0.5.9" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -70,7 +68,8 @@
    const nsColl = typeof collName === 'undefined' ? 'collection' : collName;
    const namespace = db.getSiblingDB(nsDb).getCollection(nsColl);
 
-   // Caller: var defragOptions = { ... } (--eval or REPL). Do not declare or assign it in this file.
+   // Caller: var defragOptions = { ... } (--eval or REPL). Do not declare
+   // dbName/collName/defragOptions here — IIFE const would shadow the overlay.
    const userOptions = typeof defragOptions === 'undefined' ? {} : defragOptions;
 
    const STRATEGIES = ['naturalReply', 'naturalWindow', 'quantile', 'shapeQuantile'];
@@ -98,6 +97,8 @@
                         : (Number(o.lowStressDirtyMax) > 0 ? +o.lowStressDirtyMax : 0.07);
       const updatesHard = Number(o.updatesHard) > 0 ? +o.updatesHard
                         : (Number(o.lowStressDirtyHard) > 0 ? +o.lowStressDirtyHard : 0.08);
+      const pageFillExplicit = Object.prototype.hasOwnProperty.call(o, 'pageFillRatio')
+         && Number(o.pageFillRatio) > 0;
       return Object.assign({}, o, {
          "strategy": strategy,
          "writeConcurrency": writeConcurrency,
@@ -105,7 +106,8 @@
          "naturalDir": naturalDir,
          "coverPassesOpt": coverPassesOpt,
          "updatesSoft": updatesSoft,
-         "updatesHard": updatesHard
+         "updatesHard": updatesHard,
+         "pageFillExplicit": pageFillExplicit
       });
    }
 
@@ -113,6 +115,7 @@
       "strategy": strategy,
       "shuffleSampleSize": shuffleSampleSize,
       "pageFillRatio": pageFillRatio = 0.9,
+      "pageFillExplicit": pageFillExplicit,
       "updatesSoft": updatesSoft,
       "updatesHard": updatesHard,
       "dirtyBudgetRatio": dirtyBudgetRatio = 0.2,
@@ -372,11 +375,25 @@
       if (refreshSnap && (waited.completed || !waited.available)) refreshReusableCap(window, 'reusable budget', null, cal);
    }
 
+   function autotunePageFillRatio(ps, compression, avgObjSize) {
+      // Packed sample: TFR docs/leaf × avg / C = packed bytes per estimated
+      // leaf. Ratio = that / leaf_page_max, clamped to the WT split_pct band.
+      const leaf = Number(ps?.dataPageSize) > 0 ? +ps.dataPageSize : 32 * 1024;
+      const tfr = Number(ps?.pageFillActual) > 0 ? +ps.pageFillActual : 0;
+      const C = Math.max(Number(compression) > 0 ? +compression : 1, 0.01);
+      const avg = Number(avgObjSize) > 0 ? +avgObjSize : 256;
+      if (!(tfr > 1) || !(ps.nPages > 1)) return 0.9;
+      const observed = (tfr * avg) / (C * leaf);
+      if (!(observed > 0)) return 0.9;
+      return Math.min(0.95, Math.max(0.5, observed));
+   }
+
    function packedPageBudget(cal) {
       // First-fit fill: Σ ($bsonSize / C_mode) ≤ floor(pageFillRatio × leaf).
       // C_mode from calibrate size-band temps, else global dataSize/live.
       const leaf = cal?.ps?.dataPageSize || 32 * 1024;
-      const fillRatio = Number(pageFillRatio) > 0 ? +pageFillRatio : 0.9;
+      const fillRatio = Number(cal?.pageFillRatio) > 0 ? +cal.pageFillRatio
+                      : (Number(pageFillRatio) > 0 ? +pageFillRatio : 0.9);
       const compression = Number(cal?.compression) > 0 ? +cal.compression : 1;
       const packedBudget = Math.max(1, Math.floor(fillRatio * leaf));
       const bsonCap = packedBudget * Math.max(compression, 0.01);
@@ -1219,7 +1236,11 @@
          const live = Math.max(0, (src.storageSize || 0) - (src.freeStorageSize || 0));
          const compression = live > 0 && (src.dataSize || 0) > 0 ? src.dataSize / live : 1;
          console.log(`calibrate: avgObjSize=${avg} >= leaf=${leaf}; TFR=1 skip sample and bin analysis`);
-         return { "tfr": 1, "compression": compression, "avgObjSize": avg, "ps": fill, "modes": [], "shapes": [] };
+         return {
+            "tfr": 1, "compression": compression, "avgObjSize": avg, "ps": fill,
+            "modes": [], "shapes": [],
+            "pageFillRatio": pageFillExplicit ? +pageFillRatio : 0.9
+         };
       }
       const nBins = packedCalibBins();
       const packedCap = Math.max(1, Math.floor((Number(pageFillRatio) > 0 ? +pageFillRatio : 0.9) * leaf));
@@ -1279,14 +1300,16 @@
          const ps = pageStats(stats);
          const live = Math.max(0, (stats.storageSize || 0) - (stats.freeStorageSize || 0));
          const compression = live > 0 ? (stats.dataSize || 0) / live : 1;
-         const ratio = Number(pageFillRatio) > 0 ? +pageFillRatio : 1;
-         const leafFill = Math.max(1, Math.ceil((ratio * (ps.dataPageSize || leaf) * compression) / (stats.avgObjSize > 0 ? stats.avgObjSize : avg)));
          let tfr = Math.max(1, ps.pageFillActual);
+         const tunedFill = pageFillExplicit
+                         ? +pageFillRatio
+                         : autotunePageFillRatio(ps, compression, stats.avgObjSize);
+         const leafFill = Math.max(1, Math.ceil((tunedFill * (ps.dataPageSize || leaf) * compression) / (stats.avgObjSize > 0 ? stats.avgObjSize : avg)));
          if (ps.nPages <= 1) {
             tfr = leafFill;
             console.log(`packed nPages=${ps.nPages} (unsettled or tiny file); TFR from leaf fill = ${tfr}`);
          }
-         console.log(`calibrated TFR=${tfr} (packedFill) compression=${compression.toFixed(3)} packedFill=${ps.pageFillActual} packedPages=${ps.nPages} objects=${ps.documentCount} avgObjSize=${stats.avgObjSize} storageSize=${stats.storageSize}`);
+         console.log(`calibrated TFR=${tfr} (packedFill) compression=${compression.toFixed(3)} pageFillRatio=${tunedFill.toFixed(3)}${pageFillExplicit ? ' (pinned)' : ' (packed sample)'} packedFill=${ps.pageFillActual} packedPages=${ps.nPages} objects=${ps.documentCount} avgObjSize=${stats.avgObjSize} storageSize=${stats.storageSize}`);
          let modes = [];
          let shapes = [];
          const wantShapes = strategy === 'shapeQuantile';
@@ -1297,7 +1320,7 @@
                   shapes = await measureShapeCompression(tmpDb, tmpName, shapes, compressor, compression);
                }
             } else {
-               modes = detectSizeModes(tmpDb, tmpName, compression, Math.floor((Number(pageFillRatio) > 0 ? +pageFillRatio : 0.9) * (ps.dataPageSize || 32 * 1024)));
+               modes = detectSizeModes(tmpDb, tmpName, compression, Math.floor(tunedFill * (ps.dataPageSize || 32 * 1024)));
                if (modes.length >= 2) {
                   modes = await measureModeCompression(tmpDb, tmpName, modes, compressor, compression);
                }
@@ -1307,7 +1330,7 @@
             modes = [];
             shapes = [];
          }
-         return { "tfr": tfr, "compression": compression, "avgObjSize": stats.avgObjSize, "ps": ps, "modes": modes, "shapes": shapes };
+         return { "tfr": tfr, "compression": compression, "avgObjSize": stats.avgObjSize, "ps": ps, "modes": modes, "shapes": shapes, "pageFillRatio": tunedFill };
       } finally {
          dropTmpSample(tmpDb, tmpName, 'calibrate');
       }
@@ -1334,7 +1357,8 @@
       const budget0 = dirtyBudgetCap(budgetSnap, cal);
       const packedCover = estimateRewriteBytes(nDocs, cal);
       const packedPctR = budget0.R > 0 ? 100 * packedCover / budget0.R : 0;
-      console.log(`strategy: ${label} TFR=${cal.tfr} batch=${batch} buckets=${streaming ? 'first-fit' : totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(tune.soft * 100).toFixed(2)}% hard ${(tune.hard * 100).toFixed(2)}% C=${budget0.compression.toFixed(3)} pageFill=${Number(pageFillRatio) > 0 ? +pageFillRatio : 0.9} dirtyBudgetRatio=${budget0.frac} ${formatDirtyBudget(budget0)} packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${budget0.live} storageSize=${budget0.storageSize}`);
+      const fillRatio = packedPageBudget(cal).fillRatio;
+      console.log(`strategy: ${label} TFR=${cal.tfr} batch=${batch} buckets=${streaming ? 'first-fit' : totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(tune.soft * 100).toFixed(2)}% hard ${(tune.hard * 100).toFixed(2)}% C=${budget0.compression.toFixed(3)} pageFill=${fillRatio} dirtyBudgetRatio=${budget0.frac} ${formatDirtyBudget(budget0)} packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${budget0.live} storageSize=${budget0.storageSize}`);
 
       const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
 
@@ -1358,7 +1382,7 @@
          if (done || value == null) break;
          pass++;
          const nextBytes = (Number(value.bson) > 0 || Number(value.packed) > 0)
-                         ? batchAllocBytes(value, (cal.ps && cal.ps.dataPageSize) || 32 * 1024, pageFillRatio, cal.compression)
+                         ? batchAllocBytes(value, (cal.ps && cal.ps.dataPageSize) || 32 * 1024, fillRatio, cal.compression)
                          : estimateRewriteBytes(value.n || batch, cal);
          await ensureReusableRoom(writeWindow, nextBytes, { "refreshSnap": true, "beforeWait": drainWrites, "cal": cal });
          writeWindow.bytes += nextBytes;
