@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "1.0.1"
+ *  Version: "1.0.2"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -47,7 +47,7 @@
  */
 
 (() => { // mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "1.0.1" };
+   const __script = { "name": "onlineDefrag.js", "version": "1.0.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -218,15 +218,20 @@
       }
    }
 
+   function liveBytes(stats = {}) {
+      const sz = Number(stats.storageSize) > 0 ? +stats.storageSize : 0;
+      const Rraw = +stats.freeStorageSize;
+      const R = Number.isFinite(Rraw) && Rraw > 0 ? Rraw : 0;
+      return Math.max(0, sz - R);
+   }
+
    // nPages = live/32KiB (compressed file bytes over uncompressed leaf_page_max).
    function pageStats(stats = {}) {
       const {
-         storageSize,
-         freeStorageSize,
          objects: documentCount,
          dataPageSize: leafPageSize
       } = stats;
-      const live = Math.max(0, (storageSize || 0) - (freeStorageSize || 0));
+      const live = liveBytes(stats);
       const dataPageSize = Number(leafPageSize) > 0 ? leafPageSize : 32 * 1024;
       const nPages = Math.max(1, Math.ceil(live / dataPageSize));
       const pageFillActual = Math.max(1, Math.ceil((documentCount || 0) / nPages));
@@ -372,7 +377,7 @@
       const R = Number.isFinite(Rraw) && Rraw > 0 ? Rraw : 0;
       const sz = +snap?.storageSize;
       const storageSize = Number.isFinite(sz) && sz > 0 ? sz : 0;
-      const live = Math.max(0, storageSize - R);
+      const live = liveBytes(snap);
       const G = storageSize > 0 ? R / storageSize : 0;
       const leaf = Number(cal?.ps?.dataPageSize) > 0 ? +cal.ps.dataPageSize
                  : (Number(cal?.leaf) > 0 ? +cal.leaf : 32 * 1024);
@@ -501,7 +506,7 @@
                closed = cur;
                cur = null;
             }
-            if (!cur) cur = start();
+            if (!cur) cur = (start || firstFit.emptyIds)();
             return closed;
          },
          add(bson, packed) {
@@ -517,6 +522,7 @@
          }
       };
    }
+   firstFit.emptyIds = () => ({ "ids": [], "n": 0, "bson": 0, "packed": 0 });
 
    function shapeProjectStage() {
       return {
@@ -565,7 +571,7 @@
    function curatorState(cal, maxDocs) {
       const b = packedPageBudget(cal);
       return Object.assign({}, b, {
-         "state": { "batchSize": b.packedBudget, "maxDocs": maxDocs, "taken": 0 }
+         "state": { "batchSize": b.packedBudget, "maxDocs": maxDocs }
       });
    }
 
@@ -584,7 +590,7 @@
          const bson = +doc.bson || 0;
          if (bson < 1) continue;
          const packed = packedOf(bson, cal);
-         const closed = fit.offer(packed, () => ({ "ids": [], "n": 0, "bson": 0, "packed": 0 }));
+         const closed = fit.offer(packed, firstFit.emptyIds);
          if (closed) yield closed;
          fit.add(bson, packed).ids.push(doc._id);
       }
@@ -615,13 +621,10 @@
             bsonProjectStage()
          ];
          const fit = firstFit(packedBudget);
-         const emit = (row) => {
-            state.taken += row.n;
-            return {
-               "range": { "$gte": row.min, "$lte": row.max },
-               "n": row.n, "packed": row.packed, "bson": row.bson
-            };
-         };
+         const emit = (row) => ({
+            "range": { "$gte": row.min, "$lte": row.max },
+            "n": row.n, "packed": row.packed, "bson": row.bson
+         });
          for await (const doc of aggDocs(pipeline, scanOpts("quantile first-fit packed ranges", { "_id": 1 }))) {
             const bson = +doc.bson || 0;
             const packed = packedOf(bson, cal);
@@ -653,10 +656,7 @@
             }
             return f;
          };
-         const emit = (b) => {
-            state.taken += b.n;
-            return { "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson, "shape": b.sig };
-         };
+         const emit = (b) => ({ "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson, "shape": b.sig });
          for await (const doc of aggDocs([
             { "$limit": Math.max(1, maxDocs) },
             shapeProjectStage()
@@ -665,7 +665,7 @@
             const bson = +doc.bson || 0;
             const packed = bson / Math.max(shapeCompression(sig, cal), 0.01);
             const fit = fitFor(sig);
-            const closed = fit.offer(packed, () => ({ "ids": [], "n": 0, "bson": 0, "packed": 0, "sig": sig }));
+            const closed = fit.offer(packed, () => Object.assign(firstFit.emptyIds(), { "sig": sig }));
             if (closed) pending.push(closed);
             fit.add(bson, packed).ids.push(doc._id);
             while (pending.length) yield emit(pending.shift());
@@ -917,10 +917,6 @@
            : String(oid).replace(/[^a-f0-9]/gi, '').slice(-24);
    }
 
-   function tmpSampleName() {
-      return `${tmpSamplePrefix()}_${tmpOidHex()}`;
-   }
-
    function createPackedTemp(tmpDb, suffix, compressor) {
       const name = `${tmpSamplePrefix()}_${suffix}_${tmpOidHex()}`;
       try {
@@ -937,21 +933,24 @@
       const packed = $collStats(tmpStatsDbName, name) || {};
       const { indexes, ...stats } = packed;
       const ps = pageStats(stats);
-      const live = Math.max(0, (stats.storageSize || 0) - (stats.freeStorageSize || 0));
+      const live = liveBytes(stats);
       const C = live > 0 && (stats.dataSize || 0) > 0 ? stats.dataSize / live : fallbackC;
       return {
          "compression": Number(C) > 0 ? C : fallbackC,
          "tfr": ps.pageFillActual,
          "avgObjSize": stats.avgObjSize,
-         "objects": ps.documentCount
+         "objects": ps.documentCount,
+         "ps": ps,
+         "storageSize": stats.storageSize
       };
    }
 
    async function settlePackedTemps(created, label) {
-      console.log(`calibrate ${label}: waiting for checkpoint before packed $collStats`);
+      const tag = label ? ` ${label}` : '';
+      console.log(`calibrate${tag}: waiting for checkpoint before packed $collStats`);
       await waitForCheckpoint({ "settle": true, "force": true });
       if (!wtCheckpoint().available && created[0]) {
-         console.log(`M0: polling ${label} temps for packed $collStats`);
+         console.log(`M0: polling${tag} temps for packed $collStats`);
          await waitForPackedStats(tmpStatsDbName, created[0]);
       }
    }
@@ -1224,7 +1223,7 @@
       const avg = +src.avgObjSize > 0 ? +src.avgObjSize : 256;
       const leaf = fill.dataPageSize || 32 * 1024;
       if (avg >= leaf) {
-         const live = Math.max(0, (src.storageSize || 0) - (src.freeStorageSize || 0));
+         const live = liveBytes(src);
          const compression = live > 0 && (src.dataSize || 0) > 0 ? src.dataSize / live : 1;
          console.log(`calibrate: avgObjSize=${avg} >= leaf=${leaf}; TFR=1 skip sample and bin analysis`);
          return {
@@ -1245,40 +1244,26 @@
          ? Math.ceil(+shuffleSampleSize)
          : sampleNeed);
       if (sampleN < 1) throw new Error(`${strategy}: empty namespace, cannot calibrate TFR`);
-      const tmpName = tmpSampleName();
       const tmpDb = tmpStatsDb();
+      const tmpName = createPackedTemp(tmpDb, 'c', compressor);
       console.log(`${strategy} calibrate: $sample ${sampleN} (${nBins} packed bins × ${perLowBin} docs; 2 leaves at bson>=${minBson} C=${assumeC}) compressor=${compressor} -> ${tmpStatsDbName}.${tmpName}`);
       try {
-         try {
-            tmpDb.createCollection(tmpName, {
-               "storageEngine": { "wiredTiger": { "configString": `block_compressor=${compressor}` } }
-            });
-         } catch(_) {
-            tmpDb.createCollection(tmpName);
-         }
          console.log(`calibrate collection created: ${tmpStatsDbName}.${tmpName}`);
          sampleMerge(namespace, tmpName, sampleN, nObjs, `${strategy} calibrate $merge`);
-         console.log('calibrate: waiting for checkpoint before packed $collStats');
-         await waitForCheckpoint({ "settle": true, "force": true });
-         let packed = $collStats(tmpStatsDbName, tmpName) || {};
-         if (!wtCheckpoint().available) {
-            console.log('M0: no checkpoint metrics; polling packed $collStats');
-            packed = await waitForPackedStats(tmpStatsDbName, tmpName);
-         }
-         const { indexes, ...stats } = packed;
-         const ps = pageStats(stats);
-         const live = Math.max(0, (stats.storageSize || 0) - (stats.freeStorageSize || 0));
-         const compression = live > 0 ? (stats.dataSize || 0) / live : 1;
+         await settlePackedTemps([tmpName], '');
+         const measured = packedTempStats(tmpName, 1);
+         const ps = measured.ps;
+         const compression = measured.compression;
          let tfr = Math.max(1, ps.pageFillActual);
          const tunedFill = pageFillExplicit
                          ? +pageFillRatio
-                         : autotunePageFillRatio(ps, compression, stats.avgObjSize);
-         const leafFill = Math.max(1, Math.ceil((tunedFill * (ps.dataPageSize || leaf) * compression) / (stats.avgObjSize > 0 ? stats.avgObjSize : avg)));
+                         : autotunePageFillRatio(ps, compression, measured.avgObjSize);
+         const leafFill = Math.max(1, Math.ceil((tunedFill * (ps.dataPageSize || leaf) * compression) / (measured.avgObjSize > 0 ? measured.avgObjSize : avg)));
          if (ps.nPages <= 1) {
             tfr = leafFill;
             console.log(`packed nPages=${ps.nPages} (unsettled or tiny file); TFR from leaf fill = ${tfr}`);
          }
-         console.log(`calibrated TFR=${tfr} (packedFill) compression=${compression.toFixed(3)} pageFillRatio=${tunedFill.toFixed(3)}${pageFillExplicit ? ' (pinned)' : ' (packed sample)'} packedFill=${ps.pageFillActual} packedPages=${ps.nPages} objects=${ps.documentCount} avgObjSize=${stats.avgObjSize} storageSize=${stats.storageSize}`);
+         console.log(`calibrated TFR=${tfr} (packedFill) compression=${compression.toFixed(3)} pageFillRatio=${tunedFill.toFixed(3)}${pageFillExplicit ? ' (pinned)' : ' (packed sample)'} packedFill=${ps.pageFillActual} packedPages=${ps.nPages} objects=${ps.documentCount} avgObjSize=${measured.avgObjSize} storageSize=${measured.storageSize}`);
          let modes = [];
          let shapes = [];
          const wantShapes = strategy === 'shapeQuantile';
@@ -1299,7 +1284,7 @@
             modes = [];
             shapes = [];
          }
-         return { "tfr": tfr, "compression": compression, "avgObjSize": stats.avgObjSize, "ps": ps, "modes": modes, "shapes": shapes, "pageFillRatio": tunedFill };
+         return { "tfr": tfr, "compression": compression, "avgObjSize": measured.avgObjSize, "ps": ps, "modes": modes, "shapes": shapes, "pageFillRatio": tunedFill };
       } finally {
          dropTmpSample(tmpDb, tmpName, 'calibrate');
       }
@@ -1308,11 +1293,16 @@
    // Density write loop for naturalWindow, quantile, shapeQuantile.
    // dirtyBudgetRatio caps packed rewrite bytes per checkpoint at that fraction
    // of freeStorageSize. Falling-edge collStats refreshes R.
-   async function packedWriteMain(label, startCuratorFn) {
+   async function densityStart() {
       const srcSnap = collSnapshot();
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
       const cal = await calibrateTFR();
       const nDocs = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
+      return { "srcSnap": srcSnap, "cal": cal, "nDocs": nDocs };
+   }
+
+   async function packedWriteMain(label, startCuratorFn) {
+      const { cal, nDocs } = await densityStart();
       const batch = tfrOverride > 0 ? tfrOverride : cal.tfr;
       let walk = startCuratorFn(cal, nDocs);
       if (walk && typeof walk.then === 'function') walk = await walk;
@@ -1502,12 +1492,11 @@
    }
 
    async function parkedNaturalCover(label, dir, defaultPasses = 1) {
-      const srcSnap = collSnapshot();
-      console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
-      const cal = await calibrateTFR();
+      const started = await densityStart();
       await eachCoverPass(defaultPasses, async(pass, n) => {
-         const snap = pass === 1 ? srcSnap : collSnapshot();
-         const nDocs = snap.objects || pageStats(snap).documentCount || 0;
+         const snap = pass === 1 ? started.srcSnap : collSnapshot();
+         const nDocs = pass === 1 ? started.nDocs : (snap.objects || pageStats(snap).documentCount || 0);
+         const cal = started.cal;
          const tag = n > 1 ? `${label} ${pass}/${n}` : label;
          console.log(`${label}: pass ${pass}/${n} scanning ${nDocs} docs $natural:${dir} $bsonSize (streamed cover, freeze per dirty window)`);
          await parkedWindowReplay(tag, cal, naturalPackedBatches(cal, nDocs, dir), nDocs);
