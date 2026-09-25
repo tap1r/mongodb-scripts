@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.5.5"
+ *  Version: "0.5.6"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -15,34 +15,16 @@
  *  - --eval must use var (not let/const). Do not declare dbName/collName/defragOptions
  *    in this file — IIFE const would shadow the overlay.
  *  - storage snapshots use mdblib $collStats (MDBLIB, ~/.mongodb, or cwd).
- *  - defragOptions.sampler: 'random' | 'adjacent' | 'bucketed' (default) | 'doubleParked'
- *  - defragOptions.strategy: 'waves' (default) | 'meetInMiddle' | 'lowStressMode' |
- *    'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile' |
- *    'shapeQuantile' | 'doubleParked' | 'naturalWindow' | 'naturalReply'
- *    (alias: naturalReplay → naturalReply)
- *  - defragOptions.writeConcurrency: in-flight rewrite txns (default 8).
- *    concurrentUpdates is an alias when writeConcurrency is omitted.
- *  - defragOptions.ignoreCheckpoint: skip checkpoint waits; $collStats is
- *    fetched without blocking and applied on the next write round. Calibrate
- *    still settles. Reusable/R caps and doubleParked replay use stale stats.
- *  - Settle waits try {fsync:1, lock:false} so we do not sit out a 60s
- *    checkpoint interval. Atlas M0/Flex deny fsync and omit WT checkpoint
- *    metrics: poll $collStats instead of sleeping 60s. parkedWindowReplay
- *    skip-replay (no extend, R>0) does not wait for a checkpoint.
- *  - defragOptions.naturalDir: naturalWindow / naturalReply scan, 1 (default,
- *    oldest RecordId first) or -1 (newest first). doubleParked stays -1.
- *  - defragOptions.passes: collection cover count (default 1). naturalReply
- *    / naturalReplay rescans $natural each pass (RecordIds changed).
- *  - Atlas M0/Flex ignore allowDiskUse and cap in-memory sorts at 32MiB.
- *    $sample of >=5% of n (or n<=100) COLLSCAN+sorts the whole collection;
- *    calibrate/$sample stay on the random-cursor path (chunks <5% of n).
+ *  - Aliases: naturalReplay → naturalReply; concurrentUpdates → writeConcurrency
+ *    when writeConcurrency is omitted.
+ *  - defragOptions.replay: 'onExtend' (default) | 'never' | 'always'
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
  *    instead of a fixed 0.9 — next discussion
  *  - inter-wave pause on WT dirty / updates bytes instead of checkpoint status
- *  - AIMD dirtyBudgetRatio from settled density/reusable (stop ~10–20% reuse)
- *  - compact after a density pass to relocate the geometric tail
+ *  - compact after a density pass to reclaim G / relocate the geometric tail.
+ *    dirtyBudgetRatio is a per-generation fraction of R, not a target reuse%.
  */
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>onlineDefrag.js
@@ -62,7 +44,7 @@
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'shapeQuantile' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalWindow' };" [-f|--file] </path/to/>onlineDefrag.js
  *    mongosh [connection options] --quiet --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReply', updateDelayMs: 0 };" [-f|--file] </path/to/>onlineDefrag.js
- *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReplay', concurrentUpdates: 32, updateDelayMs: 0 };" [-f|--file] </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReplay', concurrentUpdates: 32, updateDelayMs: 0, replay: 'onExtend' };" [-f|--file] </path/to/>onlineDefrag.js
  *
  *  We use 'var' to interoperate with mongosh's sloppy mode
  */
@@ -73,7 +55,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.5.5" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.5.6" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -96,34 +78,64 @@
 
    // Caller: var defragOptions = { ... } (--eval or REPL). Do not declare or assign it in this file.
    const userOptions = typeof defragOptions === 'undefined' ? {} : defragOptions;
+
+   function aliasStrategy(v) {
+      return v === 'naturalReplay' ? 'naturalReply' : v;
+   }
+
+   function normalizeOptions(raw) {
+      const o = (raw && typeof raw === 'object') ? raw : {};
+      const strategy = aliasStrategy(o.strategy == null || o.strategy === '' ? 'waves' : o.strategy);
+      const sampler = aliasStrategy(o.sampler == null || o.sampler === '' ? 'bucketed' : o.sampler);
+      const writeConcurrencyExplicit = Object.prototype.hasOwnProperty.call(o, 'writeConcurrency')
+         || Object.prototype.hasOwnProperty.call(o, 'concurrentUpdates');
+      const writeConcurrency = Number(o.writeConcurrency) > 0
+         ? Math.ceil(o.writeConcurrency)
+         : (Number(o.concurrentUpdates) > 0 ? Math.ceil(o.concurrentUpdates) : 8);
+      const replayIn = o.replay;
+      const replay = (replayIn === 'never' || replayIn === false || replayIn === 'skip') ? 'never'
+                   : (replayIn === 'always' ? 'always' : 'onExtend');
+      const naturalDir = Number(o.naturalDir) < 0 ? -1 : 1;
+      const coverPassesOpt = Number(o.passes) > 0 ? Math.ceil(o.passes) : 0;
+      return Object.assign({}, o, {
+         "strategy": strategy,
+         "sampler": sampler,
+         "writeConcurrency": writeConcurrency,
+         "writeConcurrencyExplicit": writeConcurrencyExplicit,
+         "replay": replay,
+         "naturalDir": naturalDir,
+         "coverPassesOpt": coverPassesOpt
+      });
+   }
+
    const {
-      "sampler": samplerIn = 'bucketed', // 'random' | 'adjacent' | 'bucketed' | 'doubleParked'
-      "strategy": strategyIn = 'waves', // 'waves' | 'meetInMiddle' | 'lowStressMode' | 'updateOne' | 'slidingShuffle' | 'slidingWindow' | 'quantile' | 'rndQuantile' | 'doubleParked' | 'shapeQuantile' | 'naturalWindow' | 'naturalReply'
-      "shuffleSampleSize": shuffleSampleSize, // $sample size for TFR calibration; default 10000
-      "curator": curator = 'ids', // meetInMiddle: 'ids' | 'ranges'
-      "pageFillRatio": pageFillRatio = 0.9, // WT dest-leaf spill target (fixed)
-      "dirtyFillTarget": dirtyFillTarget = 0.08, // wave fill cap vs updates allocated % of cache
-      "dirtyTrigger": dirtyTrigger = 0.20, // meetInMiddle: stressed if dirty util >= this
-      "updatesTrigger": updatesTrigger = 0.10, // eviction_updates_trigger; stressed if updates util >= this
-      "lowStressDirtyMax": lowStressDirtyMax = 0.07, // updates allocated soft pause
-      "lowStressDirtyHard": lowStressDirtyHard = 0.08, // updates allocated hard; overshoot lowers soft
-      "dirtyBudgetRatio": dirtyBudgetRatio = 0.2, // fraction of compressed freeStorageSize to dest-allocate per checkpoint. Not a target reusable%. Debit is nPages×leaf/C (same units as R).
+      "sampler": sampler = 'bucketed',
+      "strategy": strategy = 'waves',
+      "shuffleSampleSize": shuffleSampleSize,
+      "curator": curator = 'ids',
+      "pageFillRatio": pageFillRatio = 0.9,
+      "dirtyFillTarget": dirtyFillTarget = 0.08,
+      "dirtyTrigger": dirtyTrigger = 0.20,
+      "updatesTrigger": updatesTrigger = 0.10,
+      "lowStressDirtyMax": lowStressDirtyMax = 0.07,
+      "lowStressDirtyHard": lowStressDirtyHard = 0.08,
+      "dirtyBudgetRatio": dirtyBudgetRatio = 0.2,
       "maxConcurrent": maxConcurrent,
-      "writeConcurrency": writeConcurrencyIn, // meetInMiddle / lowStressMode / slidingShuffle / slidingWindow / quantile / rndQuantile write forks
-      "concurrentUpdates": concurrentUpdates, // alias of writeConcurrency when that key is omitted
-      "curatorBatchSize": curatorBatchSize, // if set, overrides pageFillTarget for $in / $bucketAuto
-      "maxLagSeconds": maxLagSeconds = 10, // pause new batches when lag exceeds this
-      "passes": passes, // collection cover count; default 1
+      "writeConcurrency": writeConcurrency,
+      "writeConcurrencyExplicit": writeConcurrencyExplicit,
+      "curatorBatchSize": curatorBatchSize,
+      "maxLagSeconds": maxLagSeconds = 10,
       "checkpointTimeoutMs": checkpointTimeoutMs,
-      "ignoreCheckpoint": ignoreCheckpoint = false, // skip ckpt waits; async $collStats next round
-      "naturalDir": naturalDir = 1, // naturalWindow/naturalReply: 1 = oldest RecordId first, -1 = newest first
-      "updateDelayMs": updateDelayMs = 0 // pause before every rewrite
-   } = userOptions;
-   const strategy = strategyIn === 'naturalReplay' ? 'naturalReply' : strategyIn;
-   const sampler = samplerIn === 'naturalReplay' ? 'naturalReply' : samplerIn;
-   const writeConcurrency = Number(writeConcurrencyIn) > 0
-      ? Math.ceil(writeConcurrencyIn)
-      : (Number(concurrentUpdates) > 0 ? Math.ceil(concurrentUpdates) : 8);
+      "ignoreCheckpoint": ignoreCheckpoint = false,
+      "naturalDir": naturalDir,
+      "replay": replay,
+      "coverPassesOpt": coverPassesOpt,
+      "updateDelayMs": updateDelayMs = 0
+   } = normalizeOptions(userOptions);
+
+   function coverPassCount(defaultN = 1) {
+      return coverPassesOpt > 0 ? coverPassesOpt : defaultN;
+   }
 
    // mdblib $collStats for the target namespace (indexes stripped).
    function collSnapshot() {
@@ -163,7 +175,8 @@
    }
 
    // $sample random-cursor path: n>100 and size <5% of n. Otherwise COLLSCAN,
-   // attach a random key, sort. Atlas M0/Flex ignore allowDiskUse (32MiB).
+   // attach a random key, sort. Atlas M0/Flex ignore allowDiskUse and cap
+   // in-memory sorts at 32MiB, so calibrate/$sample stay under 5% of n.
    function randomCursorSampleCap(nObjs) {
       const n = Math.max(0, Math.floor(Number(nObjs) || 0));
       if (n <= 100) return n;
@@ -224,14 +237,12 @@
       // so eviction can write during the wave; checkpoint still required to settle.
       // M0 (no cache stats): dirtyBudgetRatio × reusable pages.
       const leaf = Number(dataPageSize) > 0 ? dataPageSize : 32 * 1024;
-      const reusable = +stats.freeStorageSize;
-      const reusablePages = Number.isFinite(reusable) && reusable > 0
-                          ? Math.floor(reusable / leaf)
-                          : null;
+      const budget = dirtyBudgetCap(stats);
+      const reusablePages = budget.R > 0 ? Math.floor(budget.R / leaf) : null;
       const dirtyPages = dirtyFillPages(leaf);
       const dirtyCap = dirtyPages != null
                      ? dirtyPages
-                     : (reusablePages == null ? null : Math.floor(reusablePages * dirtyBudgetRatio));
+                     : (reusablePages == null ? null : Math.floor(reusablePages * budget.frac));
       let n;
       if (reusablePages == null && dirtyCap == null) n = 1;
       else if (reusablePages == null) n = dirtyCap;
@@ -512,42 +523,63 @@
       return nDocs * avg / Math.max(compression, 0.01);
    }
 
-   function refreshReusableCap(window, reason = 'checkpoint', snap) {
+   function dirtyBudgetCap(snap, cal) {
+      // Per-generation dest cap in compressed bytes: dirtyBudgetRatio × R.
+      // Not a target for collStats reuse% (G). Never exceed R (no-extend).
+      const frac = Number(dirtyBudgetRatio) > 0 ? +dirtyBudgetRatio : 0.05;
+      const Rraw = +snap?.freeStorageSize;
+      const R = Number.isFinite(Rraw) && Rraw > 0 ? Rraw : 0;
+      const sz = +snap?.storageSize;
+      const storageSize = Number.isFinite(sz) && sz > 0 ? sz : 0;
+      const live = Math.max(0, storageSize - R);
+      const G = storageSize > 0 ? R / storageSize : 0;
+      const leaf = Number(cal?.ps?.dataPageSize) > 0 ? +cal.ps.dataPageSize
+                 : (Number(cal?.leaf) > 0 ? +cal.leaf : 32 * 1024);
+      const C = Math.max(Number(cal?.compression) > 0 ? +cal.compression : 1, 0.01);
+      const minPage = leaf / C;
+      const cap = R > 0 ? Math.max(minPage, frac * R) : 0;
+      return {
+         "frac": frac, "R": R, "G": G, "live": live, "cap": cap,
+         "storageSize": storageSize, "leaf": leaf, "compression": C,
+         "minPage": minPage, "units": "compressed"
+      };
+   }
+
+   function formatDirtyBudget(b) {
+      return `reusable=${b.R} (${(100 * b.G).toFixed(1)}% of storageSize) cap=${Math.round(b.cap)} (${(100 * b.frac).toFixed(0)}% of R, ${b.units})`;
+   }
+
+   function refreshReusableCap(window, reason = 'checkpoint', snap, cal) {
       // Caller has just observed a checkpoint falling edge (or M0 proxy wait),
       // or ignoreCheckpoint delivered an async $collStats for the next round.
       window.snap = snap || collSnapshot();
       window.bytes = 0;
-      const R = +window.snap.freeStorageSize;
-      const frac = Number(dirtyBudgetRatio) > 0 ? dirtyBudgetRatio : 0.05;
-      const cap = Number.isFinite(R) && R > 0 ? frac * R : 0;
-      const live = Math.max(0, (window.snap.storageSize || 0) - (Number.isFinite(R) ? R : 0));
-      console.log(`${reason}: settled stats reusable=${Number.isFinite(R) ? R : 0} cap=${Math.round(cap)} live=${live} storageSize=${window.snap.storageSize || 0}`);
-      return cap;
+      const b = dirtyBudgetCap(window.snap, cal);
+      console.log(`${reason}: settled stats ${formatDirtyBudget(b)} live=${b.live} storageSize=${b.storageSize}`);
+      return b.cap;
    }
 
-   async function ensureReusableRoom(window, nextBytes, { refreshSnap = true, beforeWait } = {}) {
+   async function ensureReusableRoom(window, nextBytes, { refreshSnap = true, beforeWait, cal } = {}) {
       // Cap cumulative estimated rewrite bytes at dirtyBudgetRatio * R per
       // checkpoint. R comes from window.snap (refreshed on falling edge).
-      const R = +window.snap.freeStorageSize;
-      if (!Number.isFinite(R) || R <= 0) return;
-      const frac = Number(dirtyBudgetRatio) > 0 ? dirtyBudgetRatio : 0.05;
-      const cap = frac * R;
-      if (window.bytes + nextBytes <= cap) return;
+      const b = dirtyBudgetCap(window.snap, cal);
+      if (!(b.R > 0)) return;
+      if (window.bytes + nextBytes <= b.cap) return;
       if (typeof beforeWait === 'function') await beforeWait();
       if (ignoreCheckpoint) {
          window.bytes = 0;
          const s = consumeAsyncSnap();
-         if (s) refreshReusableCap(window, 'async stats', s);
+         if (s) refreshReusableCap(window, 'async stats', s, cal);
          kickCollStats();
          return;
       }
-      console.log(`reusable budget ${Math.round(window.bytes)}+${Math.round(nextBytes)} > ${Math.round(cap)} (${frac}*freeStorageSize ${R}); waiting for checkpoint`);
+      console.log(`reusable budget ${Math.round(window.bytes)}+${Math.round(nextBytes)} > ${Math.round(b.cap)} (${b.frac}*freeStorageSize ${b.R}); waiting for checkpoint`);
       const waited = await waitForCheckpoint({ "settle": true });
       if (!waited.available && !waited.completed) {
          await delay(statsPollMs);
       }
       window.bytes = 0;
-      if (refreshSnap && (waited.completed || !waited.available)) refreshReusableCap(window, 'reusable budget');
+      if (refreshSnap && (waited.completed || !waited.available)) refreshReusableCap(window, 'reusable budget', null, cal);
    }
 
    async function* curateIdBatches(direction, state) {
@@ -1117,9 +1149,8 @@
    async function lowStressModeMain() {
       let snap = collSnapshot();
       let fill = pageStats(snap);
-      const concExplicit = Object.prototype.hasOwnProperty.call(userOptions, 'writeConcurrency');
-      const concNow = () => (concExplicit && Number(writeConcurrency) > 0)
-                          ? Math.ceil(writeConcurrency)
+      const concNow = () => writeConcurrencyExplicit
+                          ? Math.max(1, writeConcurrency)
                           : 1;
       let conc = concNow();
       const dirtyTune = {
@@ -1127,9 +1158,7 @@
          "soft": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
          "hard": Number(lowStressDirtyHard) > 0 ? +lowStressDirtyHard : 0.08
       };
-      const coverPasses = Object.prototype.hasOwnProperty.call(userOptions, 'passes') && Number(passes) > 0
-                        ? Math.ceil(passes)
-                        : 3;
+      const coverPasses = coverPassCount(3);
       console.log(`strategy: lowStressMode curator: ${curator} writeConcurrency: ${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}%`);
       console.log(`docs: ${fill.documentCount} batch: ${fill.batchSize} curatorBatch: ${scaledBatch(fill.pageFillTarget)} targetFill: ${fill.pageFillTarget} actualFill: ${fill.pageFillActual}`);
       console.log(EJSON.stringify({ "state": "initial storage", ...snap }));
@@ -1201,9 +1230,8 @@
    async function updateOneModeMain() {
       let snap = collSnapshot();
       let fill = pageStats(snap);
-      const concExplicit = Object.prototype.hasOwnProperty.call(userOptions, 'writeConcurrency');
-      const concNow = () => (concExplicit && Number(writeConcurrency) > 0)
-                          ? Math.ceil(writeConcurrency)
+      const concNow = () => writeConcurrencyExplicit
+                          ? Math.max(1, writeConcurrency)
                           : Math.max(1, fill.pageFillTarget || 1);
       let conc = concNow();
       const dirtyTune = {
@@ -1211,7 +1239,7 @@
          "soft": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
          "hard": Number(lowStressDirtyHard) > 0 ? +lowStressDirtyHard : 0.08
       };
-      const coverPasses = Number(passes) > 0 ? Math.ceil(passes) : 1;
+      const coverPasses = coverPassCount(1);
       console.log(`strategy: updateOne writeConcurrency: ${conc} (pageFillTarget) updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}%`);
       console.log(`docs: ${fill.documentCount} (1 doc per updateOne) actualFill: ${fill.pageFillActual} targetFill: ${fill.pageFillTarget}`);
       console.log(EJSON.stringify({ "state": "initial storage", ...snap }));
@@ -1786,14 +1814,10 @@
          "hard": Number(lowStressDirtyHard) > 0 ? +lowStressDirtyHard : 0.08
       };
       const budgetSnap = collSnapshot();
-      const R0 = +budgetSnap.freeStorageSize;
-      const frac = Number(dirtyBudgetRatio) > 0 ? dirtyBudgetRatio : 0.05;
-      const cap0 = Number.isFinite(R0) && R0 > 0 ? frac * R0 : 0;
+      const budget0 = dirtyBudgetCap(budgetSnap, cal);
       const packedCover = estimateRewriteBytes(nDocs, cal);
-      const packedPctR = R0 > 0 ? 100 * packedCover / R0 : 0;
-      const live0 = Math.max(0, (budgetSnap.storageSize || 0) - (Number.isFinite(R0) ? R0 : 0));
-      const reusablePct = budgetSnap.storageSize > 0 && Number.isFinite(R0) ? 100 * R0 / budgetSnap.storageSize : 0;
-      console.log(`strategy: ${label} TFR=${cal.tfr} batch=${batch} buckets=${streaming ? 'first-fit' : totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}% C=${(Number(cal.compression) > 0 ? +cal.compression : 1).toFixed(3)} pageFill=${Number(pageFillRatio) > 0 ? +pageFillRatio : 0.9} dirtyBudgetRatio=${frac} reusable=${Number.isFinite(R0) ? R0 : 0} (${reusablePct.toFixed(1)}% of storageSize) cap=${Math.round(cap0)} (${(100 * frac).toFixed(0)}% of R, compressed) packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${live0} storageSize=${budgetSnap.storageSize || 0}`);
+      const packedPctR = budget0.R > 0 ? 100 * packedCover / budget0.R : 0;
+      console.log(`strategy: ${label} TFR=${cal.tfr} batch=${batch} buckets=${streaming ? 'first-fit' : totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}% C=${budget0.compression.toFixed(3)} pageFill=${Number(pageFillRatio) > 0 ? +pageFillRatio : 0.9} dirtyBudgetRatio=${budget0.frac} ${formatDirtyBudget(budget0)} packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${budget0.live} storageSize=${budget0.storageSize}`);
 
       const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
 
@@ -1807,10 +1831,10 @@
          if (!ignoreCheckpoint && ckpt.available && ckpt.running) continue;
          if (waited.completed) {
             await drainWrites();
-            refreshReusableCap(writeWindow, 'checkpoint');
+            refreshReusableCap(writeWindow, 'checkpoint', null, cal);
          } else if (ignoreCheckpoint) {
             const s = consumeAsyncSnap();
-            if (s) refreshReusableCap(writeWindow, 'async stats', s);
+            if (s) refreshReusableCap(writeWindow, 'async stats', s, cal);
             kickCollStats();
          }
          const { value, done } = await walk.gen.next();
@@ -1819,7 +1843,7 @@
          const nextBytes = (Number(value.bson) > 0 || Number(value.packed) > 0)
                          ? batchAllocBytes(value, (cal.ps && cal.ps.dataPageSize) || 32 * 1024, pageFillRatio, cal.compression)
                          : estimateRewriteBytes(value.n || batch, cal);
-         await ensureReusableRoom(writeWindow, nextBytes, { "refreshSnap": true, "beforeWait": drainWrites });
+         await ensureReusableRoom(writeWindow, nextBytes, { "refreshSnap": true, "beforeWait": drainWrites, "cal": cal });
          writeWindow.bytes += nextBytes;
          const packedNote = Number(value.packed) > 0 ? ` packed=${Math.round(value.packed)}` : '';
          const bsonNote = Number(value.bson) > 0 ? ` bson=${Math.round(value.bson)}` : '';
@@ -1866,13 +1890,28 @@
    }
 
    async function naturalWindowMain() {
+      // Density-only $natural cover (no rewrite-2). Use naturalReply + replay:'never' for parked skip-replay.
       await slidingPackedMain('naturalWindow', async({ nDocs, cal }) => startNaturalWindowCurator(cal, nDocs));
    }
 
-   // Frozen $in batches: dirty-budget window, rewrite 1, then replay the same
-   // _ids if write 1 extended or R was 0. Skip-replay (no extend) does not wait
-   // for a checkpoint; rBudget decrements until a settle replenishes R.
-   // Halloween-safe (parked _id).
+   function shouldReplay({ extended, R }) {
+      // onExtend: rewrite 2 only if write 1 grew storageSize or R was 0 (EOF trim path).
+      // never: skip-replay even after an extend. always: rewrite 2 every window.
+      if (replay === 'always') return { "replay": true, "reason": "always" };
+      if (replay === 'never') return { "replay": false, "reason": "never" };
+      if (extended) return { "replay": true, "reason": "extended" };
+      if (!(Number.isFinite(R) && R > 0)) return { "replay": true, "reason": "R=0" };
+      return { "replay": false, "reason": "no extend, R>0" };
+   }
+
+   async function eachCoverPass(defaultN, body) {
+      const n = coverPassCount(defaultN);
+      for (let pass = 1; pass <= n; pass++) await body(pass, n);
+   }
+
+   // Frozen $in batches: dirty-budget window, rewrite 1, then shouldReplay.
+   // Skip-replay does not wait for a checkpoint; rBudget decrements until a
+   // settle replenishes R. Halloween-safe (parked _id).
    async function parkedWindowReplay(label, cal, allBatches, nDocs) {
       const { packedBudget, fillRatio, leaf, compression } = packedPageBudget(cal);
       const dirtyTune = {
@@ -1880,17 +1919,15 @@
          "soft": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
          "hard": Number(lowStressDirtyHard) > 0 ? +lowStressDirtyHard : 0.08
       };
-      const frac = Number(dirtyBudgetRatio) > 0 ? +dirtyBudgetRatio : 0.05;
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
       const target = allBatches.reduce((s, b) => s + (b.packed || 0), 0);
       const allocCover = allBatches.reduce((s, b) => s + batchAllocBytes(b, leaf, fillRatio, compression), 0);
       const budgetSnap = collSnapshot();
-      let R0 = +budgetSnap.freeStorageSize;
-      if (!Number.isFinite(R0) || R0 < 0) R0 = 0;
-      const window0 = R0 > 0 ? Math.max(leaf / Math.max(compression, 0.01), frac * R0) : leaf;
+      const budget0 = dirtyBudgetCap(budgetSnap, cal);
+      const R0 = budget0.R;
+      const window0 = R0 > 0 ? budget0.cap : budget0.minPage;
       const estWindows = window0 > 0 ? Math.max(1, Math.ceil(allocCover / window0)) : 1;
-      const reusablePct = budgetSnap.storageSize > 0 ? 100 * R0 / budgetSnap.storageSize : 0;
-      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} C=${compression.toFixed(3)} docs=${nDocs} batches=${allBatches.length} packedCover=${Math.round(target)} allocCover=${Math.round(allocCover)} (compressed, nPages×leaf/C) reusable=${R0} (${reusablePct.toFixed(1)}% of storageSize) dirtyBudgetRatio=${frac} windowCap=${Math.round(window0)} (${(100 * frac).toFixed(0)}% of R) estWindows≈${estWindows} writeConcurrency=${conc} updateDelayMs=${Number(updateDelayMs) > 0 ? +updateDelayMs : 0} replay=per-window`);
+      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} C=${compression.toFixed(3)} docs=${nDocs} batches=${allBatches.length} packedCover=${Math.round(target)} allocCover=${Math.round(allocCover)} (compressed, nPages×leaf/C) dirtyBudgetRatio=${budget0.frac} ${formatDirtyBudget(budget0)} windowCap=${Math.round(window0)} estWindows≈${estWindows} writeConcurrency=${conc} updateDelayMs=${Number(updateDelayMs) > 0 ? +updateDelayMs : 0} replay=${replay}`);
 
       const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
 
@@ -1905,17 +1942,19 @@
          await waitForCheckpoint();
          const ckpt = wtCheckpoint();
          if (ckpt.available && ckpt.running) continue;
-         if (!(rBudget >= leaf)) {
+         if (!(rBudget >= budget0.minPage)) {
             await waitForCheckpoint({ "settle": true });
             await waitForReplLag();
             const replenished = collSnapshot();
-            rBudget = +replenished.freeStorageSize;
-            if (!Number.isFinite(rBudget) || rBudget < 0) rBudget = 0;
+            const bR = dirtyBudgetCap(replenished, cal);
+            rBudget = bR.R;
             prevSz = replenished.storageSize;
-            if (!(rBudget >= leaf)) rBudget = leaf;
+            if (!(rBudget >= budget0.minPage)) rBudget = budget0.minPage;
          }
          const snap0 = collSnapshot();
-         const windowCap = Math.max(leaf, rBudget * frac);
+         const windowCap = rBudget > 0
+            ? dirtyBudgetCap({ "freeStorageSize": rBudget, "storageSize": snap0.storageSize }, cal).cap
+            : budget0.minPage;
          const batches = [];
          let windowPacked = 0, windowAlloc = 0, windowN = 0;
          while (bi < allBatches.length && (windowAlloc < windowCap || !batches.length)) {
@@ -1937,12 +1976,12 @@
          kickCollStats();
          const snap1 = consumeAsyncSnap() || collSnapshot();
          const extended = (snap1.storageSize || 0) > sz0;
-         const noReusable = !(Number.isFinite(Rbefore) && Rbefore > 0);
-         if (extended || noReusable) {
+         const decision = shouldReplay({ "extended": extended, "R": Rbefore });
+         if (decision.replay) {
             await waitForCheckpoint({ "settle": true });
             await waitForReplLag();
             const snapReplay = collSnapshot();
-            console.log(`${label} ${cycle} replay batches=${batches.length} n=${windowN} storageSize=${snapReplay.storageSize} reusable=${snapReplay.freeStorageSize || 0} rewrite 2 (${extended ? 'extended' : 'R=0'})`);
+            console.log(`${label} ${cycle} replay batches=${batches.length} n=${windowN} storageSize=${snapReplay.storageSize} reusable=${snapReplay.freeStorageSize || 0} rewrite 2 (${decision.reason})`);
             for (const b of batches) {
                await waitForDirtyUnder(dirtyTune);
                await enqueueWrite(rewriteIds(b.ids, { "expect": b.n }), conc);
@@ -1952,11 +1991,10 @@
             await waitForCheckpoint({ "settle": true });
             await waitForReplLag();
             const settled = collSnapshot();
-            rBudget = +settled.freeStorageSize;
-            if (!Number.isFinite(rBudget) || rBudget < 0) rBudget = 0;
+            rBudget = dirtyBudgetCap(settled, cal).R;
             prevSz = settled.storageSize;
          } else {
-            console.log(`${label} ${cycle} skip replay (no extend, R>0) storageSize=${snap1.storageSize} reusable=${snap1.freeStorageSize || 0}`);
+            console.log(`${label} ${cycle} skip replay (${decision.reason}) storageSize=${snap1.storageSize} reusable=${snap1.freeStorageSize || 0}`);
             rBudget = Math.max(0, rBudget - windowAlloc);
          }
          packedDone += windowPacked;
@@ -1970,35 +2008,27 @@
       console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
    }
 
-   // strategy 'doubleParked': $natural:-1 cover, then parkedWindowReplay.
-   async function doubleParkedMain() {
+   async function parkedNaturalCover(label, dir, defaultPasses = 1) {
       const srcSnap = collSnapshot();
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
       const cal = await calibrateTFR();
-      const nDocs = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
-      console.log(`doubleParked: scanning ${nDocs} docs $natural:-1 $bsonSize (full cover)`);
-      const allBatches = await naturalPackedBatches(cal, nDocs, -1);
-      await parkedWindowReplay('doubleParked', cal, allBatches, nDocs);
-   }
-
-   // strategy 'naturalReply': naturalWindow cover, then parkedWindowReplay
-   // (per-window rewrite 1, conditional replay). Same loop as doubleParked.
-   // passes = how many unique $natural covers; each pass rescans (new RecordIds).
-   async function naturalReplyMain() {
-      const srcSnap = collSnapshot();
-      console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
-      const cal = await calibrateTFR();
-      const dir = Number(naturalDir) >= 0 ? 1 : -1;
-      const coverPasses = Number(passes) > 0 ? Math.ceil(passes) : 1;
-      for (let pass = 1; pass <= coverPasses; pass++) {
+      await eachCoverPass(defaultPasses, async(pass, n) => {
          const snap = pass === 1 ? srcSnap : collSnapshot();
          const nDocs = snap.objects || pageStats(snap).documentCount || 0;
-         const label = coverPasses > 1 ? `naturalReply ${pass}/${coverPasses}` : 'naturalReply';
-         console.log(`naturalReply: pass ${pass}/${coverPasses} scanning ${nDocs} docs $natural:${dir} $bsonSize (full cover, per-window replay)`);
+         const tag = n > 1 ? `${label} ${pass}/${n}` : label;
+         console.log(`${label}: pass ${pass}/${n} scanning ${nDocs} docs $natural:${dir} $bsonSize (full cover)`);
          const allBatches = await naturalPackedBatches(cal, nDocs, dir);
-         await parkedWindowReplay(label, cal, allBatches, nDocs);
-         if (pass < coverPasses) await waitForCheckpoint({ "settle": true });
-      }
+         await parkedWindowReplay(tag, cal, allBatches, nDocs);
+         if (pass < n) await waitForCheckpoint({ "settle": true });
+      });
+   }
+
+   async function doubleParkedMain() {
+      await parkedNaturalCover('doubleParked', -1, 1);
+   }
+
+   async function naturalReplyMain() {
+      await parkedNaturalCover('naturalReply', naturalDir, 1);
    }
 
    function wtCheckpoint() {
@@ -2232,7 +2262,7 @@
       const nBatches0 = budget0.nBatches;
       const docsPerWave = Math.max(1, batch0 * Math.max(1, nBatches0));
       const wavesPerPass = Math.max(1, Math.ceil((fill0.documentCount || 0) / docsPerWave));
-      const coverPasses = Number(passes) > 0 ? Math.ceil(passes) : 1;
+      const coverPasses = coverPassCount(1);
       const maxWaves = wavesPerPass * coverPasses;
 
       console.log(`sampler: ${sampler}`);
@@ -2288,18 +2318,22 @@
 
    try {
       preflightDropTmpSamples();
-      if (strategy === 'meetInMiddle' || sampler === 'meetInMiddle') await meetInMiddleMain();
-      else if (strategy === 'lowStressMode' || sampler === 'lowStressMode') await lowStressModeMain();
-      else if (strategy === 'updateOne' || sampler === 'updateOne') await updateOneModeMain();
-      else if (strategy === 'slidingShuffle' || sampler === 'slidingShuffle') await slidingShuffleMain();
-      else if (strategy === 'slidingWindow' || sampler === 'slidingWindow') await slidingWindowMain();
-      else if (strategy === 'quantile' || sampler === 'quantile') await quantileMain();
-      else if (strategy === 'rndQuantile' || sampler === 'rndQuantile') await rndQuantileMain();
-      else if (strategy === 'shapeQuantile' || sampler === 'shapeQuantile') await shapeQuantileMain();
-      else if (strategy === 'naturalWindow' || sampler === 'naturalWindow') await naturalWindowMain();
-      else if (strategy === 'naturalReply' || sampler === 'naturalReply') await naturalReplyMain();
-      else if (strategy === 'doubleParked' || sampler === 'doubleParked') await doubleParkedMain();
-      else await main();
+      const mains = {
+         "meetInMiddle": meetInMiddleMain,
+         "lowStressMode": lowStressModeMain,
+         "updateOne": updateOneModeMain,
+         "slidingShuffle": slidingShuffleMain,
+         "slidingWindow": slidingWindowMain,
+         "quantile": quantileMain,
+         "rndQuantile": rndQuantileMain,
+         "shapeQuantile": shapeQuantileMain,
+         "naturalWindow": naturalWindowMain,
+         "naturalReply": naturalReplyMain,
+         "doubleParked": doubleParkedMain,
+         "waves": main
+      };
+      const key = Object.keys(mains).find(k => k !== 'waves' && (strategy === k || sampler === k));
+      await (mains[key] || main)();
    } catch(e) {
       console.log('[red][ERROR][/]', e.errmsg || e.message || String(e));
       throw e;
