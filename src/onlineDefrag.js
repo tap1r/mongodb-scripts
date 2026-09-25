@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "1.3.1"
+ *  Version: "1.4.0"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,7 +17,7 @@
  *  - pageFillRatio: omit to autotune; set to pin
  *  - generationRatio (alias dirtyBudgetRatio, default 0.2)
  *  - reuseFloor (default 0.2)
- *  - reclaim: 'tail' (default) | 'none' | 'compact'
+ *  - reclaim: 'tail' (default) | 'none'
  *  - Other knobs: writeConcurrency (default 8), passes, naturalDir (1 | -1),
  *    updateDelayMs, updatesSoft, updatesHard, tfrOverride
  *    (alias curatorBatchSize), shuffleSampleSize, maxLagSeconds,
@@ -44,7 +44,7 @@
  */
 
 (() => { // User-facing comments are in the header. Mechanics live on the functions below. mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "1.3.1" };
+   const __script = { "name": "onlineDefrag.js", "version": "1.4.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -107,8 +107,10 @@
                             : (Number(o.dirtyBudgetRatio) > 0 ? +o.dirtyBudgetRatio : 0.2);
       const reuseFloor = Number(o.reuseFloor) > 0 ? +o.reuseFloor : 0.2;
       const reclaimIn = o.reclaim;
-      const reclaim = (reclaimIn === 'none' || reclaimIn === false) ? 'none'
-                    : (reclaimIn === 'compact' ? 'compact' : 'tail');
+      if (reclaimIn === 'compact') {
+         throw new Error('defragOptions.reclaim "compact" is not in this script; use "tail" (default) or "none"');
+      }
+      const reclaim = (reclaimIn === 'none' || reclaimIn === false) ? 'none' : 'tail';
       return Object.assign({}, o, {
          "strategy": strategy,
          "writeConcurrency": writeConcurrency,
@@ -1429,32 +1431,12 @@
    function needsReclaim(snap) {
       const b = generationCap(snap);
       if (b.G <= reuseFloor) return false;
-      if (typeof compactionHelper === 'function') {
-         return compactionHelper('collection', snap.storageSize || 0, snap.freeStorageSize || 0);
-      }
       return b.R > 1048576;
    }
 
-   async function compactCollection(label) {
-      const dbc = db.getSiblingDB(nsDb);
-      try {
-         let r;
-         try {
-            r = dbc.runCommand({ "compact": nsColl, "force": true, "comment": "onlineDefrag reclaim" });
-         } catch(_) {
-            r = dbc.runCommand({ "compact": nsColl, "comment": "onlineDefrag reclaim" });
-         }
-         if (r && typeof r.then === 'function') r = await r;
-         const freed = r?.bytesFreed;
-         console.log(`${label}: compact ok${freed != null ? ` bytesFreed=${freed}` : ''}`);
-      } catch(e) {
-         console.log(`${label}: compact unavailable, ${e.message || e}`);
-      }
-   }
-
    async function reclaimAfter(label, cal) {
-      // After density. tail: $natural:-1 one generation until G ≤ reuseFloor or
-      // storageSize does not fall (interior holes). compact is opt-in. none skips.
+      // After density. Default tail: $natural:-1 one generation until G ≤
+      // reuseFloor or storageSize does not fall (interior holes). none skips.
       if (reclaim === 'none') {
          console.log(`${label}: skip reclaim (reclaim=none)`);
          return;
@@ -1463,13 +1445,6 @@
       let snap = collSnapshot();
       if (!needsReclaim(snap)) {
          console.log(`${label}: skip reclaim ${formatGeneration(generationCap(snap, cal))} (G<=reuseFloor ${reuseFloor})`);
-         return;
-      }
-      if (reclaim === 'compact') {
-         console.log(`${label}: compact ${formatGeneration(generationCap(snap, cal))}`);
-         await compactCollection(label);
-         await waitForCheckpoint({ "settle": true });
-         console.log(EJSON.stringify({ "state": "post-compact storage", ...collSnapshot() }));
          return;
       }
       const maxRounds = 8;
