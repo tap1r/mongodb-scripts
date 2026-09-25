@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.5.9"
+ *  Version: "0.5.10"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -47,7 +47,7 @@
  */
 
 (() => { // mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "0.5.9" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.5.10" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -182,6 +182,27 @@
       };
    }
 
+   async function* aggDocs(pipeline, opts) {
+      const cursor = namespace.aggregate(pipeline, opts);
+      try {
+         if (typeof cursor[Symbol.asyncIterator] === 'function') {
+            for await (const doc of cursor) yield doc;
+            return;
+         }
+         for (;;) {
+            let has = typeof cursor.hasNext === 'function' ? cursor.hasNext() : false;
+            if (has && typeof has.then === 'function') has = await has;
+            if (!has) break;
+            let doc = cursor.next();
+            if (doc && typeof doc.then === 'function') doc = await doc;
+            if (doc == null) break;
+            yield doc;
+         }
+      } finally {
+         try { cursor.close(); } catch(_) { /* exhausted or already closed */ }
+      }
+   }
+
    // nPages = live/32KiB (compressed file bytes over uncompressed leaf_page_max).
    function pageStats(stats = {}) {
       const {
@@ -202,16 +223,16 @@
       };
    }
 
-   const bulkOpts = {
-      "ordered": false // writeConcern belongs on the txn, not bulkWrite
-   };
    const updatePipeline = [{ "$unset": "_id" }]; // leverages SERVER-36405
    const updateManyOpts = {
       "upsert": false, // must only update existing documents
-      "hint": { "_id": 1 } // must force hint to avoid $expr collscan
+      "hint": { "_id": 1 }, // must force hint to avoid $expr collscan
+      "comment": "online compacting updates"
    };
+   let txnFailed = 0;
 
-   // Txn updateMany + $unset _id. updateDelayMs before each rewrite.
+   // Sole source-collection writer: updateMany + $unset _id in a txn.
+   // No retry — competing writes take preference and still move RecordIds.
    async function rewriteFilter(filter, { expect } = {}) {
       if (Number(updateDelayMs) > 0) await delay(updateDelayMs);
       const session = db.getMongo().startSession({
@@ -220,19 +241,19 @@
       });
       const coll = session.getDatabase(nsDb).getCollection(nsColl);
       try {
-         await session.withTransaction(async() => {
-            const spec = { "updateMany": { "filter": filter, "update": updatePipeline, ...updateManyOpts } };
-            const { modifiedCount } = await coll.bulkWrite([spec], bulkOpts);
-            if (expect != null && modifiedCount !== expect) {
-               console.log(`\tmodifiedCount: ${modifiedCount}`);
-            }
-         }, {
+         session.startTransaction({
             "readConcern": { "level": "local" },
-            "writeConcern": { "w": "majority", "j": true },
-            "comment": "online compacting updates"
+            "writeConcern": { "w": "majority", "j": true }
          });
+         const { modifiedCount } = await coll.updateMany(filter, updatePipeline, updateManyOpts);
+         await session.commitTransaction();
+         if (expect != null && modifiedCount !== expect) {
+            console.log(`\tmodifiedCount: ${modifiedCount}`);
+         }
       } catch(error) {
-         console.log(`\ttxn conflict detected, aborting op`);
+         txnFailed++;
+         try { await session.abortTransaction(); } catch(_) { /* already aborted */ }
+         console.log(`\ttxn failed (${txnFailed}): ${error.message || error}`);
       } finally {
          await session.endSession();
       }
@@ -494,29 +515,27 @@
       return fallback;
    }
 
-   async function naturalPackedBatches(cal, maxDocs, naturalDir = -1) {
-      // Record-store cover in $natural order; $bsonSize on the server.
-      // $limit maxDocs (pre-update count) excludes inserts appended during the
-      // scan (Halloween). First-fit packed $in leaves. Client sees {_id, bson}.
+   async function* naturalPackedBatches(cal, maxDocs, naturalDir = -1) {
+      // Record-store cover in $natural order; $limit then $bsonSize on the
+      // server. Yield a first-fit $in when packedBudget fills. $limit maxDocs
+      // excludes inserts appended during the scan (Halloween).
       const { packedBudget } = packedPageBudget(cal);
       const dir = Number(naturalDir) >= 0 ? 1 : -1;
       const pipeline = [
-         { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } },
-         { "$limit": Math.max(1, maxDocs) }
+         { "$limit": Math.max(1, maxDocs) },
+         { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } }
       ];
-      const cursor = namespace.aggregate(pipeline, aggOpts(`natural ${dir} $bsonSize`, {
+      let cur = null;
+      for await (const doc of aggDocs(pipeline, aggOpts(`natural ${dir} $bsonSize`, {
          "hint": { "$natural": dir },
          "allowDiskUse": true,
          "cursor": { "batchSize": 256 }
-      }));
-      const batches = [];
-      let cur = null;
-      const consider = (doc) => {
+      }))) {
          const bson = +doc.bson || 0;
-         if (bson < 1) return;
+         if (bson < 1) continue;
          const packed = packedOf(bson, cal);
          if (cur && cur.n > 0 && cur.packed + packed > packedBudget) {
-            batches.push(cur);
+            yield cur;
             cur = null;
          }
          if (!cur) cur = { "ids": [], "n": 0, "bson": 0, "packed": 0 };
@@ -524,33 +543,19 @@
          cur.n++;
          cur.bson += bson;
          cur.packed += packed;
-      };
-      if (typeof cursor[Symbol.asyncIterator] === 'function') {
-         for await (const doc of cursor) consider(doc);
-      } else if (typeof cursor.forEach === 'function') {
-         cursor.forEach(consider);
-      } else {
-         let rows = typeof cursor.toArray === 'function' ? cursor.toArray() : [...cursor];
-         if (rows && typeof rows.then === 'function') rows = await rows;
-         for (const doc of rows || []) consider(doc);
       }
-      if (cur && cur.n) batches.push(cur);
-      return batches;
+      if (cur && cur.n) yield cur;
    }
 
-   async function startNaturalWindowCurator(cal, maxDocs) {
-      // Freeze a $natural + $bsonSize cover ($limit nDocs), then first-fit.
-      // Not a live stream: the scan finishes before density writes.
-      // naturalDir 1 = oldest RecordId first; -1 = newest first.
-      // $limit nDocs with dir=1 excludes concurrent tail inserts; dir=-1 is
-      // newest n (a concurrent insert can displace the oldest).
+   function startNaturalWindowCurator(cal, maxDocs) {
+      // Stream $natural first-fit batches into density writes. $limit nDocs
+      // with dir=1 excludes concurrent tail inserts; dir=-1 is newest n.
       const { packedBudget, bsonCap, leaf, fillRatio, compression } = packedPageBudget(cal);
       const dir = Number(naturalDir) >= 0 ? 1 : -1;
       console.log(`naturalWindow curator: $natural:${dir} scan nDocs=${maxDocs} packedBudget=${packedBudget} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)}`);
-      const batches = await naturalPackedBatches(cal, maxDocs, dir);
       const state = { "batchSize": packedBudget, "maxDocs": maxDocs, "taken": 0 };
       async function* gen() {
-         for (const b of batches) {
+         for await (const b of naturalPackedBatches(cal, maxDocs, dir)) {
             state.taken += b.n || 0;
             yield { "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson };
          }
@@ -558,62 +563,56 @@
       return {
          "state": state,
          "gen": gen(),
-         "totalBatches": batches.length,
+         "streaming": true,
          "packedBudget": packedBudget,
          "bsonCap": bsonCap
       };
    }
 
    function startQuantileCurator(cal, maxDocs) {
-      // strategy 'quantile': first-fit _id ranges while Σ ($bsonSize / C_mode)
-      // ≤ packedBudget. Calibrate may split the sample into size modes and
-      // measure per-mode C. Mixed modes along _id stay in one leaf until the
-      // packed cap. Jumbo docs get their own. $bucket (docSizes.js) histograms
-      // size classes — wrong axis for rewrite ranges.
+      // Stream first-fit _id ranges while Σ ($bsonSize / C_mode) ≤ packedBudget.
+      // $sort _id first (IXSCAN), then $limit, then $bsonSize.
       const { compression, packedBudget, bsonCap, leaf, fillRatio } = packedPageBudget(cal);
-      const pipeline = [
-         { "$sort": { "_id": 1 } },
-         { "$limit": Math.max(1, maxDocs) },
-         { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } }
-      ];
       const nModes = Array.isArray(cal?.modes) ? cal.modes.length : 0;
       console.log(`quantile curator: first-fit packedBudget=${packedBudget} bsonCap≈${Math.round(bsonCap)} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)} modes=${nModes >= 2 ? nModes : 'unimodal'}`);
-      const cursor = namespace.aggregate(pipeline, aggOpts("quantile first-fit packed ranges", {
-         "hint": { "_id": 1 },
-         "allowDiskUse": true
-      }));
-      const rows = [];
-      let cur = null;
-      const consume = (doc) => {
-         const bson = +doc.bson || 0;
-         const packed = packedOf(bson, cal);
-         if (cur && cur.n > 0 && cur.packed + packed > packedBudget) {
-            rows.push(cur);
-            cur = null;
-         }
-         if (!cur) cur = { "min": doc._id, "max": doc._id, "n": 0, "bson": 0, "packed": 0 };
-         else cur.max = doc._id;
-         cur.n++;
-         cur.bson += bson;
-         cur.packed += packed;
-      };
-      if (typeof cursor.forEach === 'function') cursor.forEach(consume);
-      else for (const doc of cursor) consume(doc);
-      if (cur && cur.n) rows.push(cur);
       const state = { "batchSize": packedBudget, "maxDocs": maxDocs, "taken": 0 };
       async function* gen() {
-         for (const row of rows) {
-            if (state.taken >= state.maxDocs) return;
-            state.taken += row.n || 0;
+         const pipeline = [
+            { "$sort": { "_id": 1 } },
+            { "$limit": Math.max(1, maxDocs) },
+            { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } }
+         ];
+         let cur = null;
+         for await (const doc of aggDocs(pipeline, aggOpts("quantile first-fit packed ranges", {
+            "hint": { "_id": 1 },
+            "allowDiskUse": true,
+            "cursor": { "batchSize": 256 }
+         }))) {
+            const bson = +doc.bson || 0;
+            const packed = packedOf(bson, cal);
+            if (cur && cur.n > 0 && cur.packed + packed > packedBudget) {
+               state.taken += cur.n;
+               yield {
+                  "range": { "$gte": cur.min, "$lte": cur.max },
+                  "n": cur.n, "packed": cur.packed, "bson": cur.bson
+               };
+               cur = null;
+            }
+            if (!cur) cur = { "min": doc._id, "max": doc._id, "n": 0, "bson": 0, "packed": 0 };
+            else cur.max = doc._id;
+            cur.n++;
+            cur.bson += bson;
+            cur.packed += packed;
+         }
+         if (cur && cur.n) {
+            state.taken += cur.n;
             yield {
-               "range": { "$gte": row.min, "$lte": row.max },
-               "n": row.n || 0,
-               "packed": row.packed || 0,
-               "bson": row.bson || 0
+               "range": { "$gte": cur.min, "$lte": cur.max },
+               "n": cur.n, "packed": cur.packed, "bson": cur.bson
             };
          }
       }
-      return { "state": state, "gen": gen(), "totalBatches": rows.length, "packedBudget": packedBudget, "bsonCap": bsonCap };
+      return { "state": state, "gen": gen(), "streaming": true, "packedBudget": packedBudget, "bsonCap": bsonCap };
    }
 
    // strategy 'shapeQuantile': first-fit packed $in per server-side hash of
@@ -624,16 +623,16 @@
       console.log(`shapeQuantile curator: first-fit packedBudget=${packedBudget} bsonCap≈${Math.round(bsonCap)} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)} shapes=${nShapes || 'unmeasured'}`);
       const state = { "batchSize": packedBudget, "maxDocs": maxDocs, "taken": 0 };
       async function* gen() {
-         const cursor = namespace.aggregate([
+         const open = new Map();
+         const pending = [];
+         for await (const doc of aggDocs([
+            { "$limit": Math.max(1, maxDocs) },
             shapeProjectStage()
          ], aggOpts("shapeQuantile $bsonSize $toHashedIndexKey", {
             "hint": { "_id": 1 },
             "allowDiskUse": true,
             "cursor": { "batchSize": 256 }
-         }));
-         const open = new Map();
-         const pending = [];
-         const consider = (doc) => {
+         }))) {
             const sig = keysSig(doc.shape);
             const bson = +doc.bson || 0;
             const packed = bson / Math.max(shapeCompression(sig, cal), 0.01);
@@ -651,35 +650,12 @@
             cur.n++;
             cur.bson += bson;
             cur.packed += packed;
-         };
-         const pull = async function*() {
-            if (typeof cursor[Symbol.asyncIterator] === 'function') {
-               for await (const doc of cursor) {
-                  consider(doc);
-                  while (pending.length) {
-                     const b = pending.shift();
-                     state.taken += b.n;
-                     yield { "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson, "shape": b.sig };
-                  }
-               }
-            } else {
-               while (true) {
-                  let has = typeof cursor.hasNext === 'function' ? cursor.hasNext() : false;
-                  if (has && typeof has.then === 'function') has = await has;
-                  if (!has) break;
-                  let doc = cursor.next();
-                  if (doc && typeof doc.then === 'function') doc = await doc;
-                  if (doc == null) break;
-                  consider(doc);
-                  while (pending.length) {
-                     const b = pending.shift();
-                     state.taken += b.n;
-                     yield { "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson, "shape": b.sig };
-                  }
-               }
+            while (pending.length) {
+               const b = pending.shift();
+               state.taken += b.n;
+               yield { "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson, "shape": b.sig };
             }
-         };
-         yield* pull();
+         }
          for (const cur of open.values()) {
             if (!cur.n) continue;
             state.taken += cur.n;
@@ -1405,7 +1381,8 @@
       }
 
       await drainWrites();
-      if (streaming) console.log(`${label} done batches=${pass}`);
+      if (streaming) console.log(`${label} done batches=${pass} txnFailed=${txnFailed}`);
+      else console.log(`${label} done txnFailed=${txnFailed}`);
       console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
    }
 
@@ -1424,30 +1401,46 @@
       for (let pass = 1; pass <= n; pass++) await body(pass, n);
    }
 
-   // Frozen $in batches: dirty-budget window, rewrite 1, then shouldReplay.
-   // Skip-replay does not wait for a checkpoint; rBudget decrements until a
-   // settle replenishes R. Halloween-safe (parked _id).
-   async function parkedWindowReplay(label, cal, allBatches, nDocs) {
+   // Stream first-fit batches into a dirty-budget window, freeze that window's
+   // _ids, rewrite 1, then shouldReplay. Halloween-safe (parked _id).
+   async function parkedWindowReplay(label, cal, batchSource, nDocs) {
       const { packedBudget, fillRatio, leaf, compression } = packedPageBudget(cal);
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
       const tune = dirtyTune();
-      const target = allBatches.reduce((s, b) => s + (b.packed || 0), 0);
-      const allocCover = allBatches.reduce((s, b) => s + batchAllocBytes(b, leaf, fillRatio, compression), 0);
+      const packedCover = estimateRewriteBytes(nDocs, cal);
       const budgetSnap = collSnapshot();
       const budget0 = dirtyBudgetCap(budgetSnap, cal);
       const R0 = budget0.R;
       const window0 = R0 > 0 ? budget0.cap : budget0.minPage;
-      const estWindows = window0 > 0 ? Math.max(1, Math.ceil(allocCover / window0)) : 1;
-      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} C=${compression.toFixed(3)} docs=${nDocs} batches=${allBatches.length} packedCover=${Math.round(target)} allocCover=${Math.round(allocCover)} (compressed, nPages×leaf/C) dirtyBudgetRatio=${budget0.frac} ${formatDirtyBudget(budget0)} windowCap=${Math.round(window0)} estWindows≈${estWindows} writeConcurrency=${conc} updateDelayMs=${Number(updateDelayMs) > 0 ? +updateDelayMs : 0} replay=${replay}`);
+      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} C=${compression.toFixed(3)} docs=${nDocs} batches=streaming packedCover≈${Math.round(packedCover)} dirtyBudgetRatio=${budget0.frac} ${formatDirtyBudget(budget0)} windowCap=${Math.round(window0)} writeConcurrency=${conc} updateDelayMs=${Number(updateDelayMs) > 0 ? +updateDelayMs : 0} replay=${replay}`);
 
       const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
+      const gen = typeof batchSource[Symbol.asyncIterator] === 'function'
+                ? batchSource
+                : (async function*() { for (const b of batchSource) yield b; })();
+      let held = null;
+      let sourceDone = false;
+
+      async function takeBatch() {
+         if (held) {
+            const b = held;
+            held = null;
+            return b;
+         }
+         if (sourceDone) return null;
+         const step = await gen.next();
+         if (step.done) {
+            sourceDone = true;
+            return null;
+         }
+         return step.value;
+      }
 
       let prevSz = budgetSnap.storageSize;
       let packedDone = 0;
       let cycle = 0;
-      let bi = 0;
       let rBudget = R0;
-      while (bi < allBatches.length) {
+      for (;;) {
          await waitForDirtyUnder(tune);
          await waitForReplLag({ "abortIfCheckpoint": true });
          await waitForCheckpoint();
@@ -1468,17 +1461,25 @@
             : budget0.minPage;
          const batches = [];
          let windowPacked = 0, windowAlloc = 0, windowN = 0;
-         while (bi < allBatches.length && (windowAlloc < windowCap || !batches.length)) {
-            const b = allBatches[bi++];
+         for (;;) {
+            const b = await takeBatch();
+            if (!b) break;
+            const add = batchAllocBytes(b, leaf, fillRatio, compression);
+            if (batches.length && windowAlloc + add > windowCap) {
+               held = b;
+               break;
+            }
             batches.push(b);
             windowPacked += b.packed || 0;
-            windowAlloc += batchAllocBytes(b, leaf, fillRatio, compression);
+            windowAlloc += add;
             windowN += b.n || 0;
+            if (windowAlloc >= windowCap) break;
          }
+         if (!batches.length) break;
          cycle++;
          const sz0 = snap0.storageSize || 0;
          const Rbefore = rBudget;
-         console.log(`${label} ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} window n=${windowN} batches=${batches.length}/${allBatches.length} packed=${Math.round(windowPacked)} alloc=${Math.round(windowAlloc)} R=${Number.isFinite(Rbefore) ? Rbefore : 0} cap=${Math.round(windowCap)} storageSize=${sz0} rewrite 1`);
+         console.log(`${label} ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(packedCover)} window n=${windowN} batches=${batches.length} packed=${Math.round(windowPacked)} alloc=${Math.round(windowAlloc)} R=${Number.isFinite(Rbefore) ? Rbefore : 0} cap=${Math.round(windowCap)} storageSize=${sz0} rewrite 1`);
          for (const b of batches) {
             await waitForDirtyUnder(tune);
             await enqueueWrite(rewriteIds(b.ids, { "expect": b.n }), conc);
@@ -1512,10 +1513,10 @@
          const snap2 = collSnapshot();
          const dSz = (snap2.storageSize || 0) - (prevSz || 0);
          const Rafter = +snap2.freeStorageSize;
-         console.log(`${label} cycle ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} packed=${Math.round(windowPacked)} alloc=${Math.round(windowAlloc)} R=${Number.isFinite(Rbefore) ? Rbefore : 0} dStorageSize=${dSz} storageSize=${snap2.storageSize} reusable=${Number.isFinite(Rafter) ? Rafter : 0} rBudget=${Math.round(rBudget)}${dSz > 0 ? ' EXTEND' : ''}`);
+         console.log(`${label} cycle ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(packedCover)} packed=${Math.round(windowPacked)} alloc=${Math.round(windowAlloc)} R=${Number.isFinite(Rbefore) ? Rbefore : 0} dStorageSize=${dSz} storageSize=${snap2.storageSize} reusable=${Number.isFinite(Rafter) ? Rafter : 0} rBudget=${Math.round(rBudget)}${dSz > 0 ? ' EXTEND' : ''}`);
          if ((snap2.storageSize || 0) > (prevSz || 0)) prevSz = snap2.storageSize;
       }
-      console.log(`${label} done cycles=${cycle} packedDone=${Math.round(packedDone)} targetPacked=${Math.round(target)}`);
+      console.log(`${label} done cycles=${cycle} packedDone=${Math.round(packedDone)} txnFailed=${txnFailed}`);
       console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
    }
 
@@ -1527,9 +1528,8 @@
          const snap = pass === 1 ? srcSnap : collSnapshot();
          const nDocs = snap.objects || pageStats(snap).documentCount || 0;
          const tag = n > 1 ? `${label} ${pass}/${n}` : label;
-         console.log(`${label}: pass ${pass}/${n} scanning ${nDocs} docs $natural:${dir} $bsonSize (full cover)`);
-         const allBatches = await naturalPackedBatches(cal, nDocs, dir);
-         await parkedWindowReplay(tag, cal, allBatches, nDocs);
+         console.log(`${label}: pass ${pass}/${n} scanning ${nDocs} docs $natural:${dir} $bsonSize (streamed cover, freeze per dirty window)`);
+         await parkedWindowReplay(tag, cal, naturalPackedBatches(cal, nDocs, dir), nDocs);
          if (pass < n) await waitForCheckpoint({ "settle": true });
       });
    }
