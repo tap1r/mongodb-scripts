@@ -1,11 +1,13 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "1.2.0"
+ *  Version: "1.3.0"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
  *  Notes:
+ *  - This header is user-facing (how to run and which knobs). Mechanics live
+ *    on the functions that implement them.
  *  - mongosh only. Do not top-level-await this file.
  *  - --eval must use var (not let/const) for dbName, collName, defragOptions.
  *  - Requires mdblib.js on $MDBLIB, ~/.mongodb, or cwd.
@@ -13,14 +15,11 @@
  *  - Aliases: naturalReplay → naturalReply; doubleParked → naturalReply with
  *    naturalDir:-1; concurrentUpdates → writeConcurrency;
  *    lowStressDirtyMax/Hard → updatesSoft/updatesHard.
- *  - defragOptions.replay: 'onExtend' (default) | 'never' | 'always'
- *    (naturalReply only)
- *  - pageFillRatio: omit to autotune from the packed sample's settled
- *    $collStats; set to pin (default was 0.9).
- *  - generationRatio (alias dirtyBudgetRatio, default 0.2): dest bytes per
- *    checkpoint ≤ ratio × R (never a target reuse%).
- *  - reuseFloor (default 0.2): reclaim stops when G = R/storageSize ≤ this.
- *  - reclaim: 'tail' (default, $natural:-1 after density) | 'none' | 'compact'.
+ *  - replay: 'onExtend' (default) | 'never' | 'always'
+ *  - pageFillRatio: omit to autotune; set to pin
+ *  - generationRatio (alias dirtyBudgetRatio, default 0.2)
+ *  - reuseFloor (default 0.2)
+ *  - reclaim: 'tail' (default) | 'none' | 'compact'
  *  - Other knobs: writeConcurrency (default 8), passes, naturalDir (1 | -1),
  *    updateDelayMs, updatesSoft, updatesHard, tfrOverride
  *    (alias curatorBatchSize), shuffleSampleSize, maxLagSeconds,
@@ -47,7 +46,7 @@
  */
 
 (() => { // mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "1.2.0" };
+   const __script = { "name": "onlineDefrag.js", "version": "1.3.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -64,6 +63,7 @@
 })();
 
 (async() => {
+   // --- options ---
    const nsDb = typeof dbName === 'undefined' ? 'database' : dbName;
    const nsColl = typeof collName === 'undefined' ? 'collection' : collName;
    const namespace = db.getSiblingDB(nsDb).getCollection(nsColl);
@@ -231,6 +231,7 @@
    };
    let txnFailed = 0;
 
+   // --- rewrite / txn ---
    // Sole source-collection writer: updateMany + $unset _id in a txn.
    // No retry — competing writes take preference and still move RecordIds.
    async function rewriteFilter(filter, { expect } = {}) {
@@ -349,9 +350,10 @@
       return nDocs * avg / Math.max(compression, 0.01);
    }
 
+   // --- generation ---
    function generationCap(snap, cal) {
-      // Per-generation dest cap in compressed bytes: generationRatio × R.
-      // Not a target for collStats reuse% (G). Never exceed R (no-extend).
+      // generationRatio × freeStorageSize (R), compressed dest bytes, never > R.
+      // Not a target for collStats reuse% G = R/storageSize.
       const frac = Number(generationRatio) > 0 ? +generationRatio : 0.05;
       const Rraw = +snap?.freeStorageSize;
       const R = Number.isFinite(Rraw) && Rraw > 0 ? Rraw : 0;
@@ -371,7 +373,7 @@
       };
    }
 
-   function formatDirtyBudget(b) {
+   function formatGeneration(b) {
       return `reusable=${b.R} (G=${(100 * b.G).toFixed(1)}% of storageSize) cap=${Math.round(b.cap)} (${(100 * b.frac).toFixed(0)}% of R, ${b.units})`;
    }
 
@@ -399,14 +401,14 @@
          if (!waited.available && !waited.completed) await delay(statsPollMs);
          await waitForReplLag();
          account.refresh();
-         console.log(`generation settle ${formatDirtyBudget(account)}`);
+         console.log(`generation settle ${formatGeneration(account)}`);
       };
       return account;
    }
 
    function autotunePageFillRatio(ps, compression, avgObjSize) {
-      // Packed sample: TFR docs/leaf × avg / C = packed bytes per estimated
-      // leaf. Ratio = that / leaf_page_max, clamped to the WT split_pct band.
+      // Used when pageFillRatio is omitted. TFR × avg / C / leaf from the packed
+      // sample's settled $collStats, clamped to the WT split_pct band (was 0.9).
       const leaf = Number(ps?.dataPageSize) > 0 ? +ps.dataPageSize : 32 * 1024;
       const tfr = Number(ps?.pageFillActual) > 0 ? +ps.pageFillActual : 0;
       const C = Math.max(Number(compression) > 0 ? +compression : 1, 0.01);
@@ -544,6 +546,7 @@
       return fallback;
    }
 
+   // --- curators ---
    function logCurator(kind, cal, extra) {
       const b = packedPageBudget(cal);
       console.log(`${kind} curator: ${extra} packedBudget=${b.packedBudget} bsonCap≈${Math.round(b.bsonCap)} leaf=${b.leaf} pageFillRatio=${b.fillRatio} compression=${b.compression.toFixed(3)}`);
@@ -641,6 +644,7 @@
       })();
    }
 
+   // --- waits ---
    function wtCheckpoint() {
       // WT-11171: v8+ wiredTiger.checkpoint; v7 wiredTiger.transaction.
       // mongos / Atlas M0/Flex / non-WT: no wiredTiger section.
@@ -845,6 +849,7 @@
    // create collections in the source db (may lack createCollection). Names
    // are <sourceDb>.<sourceColl>_<oid> (dots allowed; no $). Needs readWrite
    // on that tmp db.
+   // --- calibrate ---
    const tmpStatsDbName = '__tmpdb_for_collection_stats';
    function tmpStatsDb() {
       return db.getSiblingDB(tmpStatsDbName);
@@ -1253,15 +1258,10 @@
       return { "tfr": tfr, "compression": compression, "avgObjSize": measured.avgObjSize, "ps": ps, "modes": modes, "shapes": shapes, "pageFillRatio": tunedFill };
    }
 
-   async function densityStart() {
-      const srcSnap = collSnapshot();
-      console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
-      const cal = await calibrateTFR();
-      const nDocs = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
-      return { "srcSnap": srcSnap, "cal": cal, "nDocs": nDocs };
-   }
-
+   // --- writeCover ---
    function shouldReplay({ extended, R }, policy = replay) {
+      // Density covers pass replay:'never'. Freeze windows (naturalReply) use
+      // onExtend | never | always.
       if (policy === 'always') return { "replay": true, "reason": "always" };
       if (policy === 'never') return { "replay": false, "reason": "never" };
       if (extended) return { "replay": true, "reason": "extended" };
@@ -1342,6 +1342,7 @@
       replay: replayOpt,
       oneGeneration = false
    } = {}) {
+      // freezeWindow parks the current generation's _ids for maybeReplay.
       const policy = replayOpt || (freezeWindow ? replay : 'never');
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
       const tune = dirtyTune();
@@ -1350,7 +1351,7 @@
       const account = makeGeneration(collSnapshot(), cal);
       const packedPctR = account.R > 0 ? 100 * packedCover / account.R : 0;
       const batch = tfrOverride > 0 ? tfrOverride : cal.tfr;
-      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} C=${compression.toFixed(3)} docs=${nDocs} generationRatio=${account.frac} ${formatDirtyBudget(account)} packedCover≈${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) writeConcurrency=${conc} replay=${policy} freezeWindow=${freezeWindow}`);
+      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} C=${compression.toFixed(3)} docs=${nDocs} generationRatio=${account.frac} ${formatGeneration(account)} packedCover≈${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) writeConcurrency=${conc} replay=${policy} freezeWindow=${freezeWindow}`);
 
       const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
       const gen = typeof batchSource[Symbol.asyncIterator] === 'function'
@@ -1379,7 +1380,7 @@
             if (waited.completed) {
                await drainWrites();
                account.refresh();
-               console.log(`checkpoint: settled stats ${formatDirtyBudget(account)}`);
+               console.log(`checkpoint: settled stats ${formatGeneration(account)}`);
             }
          });
          if (account.cap > 0 && account.used > 0 && account.remaining() < account.minPage) {
@@ -1406,7 +1407,7 @@
             await maybeReplay(win.batches, account, policy, sz0, enqueueWrite, conc, tune, tag, drainWrites);
             const snap2 = collSnapshot();
             const dSz = (snap2.storageSize || 0) - (prevSz || 0);
-            console.log(`${label} cycle ${pass} packedDone=${Math.round(packedDone)}/${Math.round(packedCover)} alloc=${Math.round(win.alloc)} ${formatDirtyBudget(account)} used=${Math.round(account.used)} dStorageSize=${dSz}${dSz > 0 ? ' EXTEND' : ''}`);
+            console.log(`${label} cycle ${pass} packedDone=${Math.round(packedDone)}/${Math.round(packedCover)} alloc=${Math.round(win.alloc)} ${formatGeneration(account)} used=${Math.round(account.used)} dStorageSize=${dSz}${dSz > 0 ? ' EXTEND' : ''}`);
             if ((snap2.storageSize || 0) > (prevSz || 0)) prevSz = snap2.storageSize;
          } else {
             await writeBatches(win.batches, enqueueWrite, conc, tune, tag, false);
@@ -1418,6 +1419,7 @@
       console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
    }
 
+   // --- reclaim ---
    function needsReclaim(snap) {
       const b = generationCap(snap);
       if (b.G <= reuseFloor) return false;
@@ -1445,6 +1447,8 @@
    }
 
    async function reclaimAfter(label, cal) {
+      // After density. tail: $natural:-1 one generation until G ≤ reuseFloor or
+      // storageSize does not fall (interior holes). compact is opt-in. none skips.
       if (reclaim === 'none') {
          console.log(`${label}: skip reclaim (reclaim=none)`);
          return;
@@ -1452,11 +1456,11 @@
       await waitForCheckpoint({ "settle": true });
       let snap = collSnapshot();
       if (!needsReclaim(snap)) {
-         console.log(`${label}: skip reclaim ${formatDirtyBudget(generationCap(snap, cal))} (G<=reuseFloor ${reuseFloor})`);
+         console.log(`${label}: skip reclaim ${formatGeneration(generationCap(snap, cal))} (G<=reuseFloor ${reuseFloor})`);
          return;
       }
       if (reclaim === 'compact') {
-         console.log(`${label}: compact ${formatDirtyBudget(generationCap(snap, cal))}`);
+         console.log(`${label}: compact ${formatGeneration(generationCap(snap, cal))}`);
          await compactCollection(label);
          await waitForCheckpoint({ "settle": true });
          console.log(EJSON.stringify({ "state": "post-compact storage", ...collSnapshot() }));
@@ -1467,12 +1471,12 @@
          snap = collSnapshot();
          const g0 = generationCap(snap, cal);
          if (!needsReclaim(snap)) {
-            console.log(`${label}: reclaim done ${formatDirtyBudget(g0)}`);
+            console.log(`${label}: reclaim done ${formatGeneration(g0)}`);
             return;
          }
          const nDocs = snap.objects || pageStats(snap).documentCount || 0;
          const sz0 = snap.storageSize || 0;
-         console.log(`${label}: reclaim tail ${round}/${maxRounds} $natural:-1 ${formatDirtyBudget(g0)}`);
+         console.log(`${label}: reclaim tail ${round}/${maxRounds} $natural:-1 ${formatGeneration(g0)}`);
          await writeCover(`${label} reclaim ${round}`, cal, naturalPackedBatches(cal, nDocs, -1), nDocs, {
             "freezeWindow": true,
             "replay": "never",
@@ -1483,9 +1487,9 @@
          const dSz = (after.storageSize || 0) - sz0;
          const g1 = generationCap(after, cal);
          if (dSz < 0) {
-            console.log(`${label}: TRIM dStorageSize=${dSz} ${formatDirtyBudget(g1)}`);
+            console.log(`${label}: TRIM dStorageSize=${dSz} ${formatGeneration(g1)}`);
          } else {
-            console.log(`${label}: no ftruncate dStorageSize=${dSz} ${formatDirtyBudget(g1)} (holes are interior or tail was not EOF)`);
+            console.log(`${label}: no ftruncate dStorageSize=${dSz} ${formatGeneration(g1)} (holes are interior or tail was not EOF)`);
             return;
          }
          if (!needsReclaim(after)) return;
@@ -1497,22 +1501,24 @@
       for (let pass = 1; pass <= n; pass++) await body(pass, n);
    }
 
+   function naturalCurator(kind, dir) {
+      return (cal, nDocs) => {
+         logCurator(kind, cal, `$natural:${dir} scan nDocs=${nDocs}`);
+         return naturalPackedBatches(cal, nDocs, dir);
+      };
+   }
+
+   // --- run ---
    async function run() {
+      // preflight → calibrate → writeCover × passes → reclaimAfter.
       preflightDropTmpSamples();
       const plans = {
          "naturalReply": {
-            "curator": (cal, nDocs) => {
-               logCurator('naturalReply', cal, `$natural:${naturalDir} scan nDocs=${nDocs}`);
-               return naturalPackedBatches(cal, nDocs, naturalDir);
-            },
+            "curator": naturalCurator('naturalReply', naturalDir),
             "freezeWindow": true
          },
          "naturalWindow": {
-            "curator": (cal, nDocs) => {
-               const dir = Number(naturalDir) >= 0 ? 1 : -1;
-               logCurator('naturalWindow', cal, `$natural:${dir} scan nDocs=${nDocs}`);
-               return naturalPackedBatches(cal, nDocs, dir);
-            },
+            "curator": naturalCurator('naturalWindow', naturalDir),
             "freezeWindow": false,
             "replay": "never"
          },
@@ -1528,21 +1534,24 @@
          }
       };
       const plan = plans[strategy];
-      const started = await densityStart();
+      const srcSnap = collSnapshot();
+      console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
+      const cal = await calibrateTFR();
+      const nDocs0 = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
       await eachCoverPass(1, async(pass, n) => {
-         const snap = pass === 1 ? started.srcSnap : collSnapshot();
-         const nDocs = pass === 1 ? started.nDocs : (snap.objects || pageStats(snap).documentCount || 0);
+         const snap = pass === 1 ? srcSnap : collSnapshot();
+         const nDocs = pass === 1 ? nDocs0 : (snap.objects || pageStats(snap).documentCount || 0);
          const tag = n > 1 ? `${strategy} ${pass}/${n}` : strategy;
          if (n > 1) {
             console.log(`${strategy}: pass ${pass}/${n} nDocs=${nDocs} freezeWindow=${plan.freezeWindow}`);
          }
-         await writeCover(tag, started.cal, plan.curator(started.cal, nDocs), nDocs, {
+         await writeCover(tag, cal, plan.curator(cal, nDocs), nDocs, {
             "freezeWindow": plan.freezeWindow,
             "replay": plan.replay
          });
          if (pass < n) await waitForCheckpoint({ "settle": true });
       });
-      await reclaimAfter(strategy, started.cal);
+      await reclaimAfter(strategy, cal);
    }
 
    try {
