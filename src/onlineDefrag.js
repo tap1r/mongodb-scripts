@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.5.10"
+ *  Version: "1.0.0"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -47,7 +47,7 @@
  */
 
 (() => { // mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "0.5.10" };
+   const __script = { "name": "onlineDefrag.js", "version": "1.0.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -328,6 +328,18 @@
       console.log(`updates ${((u || 0) * 100).toFixed(2)}% (soft ${(tune.soft * 100).toFixed(2)}%), resuming`);
    }
 
+   async function writeGate(tune, onReady) {
+      for (;;) {
+         await waitForDirtyUnder(tune);
+         await waitForReplLag({ "abortIfCheckpoint": true });
+         const waited = await waitForCheckpoint();
+         const ckpt = wtCheckpoint();
+         if (!ignoreCheckpoint && ckpt.available && ckpt.running) continue;
+         if (typeof onReady === 'function') await onReady(waited);
+         return waited;
+      }
+   }
+
    function estimateRewriteBytes(nDocs, packed) {
       // On-disk bytes after block compression, from the packed sample:
       // n * avgObjSize (BSON) / (dataSize / live). Do not debit uncompressed
@@ -465,36 +477,56 @@
       return bson / Math.max(modeCompression(bson, cal), 0.01);
    }
 
-   function shapeKeysExpr() {
+   function firstFit(budget) {
+      let cur = null;
       return {
-         "$sortArray": {
-            "input": {
-               "$filter": {
-                  "input": {
-                     "$map": {
-                        "input": { "$objectToArray": "$$ROOT" },
-                        "as": "f",
-                        "in": "$$f.k"
-                     }
-                  },
-                  "as": "k",
-                  "cond": { "$ne": ["$$k", "_id"] }
-               }
-            },
-            "sortBy": 1
+         offer(packed, start) {
+            let closed = null;
+            if (cur && cur.n > 0 && cur.packed + packed > budget) {
+               closed = cur;
+               cur = null;
+            }
+            if (!cur) cur = start();
+            return closed;
+         },
+         add(bson, packed) {
+            cur.n++;
+            cur.bson += bson;
+            cur.packed += packed;
+            return cur;
+         },
+         flush() {
+            const b = cur && cur.n ? cur : null;
+            cur = null;
+            return b;
          }
       };
-   }
-
-   function shapeHashExpr() {
-      return { "$toHashedIndexKey": shapeKeysExpr() };
    }
 
    function shapeProjectStage() {
       return {
          "$project": {
             "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] },
-            "shape": shapeHashExpr()
+            "shape": {
+               "$toHashedIndexKey": {
+                  "$sortArray": {
+                     "input": {
+                        "$filter": {
+                           "input": {
+                              "$map": {
+                                 "input": { "$objectToArray": "$$ROOT" },
+                                 "as": "f",
+                                 "in": "$$f.k"
+                              }
+                           },
+                           "as": "k",
+                           "cond": { "$ne": ["$$k", "_id"] }
+                        }
+                     },
+                     "sortBy": 1
+                  }
+               }
+            }
          }
       };
    }
@@ -525,7 +557,7 @@
          { "$limit": Math.max(1, maxDocs) },
          { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } }
       ];
-      let cur = null;
+      const fit = firstFit(packedBudget);
       for await (const doc of aggDocs(pipeline, aggOpts(`natural ${dir} $bsonSize`, {
          "hint": { "$natural": dir },
          "allowDiskUse": true,
@@ -534,17 +566,12 @@
          const bson = +doc.bson || 0;
          if (bson < 1) continue;
          const packed = packedOf(bson, cal);
-         if (cur && cur.n > 0 && cur.packed + packed > packedBudget) {
-            yield cur;
-            cur = null;
-         }
-         if (!cur) cur = { "ids": [], "n": 0, "bson": 0, "packed": 0 };
-         cur.ids.push(doc._id);
-         cur.n++;
-         cur.bson += bson;
-         cur.packed += packed;
+         const closed = fit.offer(packed, () => ({ "ids": [], "n": 0, "bson": 0, "packed": 0 }));
+         if (closed) yield closed;
+         fit.add(bson, packed).ids.push(doc._id);
       }
-      if (cur && cur.n) yield cur;
+      const last = fit.flush();
+      if (last) yield last;
    }
 
    function startNaturalWindowCurator(cal, maxDocs) {
@@ -563,7 +590,6 @@
       return {
          "state": state,
          "gen": gen(),
-         "streaming": true,
          "packedBudget": packedBudget,
          "bsonCap": bsonCap
       };
@@ -582,7 +608,14 @@
             { "$limit": Math.max(1, maxDocs) },
             { "$project": { "bson": { "$ifNull": [{ "$bsonSize": "$$ROOT" }, 0] } } }
          ];
-         let cur = null;
+         const fit = firstFit(packedBudget);
+         const emit = (row) => {
+            state.taken += row.n;
+            return {
+               "range": { "$gte": row.min, "$lte": row.max },
+               "n": row.n, "packed": row.packed, "bson": row.bson
+            };
+         };
          for await (const doc of aggDocs(pipeline, aggOpts("quantile first-fit packed ranges", {
             "hint": { "_id": 1 },
             "allowDiskUse": true,
@@ -590,29 +623,15 @@
          }))) {
             const bson = +doc.bson || 0;
             const packed = packedOf(bson, cal);
-            if (cur && cur.n > 0 && cur.packed + packed > packedBudget) {
-               state.taken += cur.n;
-               yield {
-                  "range": { "$gte": cur.min, "$lte": cur.max },
-                  "n": cur.n, "packed": cur.packed, "bson": cur.bson
-               };
-               cur = null;
-            }
-            if (!cur) cur = { "min": doc._id, "max": doc._id, "n": 0, "bson": 0, "packed": 0 };
-            else cur.max = doc._id;
-            cur.n++;
-            cur.bson += bson;
-            cur.packed += packed;
+            const closed = fit.offer(packed, () => ({ "min": doc._id, "max": doc._id, "n": 0, "bson": 0, "packed": 0 }));
+            if (closed) yield emit(closed);
+            const cur = fit.add(bson, packed);
+            cur.max = doc._id;
          }
-         if (cur && cur.n) {
-            state.taken += cur.n;
-            yield {
-               "range": { "$gte": cur.min, "$lte": cur.max },
-               "n": cur.n, "packed": cur.packed, "bson": cur.bson
-            };
-         }
+         const last = fit.flush();
+         if (last) yield emit(last);
       }
-      return { "state": state, "gen": gen(), "streaming": true, "packedBudget": packedBudget, "bsonCap": bsonCap };
+      return { "state": state, "gen": gen(), "packedBudget": packedBudget, "bsonCap": bsonCap };
    }
 
    // strategy 'shapeQuantile': first-fit packed $in per server-side hash of
@@ -623,8 +642,20 @@
       console.log(`shapeQuantile curator: first-fit packedBudget=${packedBudget} bsonCap≈${Math.round(bsonCap)} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)} shapes=${nShapes || 'unmeasured'}`);
       const state = { "batchSize": packedBudget, "maxDocs": maxDocs, "taken": 0 };
       async function* gen() {
-         const open = new Map();
+         const fits = new Map();
          const pending = [];
+         const fitFor = (sig) => {
+            let f = fits.get(sig);
+            if (!f) {
+               f = firstFit(packedBudget);
+               fits.set(sig, f);
+            }
+            return f;
+         };
+         const emit = (b) => {
+            state.taken += b.n;
+            return { "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson, "shape": b.sig };
+         };
          for await (const doc of aggDocs([
             { "$limit": Math.max(1, maxDocs) },
             shapeProjectStage()
@@ -636,37 +667,20 @@
             const sig = keysSig(doc.shape);
             const bson = +doc.bson || 0;
             const packed = bson / Math.max(shapeCompression(sig, cal), 0.01);
-            let cur = open.get(sig);
-            if (cur && cur.n > 0 && cur.packed + packed > packedBudget) {
-               pending.push(cur);
-               open.delete(sig);
-               cur = null;
-            }
-            if (!cur) {
-               cur = { "ids": [], "n": 0, "bson": 0, "packed": 0, "sig": sig };
-               open.set(sig, cur);
-            }
-            cur.ids.push(doc._id);
-            cur.n++;
-            cur.bson += bson;
-            cur.packed += packed;
-            while (pending.length) {
-               const b = pending.shift();
-               state.taken += b.n;
-               yield { "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson, "shape": b.sig };
-            }
+            const fit = fitFor(sig);
+            const closed = fit.offer(packed, () => ({ "ids": [], "n": 0, "bson": 0, "packed": 0, "sig": sig }));
+            if (closed) pending.push(closed);
+            fit.add(bson, packed).ids.push(doc._id);
+            while (pending.length) yield emit(pending.shift());
          }
-         for (const cur of open.values()) {
-            if (!cur.n) continue;
-            state.taken += cur.n;
-            yield { "ids": cur.ids, "n": cur.n, "packed": cur.packed, "bson": cur.bson, "shape": cur.sig };
+         for (const fit of fits.values()) {
+            const last = fit.flush();
+            if (last) yield emit(last);
          }
       }
       return {
          "state": state,
          "gen": gen(),
-         "totalBatches": 0,
-         "streaming": true,
          "packedBudget": packedBudget,
          "bsonCap": bsonCap
       };
@@ -907,6 +921,32 @@
       return `${tmpSamplePrefix()}_${hex}`;
    }
 
+   function mergeInto(srcColl, stages, intoName, comment, whenMatched = 'keepExisting') {
+      srcColl.aggregate([
+         ...stages,
+         { "$merge": {
+            "into": { "db": tmpStatsDbName, "coll": intoName },
+            "whenMatched": whenMatched,
+            "whenNotMatched": "insert"
+         } }
+      ], aggOpts(comment)).toArray();
+   }
+
+   function sampleMerge(srcColl, intoName, sampleN, nObjs, comment) {
+      const cap = randomCursorSampleCap(nObjs);
+      let remaining = Math.max(1, Math.ceil(+sampleN) || 1);
+      if (nObjs > 0) remaining = Math.min(remaining, nObjs);
+      if (nObjs > 100 && remaining > cap) {
+         console.log(`calibrate: $sample ${remaining} is >=5% of ${nObjs}; ${Math.ceil(remaining / cap)} random-cursor draws of <=${cap}`);
+      }
+      while (remaining > 0) {
+         const size = (nObjs > 100) ? Math.min(remaining, Math.max(1, cap)) : remaining;
+         mergeInto(srcColl, [{ "$sample": { "size": size } }], intoName, comment, 'keepExisting');
+         remaining -= size;
+         if (nObjs <= 100) break;
+      }
+   }
+
    function dropTmpSample(tmpDb, name, reason = 'drop') {
       try {
          tmpDb.getCollection(name).drop();
@@ -1080,17 +1120,12 @@
             const bound = k === modes.length - 1
                         ? { "$lte": [packedExpr, m.max] }
                         : { "$lt": [packedExpr, m.max] };
-            tmpDb.getCollection(srcName).aggregate([
+            mergeInto(tmpDb.getCollection(srcName), [
                { "$match": { "$expr": { "$and": [
                   { "$gte": [packedExpr, m.min] },
                   bound
-               ] } } },
-               { "$merge": {
-                  "into": { "db": tmpStatsDbName, "coll": name },
-                  "whenMatched": "replace",
-                  "whenNotMatched": "insert"
-               } }
-            ], aggOpts(`${strategy} calibrate mode ${k} $merge`)).toArray();
+               ] } } }
+            ], name, `${strategy} calibrate mode ${k} $merge`, 'replace');
          }
          console.log('calibrate modes: waiting for checkpoint before per-mode $collStats');
          await waitForCheckpoint({ "settle": true, "force": true });
@@ -1164,16 +1199,11 @@
                tmpDb.createCollection(name);
             }
             created.push(name);
-            tmpDb.getCollection(srcName).aggregate([
-               { "$set": { "shape": shapeHashExpr() } },
+            mergeInto(tmpDb.getCollection(srcName), [
+               { "$set": { "shape": shapeProjectStage().$project.shape } },
                { "$match": { "shape": s.hash } },
-               { "$unset": "shape" },
-               { "$merge": {
-                  "into": { "db": tmpStatsDbName, "coll": name },
-                  "whenMatched": "replace",
-                  "whenNotMatched": "insert"
-               } }
-            ], aggOpts(`${strategy} calibrate shape ${k} $merge`)).toArray();
+               { "$unset": "shape" }
+            ], name, `${strategy} calibrate shape ${k} $merge`, 'replace');
          }
          console.log('calibrate shapes: waiting for checkpoint before per-shape $collStats');
          await waitForCheckpoint({ "settle": true, "force": true });
@@ -1232,10 +1262,6 @@
       if (sampleN < 1) throw new Error(`${strategy}: empty namespace, cannot calibrate TFR`);
       const tmpName = tmpSampleName();
       const tmpDb = tmpStatsDb();
-      const sampleCap = randomCursorSampleCap(nObjs);
-      const sampleDraws = (nObjs > 100 && sampleN > sampleCap)
-         ? Math.ceil(sampleN / sampleCap)
-         : 1;
       console.log(`${strategy} calibrate: $sample ${sampleN} (${nBins} packed bins × ${perLowBin} docs; 2 leaves at bson>=${minBson} C=${assumeC}) compressor=${compressor} -> ${tmpStatsDbName}.${tmpName}`);
       try {
          try {
@@ -1246,25 +1272,7 @@
             tmpDb.createCollection(tmpName);
          }
          console.log(`calibrate collection created: ${tmpStatsDbName}.${tmpName}`);
-         // One $sample >=5% of n COLLSCAN+sorts every document. M0 ignores
-         // allowDiskUse (32MiB), which is how 16k of ~204k threw here.
-         if (sampleDraws > 1) {
-            console.log(`calibrate: $sample ${sampleN} is >=5% of ${nObjs}; ${sampleDraws} random-cursor draws of <=${sampleCap}`);
-         }
-         let remaining = sampleN;
-         while (remaining > 0) {
-            const size = (nObjs > 100) ? Math.min(remaining, Math.max(1, sampleCap)) : remaining;
-            namespace.aggregate([
-               { "$sample": { "size": size } },
-               { "$merge": {
-                  "into": { "db": tmpStatsDbName, "coll": tmpName },
-                  "whenMatched": "keepExisting",
-                  "whenNotMatched": "insert"
-               } }
-            ], aggOpts(`${strategy} calibrate $merge`)).toArray();
-            remaining -= size;
-            if (nObjs <= 100) break;
-         }
+         sampleMerge(namespace, tmpName, sampleN, nObjs, `${strategy} calibrate $merge`);
          console.log('calibrate: waiting for checkpoint before packed $collStats');
          await waitForCheckpoint({ "settle": true, "force": true });
          let packed = $collStats(tmpStatsDbName, tmpName) || {};
@@ -1325,8 +1333,6 @@
                   : cal.tfr;
       let walk = startCuratorFn(cal, nDocs);
       if (walk && typeof walk.then === 'function') walk = await walk;
-      const streaming = !!walk.streaming;
-      const totalBatches = walk.totalBatches > 0 ? walk.totalBatches : Math.max(1, Math.ceil(nDocs / batch));
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
       const tune = dirtyTune();
       const budgetSnap = collSnapshot();
@@ -1334,26 +1340,23 @@
       const packedCover = estimateRewriteBytes(nDocs, cal);
       const packedPctR = budget0.R > 0 ? 100 * packedCover / budget0.R : 0;
       const fillRatio = packedPageBudget(cal).fillRatio;
-      console.log(`strategy: ${label} TFR=${cal.tfr} batch=${batch} buckets=${streaming ? 'first-fit' : totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(tune.soft * 100).toFixed(2)}% hard ${(tune.hard * 100).toFixed(2)}% C=${budget0.compression.toFixed(3)} pageFill=${fillRatio} dirtyBudgetRatio=${budget0.frac} ${formatDirtyBudget(budget0)} packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${budget0.live} storageSize=${budget0.storageSize}`);
+      console.log(`strategy: ${label} TFR=${cal.tfr} batch=${batch} buckets=first-fit (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(tune.soft * 100).toFixed(2)}% hard ${(tune.hard * 100).toFixed(2)}% C=${budget0.compression.toFixed(3)} pageFill=${fillRatio} dirtyBudgetRatio=${budget0.frac} ${formatDirtyBudget(budget0)} packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${budget0.live} storageSize=${budget0.storageSize}`);
 
       const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
 
       let pass = 0;
       const writeWindow = { "snap": budgetSnap, "bytes": 0 };
       for (;;) {
-         await waitForDirtyUnder(tune);
-         await waitForReplLag({ "abortIfCheckpoint": true });
-         const waited = await waitForCheckpoint();
-         const ckpt = wtCheckpoint();
-         if (!ignoreCheckpoint && ckpt.available && ckpt.running) continue;
-         if (waited.completed) {
-            await drainWrites();
-            refreshReusableCap(writeWindow, 'checkpoint', null, cal);
-         } else if (ignoreCheckpoint) {
-            const s = consumeAsyncSnap();
-            if (s) refreshReusableCap(writeWindow, 'async stats', s, cal);
-            kickCollStats();
-         }
+         await writeGate(tune, async(waited) => {
+            if (waited.completed) {
+               await drainWrites();
+               refreshReusableCap(writeWindow, 'checkpoint', null, cal);
+            } else if (ignoreCheckpoint) {
+               const s = consumeAsyncSnap();
+               if (s) refreshReusableCap(writeWindow, 'async stats', s, cal);
+               kickCollStats();
+            }
+         });
          const { value, done } = await walk.gen.next();
          if (done || value == null) break;
          pass++;
@@ -1364,7 +1367,7 @@
          writeWindow.bytes += nextBytes;
          const packedNote = Number(value.packed) > 0 ? ` packed=${Math.round(value.packed)}` : '';
          const bsonNote = Number(value.bson) > 0 ? ` bson=${Math.round(value.bson)}` : '';
-         const passTag = streaming ? `${label} ${pass}` : `${label} ${pass}/${totalBatches}`;
+         const passTag = `${label} ${pass}`;
          const expect = value.n;
          if (value.ids) {
             const shapeNote = value.shape != null && value.shape !== '' ? ` shape=${value.shape}` : '';
@@ -1381,8 +1384,7 @@
       }
 
       await drainWrites();
-      if (streaming) console.log(`${label} done batches=${pass} txnFailed=${txnFailed}`);
-      else console.log(`${label} done txnFailed=${txnFailed}`);
+      console.log(`${label} done batches=${pass} txnFailed=${txnFailed}`);
       console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
    }
 
@@ -1441,11 +1443,7 @@
       let cycle = 0;
       let rBudget = R0;
       for (;;) {
-         await waitForDirtyUnder(tune);
-         await waitForReplLag({ "abortIfCheckpoint": true });
-         await waitForCheckpoint();
-         const ckpt = wtCheckpoint();
-         if (ckpt.available && ckpt.running) continue;
+         await writeGate(tune);
          if (!(rBudget >= budget0.minPage)) {
             await waitForCheckpoint({ "settle": true });
             await waitForReplLag();
@@ -1534,10 +1532,6 @@
       });
    }
 
-   async function naturalReplyMain() {
-      await parkedNaturalCover('naturalReply', naturalDir, 1);
-   }
-
    try {
       preflightDropTmpSamples();
       const packedCurators = {
@@ -1545,7 +1539,7 @@
          "quantile": (cal, nDocs) => startQuantileCurator(cal, nDocs),
          "shapeQuantile": (cal, nDocs) => startShapeQuantileCurator(cal, nDocs)
       };
-      if (strategy === 'naturalReply') await naturalReplyMain();
+      if (strategy === 'naturalReply') await parkedNaturalCover('naturalReply', naturalDir, 1);
       else await packedWriteMain(strategy, packedCurators[strategy]);
    } catch(e) {
       console.log('[red][ERROR][/]', e.errmsg || e.message || String(e));
