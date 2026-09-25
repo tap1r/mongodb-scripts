@@ -1,13 +1,11 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "1.3.0"
+ *  Version: "1.3.1"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
  *  Notes:
- *  - This header is user-facing (how to run and which knobs). Mechanics live
- *    on the functions that implement them.
  *  - mongosh only. Do not top-level-await this file.
  *  - --eval must use var (not let/const) for dbName, collName, defragOptions.
  *  - Requires mdblib.js on $MDBLIB, ~/.mongodb, or cwd.
@@ -45,8 +43,8 @@
  *  Save libs to the $MDBLIB or other valid search path
  */
 
-(() => { // mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "1.3.0" };
+(() => { // User-facing comments are in the header. Mechanics live on the functions below. mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
+   const __script = { "name": "onlineDefrag.js", "version": "1.3.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -75,6 +73,10 @@
    const STRATEGIES = ['naturalReply', 'naturalWindow', 'quantile', 'shapeQuantile'];
 
    function normalizeOptions(raw) {
+      // Aliases: naturalReplay → naturalReply; doubleParked → naturalReply with
+      // naturalDir:-1; concurrentUpdates → writeConcurrency;
+      // lowStressDirtyMax/Hard → updatesSoft/updatesHard;
+      // dirtyBudgetRatio → generationRatio; curatorBatchSize → tfrOverride.
       const o = (raw && typeof raw === 'object') ? raw : {};
       const rawStrategy = o.strategy == null || o.strategy === '' ? 'naturalReply' : o.strategy;
       let strategy = rawStrategy === 'naturalReplay' ? 'naturalReply' : rawStrategy;
@@ -223,6 +225,10 @@
       };
    }
 
+   function nDocsFrom(snap) {
+      return snap.objects || pageStats(snap).documentCount || 0;
+   }
+
    const updatePipeline = [{ "$unset": "_id" }]; // leverages SERVER-36405
    const updateManyOpts = {
       "upsert": false, // must only update existing documents
@@ -314,32 +320,7 @@
       }
    }
 
-   // Pause while updates-allocated % ≥ soft; hard overshoot lowers the soft floor.
-   async function waitForDirtyUnder(tune) {
-      let u = cacheUpdatesUtil();
-      if (u == null) return;
-      applyDirtyOvershoot(u, tune);
-      if (u < tune.soft) return;
-      console.log(`updates ${(u * 100).toFixed(2)}% >= soft ${(tune.soft * 100).toFixed(2)}%, pausing`);
-      while ((u = cacheUpdatesUtil()) != null) {
-         applyDirtyOvershoot(u, tune);
-         if (u < tune.soft) break;
-         await delay(dirtyPollMs);
-      }
-      console.log(`updates ${((u || 0) * 100).toFixed(2)}% (soft ${(tune.soft * 100).toFixed(2)}%), resuming`);
-   }
-
-   async function writeGate(tune, onReady) {
-      for (;;) {
-         await waitForDirtyUnder(tune);
-         await waitForReplLag({ "abortIfCheckpoint": true });
-         const waited = await waitForCheckpoint();
-         const ckpt = wtCheckpoint();
-         if (ckpt.available && ckpt.running) continue;
-         if (typeof onReady === 'function') await onReady(waited);
-         return waited;
-      }
-   }
+   // waitForDirtyUnder / writeGate: --- waits ---
 
    function estimateRewriteBytes(nDocs, packed) {
       // On-disk bytes after block compression, from the packed sample:
@@ -666,6 +647,33 @@
       await new Promise(resolve => setTimeout(resolve, ms));
    }
 
+   // Pause while updates-allocated % ≥ soft; hard overshoot lowers the soft floor.
+   async function waitForDirtyUnder(tune) {
+      let u = cacheUpdatesUtil();
+      if (u == null) return;
+      applyDirtyOvershoot(u, tune);
+      if (u < tune.soft) return;
+      console.log(`updates ${(u * 100).toFixed(2)}% >= soft ${(tune.soft * 100).toFixed(2)}%, pausing`);
+      while ((u = cacheUpdatesUtil()) != null) {
+         applyDirtyOvershoot(u, tune);
+         if (u < tune.soft) break;
+         await delay(dirtyPollMs);
+      }
+      console.log(`updates ${((u || 0) * 100).toFixed(2)}% (soft ${(tune.soft * 100).toFixed(2)}%), resuming`);
+   }
+
+   async function writeGate(tune, onReady) {
+      for (;;) {
+         await waitForDirtyUnder(tune);
+         await waitForReplLag({ "abortIfCheckpoint": true });
+         const waited = await waitForCheckpoint();
+         const ckpt = wtCheckpoint();
+         if (ckpt.available && ckpt.running) continue;
+         if (typeof onReady === 'function') await onReady(waited);
+         return waited;
+      }
+   }
+
    let lagSample = { "at": 0, "value": null };
 
    function timestampSec(ts) {
@@ -963,16 +971,14 @@
       else console.log(`preflight: no leftover sample collections matching ${tmpSamplePrefix()}`);
    }
 
-   function packedCalibBins() {
-      return 24;
-   }
+   const packedCalibBins = 24;
 
    function detectSizeModes(tmpDb, tmpName, compression, packedBudget) {
       // Packed (bson/C) equal-width bins on [0, pageFillRatio×32KiB]. Larger docs
       // spill to their own leaf (TFR=1) and are excluded from C-band hunt.
       const C = Math.max(Number(compression) > 0 ? +compression : 1, 0.01);
       const cap = Math.max(1, Math.floor(Number(packedBudget) > 0 ? +packedBudget : 0.9 * 32768));
-      const nBins = packedCalibBins();
+      const nBins = packedCalibBins;
       const step = cap / nBins;
       const boundaries = [];
       for (let i = 0; i <= nBins; i++) {
@@ -1186,7 +1192,7 @@
             }
          };
       }
-      const nBins = packedCalibBins();
+      const nBins = packedCalibBins;
       const packedCap = Math.max(1, Math.floor((Number(pageFillRatio) > 0 ? +pageFillRatio : 0.9) * leaf));
       const assumeC = 3;
       const minBson = 256;
@@ -1474,7 +1480,7 @@
             console.log(`${label}: reclaim done ${formatGeneration(g0)}`);
             return;
          }
-         const nDocs = snap.objects || pageStats(snap).documentCount || 0;
+         const nDocs = nDocsFrom(snap);
          const sz0 = snap.storageSize || 0;
          console.log(`${label}: reclaim tail ${round}/${maxRounds} $natural:-1 ${formatGeneration(g0)}`);
          await writeCover(`${label} reclaim ${round}`, cal, naturalPackedBatches(cal, nDocs, -1), nDocs, {
@@ -1496,6 +1502,7 @@
       }
    }
 
+   // --- run ---
    async function eachCoverPass(defaultN, body) {
       const n = coverPassCount(defaultN);
       for (let pass = 1; pass <= n; pass++) await body(pass, n);
@@ -1508,7 +1515,6 @@
       };
    }
 
-   // --- run ---
    async function run() {
       // preflight → calibrate → writeCover × passes → reclaimAfter.
       preflightDropTmpSamples();
@@ -1537,10 +1543,10 @@
       const srcSnap = collSnapshot();
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
       const cal = await calibrateTFR();
-      const nDocs0 = srcSnap.objects || pageStats(srcSnap).documentCount || 0;
+      const nDocs0 = nDocsFrom(srcSnap);
       await eachCoverPass(1, async(pass, n) => {
          const snap = pass === 1 ? srcSnap : collSnapshot();
-         const nDocs = pass === 1 ? nDocs0 : (snap.objects || pageStats(snap).documentCount || 0);
+         const nDocs = pass === 1 ? nDocs0 : nDocsFrom(snap);
          const tag = n > 1 ? `${strategy} ${pass}/${n}` : strategy;
          if (n > 1) {
             console.log(`${strategy}: pass ${pass}/${n} nDocs=${nDocs} freezeWindow=${plan.freezeWindow}`);
