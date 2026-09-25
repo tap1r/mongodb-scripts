@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "1.1.0"
+ *  Version: "1.2.0"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -22,7 +22,7 @@
  *  - reuseFloor (default 0.2): reclaim stops when G = R/storageSize ≤ this.
  *  - reclaim: 'tail' (default, $natural:-1 after density) | 'none' | 'compact'.
  *  - Other knobs: writeConcurrency (default 8), passes, naturalDir (1 | -1),
- *    updateDelayMs, updatesSoft, updatesHard, ignoreCheckpoint, tfrOverride
+ *    updateDelayMs, updatesSoft, updatesHard, tfrOverride
  *    (alias curatorBatchSize), shuffleSampleSize, maxLagSeconds,
  *    checkpointTimeoutMs.
  */
@@ -47,7 +47,7 @@
  */
 
 (() => { // mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "1.1.0" };
+   const __script = { "name": "onlineDefrag.js", "version": "1.2.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -137,7 +137,6 @@
       "tfrOverride": tfrOverride,
       "maxLagSeconds": maxLagSeconds = 10,
       "checkpointTimeoutMs": checkpointTimeoutMs,
-      "ignoreCheckpoint": ignoreCheckpoint = false,
       "naturalDir": naturalDir,
       "replay": replay,
       "coverPassesOpt": coverPassesOpt,
@@ -152,24 +151,6 @@
    function collSnapshot() {
       const { indexes, ...stats } = $collStats(nsDb, nsColl) || {};
       return stats;
-   }
-
-   // ignoreCheckpoint: kick $collStats without waiting for a checkpoint; consume
-   // on the next round (non-blocking). In-flight kick is not duplicated.
-   let asyncSnap = null, asyncSnapBusy = false;
-   function kickCollStats() {
-      if (!ignoreCheckpoint || asyncSnapBusy) return;
-      asyncSnapBusy = true;
-      Promise.resolve().then(() => collSnapshot()).then(s => {
-         asyncSnap = s;
-         asyncSnapBusy = false;
-      }).catch(() => { asyncSnapBusy = false; });
-   }
-   function consumeAsyncSnap() {
-      if (!asyncSnap) return null;
-      const s = asyncSnap;
-      asyncSnap = null;
-      return s;
    }
 
    const ckptPollMs = 250;
@@ -353,7 +334,7 @@
          await waitForReplLag({ "abortIfCheckpoint": true });
          const waited = await waitForCheckpoint();
          const ckpt = wtCheckpoint();
-         if (!ignoreCheckpoint && ckpt.available && ckpt.running) continue;
+         if (ckpt.available && ckpt.running) continue;
          if (typeof onReady === 'function') await onReady(waited);
          return waited;
       }
@@ -775,7 +756,7 @@
       }
    }
 
-   let ckptSkipLogged = false, ckptIgnoreLogged = false, fsyncDeniedLogged = false;
+   let ckptSkipLogged = false, fsyncDeniedLogged = false;
 
    async function tryFsyncCheckpoint() {
       // Kick a WT checkpoint instead of waiting up to 60s for the periodic one.
@@ -815,22 +796,13 @@
       return packed;
    }
 
-   async function waitForCheckpoint({ settle = false, force = false } = {}) {
+   async function waitForCheckpoint({ settle = false } = {}) {
       // Do not start writes during a WT checkpoint.
       // settle=false: wait only while a checkpoint is already running.
       // settle=true: fsync if allowed, else wait for a falling edge so
       // block-manager reusable bytes are visible in collStats.
-      // force=true: wait even when ignoreCheckpoint (calibrate packed stats).
       // Returns { available, running, completed } — completed is a falling edge
       // this call observed (or fsync). Callers may collSnapshot() then.
-      if (ignoreCheckpoint && !force) {
-         if (!ckptIgnoreLogged) {
-            console.log('ignoreCheckpoint: not pausing for checkpoints; $collStats applied next round');
-            ckptIgnoreLogged = true;
-         }
-         kickCollStats();
-         return { "available": wtCheckpoint().available, "running": false, "completed": false, "ignored": true };
-      }
       let { available, running, minTimeMS, recentTimeMS } = wtCheckpoint();
       if (settle && await tryFsyncCheckpoint()) {
          ({ available, running } = wtCheckpoint());
@@ -925,7 +897,7 @@
    async function settlePackedTemps(created, label) {
       const tag = label ? ` ${label}` : '';
       console.log(`calibrate${tag}: waiting for checkpoint before packed $collStats`);
-      await waitForCheckpoint({ "settle": true, "force": true });
+      await waitForCheckpoint({ "settle": true });
       if (!wtCheckpoint().available && created[0]) {
          console.log(`M0: polling${tag} temps for packed $collStats`);
          await waitForPackedStats(tmpStatsDbName, created[0]);
@@ -1190,10 +1162,7 @@
       }
    }
 
-   // $sample+$merge into __tmpdb_for_collection_stats.<db>.<coll>_<oid>
-   // (same compressor). TFR = packed pageFillActual. Optional size-mode or
-   // shape-hash C from extra temps in the same tmp db.
-   async function calibrateTFR() {
+   async function samplePacked() {
       const src = collSnapshot();
       const fill = pageStats(src);
       const compressor = (src.compressor && src.compressor !== 'mixed') ? src.compressor : 'snappy';
@@ -1204,9 +1173,12 @@
          const compression = live > 0 && (src.dataSize || 0) > 0 ? src.dataSize / live : 1;
          console.log(`calibrate: avgObjSize=${avg} >= leaf=${leaf}; TFR=1 skip sample and bin analysis`);
          return {
-            "tfr": 1, "compression": compression, "avgObjSize": avg, "ps": fill,
-            "modes": [], "shapes": [],
-            "pageFillRatio": pageFillExplicit ? +pageFillRatio : 0.9
+            "jumbo": true,
+            "cal": {
+               "tfr": 1, "compression": compression, "avgObjSize": avg, "ps": fill,
+               "modes": [], "shapes": [],
+               "pageFillRatio": pageFillExplicit ? +pageFillRatio : 0.9
+            }
          };
       }
       const nBins = packedCalibBins();
@@ -1224,47 +1196,61 @@
       const tmpDb = tmpStatsDb();
       const tmpName = createPackedTemp(tmpDb, 'c', compressor);
       console.log(`${strategy} calibrate: $sample ${sampleN} (${nBins} packed bins × ${perLowBin} docs; 2 leaves at bson>=${minBson} C=${assumeC}) compressor=${compressor} -> ${tmpStatsDbName}.${tmpName}`);
+      console.log(`calibrate collection created: ${tmpStatsDbName}.${tmpName}`);
+      let measured;
       try {
-         console.log(`calibrate collection created: ${tmpStatsDbName}.${tmpName}`);
          sampleMerge(namespace, tmpName, sampleN, nObjs, `${strategy} calibrate $merge`);
          await settlePackedTemps([tmpName], '');
-         const measured = packedTempStats(tmpName, 1);
-         const ps = measured.ps;
-         const compression = measured.compression;
-         let tfr = Math.max(1, ps.pageFillActual);
-         const tunedFill = pageFillExplicit
-                         ? +pageFillRatio
-                         : autotunePageFillRatio(ps, compression, measured.avgObjSize);
-         const leafFill = Math.max(1, Math.ceil((tunedFill * (ps.dataPageSize || leaf) * compression) / (measured.avgObjSize > 0 ? measured.avgObjSize : avg)));
-         if (ps.nPages <= 1) {
-            tfr = leafFill;
-            console.log(`packed nPages=${ps.nPages} (unsettled or tiny file); TFR from leaf fill = ${tfr}`);
-         }
-         console.log(`calibrated TFR=${tfr} (packedFill) compression=${compression.toFixed(3)} pageFillRatio=${tunedFill.toFixed(3)}${pageFillExplicit ? ' (pinned)' : ' (packed sample)'} packedFill=${ps.pageFillActual} packedPages=${ps.nPages} objects=${ps.documentCount} avgObjSize=${measured.avgObjSize} storageSize=${measured.storageSize}`);
-         let modes = [];
-         let shapes = [];
-         const wantShapes = strategy === 'shapeQuantile';
-         try {
-            if (wantShapes) {
-               shapes = detectShapes(tmpDb, tmpName);
-               if (shapes.length >= 2) {
-                  shapes = await measureShapeCompression(tmpDb, tmpName, shapes, compressor, compression);
-               }
-            } else {
-               modes = detectSizeModes(tmpDb, tmpName, compression, Math.floor(tunedFill * (ps.dataPageSize || 32 * 1024)));
-               if (modes.length >= 2) {
-                  modes = await measureModeCompression(tmpDb, tmpName, modes, compressor, compression);
-               }
+         measured = packedTempStats(tmpName, 1);
+      } catch(e) {
+         dropTmpSample(tmpDb, tmpName, 'calibrate');
+         throw e;
+      }
+      const ps = measured.ps;
+      const compression = measured.compression;
+      let tfr = Math.max(1, ps.pageFillActual);
+      const tunedFill = pageFillExplicit
+                      ? +pageFillRatio
+                      : autotunePageFillRatio(ps, compression, measured.avgObjSize);
+      const leafFill = Math.max(1, Math.ceil((tunedFill * (ps.dataPageSize || leaf) * compression) / (measured.avgObjSize > 0 ? measured.avgObjSize : avg)));
+      if (ps.nPages <= 1) {
+         tfr = leafFill;
+         console.log(`packed nPages=${ps.nPages} (unsettled or tiny file); TFR from leaf fill = ${tfr}`);
+      }
+      console.log(`calibrated TFR=${tfr} (packedFill) compression=${compression.toFixed(3)} pageFillRatio=${tunedFill.toFixed(3)}${pageFillExplicit ? ' (pinned)' : ' (packed sample)'} packedFill=${ps.pageFillActual} packedPages=${ps.nPages} objects=${ps.documentCount} avgObjSize=${measured.avgObjSize} storageSize=${measured.storageSize}`);
+      return {
+         "jumbo": false, "tmpDb": tmpDb, "tmpName": tmpName, "compressor": compressor,
+         "tfr": tfr, "compression": compression, "tunedFill": tunedFill,
+         "ps": ps, "measured": measured, "leaf": leaf
+      };
+   }
+
+   async function calibrateTFR() {
+      const sampled = await samplePacked();
+      if (sampled.jumbo) return sampled.cal;
+      const { tmpDb, tmpName, compressor, tfr, compression, tunedFill, ps, measured, leaf } = sampled;
+      let modes = [];
+      let shapes = [];
+      try {
+         if (strategy === 'shapeQuantile') {
+            shapes = detectShapes(tmpDb, tmpName);
+            if (shapes.length >= 2) {
+               shapes = await measureShapeCompression(tmpDb, tmpName, shapes, compressor, compression);
             }
-         } catch(e) {
-            console.log(`calibrate modes/shapes skipped: ${e.message || e}`);
-            modes = [];
-            shapes = [];
+         } else if (strategy === 'quantile') {
+            modes = detectSizeModes(tmpDb, tmpName, compression, Math.floor(tunedFill * (ps.dataPageSize || leaf)));
+            if (modes.length >= 2) {
+               modes = await measureModeCompression(tmpDb, tmpName, modes, compressor, compression);
+            }
          }
-         return { "tfr": tfr, "compression": compression, "avgObjSize": measured.avgObjSize, "ps": ps, "modes": modes, "shapes": shapes, "pageFillRatio": tunedFill };
+      } catch(e) {
+         console.log(`calibrate modes/shapes skipped: ${e.message || e}`);
+         modes = [];
+         shapes = [];
       } finally {
          dropTmpSample(tmpDb, tmpName, 'calibrate');
       }
+      return { "tfr": tfr, "compression": compression, "avgObjSize": measured.avgObjSize, "ps": ps, "modes": modes, "shapes": shapes, "pageFillRatio": tunedFill };
    }
 
    async function densityStart() {
@@ -1306,6 +1292,51 @@
       await enqueue(rewriteFilter({ "_id": b.range }, { "expect": b.n }), conc);
    }
 
+   async function takeWindow(takeBatch, account, allocFn, maxBatches) {
+      const windowCap = account.cap > 0 ? Math.max(account.minPage, account.remaining()) : account.minPage;
+      const batches = [];
+      let packed = 0, alloc = 0, n = 0, overflow = null;
+      for (;;) {
+         if (batches.length >= maxBatches) break;
+         const b = await takeBatch();
+         if (!b) break;
+         const add = allocFn(b);
+         if (batches.length && account.cap > 0 && alloc + add > windowCap) {
+            overflow = b;
+            break;
+         }
+         batches.push(b);
+         packed += b.packed || 0;
+         alloc += add;
+         n += b.n || 0;
+         if (account.cap > 0 && alloc >= windowCap) break;
+      }
+      return { "batches": batches, "packed": packed, "alloc": alloc, "n": n, "overflow": overflow, "windowCap": windowCap };
+   }
+
+   async function writeBatches(batches, enqueue, conc, tune, tag, throttle) {
+      for (const b of batches) {
+         if (throttle) await waitForDirtyUnder(tune);
+         await enqueueRewrite(b, enqueue, conc, tag);
+      }
+   }
+
+   async function maybeReplay(batches, account, policy, sz0, enqueue, conc, tune, tag, drainWrites) {
+      const snap1 = collSnapshot();
+      const extended = (snap1.storageSize || 0) > sz0;
+      const decision = shouldReplay({ "extended": extended, "R": account.R }, policy);
+      if (!decision.replay) {
+         console.log(`${tag} skip replay (${decision.reason}) storageSize=${snap1.storageSize} reusable=${snap1.freeStorageSize || 0}`);
+         return snap1;
+      }
+      await account.settle();
+      console.log(`${tag} replay batches=${batches.length} storageSize=${account.storageSize} reusable=${account.R} rewrite 2 (${decision.reason})`);
+      await writeBatches(batches, enqueue, conc, tune, `${tag} replay`, true);
+      await drainWrites();
+      await account.settle();
+      return collSnapshot();
+   }
+
    async function writeCover(label, cal, batchSource, nDocs, {
       freezeWindow = false,
       replay: replayOpt,
@@ -1340,96 +1371,46 @@
          }
          return step.value;
       }
-
-      const onReady = async(waited) => {
-         if (waited.completed) {
-            await drainWrites();
-            account.refresh();
-            console.log(`checkpoint: settled stats ${formatDirtyBudget(account)}`);
-         } else if (ignoreCheckpoint) {
-            const s = consumeAsyncSnap();
-            if (s) {
-               account.refresh(s);
-               console.log(`async stats ${formatDirtyBudget(account)}`);
-            }
-            kickCollStats();
-         }
-      };
+      const allocFn = (b) => allocOf(b, cal, fillRatio, leaf, compression, batch);
 
       let pass = 0, packedDone = 0, prevSz = account.storageSize;
       for (;;) {
-         await writeGate(tune, onReady);
+         await writeGate(tune, async(waited) => {
+            if (waited.completed) {
+               await drainWrites();
+               account.refresh();
+               console.log(`checkpoint: settled stats ${formatDirtyBudget(account)}`);
+            }
+         });
          if (account.cap > 0 && account.used > 0 && account.remaining() < account.minPage) {
             await drainWrites();
             await account.settle();
          }
-         if (!freezeWindow) {
-            const b = await takeBatch();
-            if (!b) break;
-            const add = allocOf(b, cal, fillRatio, leaf, compression, batch);
-            if (account.wouldExceed(add)) {
-               await drainWrites();
-               await account.settle();
-            }
-            account.debit(add);
-            pass++;
-            packedDone += b.packed || 0;
-            await enqueueRewrite(b, enqueueWrite, conc, `${label} ${pass}`);
-            if (ignoreCheckpoint) kickCollStats();
-            if (oneGeneration && account.cap > 0 && account.used >= account.cap) break;
-            continue;
-         }
-         const windowCap = account.cap > 0 ? Math.max(account.minPage, account.remaining()) : account.minPage;
-         const batches = [];
-         let windowPacked = 0, windowAlloc = 0, windowN = 0;
-         for (;;) {
-            const b = await takeBatch();
-            if (!b) break;
-            const add = allocOf(b, cal, fillRatio, leaf, compression, batch);
-            if (batches.length && account.cap > 0 && windowAlloc + add > windowCap) {
-               held = b;
-               break;
-            }
-            batches.push(b);
-            windowPacked += b.packed || 0;
-            windowAlloc += add;
-            windowN += b.n || 0;
-            if (account.cap > 0 && windowAlloc >= windowCap) break;
-         }
-         if (!batches.length) break;
-         pass++;
-         const sz0 = collSnapshot().storageSize || 0;
-         const Rbefore = account.R;
-         account.debit(windowAlloc);
-         console.log(`${label} ${pass} packedDone=${Math.round(packedDone)}/${Math.round(packedCover)} window n=${windowN} batches=${batches.length} packed=${Math.round(windowPacked)} alloc=${Math.round(windowAlloc)} R=${Rbefore} cap=${Math.round(windowCap)} storageSize=${sz0} rewrite 1`);
-         for (const b of batches) {
-            await waitForDirtyUnder(tune);
-            await enqueueRewrite(b, enqueueWrite, conc, `${label} ${pass}`);
-         }
-         await drainWrites();
-         kickCollStats();
-         const snap1 = consumeAsyncSnap() || collSnapshot();
-         const extended = (snap1.storageSize || 0) > sz0;
-         const decision = shouldReplay({ "extended": extended, "R": Rbefore }, policy);
-         if (decision.replay) {
-            await account.settle();
-            console.log(`${label} ${pass} replay batches=${batches.length} n=${windowN} storageSize=${account.storageSize} reusable=${account.R} rewrite 2 (${decision.reason})`);
-            for (const b of batches) {
-               await waitForDirtyUnder(tune);
-               await enqueueRewrite(b, enqueueWrite, conc, `${label} ${pass} replay`);
-            }
+         const maxBatches = freezeWindow ? Infinity : 1;
+         const win = await takeWindow(takeBatch, account, allocFn, maxBatches);
+         if (win.overflow) held = win.overflow;
+         if (!win.batches.length) break;
+         if (!freezeWindow && account.wouldExceed(win.alloc)) {
             await drainWrites();
-            kickCollStats();
             await account.settle();
-            prevSz = account.storageSize;
-         } else {
-            console.log(`${label} ${pass} skip replay (${decision.reason}) storageSize=${snap1.storageSize} reusable=${snap1.freeStorageSize || 0}`);
          }
-         packedDone += windowPacked;
-         const snap2 = collSnapshot();
-         const dSz = (snap2.storageSize || 0) - (prevSz || 0);
-         console.log(`${label} cycle ${pass} packedDone=${Math.round(packedDone)}/${Math.round(packedCover)} alloc=${Math.round(windowAlloc)} ${formatDirtyBudget(account)} used=${Math.round(account.used)} dStorageSize=${dSz}${dSz > 0 ? ' EXTEND' : ''}`);
-         if ((snap2.storageSize || 0) > (prevSz || 0)) prevSz = snap2.storageSize;
+         account.debit(win.alloc);
+         pass++;
+         packedDone += win.packed;
+         const tag = `${label} ${pass}`;
+         if (freezeWindow) {
+            const sz0 = collSnapshot().storageSize || 0;
+            console.log(`${tag} packedDone=${Math.round(packedDone)}/${Math.round(packedCover)} window n=${win.n} batches=${win.batches.length} packed=${Math.round(win.packed)} alloc=${Math.round(win.alloc)} R=${account.R} cap=${Math.round(win.windowCap)} storageSize=${sz0} rewrite 1`);
+            await writeBatches(win.batches, enqueueWrite, conc, tune, tag, true);
+            await drainWrites();
+            await maybeReplay(win.batches, account, policy, sz0, enqueueWrite, conc, tune, tag, drainWrites);
+            const snap2 = collSnapshot();
+            const dSz = (snap2.storageSize || 0) - (prevSz || 0);
+            console.log(`${label} cycle ${pass} packedDone=${Math.round(packedDone)}/${Math.round(packedCover)} alloc=${Math.round(win.alloc)} ${formatDirtyBudget(account)} used=${Math.round(account.used)} dStorageSize=${dSz}${dSz > 0 ? ' EXTEND' : ''}`);
+            if ((snap2.storageSize || 0) > (prevSz || 0)) prevSz = snap2.storageSize;
+         } else {
+            await writeBatches(win.batches, enqueueWrite, conc, tune, tag, false);
+         }
          if (oneGeneration) break;
       }
       await drainWrites();
@@ -1468,7 +1449,7 @@
          console.log(`${label}: skip reclaim (reclaim=none)`);
          return;
       }
-      await waitForCheckpoint({ "settle": true, "force": true });
+      await waitForCheckpoint({ "settle": true });
       let snap = collSnapshot();
       if (!needsReclaim(snap)) {
          console.log(`${label}: skip reclaim ${formatDirtyBudget(generationCap(snap, cal))} (G<=reuseFloor ${reuseFloor})`);
@@ -1477,7 +1458,7 @@
       if (reclaim === 'compact') {
          console.log(`${label}: compact ${formatDirtyBudget(generationCap(snap, cal))}`);
          await compactCollection(label);
-         await waitForCheckpoint({ "settle": true, "force": true });
+         await waitForCheckpoint({ "settle": true });
          console.log(EJSON.stringify({ "state": "post-compact storage", ...collSnapshot() }));
          return;
       }
@@ -1497,7 +1478,7 @@
             "replay": "never",
             "oneGeneration": true
          });
-         await waitForCheckpoint({ "settle": true, "force": true });
+         await waitForCheckpoint({ "settle": true });
          const after = collSnapshot();
          const dSz = (after.storageSize || 0) - sz0;
          const g1 = generationCap(after, cal);
@@ -1516,39 +1497,56 @@
       for (let pass = 1; pass <= n; pass++) await body(pass, n);
    }
 
-   async function packedWriteMain(label, startCuratorFn) {
-      const { cal, nDocs } = await densityStart();
-      await writeCover(label, cal, startCuratorFn(cal, nDocs), nDocs, { "freezeWindow": false, "replay": "never" });
-      await reclaimAfter(label, cal);
-   }
-
-   async function parkedNaturalCover(label, dir, defaultPasses = 1) {
+   async function run() {
+      preflightDropTmpSamples();
+      const plans = {
+         "naturalReply": {
+            "curator": (cal, nDocs) => {
+               logCurator('naturalReply', cal, `$natural:${naturalDir} scan nDocs=${nDocs}`);
+               return naturalPackedBatches(cal, nDocs, naturalDir);
+            },
+            "freezeWindow": true
+         },
+         "naturalWindow": {
+            "curator": (cal, nDocs) => {
+               const dir = Number(naturalDir) >= 0 ? 1 : -1;
+               logCurator('naturalWindow', cal, `$natural:${dir} scan nDocs=${nDocs}`);
+               return naturalPackedBatches(cal, nDocs, dir);
+            },
+            "freezeWindow": false,
+            "replay": "never"
+         },
+         "quantile": {
+            "curator": startQuantileCurator,
+            "freezeWindow": false,
+            "replay": "never"
+         },
+         "shapeQuantile": {
+            "curator": startShapeQuantileCurator,
+            "freezeWindow": false,
+            "replay": "never"
+         }
+      };
+      const plan = plans[strategy];
       const started = await densityStart();
-      await eachCoverPass(defaultPasses, async(pass, n) => {
+      await eachCoverPass(1, async(pass, n) => {
          const snap = pass === 1 ? started.srcSnap : collSnapshot();
          const nDocs = pass === 1 ? started.nDocs : (snap.objects || pageStats(snap).documentCount || 0);
-         const cal = started.cal;
-         const tag = n > 1 ? `${label} ${pass}/${n}` : label;
-         console.log(`${label}: pass ${pass}/${n} scanning ${nDocs} docs $natural:${dir} $bsonSize (streamed cover, freeze per generation)`);
-         await writeCover(tag, cal, naturalPackedBatches(cal, nDocs, dir), nDocs, { "freezeWindow": true });
+         const tag = n > 1 ? `${strategy} ${pass}/${n}` : strategy;
+         if (n > 1) {
+            console.log(`${strategy}: pass ${pass}/${n} nDocs=${nDocs} freezeWindow=${plan.freezeWindow}`);
+         }
+         await writeCover(tag, started.cal, plan.curator(started.cal, nDocs), nDocs, {
+            "freezeWindow": plan.freezeWindow,
+            "replay": plan.replay
+         });
          if (pass < n) await waitForCheckpoint({ "settle": true });
       });
-      await reclaimAfter(label, started.cal);
+      await reclaimAfter(strategy, started.cal);
    }
 
    try {
-      preflightDropTmpSamples();
-      const packedCurators = {
-         "naturalWindow": (cal, nDocs) => {
-            const dir = Number(naturalDir) >= 0 ? 1 : -1;
-            logCurator('naturalWindow', cal, `$natural:${dir} scan nDocs=${nDocs}`);
-            return naturalPackedBatches(cal, nDocs, dir);
-         },
-         "quantile": (cal, nDocs) => startQuantileCurator(cal, nDocs),
-         "shapeQuantile": (cal, nDocs) => startShapeQuantileCurator(cal, nDocs)
-      };
-      if (strategy === 'naturalReply') await parkedNaturalCover('naturalReply', naturalDir, 1);
-      else await packedWriteMain(strategy, packedCurators[strategy]);
+      await run();
    } catch(e) {
       console.log('[red][ERROR][/]', e.errmsg || e.message || String(e));
       throw e;
