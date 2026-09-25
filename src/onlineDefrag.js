@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "0.5.7"
+ *  Version: "0.5.8"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,8 +17,10 @@
  *  - storage snapshots use mdblib $collStats (MDBLIB, ~/.mongodb, or cwd).
  *  - strategy: naturalReply (default) | naturalWindow | quantile | shapeQuantile
  *  - Aliases: naturalReplay → naturalReply; doubleParked → naturalReply + naturalDir:-1;
- *    concurrentUpdates → writeConcurrency when writeConcurrency is omitted.
+ *    concurrentUpdates → writeConcurrency when writeConcurrency is omitted;
+ *    lowStressDirtyMax/Hard → updatesSoft/updatesHard.
  *  - defragOptions.replay: 'onExtend' (default) | 'never' | 'always' (naturalReply)
+ *  - naturalWindow freezes a $natural cover then density-writes (not a live stream).
  *
  *  TODOs:
  *  - autotune pageFill (pageFillRatio / pageFillTarget) from settled collStats
@@ -47,7 +49,7 @@
  */
 
 (() => {
-   const __script = { "name": "onlineDefrag.js", "version": "0.5.7" };
+   const __script = { "name": "onlineDefrag.js", "version": "0.5.8" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -92,12 +94,18 @@
       const replay = (replayIn === 'never' || replayIn === false || replayIn === 'skip') ? 'never'
                    : (replayIn === 'always' ? 'always' : 'onExtend');
       const coverPassesOpt = Number(o.passes) > 0 ? Math.ceil(o.passes) : 0;
+      const updatesSoft = Number(o.updatesSoft) > 0 ? +o.updatesSoft
+                        : (Number(o.lowStressDirtyMax) > 0 ? +o.lowStressDirtyMax : 0.07);
+      const updatesHard = Number(o.updatesHard) > 0 ? +o.updatesHard
+                        : (Number(o.lowStressDirtyHard) > 0 ? +o.lowStressDirtyHard : 0.08);
       return Object.assign({}, o, {
          "strategy": strategy,
          "writeConcurrency": writeConcurrency,
          "replay": replay,
          "naturalDir": naturalDir,
-         "coverPassesOpt": coverPassesOpt
+         "coverPassesOpt": coverPassesOpt,
+         "updatesSoft": updatesSoft,
+         "updatesHard": updatesHard
       });
    }
 
@@ -105,8 +113,8 @@
       "strategy": strategy,
       "shuffleSampleSize": shuffleSampleSize,
       "pageFillRatio": pageFillRatio = 0.9,
-      "lowStressDirtyMax": lowStressDirtyMax = 0.07,
-      "lowStressDirtyHard": lowStressDirtyHard = 0.08,
+      "updatesSoft": updatesSoft,
+      "updatesHard": updatesHard,
       "dirtyBudgetRatio": dirtyBudgetRatio = 0.2,
       "writeConcurrency": writeConcurrency,
       "curatorBatchSize": curatorBatchSize,
@@ -171,30 +179,20 @@
       };
    }
 
-   // Wave batch = max(actual fill, pageFillRatio × dest leaf). nPages from live/32KiB.
+   // nPages = live/32KiB (compressed file bytes over uncompressed leaf_page_max).
    function pageStats(stats = {}) {
       const {
-         dataSize,
          storageSize,
          freeStorageSize,
          objects: documentCount,
-         avgObjSize,
          dataPageSize: leafPageSize
       } = stats;
       const live = Math.max(0, (storageSize || 0) - (freeStorageSize || 0));
-      const compression = live > 0 ? dataSize / live : 1;
       const dataPageSize = Number(leafPageSize) > 0 ? leafPageSize : 32 * 1024;
-      const avg = +avgObjSize > 0 ? +avgObjSize : 1;
       const nPages = Math.max(1, Math.ceil(live / dataPageSize));
       const pageFillActual = Math.max(1, Math.ceil((documentCount || 0) / nPages));
-      const leafFill = Math.max(1, Math.ceil((pageFillRatio * dataPageSize * compression) / avg));
-      const pageFillTarget = Math.max(1, Math.ceil(leafFill));
-      const batchSize = Math.max(pageFillTarget, pageFillActual);
-
       return {
-         "pageFillTarget": pageFillTarget,
          "pageFillActual": pageFillActual,
-         "batchSize": batchSize,
          "documentCount": documentCount,
          "nPages": nPages,
          "dataPageSize": dataPageSize
@@ -244,7 +242,7 @@
       return rewriteFilter({ "_id": { "$in": ids } }, opts);
    }
 
-   function makeWritePool({ onEnqueue } = {}) {
+   function makeWritePool() {
       let inflight = [];
       return {
          async drain() {
@@ -253,11 +251,16 @@
             inflight = [];
          },
          async enqueue(p, cap) {
-            if (typeof onEnqueue === 'function') onEnqueue();
             inflight.push(p);
             while (inflight.length >= cap) await inflight.shift();
          }
       };
+   }
+
+   function dirtyTune() {
+      const base = Number(updatesSoft) > 0 ? +updatesSoft : 0.07;
+      const hard = Number(updatesHard) > 0 ? +updatesHard : 0.08;
+      return { "base": base, "soft": base, "hard": hard };
    }
 
    function wtCache() {
@@ -519,11 +522,11 @@
    }
 
    async function startNaturalWindowCurator(cal, maxDocs) {
-      // strategy 'naturalWindow': freeze a $natural + $bsonSize cover ($limit
-      // nDocs) then first-fit like quantile. naturalDir 1 = oldest RecordId
-      // first; -1 = newest first. Writes are $in in that order. $limit nDocs
-      // with dir=1 excludes concurrent tail inserts; dir=-1 is newest n (a
-      // concurrent insert can displace the oldest).
+      // Freeze a $natural + $bsonSize cover ($limit nDocs), then first-fit.
+      // Not a live stream: the scan finishes before density writes.
+      // naturalDir 1 = oldest RecordId first; -1 = newest first.
+      // $limit nDocs with dir=1 excludes concurrent tail inserts; dir=-1 is
+      // newest n (a concurrent insert can displace the oldest).
       const { packedBudget, bsonCap, leaf, fillRatio, compression } = packedPageBudget(cal);
       const dir = Number(naturalDir) >= 0 ? 1 : -1;
       console.log(`naturalWindow curator: $natural:${dir} scan nDocs=${maxDocs} packedBudget=${packedBudget} leaf=${leaf} pageFillRatio=${fillRatio} compression=${compression.toFixed(3)}`);
@@ -674,6 +677,215 @@
          "packedBudget": packedBudget,
          "bsonCap": bsonCap
       };
+   }
+
+   function wtCheckpoint() {
+      // WT-11171: v8+ wiredTiger.checkpoint; v7 wiredTiger.transaction.
+      // mongos / Atlas M0/Flex / non-WT: no wiredTiger section.
+      const { wiredTiger } = serverStatus({ "wiredTiger": true });
+      if (wiredTiger == null) {
+         return { "available": false, "running": false, "minTimeMS": null, "recentTimeMS": null };
+      }
+      const v8 = wiredTiger.checkpoint;
+      const v7 = wiredTiger.transaction;
+      return {
+         "available": true,
+         "running": (v8?.['progress state'] > 0) || (v7?.['transaction checkpoint currently running'] === 1),
+         "minTimeMS": v8?.['min time (msecs)'] ?? v7?.['transaction checkpoint min time (msecs)'] ?? null,
+         "recentTimeMS": v8?.['most recent time (msecs)'] ?? v7?.['transaction checkpoint most recent time (msecs)'] ?? null
+      };
+   }
+
+   async function delay(ms) {
+      await new Promise(resolve => setTimeout(resolve, ms));
+   }
+
+   let lagSample = { "at": 0, "value": null };
+
+   function timestampSec(ts) {
+      if (ts == null) return null;
+      if (typeof ts.t === 'number') return ts.t;
+      if (ts.t != null && ts.i != null) return Number(ts.t);
+      return null;
+   }
+
+   function replLag(fresh = false) {
+      // Seconds the commit point / secondaries trail this node's applied optime.
+      // Do not use optimeDate min/max (heartbeat alignment → false 0).
+      if (!fresh && lagSample.value && Date.now() - lagSample.at < 1000) return lagSample.value;
+      let value;
+      try {
+         const st = db.adminCommand({ "replSetGetStatus": 1 });
+         let lag = 0, n = 0;
+         const applied = timestampSec(st.optimes?.appliedOpTime?.ts ?? st.optimes?.writtenOpTime?.ts);
+         const committed = timestampSec(st.optimes?.lastCommittedOpTime?.ts);
+         if (applied != null && committed != null) {
+            n++;
+            lag = Math.max(lag, applied - committed);
+         }
+         const members = st.members || [];
+         const now = st.date ? +new Date(st.date) : Date.now();
+         const primary = members.find(m => m.health && m.stateStr === 'PRIMARY');
+         const p = timestampSec(primary?.optime?.ts ?? primary?.optime) ?? (primary?.optimeDate != null ? +new Date(primary.optimeDate) / 1000 : null);
+         if (p != null) {
+            for (const m of members) {
+               if (!m.health || m.stateStr !== 'SECONDARY') continue;
+               if (m.lastHeartbeat && now - +new Date(m.lastHeartbeat) > 4000) continue;
+               const s = timestampSec(m.optime?.ts ?? m.optime) ?? (m.optimeDate != null ? +new Date(m.optimeDate) / 1000 : null);
+               if (s == null) continue;
+               n++;
+               lag = Math.max(lag, p - s);
+            }
+         }
+         if (n) value = { "available": true, "lagSeconds": Math.max(0, lag), "source": "replSetGetStatus" };
+      } catch(_) { /* M0/Flex / unauthorized */ }
+      if (!value) {
+         const { lastWrite } = serverStatus({ "repl": true }).repl || {};
+         const last = lastWrite?.lastWriteDate;
+         const maj = lastWrite?.majorityWriteDate;
+         value = (last == null || maj == null)
+               ? { "available": false, "lagSeconds": 0, "source": null }
+               : {
+                  "available": true,
+                  "lagSeconds": Math.max(0, (new Date(last) - new Date(maj)) / 1000),
+                  "source": "lastWrite"
+               };
+      }
+      lagSample = { "at": Date.now(), "value": value };
+      return value;
+   }
+
+   let lagSkipLogged = false;
+   // Throttle when repl lag exceeds maxLagSeconds (rs.status, else lastWrite vs majority).
+   async function waitForReplLag({ abortIfCheckpoint = false } = {}) {
+      const cap = Number(maxLagSeconds) > 0 ? +maxLagSeconds : 10;
+      let { available, lagSeconds, source } = replLag();
+      if (!available) {
+         if (!lagSkipLogged) {
+            console.log('repl lag metrics unavailable, skipping lag throttle');
+            lagSkipLogged = true;
+         }
+         return;
+      }
+      if (lagSeconds <= cap) return;
+      const timeoutMs = Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000;
+      const deadline = Date.now() + timeoutMs;
+      console.log(`repl lag ${lagSeconds.toFixed(1)}s via ${source} > ${cap}s, throttling...`);
+      // Optime lag is not a wall-clock countdown: with writes paused, secondaries
+      // can apply the backlog in one interval (14s → 0s). Wait at least (lag-cap)
+      // before the first resume check, then poll every 1s.
+      const minCoolMs = Math.max(lagPollMs, (lagSeconds - cap) * 1000);
+      await delay(Math.min(minCoolMs, Math.max(1, deadline - Date.now())));
+      do {
+         if (abortIfCheckpoint && wtCheckpoint().running) {
+            console.log('checkpoint running, ending lag throttle');
+            return;
+         }
+         ({ available, lagSeconds, source } = replLag(true));
+         if (!available) return;
+         if (lagSeconds <= cap) break;
+         console.log(`repl lag ${lagSeconds.toFixed(1)}s via ${source}, still throttling`);
+         await delay(Math.min(lagPollMs, Math.max(1, deadline - Date.now())));
+      } while (lagSeconds > cap && Date.now() < deadline);
+      if (lagSeconds > cap) {
+         console.log(`repl lag still ${lagSeconds.toFixed(1)}s after throttle timeout, continuing`);
+      } else {
+         console.log(`repl lag ${lagSeconds.toFixed(1)}s via ${source}, resuming`);
+      }
+   }
+
+   let ckptSkipLogged = false, ckptIgnoreLogged = false, fsyncDeniedLogged = false;
+
+   async function tryFsyncCheckpoint() {
+      // Kick a WT checkpoint instead of waiting up to 60s for the periodic one.
+      // Atlas M0/Flex / unauthorized: command fails; caller polls or waits.
+      try {
+         const r = await db.adminCommand({ "fsync": 1, "lock": false });
+         return r == null || r.ok !== 0;
+      } catch(e) {
+         if (!fsyncDeniedLogged) {
+            console.log(`checkpoint fsync unavailable, ${e.message || e}`);
+            fsyncDeniedLogged = true;
+         }
+         return false;
+      }
+   }
+
+   async function waitForPackedStats(tmpDbName, tmpName) {
+      // M0 proxy for a checkpoint: poll $collStats until storageSize is stable.
+      const timeoutMs = Number(checkpointTimeoutMs) > 0
+                      ? Math.min(+checkpointTimeoutMs, statsSettleTimeoutMs)
+                      : statsSettleTimeoutMs;
+      const deadline = Date.now() + timeoutMs;
+      let packed = $collStats(tmpDbName, tmpName) || {};
+      let prevSz = packed.storageSize, stable = 0;
+      console.log(`calibrate poll nPages=${pageStats(packed).nPages} storageSize=${packed.storageSize} objects=${packed.objects}`);
+      while (Date.now() < deadline) {
+         await delay(statsPollMs);
+         packed = $collStats(tmpDbName, tmpName) || {};
+         const nPages = pageStats(packed).nPages;
+         console.log(`calibrate poll nPages=${nPages} storageSize=${packed.storageSize} objects=${packed.objects}`);
+         if (packed.storageSize === prevSz) {
+            stable++;
+            if (nPages > 1 || stable >= 2) return packed;
+         } else stable = 0;
+         prevSz = packed.storageSize;
+      }
+      return packed;
+   }
+
+   async function waitForCheckpoint({ settle = false, force = false } = {}) {
+      // Do not start writes during a WT checkpoint.
+      // settle=false: wait only while a checkpoint is already running.
+      // settle=true: fsync if allowed, else wait for a falling edge so
+      // block-manager reusable bytes are visible in collStats.
+      // force=true: wait even when ignoreCheckpoint (calibrate packed stats).
+      // Returns { available, running, completed } — completed is a falling edge
+      // this call observed (or fsync). Callers may collSnapshot() then.
+      if (ignoreCheckpoint && !force) {
+         if (!ckptIgnoreLogged) {
+            console.log('ignoreCheckpoint: not pausing for checkpoints; $collStats applied next round');
+            ckptIgnoreLogged = true;
+         }
+         kickCollStats();
+         return { "available": wtCheckpoint().available, "running": false, "completed": false, "ignored": true };
+      }
+      let { available, running, minTimeMS, recentTimeMS } = wtCheckpoint();
+      if (settle && await tryFsyncCheckpoint()) {
+         ({ available, running } = wtCheckpoint());
+         if (!running) {
+            console.log('checkpoint fsync completed');
+            return { "available": available, "running": false, "completed": true, "fsync": true };
+         }
+         console.log('checkpoint fsync issued, waiting to complete...');
+      }
+      if (!available) {
+         if (!ckptSkipLogged) {
+            console.log('checkpoint metrics unavailable (no wiredTiger in serverStatus), skipping wait');
+            ckptSkipLogged = true;
+         }
+         return { "available": false, "running": false, "completed": false };
+      }
+      if (!settle && !running) return { "available": true, "running": false, "completed": false };
+      const pollMs = Math.min(ckptPollMs, Math.max(50, Math.ceil(0.9 * (minTimeMS || ckptPollMs))));
+      const timeoutMs = Number(checkpointTimeoutMs) > 0
+                      ? +checkpointTimeoutMs
+                      : Math.max(120000, 2 * (recentTimeMS || minTimeMS || 0));
+      const deadline = Date.now() + timeoutMs;
+      if (running) {
+         console.log(`checkpoint running, waiting to complete (timeout ${timeoutMs}ms)...`);
+      } else {
+         console.log(`waiting for checkpoint to start and complete (settled stats, timeout ${timeoutMs}ms)...`);
+      }
+      let completed = false;
+      do {
+         const wasRunning = running;
+         await delay(Math.min(pollMs, Math.max(1, deadline - Date.now())));
+         ({ running } = wtCheckpoint());
+         if (wasRunning && !running) completed = true;
+      } while ((running || (settle && !completed)) && Date.now() < deadline);
+      console.log(completed ? 'checkpoint completed' : 'checkpoint wait timed out, continuing');
+      return { "available": true, "running": running, "completed": completed };
    }
 
    // Packed-sample temps live in __tmpdb_for_collection_stats so we do not
@@ -1101,10 +1313,10 @@
       }
    }
 
-   // Shared write/throttle/budget path for naturalWindow, quantile, shapeQuantile.
+   // Density write loop for naturalWindow, quantile, shapeQuantile.
    // dirtyBudgetRatio caps packed rewrite bytes per checkpoint at that fraction
    // of freeStorageSize. Falling-edge collStats refreshes R.
-   async function slidingPackedMain(label, startWalk) {
+   async function packedWriteMain(label, startCuratorFn) {
       const srcSnap = collSnapshot();
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
       const cal = await calibrateTFR();
@@ -1112,28 +1324,24 @@
       const batch = Object.prototype.hasOwnProperty.call(userOptions, 'curatorBatchSize') && Number(curatorBatchSize) > 0
                   ? Math.ceil(+curatorBatchSize)
                   : cal.tfr;
-      let walk = startWalk({ "nDocs": nDocs, "batch": batch, "cal": cal });
+      let walk = startCuratorFn(cal, nDocs);
       if (walk && typeof walk.then === 'function') walk = await walk;
       const streaming = !!walk.streaming;
       const totalBatches = walk.totalBatches > 0 ? walk.totalBatches : Math.max(1, Math.ceil(nDocs / batch));
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
-      const dirtyTune = {
-         "base": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
-         "soft": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
-         "hard": Number(lowStressDirtyHard) > 0 ? +lowStressDirtyHard : 0.08
-      };
+      const tune = dirtyTune();
       const budgetSnap = collSnapshot();
       const budget0 = dirtyBudgetCap(budgetSnap, cal);
       const packedCover = estimateRewriteBytes(nDocs, cal);
       const packedPctR = budget0.R > 0 ? 100 * packedCover / budget0.R : 0;
-      console.log(`strategy: ${label} TFR=${cal.tfr} batch=${batch} buckets=${streaming ? 'first-fit' : totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(dirtyTune.soft * 100).toFixed(2)}% hard ${(dirtyTune.hard * 100).toFixed(2)}% C=${budget0.compression.toFixed(3)} pageFill=${Number(pageFillRatio) > 0 ? +pageFillRatio : 0.9} dirtyBudgetRatio=${budget0.frac} ${formatDirtyBudget(budget0)} packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${budget0.live} storageSize=${budget0.storageSize}`);
+      console.log(`strategy: ${label} TFR=${cal.tfr} batch=${batch} buckets=${streaming ? 'first-fit' : totalBatches} (docs ${nDocs}) writeConcurrency=${conc} updates soft ${(tune.soft * 100).toFixed(2)}% hard ${(tune.hard * 100).toFixed(2)}% C=${budget0.compression.toFixed(3)} pageFill=${Number(pageFillRatio) > 0 ? +pageFillRatio : 0.9} dirtyBudgetRatio=${budget0.frac} ${formatDirtyBudget(budget0)} packedCover=${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) sourceLive=${budget0.live} storageSize=${budget0.storageSize}`);
 
       const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
 
       let pass = 0;
       const writeWindow = { "snap": budgetSnap, "bytes": 0 };
       for (;;) {
-         await waitForDirtyUnder(dirtyTune);
+         await waitForDirtyUnder(tune);
          await waitForReplLag({ "abortIfCheckpoint": true });
          const waited = await waitForCheckpoint();
          const ckpt = wtCheckpoint();
@@ -1177,21 +1385,6 @@
       console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
    }
 
-   // strategy 'quantile': slidingPackedMain + startQuantileCurator.
-   async function quantileMain() {
-      await slidingPackedMain('quantile', ({ nDocs, cal }) => startQuantileCurator(cal, nDocs));
-   }
-
-   // strategy 'shapeQuantile': slidingPackedMain + startShapeQuantileCurator.
-   async function shapeQuantileMain() {
-      await slidingPackedMain('shapeQuantile', ({ nDocs, cal }) => startShapeQuantileCurator(cal, nDocs));
-   }
-
-   async function naturalWindowMain() {
-      // Density-only $natural cover (no rewrite-2). Use naturalReply + replay:'never' for parked skip-replay.
-      await slidingPackedMain('naturalWindow', async({ nDocs, cal }) => startNaturalWindowCurator(cal, nDocs));
-   }
-
    function shouldReplay({ extended, R }) {
       // onExtend: rewrite 2 only if write 1 grew storageSize or R was 0 (EOF trim path).
       // never: skip-replay even after an extend. always: rewrite 2 every window.
@@ -1212,12 +1405,8 @@
    // settle replenishes R. Halloween-safe (parked _id).
    async function parkedWindowReplay(label, cal, allBatches, nDocs) {
       const { packedBudget, fillRatio, leaf, compression } = packedPageBudget(cal);
-      const dirtyTune = {
-         "base": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
-         "soft": Number(lowStressDirtyMax) > 0 ? +lowStressDirtyMax : 0.07,
-         "hard": Number(lowStressDirtyHard) > 0 ? +lowStressDirtyHard : 0.08
-      };
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
+      const tune = dirtyTune();
       const target = allBatches.reduce((s, b) => s + (b.packed || 0), 0);
       const allocCover = allBatches.reduce((s, b) => s + batchAllocBytes(b, leaf, fillRatio, compression), 0);
       const budgetSnap = collSnapshot();
@@ -1235,7 +1424,7 @@
       let bi = 0;
       let rBudget = R0;
       while (bi < allBatches.length) {
-         await waitForDirtyUnder(dirtyTune);
+         await waitForDirtyUnder(tune);
          await waitForReplLag({ "abortIfCheckpoint": true });
          await waitForCheckpoint();
          const ckpt = wtCheckpoint();
@@ -1267,7 +1456,7 @@
          const Rbefore = rBudget;
          console.log(`${label} ${cycle} packedDone=${Math.round(packedDone)}/${Math.round(target)} window n=${windowN} batches=${batches.length}/${allBatches.length} packed=${Math.round(windowPacked)} alloc=${Math.round(windowAlloc)} R=${Number.isFinite(Rbefore) ? Rbefore : 0} cap=${Math.round(windowCap)} storageSize=${sz0} rewrite 1`);
          for (const b of batches) {
-            await waitForDirtyUnder(dirtyTune);
+            await waitForDirtyUnder(tune);
             await enqueueWrite(rewriteIds(b.ids, { "expect": b.n }), conc);
          }
          await drainWrites();
@@ -1281,7 +1470,7 @@
             const snapReplay = collSnapshot();
             console.log(`${label} ${cycle} replay batches=${batches.length} n=${windowN} storageSize=${snapReplay.storageSize} reusable=${snapReplay.freeStorageSize || 0} rewrite 2 (${decision.reason})`);
             for (const b of batches) {
-               await waitForDirtyUnder(dirtyTune);
+               await waitForDirtyUnder(tune);
                await enqueueWrite(rewriteIds(b.ids, { "expect": b.n }), conc);
             }
             await drainWrites();
@@ -1325,224 +1514,15 @@
       await parkedNaturalCover('naturalReply', naturalDir, 1);
    }
 
-   function wtCheckpoint() {
-      // WT-11171: v8+ wiredTiger.checkpoint; v7 wiredTiger.transaction.
-      // mongos / Atlas M0/Flex / non-WT: no wiredTiger section.
-      const { wiredTiger } = serverStatus({ "wiredTiger": true });
-      if (wiredTiger == null) {
-         return { "available": false, "running": false, "minTimeMS": null, "recentTimeMS": null };
-      }
-      const v8 = wiredTiger.checkpoint;
-      const v7 = wiredTiger.transaction;
-      return {
-         "available": true,
-         "running": (v8?.['progress state'] > 0) || (v7?.['transaction checkpoint currently running'] === 1),
-         "minTimeMS": v8?.['min time (msecs)'] ?? v7?.['transaction checkpoint min time (msecs)'] ?? null,
-         "recentTimeMS": v8?.['most recent time (msecs)'] ?? v7?.['transaction checkpoint most recent time (msecs)'] ?? null
-      };
-   }
-
-   async function delay(ms) {
-      await new Promise(resolve => setTimeout(resolve, ms));
-   }
-
-   let lagSample = { "at": 0, "value": null };
-
-   function timestampSec(ts) {
-      if (ts == null) return null;
-      if (typeof ts.t === 'number') return ts.t;
-      if (ts.t != null && ts.i != null) return Number(ts.t);
-      return null;
-   }
-
-   function replLag(fresh = false) {
-      // Seconds the commit point / secondaries trail this node's applied optime.
-      // Do not use optimeDate min/max (heartbeat alignment → false 0).
-      if (!fresh && lagSample.value && Date.now() - lagSample.at < 1000) return lagSample.value;
-      let value;
-      try {
-         const st = db.adminCommand({ "replSetGetStatus": 1 });
-         let lag = 0, n = 0;
-         const applied = timestampSec(st.optimes?.appliedOpTime?.ts ?? st.optimes?.writtenOpTime?.ts);
-         const committed = timestampSec(st.optimes?.lastCommittedOpTime?.ts);
-         if (applied != null && committed != null) {
-            n++;
-            lag = Math.max(lag, applied - committed);
-         }
-         const members = st.members || [];
-         const now = st.date ? +new Date(st.date) : Date.now();
-         const primary = members.find(m => m.health && m.stateStr === 'PRIMARY');
-         const p = timestampSec(primary?.optime?.ts ?? primary?.optime) ?? (primary?.optimeDate != null ? +new Date(primary.optimeDate) / 1000 : null);
-         if (p != null) {
-            for (const m of members) {
-               if (!m.health || m.stateStr !== 'SECONDARY') continue;
-               if (m.lastHeartbeat && now - +new Date(m.lastHeartbeat) > 4000) continue;
-               const s = timestampSec(m.optime?.ts ?? m.optime) ?? (m.optimeDate != null ? +new Date(m.optimeDate) / 1000 : null);
-               if (s == null) continue;
-               n++;
-               lag = Math.max(lag, p - s);
-            }
-         }
-         if (n) value = { "available": true, "lagSeconds": Math.max(0, lag), "source": "replSetGetStatus" };
-      } catch(_) { /* M0/Flex / unauthorized */ }
-      if (!value) {
-         const { lastWrite } = serverStatus({ "repl": true }).repl || {};
-         const last = lastWrite?.lastWriteDate;
-         const maj = lastWrite?.majorityWriteDate;
-         value = (last == null || maj == null)
-               ? { "available": false, "lagSeconds": 0, "source": null }
-               : {
-                  "available": true,
-                  "lagSeconds": Math.max(0, (new Date(last) - new Date(maj)) / 1000),
-                  "source": "lastWrite"
-               };
-      }
-      lagSample = { "at": Date.now(), "value": value };
-      return value;
-   }
-
-   let lagSkipLogged = false;
-   // Throttle when repl lag exceeds maxLagSeconds (rs.status, else lastWrite vs majority).
-   async function waitForReplLag({ abortIfCheckpoint = false } = {}) {
-      const cap = Number(maxLagSeconds) > 0 ? +maxLagSeconds : 10;
-      let { available, lagSeconds, source } = replLag();
-      if (!available) {
-         if (!lagSkipLogged) {
-            console.log('repl lag metrics unavailable, skipping lag throttle');
-            lagSkipLogged = true;
-         }
-         return;
-      }
-      if (lagSeconds <= cap) return;
-      const timeoutMs = Number(checkpointTimeoutMs) > 0 ? +checkpointTimeoutMs : 120000;
-      const deadline = Date.now() + timeoutMs;
-      console.log(`repl lag ${lagSeconds.toFixed(1)}s via ${source} > ${cap}s, throttling...`);
-      // Optime lag is not a wall-clock countdown: with writes paused, secondaries
-      // can apply the backlog in one interval (14s → 0s). Wait at least (lag-cap)
-      // before the first resume check, then poll every 1s.
-      const minCoolMs = Math.max(lagPollMs, (lagSeconds - cap) * 1000);
-      await delay(Math.min(minCoolMs, Math.max(1, deadline - Date.now())));
-      do {
-         if (abortIfCheckpoint && wtCheckpoint().running) {
-            console.log('checkpoint running, ending lag throttle for high pass');
-            return;
-         }
-         ({ available, lagSeconds, source } = replLag(true));
-         if (!available) return;
-         if (lagSeconds <= cap) break;
-         console.log(`repl lag ${lagSeconds.toFixed(1)}s via ${source}, still throttling`);
-         await delay(Math.min(lagPollMs, Math.max(1, deadline - Date.now())));
-      } while (lagSeconds > cap && Date.now() < deadline);
-      if (lagSeconds > cap) {
-         console.log(`repl lag still ${lagSeconds.toFixed(1)}s after throttle timeout, continuing`);
-      } else {
-         console.log(`repl lag ${lagSeconds.toFixed(1)}s via ${source}, resuming`);
-      }
-   }
-
-   let ckptSkipLogged = false, ckptIgnoreLogged = false, fsyncDeniedLogged = false;
-
-   async function tryFsyncCheckpoint() {
-      // Kick a WT checkpoint instead of waiting up to 60s for the periodic one.
-      // Atlas M0/Flex / unauthorized: command fails; caller polls or waits.
-      try {
-         const r = await db.adminCommand({ "fsync": 1, "lock": false });
-         return r == null || r.ok !== 0;
-      } catch(e) {
-         if (!fsyncDeniedLogged) {
-            console.log(`checkpoint fsync unavailable, ${e.message || e}`);
-            fsyncDeniedLogged = true;
-         }
-         return false;
-      }
-   }
-
-   async function waitForPackedStats(tmpDbName, tmpName) {
-      // M0 proxy for a checkpoint: poll $collStats until storageSize is stable.
-      const timeoutMs = Number(checkpointTimeoutMs) > 0
-                      ? Math.min(+checkpointTimeoutMs, statsSettleTimeoutMs)
-                      : statsSettleTimeoutMs;
-      const deadline = Date.now() + timeoutMs;
-      let packed = $collStats(tmpDbName, tmpName) || {};
-      let prevSz = packed.storageSize, stable = 0;
-      console.log(`calibrate poll nPages=${pageStats(packed).nPages} storageSize=${packed.storageSize} objects=${packed.objects}`);
-      while (Date.now() < deadline) {
-         await delay(statsPollMs);
-         packed = $collStats(tmpDbName, tmpName) || {};
-         const nPages = pageStats(packed).nPages;
-         console.log(`calibrate poll nPages=${nPages} storageSize=${packed.storageSize} objects=${packed.objects}`);
-         if (packed.storageSize === prevSz) {
-            stable++;
-            if (nPages > 1 || stable >= 2) return packed;
-         } else stable = 0;
-         prevSz = packed.storageSize;
-      }
-      return packed;
-   }
-
-   async function waitForCheckpoint({ settle = false, force = false } = {}) {
-      // Do not start writes during a WT checkpoint.
-      // settle=false: wait only while a checkpoint is already running.
-      // settle=true: fsync if allowed, else wait for a falling edge so
-      // block-manager reusable bytes are visible in collStats.
-      // force=true: wait even when ignoreCheckpoint (calibrate packed stats).
-      // Returns { available, running, completed } — completed is a falling edge
-      // this call observed (or fsync). Callers may collSnapshot() then.
-      if (ignoreCheckpoint && !force) {
-         if (!ckptIgnoreLogged) {
-            console.log('ignoreCheckpoint: not pausing for checkpoints; $collStats applied next round');
-            ckptIgnoreLogged = true;
-         }
-         kickCollStats();
-         return { "available": wtCheckpoint().available, "running": false, "completed": false, "ignored": true };
-      }
-      let { available, running, minTimeMS, recentTimeMS } = wtCheckpoint();
-      if (settle && await tryFsyncCheckpoint()) {
-         ({ available, running } = wtCheckpoint());
-         if (!running) {
-            console.log('checkpoint fsync completed');
-            return { "available": available, "running": false, "completed": true, "fsync": true };
-         }
-         console.log('checkpoint fsync issued, waiting to complete...');
-      }
-      if (!available) {
-         if (!ckptSkipLogged) {
-            console.log('checkpoint metrics unavailable (no wiredTiger in serverStatus), skipping wait');
-            ckptSkipLogged = true;
-         }
-         return { "available": false, "running": false, "completed": false };
-      }
-      if (!settle && !running) return { "available": true, "running": false, "completed": false };
-      const pollMs = Math.min(ckptPollMs, Math.max(50, Math.ceil(0.9 * (minTimeMS || ckptPollMs))));
-      const timeoutMs = Number(checkpointTimeoutMs) > 0
-                      ? +checkpointTimeoutMs
-                      : Math.max(120000, 2 * (recentTimeMS || minTimeMS || 0));
-      const deadline = Date.now() + timeoutMs;
-      if (running) {
-         console.log(`checkpoint running, waiting to complete (timeout ${timeoutMs}ms)...`);
-      } else {
-         console.log(`waiting for checkpoint to start and complete (settled stats, timeout ${timeoutMs}ms)...`);
-      }
-      let completed = false;
-      do {
-         const wasRunning = running;
-         await delay(Math.min(pollMs, Math.max(1, deadline - Date.now())));
-         ({ running } = wtCheckpoint());
-         if (wasRunning && !running) completed = true;
-      } while ((running || (settle && !completed)) && Date.now() < deadline);
-      console.log(completed ? 'checkpoint completed' : 'checkpoint wait timed out, continuing');
-      return { "available": true, "running": running, "completed": completed };
-   }
-
    try {
       preflightDropTmpSamples();
-      const mains = {
-         "naturalReply": naturalReplyMain,
-         "naturalWindow": naturalWindowMain,
-         "quantile": quantileMain,
-         "shapeQuantile": shapeQuantileMain
+      const packedCurators = {
+         "naturalWindow": (cal, nDocs) => startNaturalWindowCurator(cal, nDocs),
+         "quantile": (cal, nDocs) => startQuantileCurator(cal, nDocs),
+         "shapeQuantile": (cal, nDocs) => startShapeQuantileCurator(cal, nDocs)
       };
-      await mains[strategy]();
+      if (strategy === 'naturalReply') await naturalReplyMain();
+      else await packedWriteMain(strategy, packedCurators[strategy]);
    } catch(e) {
       console.log('[red][ERROR][/]', e.errmsg || e.message || String(e));
       throw e;
