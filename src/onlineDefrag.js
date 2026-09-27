@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "1.4.1"
+ *  Version: "1.5.0"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -44,7 +44,7 @@
  */
 
 (() => { // User-facing comments are in the header. Mechanics live on the functions below. mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "1.4.1" };
+   const __script = { "name": "onlineDefrag.js", "version": "1.5.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -909,6 +909,86 @@
       };
    }
 
+   function walkPackedTemp(tmpDb, name) {
+      // Temp is already a sample; collscan to populate runtime WT btree/compression.
+      const coll = tmpDb.getCollection(name);
+      const cur = coll.find({}, { "_id": 1 }).hint({ "$natural": 1 });
+      let n = 0;
+      if (typeof cur.forEach === 'function') cur.forEach(() => { n++; });
+      else for (const _ of cur) n++;
+      return n;
+   }
+
+   function packedTempWt(tmpDbName, name) {
+      const coll = db.getSiblingDB(tmpDbName).getCollection(name);
+      const raw = coll.aggregate([
+         { "$collStats": { "storageStats": { "scale": 1, "freeStorage": 1 } } }
+      ]).toArray()[0];
+      const wt = (raw && raw.storageStats && raw.storageStats.wiredTiger) || {};
+      return { "compression": wt.compression || {}, "btree": wt.btree || {} };
+   }
+
+   function writeHistSplit(comp) {
+      const total = +comp['pages written to disk'] || 0;
+      if (total < 8) return { "split": false, "lt2": 0, "ge8": 0, "total": total };
+      let lt2 = 0, ge8 = 0;
+      for (const [k, v] of Object.entries(comp)) {
+         const m = String(k).match(/pages written to disk with compression ratio (smaller|greater) than\s+(\d+)/);
+         if (!m) continue;
+         const n = +v || 0;
+         if (m[1] === 'smaller' && +m[2] === 2) lt2 += n;
+         if (m[1] === 'greater' || (m[1] === 'smaller' && +m[2] >= 8)) ge8 += n;
+      }
+      return {
+         "split": (lt2 / total > 0.15) && (ge8 / total > 0.15),
+         "lt2": lt2 / total,
+         "ge8": ge8 / total,
+         "total": total
+      };
+   }
+
+   function tuneFromPackedWt(tmpDb, name, { objects, tfr, tunedFill, leaf }) {
+      // Collscan the packed temp, then WT write-hist / too-small / real leaf count.
+      // dataSize/live stays the C mean. Size/shape temps still own per-band C.
+      let tfrOut = tfr, fillOut = tunedFill;
+      try {
+         const walked = walkPackedTemp(tmpDb, name);
+         const { compression: comp, btree } = packedTempWt(tmpStatsDbName, name);
+         const leafPages = +btree['row-store leaf pages'] || 0;
+         const pagesWritten = +comp['pages written to disk'] || 0;
+         const tooSmall = +comp['page written to disk was too small to compress']
+                       || +comp['page written was too small to compress'] || 0;
+         const maxLeafPrior = +comp['compressed page maximum leaf page size prior to compression ']
+                           || +comp['compressed page maximum leaf page size prior to compression'] || 0;
+         if (leafPages > 1 && objects > 0) {
+            tfrOut = Math.max(1, Math.ceil(objects / leafPages));
+            console.log(`calibrate WT: row-store leaf pages=${leafPages} TFR ${tfr} -> ${tfrOut} (collscan ${walked})`);
+         } else {
+            console.log(`calibrate WT: row-store leaf pages=${leafPages} TFR stays ${tfrOut} collscan=${walked}`);
+         }
+         const tooSmallFrac = pagesWritten > 0 ? tooSmall / pagesWritten : 0;
+         if (tooSmallFrac > 0.05 && !pageFillExplicit) {
+            const next = Math.max(0.5, fillOut * (1 - tooSmallFrac));
+            console.log(`calibrate WT: too-small-to-compress ${tooSmall}/${pagesWritten} (${(100 * tooSmallFrac).toFixed(1)}%); pageFillRatio ${fillOut.toFixed(3)} -> ${next.toFixed(3)}`);
+            fillOut = next;
+         } else if (pagesWritten > 0) {
+            console.log(`calibrate WT: too-small ${tooSmall}/${pagesWritten} written=${pagesWritten}`);
+         }
+         const hist = writeHistSplit(comp);
+         if (hist.total > 0 && hist.split) {
+            console.log(`calibrate WT: write-ratio hist split (lt2=${(100 * hist.lt2).toFixed(0)}% ge8=${(100 * hist.ge8).toFixed(0)}% of ${hist.total}); single C may be dishonest`);
+         } else if (hist.total > 0) {
+            console.log(`calibrate WT: write-ratio hist ok (lt2=${(100 * hist.lt2).toFixed(0)}% ge8=${(100 * hist.ge8).toFixed(0)}% of ${hist.total} writes)`);
+         }
+         if (maxLeafPrior > leaf * 1.5) {
+            console.log(`calibrate WT: max leaf prior to compress=${maxLeafPrior} vs leaf=${leaf}; 32KiB dest alloc may under-debit`);
+         }
+      } catch(e) {
+         console.log(`calibrate WT: unavailable, ${e.message || e}`);
+      }
+      return { "tfr": tfrOut, "tunedFill": fillOut };
+   }
+
    async function settlePackedTemps(created, label) {
       const tag = label ? ` ${label}` : '';
       console.log(`calibrate${tag}: waiting for checkpoint before packed $collStats`);
@@ -1222,14 +1302,22 @@
       const ps = measured.ps;
       const compression = measured.compression;
       let tfr = Math.max(1, ps.pageFillActual);
-      const tunedFill = pageFillExplicit
-                      ? +pageFillRatio
-                      : autotunePageFillRatio(ps, compression, measured.avgObjSize);
+      let tunedFill = pageFillExplicit
+                    ? +pageFillRatio
+                    : autotunePageFillRatio(ps, compression, measured.avgObjSize);
       const leafFill = Math.max(1, Math.ceil((tunedFill * (ps.dataPageSize || leaf) * compression) / (measured.avgObjSize > 0 ? measured.avgObjSize : avg)));
       if (ps.nPages <= 1) {
          tfr = leafFill;
          console.log(`packed nPages=${ps.nPages} (unsettled or tiny file); TFR from leaf fill = ${tfr}`);
       }
+      const wtTune = tuneFromPackedWt(tmpDb, tmpName, {
+         "objects": measured.objects || ps.documentCount,
+         "tfr": tfr,
+         "tunedFill": tunedFill,
+         "leaf": ps.dataPageSize || leaf
+      });
+      tfr = wtTune.tfr;
+      tunedFill = wtTune.tunedFill;
       console.log(`calibrated TFR=${tfr} (packedFill) compression=${compression.toFixed(3)} pageFillRatio=${tunedFill.toFixed(3)}${pageFillExplicit ? ' (pinned)' : ' (packed sample)'} packedFill=${ps.pageFillActual} packedPages=${ps.nPages} objects=${ps.documentCount} avgObjSize=${measured.avgObjSize} storageSize=${measured.storageSize}`);
       return {
          "jumbo": false, "tmpDb": tmpDb, "tmpName": tmpName, "compressor": compressor,
