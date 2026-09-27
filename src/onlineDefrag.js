@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "1.4.0"
+ *  Version: "1.4.1"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -44,7 +44,7 @@
  */
 
 (() => { // User-facing comments are in the header. Mechanics live on the functions below. mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "1.4.0" };
+   const __script = { "name": "onlineDefrag.js", "version": "1.4.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -259,10 +259,10 @@
          if (expect != null && modifiedCount !== expect) {
             console.log(`\tmodifiedCount: ${modifiedCount}`);
          }
-      } catch(error) {
+      } catch(e) {
          txnFailed++;
          try { await session.abortTransaction(); } catch(_) { /* already aborted */ }
-         console.log(`\ttxn failed (${txnFailed}): ${error.message || error}`);
+         console.log(`\ttxn failed (${txnFailed}):`, e.errmsg || e.message || String(e));
       } finally {
          await session.endSession();
       }
@@ -337,7 +337,7 @@
    function generationCap(snap, cal) {
       // generationRatio × freeStorageSize (R), compressed dest bytes, never > R.
       // Not a target for collStats reuse% G = R/storageSize.
-      const frac = Number(generationRatio) > 0 ? +generationRatio : 0.05;
+      const fractional = Number(generationRatio) > 0 ? +generationRatio : 0.05;
       const Rraw = +snap?.freeStorageSize;
       const R = Number.isFinite(Rraw) && Rraw > 0 ? Rraw : 0;
       const sz = +snap?.storageSize;
@@ -348,22 +348,22 @@
                  : (Number(cal?.leaf) > 0 ? +cal.leaf : 32 * 1024);
       const C = Math.max(Number(cal?.compression) > 0 ? +cal.compression : 1, 0.01);
       const minPage = leaf / C;
-      const cap = R > 0 ? Math.max(minPage, frac * R) : 0;
+      const cap = R > 0 ? Math.max(minPage, fractional * R) : 0;
       return {
-         "frac": frac, "R": R, "G": G, "live": live, "cap": cap,
+         "fractional": fractional, "R": R, "G": G, "live": live, "cap": cap,
          "storageSize": storageSize, "leaf": leaf, "compression": C,
          "minPage": minPage, "units": "compressed"
       };
    }
 
    function formatGeneration(b) {
-      return `reusable=${b.R} (G=${(100 * b.G).toFixed(1)}% of storageSize) cap=${Math.round(b.cap)} (${(100 * b.frac).toFixed(0)}% of R, ${b.units})`;
+      return `reusable=${b.R} (G=${(100 * b.G).toFixed(1)}% of storageSize) cap=${Math.round(b.cap)} (${(100 * b.fractional).toFixed(0)}% of R, ${b.units})`;
    }
 
    function makeGeneration(snap, cal) {
       const account = Object.assign({ "used": 0 }, generationCap(snap, cal));
-      account.apply = (b) => {
-         account.frac = b.frac;
+      account.apply = b => {
+         account.fractional = b.fractional;
          account.R = b.R;
          account.G = b.G;
          account.live = b.live;
@@ -375,10 +375,10 @@
          account.units = b.units;
          account.used = 0;
       };
-      account.refresh = (s) => account.apply(generationCap(s || collSnapshot(), cal));
-      account.debit = (n) => { account.used += n; };
+      account.refresh = s => account.apply(generationCap(s || collSnapshot(), cal));
+      account.debit = n => { account.used += n; };
       account.remaining = () => Math.max(0, account.cap - account.used);
-      account.wouldExceed = (n) => account.cap > 0 && account.used > 0 && account.used + n > account.cap;
+      account.wouldExceed = n => account.cap > 0 && account.used > 0 && account.used + n > account.cap;
       account.settle = async() => {
          const waited = await waitForCheckpoint({ "settle": true });
          if (!waited.available && !waited.completed) await delay(statsPollMs);
@@ -606,7 +606,7 @@
             }
             return f;
          };
-         const emit = (b) => ({ "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson, "shape": b.sig });
+         const emit = b => ({ "ids": b.ids, "n": b.n, "packed": b.packed, "bson": b.bson, "shape": b.sig });
          for await (const doc of aggDocs([
             { "$limit": Math.max(1, maxDocs) },
             shapeProjectStage()
@@ -1044,7 +1044,7 @@
          console.log(`calibrate modes: unimodal (${bins.length} packed bins 0–${cap}, density-peaks=${groups.length}) ${densNote}`);
          return [];
       }
-      const binHi = (i) => {
+      const binHi = i => {
          const lo = Number(bins[i]._id);
          const nxt = i + 1 < bins.length ? Number(bins[i + 1]._id) : cap;
          return Number.isFinite(nxt) ? nxt : cap;
@@ -1359,7 +1359,7 @@
       const account = makeGeneration(collSnapshot(), cal);
       const packedPctR = account.R > 0 ? 100 * packedCover / account.R : 0;
       const batch = tfrOverride > 0 ? tfrOverride : cal.tfr;
-      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} C=${compression.toFixed(3)} docs=${nDocs} generationRatio=${account.frac} ${formatGeneration(account)} packedCover≈${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) writeConcurrency=${conc} replay=${policy} freezeWindow=${freezeWindow}`);
+      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} C=${compression.toFixed(3)} docs=${nDocs} generationRatio=${account.fractional} ${formatGeneration(account)} packedCover≈${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) writeConcurrency=${conc} replay=${policy} freezeWindow=${freezeWindow}`);
 
       const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
       const gen = typeof batchSource[Symbol.asyncIterator] === 'function'
@@ -1380,7 +1380,7 @@
          }
          return step.value;
       }
-      const allocFn = (b) => allocOf(b, cal, fillRatio, leaf, compression, batch);
+      const allocFn = b => allocOf(b, cal, fillRatio, leaf, compression, batch);
 
       let pass = 0, packedDone = 0, prevSz = account.storageSize;
       for (;;) {
