@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "1.5.0"
+ *  Version: "1.6.0"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,13 +9,13 @@
  *  - mongosh only. Do not top-level-await this file.
  *  - --eval must use var (not let/const) for dbName, collName, defragOptions.
  *  - Requires mdblib.js on $MDBLIB, ~/.mongodb, or cwd.
- *  - strategy: naturalReply (default) | naturalWindow | quantile | shapeQuantile
- *  - Aliases: naturalReplay → naturalReply; doubleParked → naturalReply with
- *    naturalDir:-1; concurrentUpdates → writeConcurrency;
+ *  - strategy: naturalReplay (default) | naturalWindow | quantile | shapeQuantile
+ *  - Aliases: concurrentUpdates → writeConcurrency;
  *    lowStressDirtyMax/Hard → updatesSoft/updatesHard.
  *  - replay: 'onExtend' (default) | 'never' | 'always'
  *  - pageFillRatio: omit to autotune; set to pin
- *  - generationRatio (alias dirtyBudgetRatio, default 0.2)
+ *  - generationRatio (alias dirtyBudgetRatio, default 0.2): 1/N checkpoint
+ *    slices of the full dest cover (0.2 → 5). Cap is min(R, cover/N).
  *  - reuseFloor (default 0.2)
  *  - reclaim: 'tail' (default) | 'none'
  *  - Other knobs: writeConcurrency (default 8), passes, naturalDir (1 | -1),
@@ -30,7 +30,7 @@
  *  Example:
  *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection';" -f </path/to/>onlineDefrag.js
  *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReplay', concurrentUpdates: 32, updateDelayMs: 0, replay: 'onExtend' };" -f </path/to/>onlineDefrag.js
- *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReply', naturalDir: -1 };" -f </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReplay', naturalDir: -1 };" -f </path/to/>onlineDefrag.js
  *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalWindow' };" -f </path/to/>onlineDefrag.js
  *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'quantile' };" -f </path/to/>onlineDefrag.js
  *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'shapeQuantile' };" -f </path/to/>onlineDefrag.js
@@ -44,7 +44,7 @@
  */
 
 (() => { // User-facing comments are in the header. Mechanics live on the functions below. mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "1.5.0" };
+   const __script = { "name": "onlineDefrag.js", "version": "1.6.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -70,23 +70,17 @@
    // dbName/collName/defragOptions here — IIFE const would shadow the overlay.
    const userOptions = typeof defragOptions === 'undefined' ? {} : defragOptions;
 
-   const STRATEGIES = ['naturalReply', 'naturalWindow', 'quantile', 'shapeQuantile'];
+   const STRATEGIES = ['naturalReplay', 'naturalWindow', 'quantile', 'shapeQuantile'];
 
    function normalizeOptions(raw) {
-      // Aliases: naturalReplay → naturalReply; doubleParked → naturalReply with
-      // naturalDir:-1; concurrentUpdates → writeConcurrency;
+      // Aliases: concurrentUpdates → writeConcurrency;
       // lowStressDirtyMax/Hard → updatesSoft/updatesHard;
       // dirtyBudgetRatio → generationRatio; curatorBatchSize → tfrOverride.
       const o = (raw && typeof raw === 'object') ? raw : {};
-      const rawStrategy = o.strategy == null || o.strategy === '' ? 'naturalReply' : o.strategy;
-      let strategy = rawStrategy === 'naturalReplay' ? 'naturalReply' : rawStrategy;
-      let naturalDir = Number(o.naturalDir) < 0 ? -1 : 1;
-      if (rawStrategy === 'doubleParked' || strategy === 'doubleParked') {
-         strategy = 'naturalReply';
-         if (!Object.prototype.hasOwnProperty.call(o, 'naturalDir')) naturalDir = -1;
-      }
+      const strategy = o.strategy == null || o.strategy === '' ? 'naturalReplay' : o.strategy;
+      const naturalDir = Number(o.naturalDir) < 0 ? -1 : 1;
       if (STRATEGIES.indexOf(strategy) < 0) {
-         throw new Error(`unknown defragOptions.strategy "${rawStrategy}" (use ${STRATEGIES.join('|')}; aliases naturalReplay, doubleParked)`);
+         throw new Error(`unknown defragOptions.strategy "${o.strategy}" (use ${STRATEGIES.join('|')})`);
       }
       const writeConcurrency = Number(o.writeConcurrency) > 0
          ? Math.ceil(o.writeConcurrency)
@@ -334,10 +328,17 @@
    }
 
    // --- generation ---
-   function generationCap(snap, cal) {
-      // generationRatio × freeStorageSize (R), compressed dest bytes, never > R.
-      // Not a target for collStats reuse% G = R/storageSize.
+   function checkpointGenerations() {
       const fractional = Number(generationRatio) > 0 ? +generationRatio : 0.05;
+      return Math.max(2, Math.ceil(1 / fractional));
+   }
+
+   function generationCap(snap, cal, coverBytes) {
+      // Full dest cover split across N checkpoints (N = max(2, ceil(1/generationRatio))),
+      // like waves. Cap = min(R, cover/N). Same total rewrite; less dest in flight
+      // per cycle. Settled G after a full cover without TRIM is unchanged.
+      const fractional = Number(generationRatio) > 0 ? +generationRatio : 0.05;
+      const nGens = checkpointGenerations();
       const Rraw = +snap?.freeStorageSize;
       const R = Number.isFinite(Rraw) && Rraw > 0 ? Rraw : 0;
       const sz = +snap?.storageSize;
@@ -348,22 +349,30 @@
                  : (Number(cal?.leaf) > 0 ? +cal.leaf : 32 * 1024);
       const C = Math.max(Number(cal?.compression) > 0 ? +cal.compression : 1, 0.01);
       const minPage = leaf / C;
-      const cap = R > 0 ? Math.max(minPage, fractional * R) : 0;
+      const cover = Number(coverBytes) > 0 ? +coverBytes : 0;
+      const slice = cover > 0 ? cover / nGens : (R > 0 ? fractional * R : 0);
+      const cap = R > 0 ? Math.max(minPage, Math.min(R, slice)) : 0;
       return {
-         "fractional": fractional, "R": R, "G": G, "live": live, "cap": cap,
+         "fractional": fractional, "nGens": nGens, "coverBytes": cover,
+         "R": R, "G": G, "live": live, "cap": cap,
          "storageSize": storageSize, "leaf": leaf, "compression": C,
          "minPage": minPage, "units": "compressed"
       };
    }
 
    function formatGeneration(b) {
-      return `reusable=${b.R} (G=${(100 * b.G).toFixed(1)}% of storageSize) cap=${Math.round(b.cap)} (${(100 * b.fractional).toFixed(0)}% of R, ${b.units})`;
+      const nGens = b.nGens > 0 ? b.nGens : checkpointGenerations();
+      const pctR = b.R > 0 ? (100 * b.cap / b.R).toFixed(0) : '0';
+      const pctCover = b.coverBytes > 0 ? (100 * b.cap / b.coverBytes).toFixed(0) : '?';
+      return `reusable=${b.R} (G=${(100 * b.G).toFixed(1)}% of storageSize) cap=${Math.round(b.cap)} (${nGens} ckpts, ${pctCover}% of cover, ${pctR}% of R, ${b.units})`;
    }
 
-   function makeGeneration(snap, cal) {
-      const account = Object.assign({ "used": 0 }, generationCap(snap, cal));
+   function makeGeneration(snap, cal, coverBytes) {
+      const account = Object.assign({ "used": 0 }, generationCap(snap, cal, coverBytes));
       account.apply = b => {
          account.fractional = b.fractional;
+         account.nGens = b.nGens;
+         account.coverBytes = b.coverBytes;
          account.R = b.R;
          account.G = b.G;
          account.live = b.live;
@@ -375,7 +384,7 @@
          account.units = b.units;
          account.used = 0;
       };
-      account.refresh = s => account.apply(generationCap(s || collSnapshot(), cal));
+      account.refresh = s => account.apply(generationCap(s || collSnapshot(), cal, account.coverBytes));
       account.debit = n => { account.used += n; };
       account.remaining = () => Math.max(0, account.cap - account.used);
       account.wouldExceed = n => account.cap > 0 && account.used > 0 && account.used + n > account.cap;
@@ -1356,7 +1365,7 @@
 
    // --- writeCover ---
    function shouldReplay({ extended, R }, policy = replay) {
-      // Density covers pass replay:'never'. Freeze windows (naturalReply) use
+      // Density covers pass replay:'never'. Freeze windows (naturalReplay) use
       // onExtend | never | always.
       if (policy === 'always') return { "replay": true, "reason": "always" };
       if (policy === 'never') return { "replay": false, "reason": "never" };
@@ -1444,7 +1453,7 @@
       const tune = dirtyTune();
       const { packedBudget, fillRatio, leaf, compression } = packedPageBudget(cal);
       const packedCover = estimateRewriteBytes(nDocs, cal);
-      const account = makeGeneration(collSnapshot(), cal);
+      const account = makeGeneration(collSnapshot(), cal, packedCover);
       const packedPctR = account.R > 0 ? 100 * packedCover / account.R : 0;
       const batch = tfrOverride > 0 ? tfrOverride : cal.tfr;
       console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} C=${compression.toFixed(3)} docs=${nDocs} generationRatio=${account.fractional} ${formatGeneration(account)} packedCover≈${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) writeConcurrency=${conc} replay=${policy} freezeWindow=${freezeWindow}`);
@@ -1582,8 +1591,8 @@
       // preflight → calibrate → writeCover × passes → reclaimAfter.
       preflightDropTmpSamples();
       const plans = {
-         "naturalReply": {
-            "curator": naturalCurator('naturalReply', naturalDir),
+         "naturalReplay": {
+            "curator": naturalCurator('naturalReplay', naturalDir),
             "freezeWindow": true
          },
          "naturalWindow": {
