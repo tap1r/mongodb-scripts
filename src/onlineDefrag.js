@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "1.6.0"
+ *  Version: "1.6.1"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -8,20 +8,14 @@
  *  Notes:
  *  - mongosh only. Do not top-level-await this file.
  *  - --eval must use var (not let/const) for dbName, collName, defragOptions.
- *  - Requires mdblib.js on $MDBLIB, ~/.mongodb, or cwd.
+ *  - Requires mdblib.js ($MDBLIB, ~/.mongodb, or cwd).
  *  - strategy: naturalReplay (default) | naturalWindow | quantile | shapeQuantile
- *  - Aliases: concurrentUpdates → writeConcurrency;
- *    lowStressDirtyMax/Hard → updatesSoft/updatesHard.
  *  - replay: 'onExtend' (default) | 'never' | 'always'
- *  - pageFillRatio: omit to autotune; set to pin
- *  - generationRatio (alias dirtyBudgetRatio, default 0.2): 1/N checkpoint
- *    slices of the full dest cover (0.2 → 5). Cap is min(R, cover/N).
- *  - reuseFloor (default 0.2)
  *  - reclaim: 'tail' (default) | 'none'
- *  - Other knobs: writeConcurrency (default 8), passes, naturalDir (1 | -1),
- *    updateDelayMs, updatesSoft, updatesHard, tfrOverride
- *    (alias curatorBatchSize), shuffleSampleSize, maxLagSeconds,
- *    checkpointTimeoutMs.
+ *  - Knobs: writeConcurrency (default 8), generationRatio (default 0.2),
+ *    reuseFloor (default 0.2), pageFillRatio, passes, naturalDir (1 | -1),
+ *    updateDelayMs, updatesSoft, updatesHard, tfrOverride, shuffleSampleSize,
+ *    maxLagSeconds, checkpointTimeoutMs.
  */
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>onlineDefrag.js
@@ -29,7 +23,7 @@
 /*
  *  Example:
  *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection';" -f </path/to/>onlineDefrag.js
- *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReplay', concurrentUpdates: 32, updateDelayMs: 0, replay: 'onExtend' };" -f </path/to/>onlineDefrag.js
+ *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReplay', writeConcurrency: 32, updateDelayMs: 0, replay: 'onExtend' };" -f </path/to/>onlineDefrag.js
  *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalReplay', naturalDir: -1 };" -f </path/to/>onlineDefrag.js
  *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'naturalWindow' };" -f </path/to/>onlineDefrag.js
  *    mongosh [connection options] --eval "var dbName = 'database', collName = 'collection', defragOptions = { strategy: 'quantile' };" -f </path/to/>onlineDefrag.js
@@ -44,7 +38,7 @@
  */
 
 (() => { // User-facing comments are in the header. Mechanics live on the functions below. mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "1.6.0" };
+   const __script = { "name": "onlineDefrag.js", "version": "1.6.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -73,38 +67,29 @@
    const STRATEGIES = ['naturalReplay', 'naturalWindow', 'quantile', 'shapeQuantile'];
 
    function normalizeOptions(raw) {
-      // Aliases: concurrentUpdates → writeConcurrency;
-      // lowStressDirtyMax/Hard → updatesSoft/updatesHard;
-      // dirtyBudgetRatio → generationRatio; curatorBatchSize → tfrOverride.
       const o = (raw && typeof raw === 'object') ? raw : {};
       const strategy = o.strategy == null || o.strategy === '' ? 'naturalReplay' : o.strategy;
       const naturalDir = Number(o.naturalDir) < 0 ? -1 : 1;
       if (STRATEGIES.indexOf(strategy) < 0) {
          throw new Error(`unknown defragOptions.strategy "${o.strategy}" (use ${STRATEGIES.join('|')})`);
       }
-      const writeConcurrency = Number(o.writeConcurrency) > 0
-         ? Math.ceil(o.writeConcurrency)
-         : (Number(o.concurrentUpdates) > 0 ? Math.ceil(o.concurrentUpdates) : 8);
+      const writeConcurrency = Number(o.writeConcurrency) > 0 ? Math.ceil(o.writeConcurrency) : 8;
       const replayIn = o.replay;
-      const replay = (replayIn === 'never' || replayIn === false || replayIn === 'skip') ? 'never'
+      const replay = replayIn === 'never' ? 'never'
                    : (replayIn === 'always' ? 'always' : 'onExtend');
       const coverPassesOpt = Number(o.passes) > 0 ? Math.ceil(o.passes) : 0;
-      const updatesSoft = Number(o.updatesSoft) > 0 ? +o.updatesSoft
-                        : (Number(o.lowStressDirtyMax) > 0 ? +o.lowStressDirtyMax : 0.07);
-      const updatesHard = Number(o.updatesHard) > 0 ? +o.updatesHard
-                        : (Number(o.lowStressDirtyHard) > 0 ? +o.lowStressDirtyHard : 0.08);
+      const updatesSoft = Number(o.updatesSoft) > 0 ? +o.updatesSoft : 0.07;
+      const updatesHard = Number(o.updatesHard) > 0 ? +o.updatesHard : 0.08;
       const pageFillExplicit = Object.prototype.hasOwnProperty.call(o, 'pageFillRatio')
          && Number(o.pageFillRatio) > 0;
-      const tfrOverride = Number(o.tfrOverride) > 0 ? Math.ceil(o.tfrOverride)
-                        : (Number(o.curatorBatchSize) > 0 ? Math.ceil(o.curatorBatchSize) : 0);
-      const generationRatio = Number(o.generationRatio) > 0 ? +o.generationRatio
-                            : (Number(o.dirtyBudgetRatio) > 0 ? +o.dirtyBudgetRatio : 0.2);
+      const tfrOverride = Number(o.tfrOverride) > 0 ? Math.ceil(o.tfrOverride) : 0;
+      const generationRatio = Number(o.generationRatio) > 0 ? +o.generationRatio : 0.2;
       const reuseFloor = Number(o.reuseFloor) > 0 ? +o.reuseFloor : 0.2;
       const reclaimIn = o.reclaim;
       if (reclaimIn === 'compact') {
          throw new Error('defragOptions.reclaim "compact" is not in this script; use "tail" (default) or "none"');
       }
-      const reclaim = (reclaimIn === 'none' || reclaimIn === false) ? 'none' : 'tail';
+      const reclaim = reclaimIn === 'none' ? 'none' : 'tail';
       return Object.assign({}, o, {
          "strategy": strategy,
          "writeConcurrency": writeConcurrency,
@@ -328,17 +313,10 @@
    }
 
    // --- generation ---
-   function checkpointGenerations() {
+   function generationCap(snap, cal, allowExtend = false) {
+      // Density: generationRatio × R, never > R. Reclaim tail (allowExtend):
+      // R + one dest leaf so WT must allocate at EOF, then replay.
       const fractional = Number(generationRatio) > 0 ? +generationRatio : 0.05;
-      return Math.max(2, Math.ceil(1 / fractional));
-   }
-
-   function generationCap(snap, cal, coverBytes) {
-      // Full dest cover split across N checkpoints (N = max(2, ceil(1/generationRatio))),
-      // like waves. Cap = min(R, cover/N). Same total rewrite; less dest in flight
-      // per cycle. Settled G after a full cover without TRIM is unchanged.
-      const fractional = Number(generationRatio) > 0 ? +generationRatio : 0.05;
-      const nGens = checkpointGenerations();
       const Rraw = +snap?.freeStorageSize;
       const R = Number.isFinite(Rraw) && Rraw > 0 ? Rraw : 0;
       const sz = +snap?.storageSize;
@@ -349,30 +327,26 @@
                  : (Number(cal?.leaf) > 0 ? +cal.leaf : 32 * 1024);
       const C = Math.max(Number(cal?.compression) > 0 ? +cal.compression : 1, 0.01);
       const minPage = leaf / C;
-      const cover = Number(coverBytes) > 0 ? +coverBytes : 0;
-      const slice = cover > 0 ? cover / nGens : (R > 0 ? fractional * R : 0);
-      const cap = R > 0 ? Math.max(minPage, Math.min(R, slice)) : 0;
+      const base = R > 0 ? Math.max(minPage, fractional * R) : 0;
+      const cap = allowExtend ? (R + minPage) : base;
       return {
-         "fractional": fractional, "nGens": nGens, "coverBytes": cover,
-         "R": R, "G": G, "live": live, "cap": cap,
+         "fractional": fractional, "R": R, "G": G, "live": live, "cap": cap,
          "storageSize": storageSize, "leaf": leaf, "compression": C,
-         "minPage": minPage, "units": "compressed"
+         "minPage": minPage, "units": "compressed", "allowExtend": !!allowExtend
       };
    }
 
    function formatGeneration(b) {
-      const nGens = b.nGens > 0 ? b.nGens : checkpointGenerations();
-      const pctR = b.R > 0 ? (100 * b.cap / b.R).toFixed(0) : '0';
-      const pctCover = b.coverBytes > 0 ? (100 * b.cap / b.coverBytes).toFixed(0) : '?';
-      return `reusable=${b.R} (G=${(100 * b.G).toFixed(1)}% of storageSize) cap=${Math.round(b.cap)} (${nGens} ckpts, ${pctCover}% of cover, ${pctR}% of R, ${b.units})`;
+      const pctR = b.R > 0 ? (100 * b.cap / b.R).toFixed(0) : 'n/a';
+      const ext = b.allowExtend ? ', EOF extend' : '';
+      return `reusable=${b.R} (G=${(100 * b.G).toFixed(1)}% of storageSize) cap=${Math.round(b.cap)} (${pctR}% of R${ext}, ${b.units})`;
    }
 
-   function makeGeneration(snap, cal, coverBytes) {
-      const account = Object.assign({ "used": 0 }, generationCap(snap, cal, coverBytes));
+   function makeGeneration(snap, cal, allowExtend = false) {
+      const account = Object.assign({ "used": 0 }, generationCap(snap, cal, allowExtend));
+      account.allowExtend = !!allowExtend;
       account.apply = b => {
          account.fractional = b.fractional;
-         account.nGens = b.nGens;
-         account.coverBytes = b.coverBytes;
          account.R = b.R;
          account.G = b.G;
          account.live = b.live;
@@ -382,9 +356,10 @@
          account.compression = b.compression;
          account.minPage = b.minPage;
          account.units = b.units;
+         account.allowExtend = !!b.allowExtend;
          account.used = 0;
       };
-      account.refresh = s => account.apply(generationCap(s || collSnapshot(), cal, account.coverBytes));
+      account.refresh = s => account.apply(generationCap(s || collSnapshot(), cal, account.allowExtend));
       account.debit = n => { account.used += n; };
       account.remaining = () => Math.max(0, account.cap - account.used);
       account.wouldExceed = n => account.cap > 0 && account.used > 0 && account.used + n > account.cap;
@@ -399,8 +374,8 @@
    }
 
    function autotunePageFillRatio(ps, compression, avgObjSize) {
-      // Used when pageFillRatio is omitted. TFR × avg / C / leaf from the packed
-      // sample's settled $collStats, clamped to the WT split_pct band (was 0.9).
+      // Omit pageFillRatio to use this; set the knob to pin. TFR × avg / C / leaf
+      // from the packed sample's settled $collStats, clamped to WT split_pct.
       const leaf = Number(ps?.dataPageSize) > 0 ? +ps.dataPageSize : 32 * 1024;
       const tfr = Number(ps?.pageFillActual) > 0 ? +ps.pageFillActual : 0;
       const C = Math.max(Number(compression) > 0 ? +compression : 1, 0.01);
@@ -1445,15 +1420,17 @@
    async function writeCover(label, cal, batchSource, nDocs, {
       freezeWindow = false,
       replay: replayOpt,
-      oneGeneration = false
+      oneGeneration = false,
+      allowExtend = false
    } = {}) {
       // freezeWindow parks the current generation's _ids for maybeReplay.
+      // allowExtend: cap = R + one leaf (EOF dest), then replay off it.
       const policy = replayOpt || (freezeWindow ? replay : 'never');
       const conc = Math.max(1, Number(writeConcurrency) > 0 ? Math.ceil(writeConcurrency) : 1);
       const tune = dirtyTune();
       const { packedBudget, fillRatio, leaf, compression } = packedPageBudget(cal);
       const packedCover = estimateRewriteBytes(nDocs, cal);
-      const account = makeGeneration(collSnapshot(), cal, packedCover);
+      const account = makeGeneration(collSnapshot(), cal, allowExtend);
       const packedPctR = account.R > 0 ? 100 * packedCover / account.R : 0;
       const batch = tfrOverride > 0 ? tfrOverride : cal.tfr;
       console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} C=${compression.toFixed(3)} docs=${nDocs} generationRatio=${account.fractional} ${formatGeneration(account)} packedCover≈${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) writeConcurrency=${conc} replay=${policy} freezeWindow=${freezeWindow}`);
@@ -1532,8 +1509,9 @@
    }
 
    async function reclaimAfter(label, cal) {
-      // After density. Default tail: $natural:-1 one generation until G ≤
-      // reuseFloor or storageSize does not fall (interior holes). none skips.
+      // After density. Tail: $natural:-1 one window of R + one dest leaf (EOF
+      // extend), settle, replay those _ids, settle. Repeat while G > reuseFloor
+      // and storageSize falls. none skips.
       if (reclaim === 'none') {
          console.log(`${label}: skip reclaim (reclaim=none)`);
          return;
@@ -1547,18 +1525,19 @@
       const maxRounds = 8;
       for (let round = 1; round <= maxRounds; round++) {
          snap = collSnapshot();
-         const g0 = generationCap(snap, cal);
+         const g0 = generationCap(snap, cal, true);
          if (!needsReclaim(snap)) {
-            console.log(`${label}: reclaim done ${formatGeneration(g0)}`);
+            console.log(`${label}: reclaim done ${formatGeneration(generationCap(snap, cal))}`);
             return;
          }
          const nDocs = nDocsFrom(snap);
          const sz0 = snap.storageSize || 0;
-         console.log(`${label}: reclaim tail ${round}/${maxRounds} $natural:-1 ${formatGeneration(g0)}`);
+         console.log(`${label}: reclaim tail ${round}/${maxRounds} $natural:-1 EOF-extend+replay ${formatGeneration(g0)}`);
          await writeCover(`${label} reclaim ${round}`, cal, naturalPackedBatches(cal, nDocs, -1), nDocs, {
             "freezeWindow": true,
-            "replay": "never",
-            "oneGeneration": true
+            "replay": "always",
+            "oneGeneration": true,
+            "allowExtend": true
          });
          await waitForCheckpoint({ "settle": true });
          const after = collSnapshot();
@@ -1567,7 +1546,7 @@
          if (dSz < 0) {
             console.log(`${label}: TRIM dStorageSize=${dSz} ${formatGeneration(g1)}`);
          } else {
-            console.log(`${label}: no ftruncate dStorageSize=${dSz} ${formatGeneration(g1)} (holes are interior or tail was not EOF)`);
+            console.log(`${label}: no ftruncate dStorageSize=${dSz} ${formatGeneration(g1)} (EOF generation did not become last extent)`);
             return;
          }
          if (!needsReclaim(after)) return;
