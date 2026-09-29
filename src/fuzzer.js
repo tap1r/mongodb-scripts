@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.49"
+ *  Version: "0.6.50"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.49" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.50" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -181,7 +181,7 @@
 
       const avgSize = $floor(docSize / sampleSize);
       if (avgSize > bsonMax * 0.95)
-         console.log(`\n[Warning] The average document size of ${avgSize} bytes approaches or exceeeds the BSON max size of ${bsonMax} bytes`);
+         console.log(`\n[Warning] The average document size of ${avgSize} bytes approaches or exceeds the BSON max size of ${bsonMax} bytes`);
       console.log(`\nSampling ${sampleSize} document${(sampleSize === 1) ? '' : 's'} each with BSON size averaging ${avgSize} byte${(avgSize === 1) ? '' : 's'}`);
       const sampledSize = $floor(bsonMax * 0.95 / avgSize);
       const batchCap = 1000;
