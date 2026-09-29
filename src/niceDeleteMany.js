@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.12.5"
+    *  Version: "0.12.6"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.12.5" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.12.6" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -1506,12 +1506,10 @@
       };
       takeRoot(explainResult);
       for (const root of roots) {
-         walkPlanNodes(root, (node) => {
-            const upper = String(node.stage || node.nodeType || '').toUpperCase();
-            if (upper === 'COLLSCAN' || upper === 'COLLECTIONSCAN') collScan = true;
-            if (upper === 'SORT' || upper === 'SORT_KEY_GENERATOR') blockingSort = true;
-            if (isIxscanStage(node)) ixscan = true;
-         });
+         const cls = classifyPlanRoot(root);
+         collScan = collScan || cls.collScan;
+         blockingSort = blockingSort || cls.blockingSort;
+         ixscan = ixscan || cls.ixscan;
       }
       return { collScan, blockingSort, ixscan };
    }
@@ -1527,7 +1525,8 @@
          || upper === 'CLUSTERED_IXSCAN' || upper === 'COUNT_SCAN' || upper === 'INDEXSCAN';
    }
 
-   function planTreeIsIndexOrdered(planRoot) {
+   function classifyPlanRoot(planRoot) {
+      // Physical winningPlan stages: COLLSCAN, blocking SORT, IXSCAN (and aliases).
       let collScan = false, blockingSort = false, ixscan = false;
       walkPlanNodes(planRoot, (node) => {
          const upper = String(node.stage || node.nodeType || '').toUpperCase();
@@ -1535,6 +1534,11 @@
          if (upper === 'SORT' || upper === 'SORT_KEY_GENERATOR') blockingSort = true;
          if (isIxscanStage(node)) ixscan = true;
       });
+      return { collScan, blockingSort, ixscan };
+   }
+
+   function planTreeIsIndexOrdered(planRoot) {
+      const { collScan, blockingSort, ixscan } = classifyPlanRoot(planRoot);
       return ixscan && !collScan && !blockingSort;
    }
 
