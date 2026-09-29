@@ -36,9 +36,10 @@ A `$setWindowFields` whose `sortBy` is the first ordering stage injects a physic
 3. Explain `$match` + `$sort` (`queryPlanner`) with the candidate hint when one is in play.
 4. When that plan is index-ordered, also explain the **full v3 window pipeline** (both `$setWindowFields` stages) with `allowDiskUse: false`.
 5. **Window** mode only when **both** plans are IXSCAN with no `COLLSCAN` and no blocking `SORT` / `SORT_KEY_GENERATOR`.
-6. Otherwise **scan** mode: hinted `{_id:1}` `find()`, residual filter as FETCH, buckets assembled in-process.
-7. A user hint is honored only when that hinted explain is index-ordered; otherwise WARN and take the `_id` scan.
-8. If a live window cursor still hits the 32MiB sort budget (`QueryExceededMemoryLimitNoDiskUseAllowed`), close it and continue as scan.
+6. **Policy B:** if that first-field `sortBy` is not index-ordered, probe btree indexes whose prefix keys are **equality** fields of the filter: prefix keys in index order, then the next (trailing) key — ESR, Example D. Cap 8 explains. A user hint is reused on those probes when one was given.
+7. Otherwise **scan** mode: hinted `{_id:1}` `find()`, residual filter as FETCH, buckets assembled in-process.
+8. A user hint is honored only when that hinted explain is index-ordered; otherwise WARN and take the `_id` scan.
+9. If a live window cursor still hits the 32MiB sort budget (`QueryExceededMemoryLimitNoDiskUseAllowed`), close it and continue as scan.
 
 **Bucket vs batch:** pipeline fields stay `bucket*` (consistent with operators like `$bucketAuto`). “Batch” is the client/task-pool name for a yielded bucket once it enters the delete worker pool. Both modes yield the same document shape, **100 `_id`s per bucket** by default.
 
@@ -338,7 +339,7 @@ db.collection
 // Good: IXSCAN on that compound key without SORT
 ```
 
-Useful when extending beyond a single filter field (Policy B–style probes).
+Policy B in `niceDeleteMany.js` probes this when the first filter field is not an index prefix (for example `$sort: { region: 1 }` against `{ status: 1, region: 1, createdAt: 1 }`).
 
 ### Example E — scan mode (`find()` `{_id:1}`)
 
