@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.7.13"
+    *  Version: "0.7.14"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -66,7 +66,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.7.13" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.7.14" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -3091,6 +3091,29 @@
       emitHud(admissionControl());
    }
 
+   function buildStartupBanner(heading) {
+      /*
+       *  Attach-time HUD header. heading is the script title plus any
+       *  persistBannerLine emits from attach. Pace WARN is one copy here;
+       *  enablePaceAdmission emits only after startupLogDone.
+       */
+      let text = `\n[yellow]${heading}[/]`;
+      text += `\n\nCurating '[green]_id[/]' deletion list from namespace:` +
+              `\n\n\t[green]${dbName}.${collName}[/]` +
+              `\n\nwith filter:` +
+              `\n\n\t[green]${JSON.stringify(filter)}[/]` +
+              `\n\n...please wait\n`;
+      if (safeguard) {
+         text += '\n[red][WARN][/] [yellow]Safeguard is enabled, simulating deletes only (via transaction rollbacks)\n[/]';
+      }
+      if (admissionMode === 'pace' && paceDetail) {
+         text += `\n[red][WARN][/] [yellow]${paceDetail}[/]\n`;
+      } else if (onMongos && Array.isArray(vitals.owningShards) && vitals.owningShards.length) {
+         text += `\n[blue][INFO][/] WT admission from collection-owning shard primaries: [yellow]${vitals.owningShards.join(', ')}[/] (worst-shard fold)\n`;
+      }
+      return text;
+   }
+
    async function main() {
       // One-shot vitals for concurrency sizing + WT probe; sampler runs only in 'wt' mode.
       try {
@@ -3167,22 +3190,7 @@
          "readPreference": writeReadPreference
       };
 
-      banner = `\n[yellow]${banner}[/]`;
-      banner += `\n\nCurating '[green]_id[/]' deletion list from namespace:` +
-                `\n\n\t[green]${dbName}.${collName}[/]` +
-                `\n\nwith filter:` +
-                `\n\n\t[green]${JSON.stringify(filter)}[/]` +
-                `\n\n...please wait\n`;
-      if (safeguard) {
-         banner += '\n[red][WARN][/] [yellow]Safeguard is enabled, simulating deletes only (via transaction rollbacks)\n[/]';
-      }
-      // Attach-time pace WARN: one copy on the banner (enablePaceAdmission
-      // emits only after startupLogDone). Same pattern as the safeguard line.
-      if (admissionMode === 'pace' && paceDetail) {
-         banner += `\n[red][WARN][/] [yellow]${paceDetail}[/]\n`;
-      } else if (onMongos && Array.isArray(vitals.owningShards) && vitals.owningShards.length) {
-         banner += `\n[blue][INFO][/] WT admission from collection-owning shard primaries: [yellow]${vitals.owningShards.join(', ')}[/] (worst-shard fold)\n`;
-      }
+      banner = buildStartupBanner(banner);
 
       // WT sampler for mongod and for mongos with attached shard primaries.
       const useVitalsSampler = admissionMode === 'wt';
