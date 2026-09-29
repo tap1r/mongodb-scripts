@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.9.0"
+    *  Version: "0.9.1"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -66,7 +66,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.9.0" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.9.1" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -720,6 +720,8 @@
       }
    }
 
+   // Mongos shard WT vitals: collection-owning shard primaries only.
+   // Separate from mongod congestionMonitor().
    function collectionOwningShardIds() {
       /*
        *  Shard ids that currently own the target namespace. collStats.shards
