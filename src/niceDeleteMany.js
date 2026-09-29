@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.7.5"
+    *  Version: "0.7.6"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -66,7 +66,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.7.5" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.7.6" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -135,6 +135,7 @@
    let admissionMode = 'wt';
    let paceReason = null; // 'mongos' | 'no-wt' | null
    let paceDetail = null;
+   let startupLogDone = false; // after writeConsole(banner); attach WARN is banner-only until then
    let shardVitalsClients = []; // [{ id, mongo, admin }, ...] collection-owning shard primaries
    let shardVitalsEnabled = false;
    let shardVitalsMissStrikes = 0;
@@ -508,11 +509,20 @@
    }
 
    function enablePaceAdmission(reason, detail) {
+      /*
+       *  Attach-time WARN is appended once on the reconstructed banner
+       *  (writeConsole(banner)). emit() here would print a second copy
+       *  on non-TTY before that dump. After the banner is written
+       *  (mid-run latch, or latch during curation) emit so the HUD
+       *  lifts and TTY resize persist keeps the line.
+       */
       const switchingFromWt = admissionMode === 'wt';
       admissionMode = 'pace';
       paceReason = reason;
       paceDetail = detail;
-      emit(`\n[red][WARN][/] [yellow]${detail}[/]`);
+      if (startupLogDone) {
+         emit(`\n[red][WARN][/] [yellow]${detail}[/]`);
+      }
       if (switchingFromWt) {
          maxInFlightCap = Math.max(1, Math.min(PACE_MAX_IN_FLIGHT_CAP, maxInFlightCap|0 || PACE_MAX_IN_FLIGHT_CAP));
          maxInFlight = 1;
@@ -1742,10 +1752,11 @@
          "hint": { "_id": 1 },
          "batchSize": bucketSizeLimit,
          "maxTimeMS": 0,
-         "noCursorTimeout": true,
          "readOnce": true,
          "comment": "Bucketing IDs via niceDeleteMany.js (_id index scan)"
       };
+      // Atlas M0/Flex reject noTimeout cursors; session idle already bounds the walk.
+      if (!curationCannotSpill()) findCmd.noCursorTimeout = true;
       if (hasUserCollation(collation)) findCmd.collation = collation;
       let cursor = database._runCursorCommand(findCmd, {
          "readPreference": driverReadPreference(cmdRP)
@@ -3173,6 +3184,8 @@
       if (safeguard) {
          banner += '\n[red][WARN][/] [yellow]Safeguard is enabled, simulating deletes only (via transaction rollbacks)\n[/]';
       }
+      // Attach-time pace WARN: one copy on the banner (enablePaceAdmission
+      // emits only after startupLogDone). Same pattern as the safeguard line.
       if (admissionMode === 'pace' && paceDetail) {
          banner += `\n[red][WARN][/] [yellow]${paceDetail}[/]\n`;
       } else if (onMongos && Array.isArray(vitals.owningShards) && vitals.owningShards.length) {
@@ -3241,6 +3254,7 @@
       try {
          if (interactive) console.clear();
          writeConsole(banner);
+         startupLogDone = true;
          const deletionList = getIds(filter, bucketSizeLimit, readSessionOpts);
          const { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
          if (initialEmptyBatch === true) {
