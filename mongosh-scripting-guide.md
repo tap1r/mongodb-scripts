@@ -166,7 +166,7 @@ A `Promise` has `.then` and no `.close`; a mongosh find or aggregation cursor ha
 
 In `--file` scripts the [async rewriter](https://www.npmjs.com/package/@mongosh/async-rewriter2) already inserts implicit `await` around marked **shell-API** methods (`find`, `aggregate`, …). You usually receive a **cursor object**, not `Promise<Cursor>`. Stream it with `for await` or `yield*`. Do not `await` it first.
 
-Hit in `niceDeleteMany.js` on the hinted `_id` `find()` fallback: `typeof cursor.then === 'function'` was true for a live cursor, and `await cursor` would materialise every matching `_id` instead of yielding 100-id buckets. The window `aggregate()` path already `yield*`s the cursor without awaiting it.
+Hit in `niceDeleteMany.js` on the hinted `_id` `find()` fallback: `typeof cursor.then === 'function'` was true for a live cursor, and `await cursor` would materialise every matching `_id` instead of yielding 100-id buckets. Both the window `aggregate()` path and the `find()` walk unwrap only a bare Promise (no `.close`), then stream (`yield*` / `for await`).
 
 The object you hold is the **mongosh cursor**, not the server cursor. It wraps a Node driver cursor (`_cursor`). `for await` / `yield*` on the shell object uses `Symbol.asyncIterator`, which (unless `.map()` is set) **delegates to the driver iterator**. `close()` is `await this._cursor.close()` (killCursors on the server when the id is still live).
 
