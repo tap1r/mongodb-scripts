@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.7.4"
+    *  Version: "0.7.5"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,7 +18,7 @@
     *  - --eval must use var (not let/const); probe typeof, do not declare
     *    dbName/collName/filter in this file.
     *  - Window mode: index-ordered $match+$sort + $setWindowFields (semi-blocking bucket estimates)
-    *  - Scan mode: hinted {_id:1} find(), residual FETCH, in-process buckets (no $setWindowFields)
+    *  - Scan mode: hinted {_id:1} find with readOnce, residual FETCH, in-process buckets (no $setWindowFields)
     *  - User hint is kept only when the hinted explain is IXSCAN without a blocking SORT; otherwise WARN and _id scan
     *  - Policy B: compound equality prefix → trailing index sort when the first filter field is not index-ordered
     *  - Unhinted window: if winningPlan is not IXSCAN-without-SORT, hint the first ranked rejectedPlan that is (planner order)
@@ -66,7 +66,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.7.4" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.7.5" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -1389,14 +1389,37 @@
       /*
        *  Shape for runCommand / aggregate / find / explain options. Document
        *  form carries mode + tags (probed on Atlas); empty tags still fine.
+       *  RunCommandCursor needs driverReadPreference() on this document —
+       *  the Node cursor constructor only keeps an instanceof ReadPreference.
        */
       const mode = readPreference?.mode ?? 'primary';
       const tags = Array.isArray(readPreference?.tags) ? readPreference.tags : [];
       return { "mode": mode, "tags": tags };
    }
 
+   function driverReadPreference(cmdRP) {
+      /*
+       *  mongosh Database._runCursorCommand builds a Node RunCommandCursor.
+       *  That cursor stores options.readPreference only when the value is a
+       *  driver ReadPreference instance. A {mode, tags} document is ignored
+       *  and the cursor defaults to primary, so secondaryPreferred + Atlas
+       *  tags never take effect. fromOptions() builds the instance from the
+       *  same document commandReadPreference() returns.
+       *  FindCursor/AggregationCursor keep using applyCursorReadPref /
+       *  cursor.readPref(); RunCommandCursor has no readPref().
+       */
+      try {
+         const ReadPreference = db.getMongo()._serviceProvider.mongoClient.db(dbName).readPreference.constructor;
+         if (typeof ReadPreference.fromOptions === 'function') {
+            return ReadPreference.fromOptions({ "readPreference": cmdRP }) ?? cmdRP;
+         }
+      } catch(_) { /* keep document form */ }
+      return cmdRP;
+   }
+
    function applyCursorReadPref(cursor, cmdRP) {
-      // Shell cursor.readPref(mode, tags) plus driver options.readPreference.
+      // FindCursor / AggregationCursor (idScan explain, window aggregate).
+      // RunCommandCursor has no readPref(); scan walk uses driverReadPreference.
       if (!cursor || typeof cursor.readPref !== 'function' || !cmdRP?.mode) return cursor;
       const next = cursor.readPref(cmdRP.mode, cmdRP.tags);
       return next ?? cursor;
@@ -1404,8 +1427,11 @@
 
    async function unwrapShellCursor(cursor) {
       /*
-       *  mongosh FindCursor/AggregationCursor are thenable (await → toArray).
-       *  Unwrap only a bare Promise (no .close). Do not use .sort — agg cursors lack it.
+       *  mongosh FindCursor / AggregationCursor / RunCommandCursor are
+       *  thenable (await → toArray). _runCursorCommand is async, so the
+       *  first value is a Promise (no .close) wrapping the cursor (has
+       *  .close). Unwrap only a bare Promise. Do not use .sort — agg and
+       *  run-command cursors lack it.
        */
       if (cursor && typeof cursor.then === 'function' && typeof cursor.close !== 'function') {
          return await cursor;
@@ -1620,6 +1646,8 @@
        *  Curation via per-command readPreference (no Mongo.setReadPref):
        *  landing hello, Policy A explain, and bucketing aggregate share the same RP
        *  document so server selection can stay on one secondary / plan cache.
+       *  Scan walk converts that document with driverReadPreference() for
+       *  _runCursorCommand (Node RunCommandCursor ignores {mode, tags}).
        *  No DriverSession (mongosh explain on a session can expire before the cursor).
        */
       const readPreference = sessionOpts.readPreference ?? { "mode": "primary" };
@@ -1687,26 +1715,47 @@
        *  Hinted {_id:1} find walk. Residual filter is a FETCH (object scan);
        *  no blocking SORT / $setWindowFields. Bucket in-process to the same
        *  shape as the window pipeline ({ bucketId, ids, bucketSize, ... }).
+       *
+       *  readOnce is a find-command flag (WiredTiger one-shot pages; IDL
+       *  unstable/deprecated). It is a find field, not a $match option.
+       *  mongosh collection.find() forwards known FindOptions only, so
+       *  readOnce never reaches the server on the helper. Public
+       *  db.runCursorCommand is a Help object (not callable).
+       *  Database._runCursorCommand sends the find command as-is; the
+       *  driver RunCommandCursor pins getMore to the selected member
+       *  (required for secondaryPreferred). A later runCommand({getMore})
+       *  with the same RP document can select a different member
+       *  (CursorNotFound). Pass driverReadPreference(cmdRP). No
+       *  DriverSession on this cursor (implicit cursor session only).
        */
       emit('[blue][INFO][/] Curation using hinted [yellow]_id[/] index walk (find); filter applied as residual');
       // Same per-command RP as aggregate (secondaryPreferred + Atlas tags).
-      // Wire batchSize = bucketSizeLimit _id docs per getMore (= one yielded bucket).
-      // Agg path uses cursor.batchSize 1 because each agg doc is already that bucket.
-      const findOpts = {
+      // find.batchSize = firstBatch; getMore.batchSize is driver setBatchSize.
+      // Shell RunCommandCursor.batchSize() throws. Agg path uses cursor
+      // batchSize 1 because each agg doc is already one yielded bucket.
+      const database = namespace.getDB();
+      const findCmd = {
+         "find": namespace.getName(),
+         "filter": filter,
+         "projection": { "_id": 1 },
          "sort": { "_id": 1 },
          "hint": { "_id": 1 },
          "batchSize": bucketSizeLimit,
          "maxTimeMS": 0,
          "noCursorTimeout": true,
-         "comment": "Bucketing IDs via niceDeleteMany.js (_id index scan)",
-         "readPreference": cmdRP
+         "readOnce": true,
+         "comment": "Bucketing IDs via niceDeleteMany.js (_id index scan)"
       };
-      if (hasUserCollation(collation)) findOpts.collation = collation;
-      let cursor = namespace.find(filter, { "_id": 1 }, findOpts);
+      if (hasUserCollation(collation)) findCmd.collation = collation;
+      let cursor = database._runCursorCommand(findCmd, {
+         "readPreference": driverReadPreference(cmdRP)
+      });
       cursor = await unwrapShellCursor(cursor);
-      if (typeof cursor.sort === 'function') cursor = cursor.sort({ "_id": 1 }) ?? cursor;
-      if (typeof cursor.hint === 'function') cursor = cursor.hint({ "_id": 1 }) ?? cursor;
-      cursor = applyCursorReadPref(cursor, cmdRP);
+      // RunCommandCursor.getMore reads getMoreOptions.batchSize (setBatchSize).
+      // AbstractCursor.batchSize() / shell .batchSize() throw on this cursor.
+      if (typeof cursor?._cursor?.setBatchSize === 'function') {
+         cursor._cursor.setBatchSize(bucketSizeLimit);
+      }
       try {
          let bucketId = 1;
          let ids = [];
@@ -1742,6 +1791,9 @@
        *  allowDiskUse false: $count is O(1) memory; spill is a failed plan (Policy A).
        *  Hint only when window mode honored a user hint. Scan drops a rejected hint
        *  so the planner can pick a filter index for $match.
+       *  aggregate IDL has no readOnce field (runCommand → 40415 IDLUnknownField);
+       *  collection.aggregate() strips it as a silent no-op. Residual $match+$count
+       *  is small; the one-shot WT walk is getIdsByIdIndexScan.
        */
       const session = db.getMongo().startSession(sessionOpts);
       try {
@@ -1759,7 +1811,6 @@
             ],
             aggOpts = {
                "allowDiskUse": false,
-               "readOnce": true, // may or may not work in aggregation?
                "readConcern": sessionOpts?.readConcern?.level ?? "majority",
                "comment": "Validating IDs via niceDeleteMany.js"
             };
