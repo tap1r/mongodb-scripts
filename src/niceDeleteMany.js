@@ -3076,6 +3076,97 @@
       return text;
    }
 
+   async function runDeletes({
+      deletionList,
+      writeSessionOpts,
+      concurrency,
+      startedAt,
+      bucketSizeLimit
+   }) {
+      /*
+       *  Prefetch + pool + HUD for the delete walk. Empty match skips the pool.
+       *  Caller still runs residual countIds and owns sampler/shard close.
+       */
+      let batchesDone = 0;
+      let docsDeleted = 0;
+      let batchesFailed = 0;
+      let hudSnap = {
+         "admission": admissionCtl.snapshot(),
+         "poolSize": concurrency,
+         "executing": 0,
+         "buffered": 0
+      };
+      const { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
+      if (initialEmptyBatch === true) {
+         emit('\tNo matching documents found to match the filter, double-check the namespace and filter');
+         return { "batchesDone": batchesDone, "docsDeleted": docsDeleted, "batchesFailed": batchesFailed };
+      }
+      emit(interactive
+         ? `[blue][INFO][/] HUD: congestion / admission / pool — no % complete or ETA`
+         : `[INFO] status: elapsed / congestion / admission / pool (plain, no bars) — no % complete or ETA`);
+      hud.start({
+         render() {
+            return renderHud({
+               "startedAt": startedAt,
+               "batchesDone": batchesDone,
+               "batchesFailed": batchesFailed,
+               "docsDeleted": docsDeleted,
+               "bucketSizeLimit": bucketSizeLimit,
+               "bars": interactive,
+               ...hudSnap
+            });
+         }
+      });
+      hud.redraw({ "force": true });
+      for await (const [, deletedCount, batchOk] of asyncPool(
+         prepend(initialBatch, deletionList),
+         task => deleteManyTask(task, writeSessionOpts),
+         {
+            "poolSize": concurrency,
+            "admission": admissionCtl,
+            onHud(snap) {
+               hudSnap = snap;
+               hud.redraw();
+            }
+         }
+      )) {
+         batchesDone += 1;
+         docsDeleted += deletedCount ?? 0;
+         if (batchOk === false) {
+            batchesFailed += 1;
+         } else {
+            admissionCtl.noteBatchOk({ "deletedCount": deletedCount ?? 0 });
+         }
+         if (interactive) hud.redraw({ "force": true });
+      }
+      hud.redraw({ "final": true });
+      hud.stop();
+      return { "batchesDone": batchesDone, "docsDeleted": docsDeleted, "batchesFailed": batchesFailed };
+   }
+
+   function validateDeletes({
+      countSessionOpts,
+      lastCuration,
+      batchesDone,
+      docsDeleted,
+      batchesFailed,
+      bucketSizeLimit,
+      elapsedMs
+   }) {
+      emit(`\nValidating deletion results ...please wait\n`);
+      emit('...you may CTRL+C here to exit gracefully if validation is not required\n');
+      // countIds uses a primary-oriented session; no connection setReadPref.
+      const finalCount = countIds(filter, countSessionOpts, lastCuration);
+      reportResidualValidation({
+         "residual": finalCount,
+         "batchesDone": batchesDone,
+         "docsDeleted": docsDeleted,
+         "batchesFailed": batchesFailed,
+         "bucketSizeLimit": bucketSizeLimit,
+         "elapsedMs": elapsedMs
+      });
+   }
+
    async function main() {
       await attachVitals();
       const numCores = vitals?.numCores;
@@ -3092,15 +3183,6 @@
       vitalsSampling = useVitalsSampler;
       const sampler = useVitalsSampler ? vitalsSampler() : Promise.resolve();
       const startedAt = Date.now();
-      let batchesDone = 0;
-      let docsDeleted = 0;
-      let batchesFailed = 0;
-      let hudSnap = {
-         "admission": admissionCtl.snapshot(),
-         "poolSize": concurrency,
-         "executing": 0,
-         "buffered": 0
-      };
 
       try {
          if (interactive) console.clear();
@@ -3108,62 +3190,19 @@
          startupLogDone = true;
          const lastCuration = { "mode": "scan", "hint": {} };
          const deletionList = getIds(filter, bucketSizeLimit, readSessionOpts, lastCuration);
-         const { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
-         if (initialEmptyBatch === true) {
-            emit('\tNo matching documents found to match the filter, double-check the namespace and filter');
-         } else {
-            emit(interactive
-               ? `[blue][INFO][/] HUD: congestion / admission / pool — no % complete or ETA`
-               : `[INFO] status: elapsed / congestion / admission / pool (plain, no bars) — no % complete or ETA`);
-            hud.start({
-               render() {
-                  return renderHud({
-                     "startedAt": startedAt,
-                     "batchesDone": batchesDone,
-                     "batchesFailed": batchesFailed,
-                     "docsDeleted": docsDeleted,
-                     "bucketSizeLimit": bucketSizeLimit,
-                     "bars": interactive,
-                     ...hudSnap
-                  });
-               }
-            });
-            hud.redraw({ "force": true });
-            for await (const [, deletedCount, batchOk] of asyncPool(
-               prepend(initialBatch, deletionList),
-               task => deleteManyTask(task, writeSessionOpts),
-               {
-                  "poolSize": concurrency,
-                  "admission": admissionCtl,
-                  onHud(snap) {
-                     hudSnap = snap;
-                     hud.redraw();
-                  }
-               }
-            )) {
-               batchesDone += 1;
-               docsDeleted += deletedCount ?? 0;
-               if (batchOk === false) {
-                  batchesFailed += 1;
-               } else {
-                  admissionCtl.noteBatchOk({ "deletedCount": deletedCount ?? 0 });
-               }
-               if (interactive) hud.redraw({ "force": true });
-            }
-            hud.redraw({ "final": true });
-            hud.stop();
-         }
-         emit(`\nValidating deletion results ...please wait\n`);
-         emit('...you may CTRL+C here to exit gracefully if validation is not required\n');
-         // countIds uses a primary-oriented session; no connection setReadPref.
-         const finalCount = countIds(filter, countSessionOpts, lastCuration);
-         reportResidualValidation({
-            "residual": finalCount,
-            "batchesDone": batchesDone,
-            "docsDeleted": docsDeleted,
-            "batchesFailed": batchesFailed,
+         const result = await runDeletes({
+            "deletionList": deletionList,
+            "writeSessionOpts": writeSessionOpts,
+            "concurrency": concurrency,
+            "startedAt": startedAt,
+            "bucketSizeLimit": bucketSizeLimit
+         });
+         validateDeletes({
+            "countSessionOpts": countSessionOpts,
+            "lastCuration": lastCuration,
             "bucketSizeLimit": bucketSizeLimit,
-            "elapsedMs": Date.now() - startedAt
+            "elapsedMs": Date.now() - startedAt,
+            ...result
          });
          emit('\nDone!');
       } finally {
