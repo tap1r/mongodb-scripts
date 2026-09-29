@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.7.6"
+    *  Version: "0.7.7"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -66,7 +66,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.7.6" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.7.7" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -1449,6 +1449,12 @@
       return cursor;
    }
 
+   async function closeCursor(cursor) {
+      // Exhausted and already-closed are fine; missing close (failed open) is a no-op.
+      if (!cursor || typeof cursor.close !== 'function') return;
+      try { await cursor.close(); } catch(_) { /* already closed */ }
+   }
+
    function connectionHostsLabel() {
       /*
        *  Host label from the mongosh connection URI (credentials stripped).
@@ -1551,7 +1557,7 @@
          } catch(e) {
             emit('\n[red][WARN][/] [yellow]Curation _id find() explain failed[/]:', e?.message ?? e);
          } finally {
-            try { if (cursor && typeof cursor.close === 'function') await cursor.close(); } catch(_) { /* already closed */ }
+            await closeCursor(cursor);
          }
          emit(why ?? '\n[red][WARN][/] [yellow]Curation falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)[/]');
          return { "sortBy": idSort, "hint": idHint, "mode": "scan" };
@@ -1710,7 +1716,7 @@
          try {
             yield* cursor;
          } finally {
-            try { await cursor.close(); } catch(_) { /* exhausted or already closed */ }
+            await closeCursor(cursor);
          }
       } catch(e) {
          if (!isCurationSortMemoryError(e)) throw e;
@@ -1792,7 +1798,7 @@
             };
          }
       } finally {
-         try { await cursor.close(); } catch(_) { /* exhausted or already closed */ }
+         await closeCursor(cursor);
       }
    }
 
