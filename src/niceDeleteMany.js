@@ -881,8 +881,10 @@
    const SHARD_CONNECT_TIMEOUT_MS = 5000;
    const SHARD_VITALS_MISS_STRIKES = 3; // consecutive mid-run misses before latching pace
 
+   let _parentConnectionParts = null; // URI is stable for the run; shardPrimaryUri copies searchParams
    function parentConnectionParts() {
       // Public Mongo.getURI(); mongosh _uri is private and can lag the session.
+      if (_parentConnectionParts) return _parentConnectionParts;
       const rawUri = db.getMongo().getURI();
       if (!rawUri || typeof rawUri !== 'string') throw new Error('missing parent URI');
       const isSrv = /^mongodb\+srv:/i.test(rawUri);
@@ -895,7 +897,7 @@
       const authority = stripped.replace(/^mongodb:\/\//i, '').split(/[/?]/, 1)[0];
       const at = authority.lastIndexOf('@');
       const hosts = (at >= 0 ? authority.slice(at + 1) : authority) || url.host || '';
-      return {
+      _parentConnectionParts = {
          "isSrv": isSrv,
          "username": url.username || '',
          "password": url.password || '',
@@ -903,6 +905,7 @@
          "searchParams": searchParams,
          "hosts": hosts
       };
+      return _parentConnectionParts;
    }
 
    // Mongos shard WT vitals: collection-owning shard primaries only.
