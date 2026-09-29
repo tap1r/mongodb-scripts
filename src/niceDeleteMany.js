@@ -2400,6 +2400,7 @@
          "dirtyUpdatesUtil": null,
          "wtWriteTicketsUtil": null
       };
+      let lastSample = {}; // latest noteSample snapshot; AIMDs band on this, not IIFE vitals
       // 'wt' = WiredTiger FSM (mongod, or worst collection-owning shard on mongos);
       // 'pace' = paceMaker when WT vitals unavailable.
       let admissionMode = 'wt';
@@ -2543,7 +2544,7 @@
          const now = Date.now();
          paceMakerAimd(now);
 
-         const lag = +(vitals.activeReplLag) || 0;
+         const lag = +(lastSample.activeReplLag) || 0;
          const hardLag = lag >= REPL_LAG_HARD_SEC;
          const softLag = lag >= REPL_LAG_SOFT_SEC;
 
@@ -2597,20 +2598,20 @@
             evictionUpdatesTarget = 2.5,
             evictionUpdatesTrigger = 10,
             activeReplLag = 0
-         } = vitals;
+         } = lastSample;
 
-         // Prefer EWMA; fall back to raw vitals until the first successful noteSample().
-         const cacheUtil = ewma.cacheUtil ?? vitals.cacheUtil;
-         const dirtyUtil = ewma.dirtyUtil ?? vitals.dirtyUtil;
-         const dirtyUpdatesUtil = ewma.dirtyUpdatesUtil ?? vitals.dirtyUpdatesUtil;
-         const wtWriteTicketsUtil = ewma.wtWriteTicketsUtil ?? vitals.wtWriteTicketsUtil;
+         // Prefer EWMA; fall back to lastSample until the first successful noteSample().
+         const cacheUtil = ewma.cacheUtil ?? lastSample.cacheUtil;
+         const dirtyUtil = ewma.dirtyUtil ?? lastSample.dirtyUtil;
+         const dirtyUpdatesUtil = ewma.dirtyUpdatesUtil ?? lastSample.dirtyUpdatesUtil;
+         const wtWriteTicketsUtil = ewma.wtWriteTicketsUtil ?? lastSample.wtWriteTicketsUtil;
          const softLag = activeReplLag >= REPL_LAG_SOFT_SEC;
          const hardLag = activeReplLag >= REPL_LAG_HARD_SEC;
 
-         const activeFlowControl = !!vitals.activeFlowControl;
-         const activeIndexBuilds = !!vitals.activeIndexBuilds;
-         const activeRangeDeleter = !!vitals.activeRangeDeleter;
-         const backupCursorOpen = !!vitals.backupCursorOpen;
+         const activeFlowControl = !!lastSample.activeFlowControl;
+         const activeIndexBuilds = !!lastSample.activeIndexBuilds;
+         const activeRangeDeleter = !!lastSample.activeRangeDeleter;
+         const backupCursorOpen = !!lastSample.backupCursorOpen;
 
          const dirtySoftFill = fillProgress(dirtyUtil, evictionDirtyTarget, evictionDirtyTrigger);
          const updatesSoftFill = fillProgress(dirtyUpdatesUtil, evictionUpdatesTarget, evictionUpdatesTrigger);
@@ -2713,7 +2714,7 @@
 
          // OPEN: light soft-band pace and/or ticket+checkpoint pacing
          const wtWriteTicketsStatus = bandStatus(wtWriteTicketsUtil, 20, 75);
-         const { checkpointStatus } = vitals;
+         const { checkpointStatus } = lastSample;
          const ticketDelay = (wtWriteTicketsStatus == 'high' && checkpointStatus == 'high')
             ? Math.floor(100 + Math.random() * 100)
             : 0;
@@ -2766,8 +2767,9 @@
       }
 
       function noteSample(sample) {
-         // WT util EWMA from a vitals snapshot. Sampler/attach call this after assigning vitals.
+         // Keep the snapshot for AIMDs; EWMA from its WT utils. Sampler/attach call after assigning IIFE vitals.
          if (sample == null || typeof sample !== 'object') return;
+         lastSample = sample;
          ewma.cacheUtil = ewmaStep(ewma.cacheUtil, sample.cacheUtil);
          ewma.dirtyUtil = ewmaStep(ewma.dirtyUtil, sample.dirtyUtil);
          ewma.dirtyUpdatesUtil = ewmaStep(ewma.dirtyUpdatesUtil, sample.dirtyUpdatesUtil);
