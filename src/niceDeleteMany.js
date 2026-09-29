@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.12.6"
+    *  Version: "0.12.7"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,11 +68,10 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.12.6" };
-   let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
+   const __script = { "name": "niceDeleteMany.js", "version": "0.12.7" };
    let vitals = {};
    let vitalsSampling = false;
-   let startupLogDone = false; // after writeConsole(banner); attach WARN is banner-only until then
+   let startupLogDone = false; // after writeConsole of the startup banner; attach WARN is banner-only until then
    let shardVitalsClients = []; // [{ id, mongo, admin }, ...] collection-owning shard primaries
    let shardVitalsEnabled = false;
    let shardVitalsMissStrikes = 0;
@@ -190,12 +189,15 @@
       ansiTagCodeOf(tag) === undefined ? all : ''
    )).replace(ANSI_CSI_RE, '');
 
-   function createHud({ interactive } = {}) {
+   function createHud({ interactive, banner: initialBanner = '' } = {}) {
       /*
        *  Pin/emit/resize lifecycle. Bar-drawing stays on renderHud / HUD_MARK.
        *  start({ render }) registers the text builder; emit lifts the pin and
        *  redraws. stop() drops the pin without erasing the last frame.
+       *  persist is the HUD-owned banner (title + emit lines); resize/full-repaint
+       *  and main() read/write it via the banner getter/setter.
        */
+      let persist = String(initialBanner ?? '');
       let hudActive = false;
       let hudPaintedRows = 0;
       let lastHudAt = 0;
@@ -219,13 +221,13 @@
       }
 
       function persistBannerLine(text) {
-         // Resize / non-TTY fallback full-repaints from banner; keep every emit line.
+         // TTY resize / full-repaint reads persist; keep every emit line.
          if (!interactive) return;
          const line = String(text ?? '');
          if (!line) return;
-         if (banner.length && !banner.endsWith('\n')) banner += '\n';
-         banner += line;
-         if (!banner.endsWith('\n')) banner += '\n';
+         if (persist.length && !persist.endsWith('\n')) persist += '\n';
+         persist += line;
+         if (!persist.endsWith('\n')) persist += '\n';
       }
 
       function canPinHud() {
@@ -317,7 +319,7 @@
                paintHudRegion(hudText);
             } else {
                console.clear();
-               writeConsole(banner);
+               writeConsole(persist);
                if (canPinHud()) paintHudRegion(hudText);
                else writeConsole(hudText);
             }
@@ -345,10 +347,21 @@
          uninstallResize = () => {};
       }
 
-      return { emit, redraw, start, stop, writeConsole };
+      return {
+         emit,
+         redraw,
+         start,
+         stop,
+         writeConsole,
+         get banner() { return persist; },
+         set banner(text) { persist = String(text ?? ''); }
+      };
    }
 
-   const hud = createHud({ interactive });
+   const hud = createHud({
+      interactive,
+      banner: `#### Running script ${__script.name} v${__script.version} on shell v${version()}`
+   });
    function emit(...args) { hud.emit(...args); }
 
    // Same vocabulary as congestionMonitor EQ: literal glyphs + colour tags (JS \xNN is
@@ -2786,7 +2799,7 @@
 
    const admissionCtl = createAdmissionController({
       onWarn(detail) {
-         // Attach-time WARN is banner-only until writeConsole(banner).
+         // Attach-time WARN is banner-only until writeConsole of the startup banner.
          if (startupLogDone) emit(`\n[red][WARN][/] [yellow]${detail}[/]`);
       }
    });
@@ -3055,7 +3068,7 @@
       const writeSessionOpts = sessionOpts('write');
       const countSessionOpts = sessionOpts('count');
 
-      banner = buildStartupBanner(banner);
+      hud.banner = buildStartupBanner(hud.banner);
 
       // WT sampler for mongod and for mongos with attached shard primaries.
       const useVitalsSampler = admissionCtl.mode === 'wt';
@@ -3074,7 +3087,7 @@
 
       try {
          if (interactive) console.clear();
-         hud.writeConsole(banner);
+         hud.writeConsole(hud.banner);
          startupLogDone = true;
          const deletionList = getIds(filter, bucketSizeLimit, readSessionOpts);
          const { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
