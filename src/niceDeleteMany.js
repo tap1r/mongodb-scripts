@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.11.3"
+    *  Version: "0.11.4"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,28 +68,16 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.11.3" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.11.4" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
-
-   // TTL caches: serverStatus is hot-path; hostInfo is near-static; rsStatus is low/medium volatility.
-   // serverStatus uses a Promise wrapper (adminCommand is sync in mongosh) for in-flight coalescing.
-   const SERVER_STATUS_CACHE_TTL_MS = 100;
-   const HOST_INFO_CACHE_TTL_MS = 60 * 1000;
-   const RS_STATUS_CACHE_TTL_MS = 2 * 1000; // 2s matches the Atlas no-op heartbeat interval
-   const SLOWMS_CACHE_TTL_MS = 60 * 1000;
-   const GET_PARAMETER_CACHE_TTL_MS = 60 * 1000;
-   const VITALS_SAMPLE_INTERVAL_MS = 100;
-   const SHARD_VITALS_SAMPLE_INTERVAL_MS = 2000; // collection-owning shard primaries (1–5s band)
-   const SHARD_CONNECT_TIMEOUT_MS = 5000;
-   const SHARD_VITALS_MISS_STRIKES = 3; // consecutive mid-run misses before latching pace
-
    let startupLogDone = false; // after writeConsole(banner); attach WARN is banner-only until then
    let shardVitalsClients = []; // [{ id, mongo, admin }, ...] collection-owning shard primaries
    let shardVitalsEnabled = false;
    let shardVitalsMissStrikes = 0;
    let lastCuration = { "mode": "scan", "hint": {} }; // Policy A result for residual countIds
+
    // Live HUD; no % complete / ETA. Interactive: pinned bars; non-interactive: plain log lines.
    const HUD_BAR_WIDTH_MIN = 12;
    const HUD_BAR_WIDTH_MAX = 48;
@@ -646,6 +634,14 @@
       return `${statsLine}\n${congLine}\n${admitLine}\n${poolLine}`;
    }
 
+   // TTL caches: serverStatus is hot-path; hostInfo is near-static; rsStatus is low/medium volatility.
+   // serverStatus uses a Promise wrapper (adminCommand is sync in mongosh) for in-flight coalescing.
+   const SERVER_STATUS_CACHE_TTL_MS = 100;
+   const HOST_INFO_CACHE_TTL_MS = 60 * 1000;
+   const RS_STATUS_CACHE_TTL_MS = 2 * 1000; // 2s matches the Atlas no-op heartbeat interval
+   const SLOWMS_CACHE_TTL_MS = 60 * 1000;
+   const GET_PARAMETER_CACHE_TTL_MS = 60 * 1000;
+
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
    const _hostInfoCache = { "at": 0, "value": null };
    const _rsStatusCache = { "at": 0, "value": null };
@@ -856,80 +852,6 @@
       return db.hello().msg === 'isdbgrid';
    }
 
-   function hasWiredTigerVitals(sample = vitals) {
-      /*
-       *  Atlas M0/Flex (and some restricted roles) omit serverStatus.wiredTiger.
-       *  Without cache size / dirty bytes the WT admission FSM cannot pace safely.
-       */
-      try {
-         const cacheSize = sample?.cacheSizeBytes;
-         const dirty = sample?.dirtyBytes ?? sample?.dirtyUtil;
-         return cacheSize != null && !Number.isNaN(+cacheSize) && +cacheSize > 0
-            && dirty != null && !Number.isNaN(+dirty);
-      } catch(_) {
-         return false;
-      }
-   }
-
-   function curationCannotSpill() {
-      /*
-       *  Atlas M0/Flex (and mongod with no WT in serverStatus) ignore
-       *  allowDiskUse. A leftover $setWindowFields SORT fails at 32MiB.
-       *  mongos pace is different: shards can spill, so window mode stays eligible.
-       *  Set in main() before getIds (paceReason 'no-wt').
-       */
-      return admissionCtl.mode === 'pace' && admissionCtl.reason === 'no-wt';
-   }
-
-   function isCurationSortMemoryError(err) {
-      const code = err?.code ?? err?.codeName;
-      if (code === 292 || code === 'QueryExceededMemoryLimitNoDiskUseAllowed') return true;
-      const msg = String(err?.message ?? err ?? '');
-      return /Sort exceeded \d+ bytes/i.test(msg)
-         || /did not opt in to external sorting/i.test(msg);
-   }
-
-   function windowBucketPipeline(filter, sortBy) {
-      /*
-       *  v3 window pipeline. $sort immediately after $match so an index can
-       *  provide order. History: Howto-streaming-sort.md
-       */
-      return [
-         { "$match": filter },
-         { "$sort": sortBy },
-         { "$setWindowFields": { // assign ordinal numbers in curation order
-            "sortBy": sortBy,
-            "output": { "ordinal": { "$documentNumber": {} } }
-         } },
-         { "$set": {
-            "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
-            "cardinal": 1 // unit contribution per document within its bucket
-         } },
-         { "$setWindowFields": { // per-bucket running count + id list
-            "partitionBy": "$bucketId",
-            "sortBy": sortBy,
-            "output": {
-               "idsInBucket": { // was IDsCumulative (per-bucket only, not global)
-                  "$sum": "$cardinal",
-                  "window": { "documents": ["unbounded", "current"] }
-               },
-               "ids": { "$push": "$_id" },
-               "bucketSize": { "$sum": 1 }
-            }
-         } },
-         { "$match": { // emit only the last document of each bucket
-            "$expr": { "$eq": ["$idsInBucket", "$bucketSize"] }
-         } },
-         { "$project": {
-            "_id": 0,
-            "bucketId": 1,
-            "bucketSize": 1,
-            "bucketSizeLimit": "$$bucketSizeLimit",
-            "ids": 1
-         } }
-      ];
-   }
-
    const onMongos = isMongos();
 
    function redactMessage(value) {
@@ -990,6 +912,10 @@
          return 4;
       }
    }
+
+   const SHARD_VITALS_SAMPLE_INTERVAL_MS = 2000; // collection-owning shard primaries (1–5s band)
+   const SHARD_CONNECT_TIMEOUT_MS = 5000;
+   const SHARD_VITALS_MISS_STRIKES = 3; // consecutive mid-run misses before latching pace
 
    // Mongos shard WT vitals: collection-owning shard primaries only.
    // Separate from mongod congestionMonitor().
@@ -1240,73 +1166,6 @@
       return true;
    }
 
-   function evictionConfigFromWterc(wterc = '') {
-      const cfg = String(wterc || '');
-      const num = (re, d) => {
-         const m = cfg.match(re);
-         return m ? +m[1] : d;
-      };
-      return {
-         "evictionThreadsMin": num(/eviction=\(.*threads_min=(\d+).*\)/, 4),
-         "evictionThreadsMax": num(/eviction=\(.*threads_max=(\d+).*\)/, 4),
-         "evictionCheckpointTarget": num(/eviction_checkpoint_target=(\d+)/, 1),
-         "evictionDirtyTarget": num(/eviction_dirty_target=(\d+)/, 5),
-         "evictionDirtyTrigger": num(/eviction_dirty_trigger=(\d+)/, 20),
-         "evictionTarget": num(/eviction_target=(\d+)/, 80),
-         "evictionTrigger": num(/eviction_trigger=(\d+)/, 95),
-         "evictionUpdatesTarget": num(/eviction_updates_target=(\d+)/, 2.5),
-         "evictionUpdatesTrigger": num(/eviction_updates_trigger=(\d+)/, 10),
-         "checkpointIntervalMS": 1000 * num(/checkpoint=\(.*wait=(\d+).*\)/, 60)
-      };
-   }
-
-   function vitalsFromServerStatus(ss = {}, rsSt = {}, wterc = '') {
-      /*
-       *  Plain WT snapshot used by mongod congestionMonitor and shard
-       *  sampleShardPrimary. Admission and HUD read these fields only.
-       */
-      const cache = ss.wiredTiger?.cache;
-      const cacheSizeBytes = +(cache?.['maximum bytes configured'] ?? NaN);
-      const dirtyBytes = +(cache?.['tracked dirty bytes in the cache'] ?? NaN);
-      const cachedBytes = +(cache?.['bytes currently in the cache'] ?? 0);
-      const updatesDirtyBytes = +(cache?.['bytes allocated for updates'] ?? 0);
-      const eviction = evictionConfigFromWterc(wterc);
-      const writeTickets = ss.wiredTiger?.concurrentTransactions?.write
-         ?? ss.queues?.execution?.write
-         ?? {};
-      const wtWriteTicketsUtil = (writeTickets.totalTickets > 0)
-         ? Number.parseFloat(((writeTickets.out / writeTickets.totalTickets) * 100).toFixed(2))
-         : 0;
-      const checkpointMs = +(ss.wiredTiger?.transaction?.['transaction checkpoint most recent time (msecs)']
-         ?? ss.wiredTiger?.checkpoint?.['most recent time (msecs)']
-         ?? 0);
-      const checkpointRuntimeRatio = Number.parseFloat(
-         ((checkpointMs / eviction.checkpointIntervalMS) * 100).toFixed(2)
-      );
-      const checkpointStatus = checkpointRuntimeRatio < 50 ? 'low'
-         : checkpointRuntimeRatio > 100 ? 'high'
-         : 'medium';
-      return {
-         "cacheSizeBytes": cacheSizeBytes,
-         "dirtyBytes": dirtyBytes,
-         "cacheUtil": Number.parseFloat(((cachedBytes / cacheSizeBytes) * 100).toFixed(2)),
-         "dirtyUtil": Number.parseFloat(((dirtyBytes / cacheSizeBytes) * 100).toFixed(2)),
-         "dirtyUpdatesUtil": Number.parseFloat(((updatesDirtyBytes / cacheSizeBytes) * 100).toFixed(2)),
-         "wtWriteTicketsUtil": wtWriteTicketsUtil,
-         "activeReplLag": +majorityCommitLagSeconds(rsSt, ss).toFixed(0),
-         "activeFlowControl": ss.flowControl?.isLagged === true && ss.flowControl?.enabled === true,
-         "activeIndexBuilds": (ss.indexBuilds?.total ?? 0) > (ss.indexBuilds?.phases?.commit ?? 0)
-            || (ss.activeIndexBuilds?.total ?? 0) > 0,
-         "backupCursorOpen": !!ss.storageEngine?.backupCursorOpen,
-         "activeCheckpoint": !!(ss.wiredTiger?.transaction?.['transaction checkpoint currently running']
-            || ss.wiredTiger?.checkpoint?.['progress state']),
-         "slowRecentCheckpoint": checkpointMs > 60000,
-         "checkpointStatus": checkpointStatus,
-         "checkpointRuntimeRatio": checkpointRuntimeRatio,
-         ...eviction
-      };
-   }
-
    function sampleShardPrimary(admin) {
       const cmdOpts = { "readPreference": { "mode": "primary" } };
       const ss = admin.runCommand({
@@ -1454,6 +1313,65 @@
          };
       }
       return sampled;
+   }
+
+   function curationCannotSpill() {
+      /*
+       *  Atlas M0/Flex (and mongod with no WT in serverStatus) ignore
+       *  allowDiskUse. A leftover $setWindowFields SORT fails at 32MiB.
+       *  mongos pace is different: shards can spill, so window mode stays eligible.
+       *  Set in main() before getIds (paceReason 'no-wt').
+       */
+      return admissionCtl.mode === 'pace' && admissionCtl.reason === 'no-wt';
+   }
+
+   function isCurationSortMemoryError(err) {
+      const code = err?.code ?? err?.codeName;
+      if (code === 292 || code === 'QueryExceededMemoryLimitNoDiskUseAllowed') return true;
+      const msg = String(err?.message ?? err ?? '');
+      return /Sort exceeded \d+ bytes/i.test(msg)
+         || /did not opt in to external sorting/i.test(msg);
+   }
+
+   function windowBucketPipeline(filter, sortBy) {
+      /*
+       *  v3 window pipeline. $sort immediately after $match so an index can
+       *  provide order. History: Howto-streaming-sort.md
+       */
+      return [
+         { "$match": filter },
+         { "$sort": sortBy },
+         { "$setWindowFields": { // assign ordinal numbers in curation order
+            "sortBy": sortBy,
+            "output": { "ordinal": { "$documentNumber": {} } }
+         } },
+         { "$set": {
+            "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
+            "cardinal": 1 // unit contribution per document within its bucket
+         } },
+         { "$setWindowFields": { // per-bucket running count + id list
+            "partitionBy": "$bucketId",
+            "sortBy": sortBy,
+            "output": {
+               "idsInBucket": { // was IDsCumulative (per-bucket only, not global)
+                  "$sum": "$cardinal",
+                  "window": { "documents": ["unbounded", "current"] }
+               },
+               "ids": { "$push": "$_id" },
+               "bucketSize": { "$sum": 1 }
+            }
+         } },
+         { "$match": { // emit only the last document of each bucket
+            "$expr": { "$eq": ["$idsInBucket", "$bucketSize"] }
+         } },
+         { "$project": {
+            "_id": 0,
+            "bucketId": 1,
+            "bucketSize": 1,
+            "bucketSizeLimit": "$$bucketSizeLimit",
+            "ids": 1
+         } }
+      ];
    }
 
    function sortKeyFromFilter(filter = {}) {
@@ -2274,6 +2192,91 @@
             emit('\t(Reported delete counts may still be incomplete due to batch errors.)');
          }
       }
+   }
+
+   const VITALS_SAMPLE_INTERVAL_MS = 100;
+
+   // WT snapshot + admission: shared projector for mongod congestionMonitor and shard samples.
+   function hasWiredTigerVitals(sample = vitals) {
+      /*
+       *  Atlas M0/Flex (and some restricted roles) omit serverStatus.wiredTiger.
+       *  Without cache size / dirty bytes the WT admission FSM cannot pace safely.
+       */
+      try {
+         const cacheSize = sample?.cacheSizeBytes;
+         const dirty = sample?.dirtyBytes ?? sample?.dirtyUtil;
+         return cacheSize != null && !Number.isNaN(+cacheSize) && +cacheSize > 0
+            && dirty != null && !Number.isNaN(+dirty);
+      } catch(_) {
+         return false;
+      }
+   }
+
+   function evictionConfigFromWterc(wterc = '') {
+      const cfg = String(wterc || '');
+      const num = (re, d) => {
+         const m = cfg.match(re);
+         return m ? +m[1] : d;
+      };
+      return {
+         "evictionThreadsMin": num(/eviction=\(.*threads_min=(\d+).*\)/, 4),
+         "evictionThreadsMax": num(/eviction=\(.*threads_max=(\d+).*\)/, 4),
+         "evictionCheckpointTarget": num(/eviction_checkpoint_target=(\d+)/, 1),
+         "evictionDirtyTarget": num(/eviction_dirty_target=(\d+)/, 5),
+         "evictionDirtyTrigger": num(/eviction_dirty_trigger=(\d+)/, 20),
+         "evictionTarget": num(/eviction_target=(\d+)/, 80),
+         "evictionTrigger": num(/eviction_trigger=(\d+)/, 95),
+         "evictionUpdatesTarget": num(/eviction_updates_target=(\d+)/, 2.5),
+         "evictionUpdatesTrigger": num(/eviction_updates_trigger=(\d+)/, 10),
+         "checkpointIntervalMS": 1000 * num(/checkpoint=\(.*wait=(\d+).*\)/, 60)
+      };
+   }
+
+   function vitalsFromServerStatus(ss = {}, rsSt = {}, wterc = '') {
+      /*
+       *  Plain WT snapshot used by mongod congestionMonitor and shard
+       *  sampleShardPrimary. Admission and HUD read these fields only.
+       */
+      const cache = ss.wiredTiger?.cache;
+      const cacheSizeBytes = +(cache?.['maximum bytes configured'] ?? NaN);
+      const dirtyBytes = +(cache?.['tracked dirty bytes in the cache'] ?? NaN);
+      const cachedBytes = +(cache?.['bytes currently in the cache'] ?? 0);
+      const updatesDirtyBytes = +(cache?.['bytes allocated for updates'] ?? 0);
+      const eviction = evictionConfigFromWterc(wterc);
+      const writeTickets = ss.wiredTiger?.concurrentTransactions?.write
+         ?? ss.queues?.execution?.write
+         ?? {};
+      const wtWriteTicketsUtil = (writeTickets.totalTickets > 0)
+         ? Number.parseFloat(((writeTickets.out / writeTickets.totalTickets) * 100).toFixed(2))
+         : 0;
+      const checkpointMs = +(ss.wiredTiger?.transaction?.['transaction checkpoint most recent time (msecs)']
+         ?? ss.wiredTiger?.checkpoint?.['most recent time (msecs)']
+         ?? 0);
+      const checkpointRuntimeRatio = Number.parseFloat(
+         ((checkpointMs / eviction.checkpointIntervalMS) * 100).toFixed(2)
+      );
+      const checkpointStatus = checkpointRuntimeRatio < 50 ? 'low'
+         : checkpointRuntimeRatio > 100 ? 'high'
+         : 'medium';
+      return {
+         "cacheSizeBytes": cacheSizeBytes,
+         "dirtyBytes": dirtyBytes,
+         "cacheUtil": Number.parseFloat(((cachedBytes / cacheSizeBytes) * 100).toFixed(2)),
+         "dirtyUtil": Number.parseFloat(((dirtyBytes / cacheSizeBytes) * 100).toFixed(2)),
+         "dirtyUpdatesUtil": Number.parseFloat(((updatesDirtyBytes / cacheSizeBytes) * 100).toFixed(2)),
+         "wtWriteTicketsUtil": wtWriteTicketsUtil,
+         "activeReplLag": +majorityCommitLagSeconds(rsSt, ss).toFixed(0),
+         "activeFlowControl": ss.flowControl?.isLagged === true && ss.flowControl?.enabled === true,
+         "activeIndexBuilds": (ss.indexBuilds?.total ?? 0) > (ss.indexBuilds?.phases?.commit ?? 0)
+            || (ss.activeIndexBuilds?.total ?? 0) > 0,
+         "backupCursorOpen": !!ss.storageEngine?.backupCursorOpen,
+         "activeCheckpoint": !!(ss.wiredTiger?.transaction?.['transaction checkpoint currently running']
+            || ss.wiredTiger?.checkpoint?.['progress state']),
+         "slowRecentCheckpoint": checkpointMs > 60000,
+         "checkpointStatus": checkpointStatus,
+         "checkpointRuntimeRatio": checkpointRuntimeRatio,
+         ...eviction
+      };
    }
 
    async function congestionMonitor() {
