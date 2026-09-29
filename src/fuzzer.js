@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.44"
+ *  Version: "0.6.45"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.44" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.45" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -123,7 +123,7 @@
          // { "multiPolygon": "2dsphere" },
          // { "geoCollection": "2dsphere" },
          fCV(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
-      ];
+      ],
       indexOptions = { /* createIndexes options */
          // "background": fCV(4.0) ? true : false,
          // "background": true,
@@ -149,18 +149,11 @@
          "collation": { "locale": "simple" },
          "default_language": idioma
       };
-      if (idxCompressor != 'default') {
-         indexOptions.storageEngine = {
-            "wiredTiger": {
-               "configString": `block_compressor=${parseCompressor(idxCompressor)[0]}`
-            }
-         };
-         specialIndexOptions.storageEngine = {
-            "wiredTiger": {
-               "configString": `block_compressor=${parseCompressor(idxCompressor)[0]}`
-            }
-         };
-      }
+   if (idxCompressor != 'default') {
+      const configString = `block_compressor=${parseCompressor(idxCompressor)[0]}`;
+      indexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
+      specialIndexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
+   }
 
    /*
     *  Global defaults
