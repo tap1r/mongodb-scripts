@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.9.3"
+    *  Version: "0.9.4"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.9.3" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.9.4" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -1628,6 +1628,112 @@
       }
    }
 
+   function explainCurationAggregate(namespace, pipeline, opts) {
+      return namespace.explain('queryPlanner').aggregate(pipeline, opts);
+   }
+
+   async function idScan(namespace, filter, explainOpts, why) {
+      const idSort = { "_id": 1 };
+      const idHint = { "_id": 1 };
+      let cursor;
+      try {
+         const findExplainOpts = {
+            "sort": idSort,
+            "hint": idHint
+         };
+         applyUserCollation(findExplainOpts);
+         if (explainOpts.readPreference) findExplainOpts.readPreference = explainOpts.readPreference;
+         cursor = namespace.find(filter, { "_id": 1 }, findExplainOpts);
+         cursor = await unwrapShellCursor(cursor);
+         if (typeof cursor.sort === 'function') cursor = cursor.sort(idSort) ?? cursor;
+         if (typeof cursor.hint === 'function') cursor = cursor.hint(idHint) ?? cursor;
+         if (explainOpts.readPreference) cursor = applyCursorReadPref(cursor, explainOpts.readPreference);
+         const expl = await cursor.explain('queryPlanner');
+         if (!planIsIndexOrdered(expl)) {
+            emit('\n[red][WARN][/] [yellow]_id find() explain is not IXSCAN-without-SORT; scan will still force hinted {_id:1}[/]');
+         }
+      } catch(e) {
+         emit('\n[red][WARN][/] [yellow]Curation _id find() explain failed[/]:', e?.message ?? e);
+      } finally {
+         await closeCursor(cursor);
+      }
+      emit(why ?? '\n[red][WARN][/] [yellow]Curation falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)[/]');
+      return { "sortBy": idSort, "hint": idHint, "mode": "scan" };
+   }
+
+   async function tryWindow(namespace, filter, explainOpts, candidateSort, candidateHint) {
+      const opts = { ...explainOpts };
+      applyHint(opts, candidateHint);
+      const prefix = [{ "$match": filter }, { "$sort": candidateSort }];
+      const fullOpts = { ...opts, "allowDiskUse": false, "let": { "bucketSizeLimit": 100 } };
+      try {
+         const prefixExpl = await explainCurationAggregate(namespace, prefix, opts);
+         if (!planIsIndexOrdered(prefixExpl)) return null;
+         const fullExpl = await explainCurationAggregate(namespace, windowBucketPipeline(filter, candidateSort), fullOpts);
+         if (!planIsIndexOrdered(fullExpl)) return null;
+         return { "sortBy": candidateSort, "hint": candidateHint, "mode": "window" };
+      } catch(e) {
+         emit('\n[red][WARN][/] [yellow]Curation window explain failed[/]:', e?.message ?? e);
+         return null;
+      }
+   }
+
+   async function tryWindowFromPlanner(namespace, filter, explainOpts, candidateSort, indexes) {
+      /*
+       *  Unhinted $match+$sort. If the winner is index-ordered, no hint.
+       *  Else hint the first ranked rejectedPlan that stays IXSCAN-without-SORT
+       *  on a window-safe btree. Confirm the full window pipeline.
+       */
+      const prefix = [{ "$match": filter }, { "$sort": candidateSort }];
+      const fullLet = { "allowDiskUse": false, "let": { "bucketSizeLimit": 100 } };
+      try {
+         const prefixExpl = await explainCurationAggregate(namespace, prefix, explainOpts);
+         if (planIsIndexOrdered(prefixExpl)) {
+            const fullExpl = await explainCurationAggregate(namespace, windowBucketPipeline(filter, candidateSort), { ...explainOpts, ...fullLet });
+            if (!planIsIndexOrdered(fullExpl)) return null;
+            return { "sortBy": candidateSort, "hint": {}, "mode": "window" };
+         }
+         const pick = firstViableWindowHint(prefixExpl, indexes);
+         if (!pick || pick.fromWinner || !hasUserHint(pick.hint)) return null;
+         const hinted = await tryWindow(namespace, filter, explainOpts, candidateSort, pick.hint);
+         if (!hinted) return null;
+         emit(`\n[blue][INFO][/] Curation planner hint [yellow]${JSON.stringify(hinted.hint)}[/] for sortBy [yellow]${JSON.stringify(candidateSort)}[/]`);
+         return hinted;
+      } catch(e) {
+         emit('\n[red][WARN][/] [yellow]Curation window explain failed[/]:', e?.message ?? e);
+         return null;
+      }
+   }
+
+   async function tryPolicyB(namespace, filter, explainOpts, sortBy, forcedHint, indexes) {
+      const POLICY_B_MAX_PROBES = 8;
+      const candidates = policyBSortCandidates(filter, indexes, sortBy);
+      const seenSort = new Set();
+      let probes = 0;
+      for (const cand of candidates) {
+         if (probes >= POLICY_B_MAX_PROBES) break;
+         if (hasUserHint(forcedHint)) {
+            probes++;
+            const win = await tryWindow(namespace, filter, explainOpts, cand.sortBy, forcedHint);
+            if (win) {
+               emit(`\n[blue][INFO][/] Curation Policy B window sortBy [yellow]${JSON.stringify(win.sortBy)}[/]`);
+               return win;
+            }
+            continue;
+         }
+         const sig = JSON.stringify(cand.sortBy);
+         if (seenSort.has(sig)) continue;
+         seenSort.add(sig);
+         probes++;
+         const win = await tryWindowFromPlanner(namespace, filter, explainOpts, cand.sortBy, indexes);
+         if (win) {
+            emit(`\n[blue][INFO][/] Curation Policy B window sortBy [yellow]${JSON.stringify(win.sortBy)}[/]`);
+            return win;
+         }
+      }
+      return null;
+   }
+
    async function resolveCurationOrder(namespace, filter = {}, userHint = {}, readPreference = null) {
       /*
        *  Curation order (Policy A):
@@ -1648,136 +1754,32 @@
        *    ranked rejectedPlan that is (queryPlanner order, window-safe btree).
        *    Empty viable set → _id find() scan. Catch-292 still covers live SORT.
        */
-      const idSort = { "_id": 1 };
-      const idHint = { "_id": 1 };
       const sortField = sortKeyFromFilter(filter);
       const sortBy = { [sortField]: 1 };
-      const POLICY_B_MAX_PROBES = 8;
       const explainOpts = {};
       applyUserCollation(explainOpts);
       if (readPreference?.mode) explainOpts.readPreference = commandReadPreference(readPreference);
 
-      const runExplain = (pipeline, opts) => namespace.explain('queryPlanner').aggregate(pipeline, opts);
-
-      const idScan = async (why) => {
-         let cursor;
-         try {
-            const findExplainOpts = {
-               "sort": idSort,
-               "hint": idHint
-            };
-            applyUserCollation(findExplainOpts);
-            if (explainOpts.readPreference) findExplainOpts.readPreference = explainOpts.readPreference;
-            cursor = namespace.find(filter, { "_id": 1 }, findExplainOpts);
-            cursor = await unwrapShellCursor(cursor);
-            if (typeof cursor.sort === 'function') cursor = cursor.sort(idSort) ?? cursor;
-            if (typeof cursor.hint === 'function') cursor = cursor.hint(idHint) ?? cursor;
-            if (explainOpts.readPreference) cursor = applyCursorReadPref(cursor, explainOpts.readPreference);
-            const expl = await cursor.explain('queryPlanner');
-            if (!planIsIndexOrdered(expl)) {
-               emit('\n[red][WARN][/] [yellow]_id find() explain is not IXSCAN-without-SORT; scan will still force hinted {_id:1}[/]');
-            }
-         } catch(e) {
-            emit('\n[red][WARN][/] [yellow]Curation _id find() explain failed[/]:', e?.message ?? e);
-         } finally {
-            await closeCursor(cursor);
-         }
-         emit(why ?? '\n[red][WARN][/] [yellow]Curation falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)[/]');
-         return { "sortBy": idSort, "hint": idHint, "mode": "scan" };
-      };
-
       if (curationCannotSpill()) {
-         return await idScan('\n[red][WARN][/] [yellow]Curation forcing hinted _id find() walk — this host cannot spill a leftover $setWindowFields SORT (Atlas M0/Flex / no WT vitals)[/]');
+         return await idScan(namespace, filter, explainOpts, '\n[red][WARN][/] [yellow]Curation forcing hinted _id find() walk — this host cannot spill a leftover $setWindowFields SORT (Atlas M0/Flex / no WT vitals)[/]');
       }
-
-      const tryWindow = async (candidateSort, candidateHint) => {
-         const opts = { ...explainOpts };
-         applyHint(opts, candidateHint);
-         const prefix = [{ "$match": filter }, { "$sort": candidateSort }];
-         const fullOpts = { ...opts, "allowDiskUse": false, "let": { "bucketSizeLimit": 100 } };
-         try {
-            const prefixExpl = await runExplain(prefix, opts);
-            if (!planIsIndexOrdered(prefixExpl)) return null;
-            const fullExpl = await runExplain(windowBucketPipeline(filter, candidateSort), fullOpts);
-            if (!planIsIndexOrdered(fullExpl)) return null;
-            return { "sortBy": candidateSort, "hint": candidateHint, "mode": "window" };
-         } catch(e) {
-            emit('\n[red][WARN][/] [yellow]Curation window explain failed[/]:', e?.message ?? e);
-            return null;
-         }
-      };
-
-      const tryWindowFromPlanner = async (candidateSort, indexes) => {
-         /*
-          *  Unhinted $match+$sort. If the winner is index-ordered, no hint.
-          *  Else hint the first ranked rejectedPlan that stays IXSCAN-without-SORT
-          *  on a window-safe btree. Confirm the full window pipeline.
-          */
-         const prefix = [{ "$match": filter }, { "$sort": candidateSort }];
-         const fullLet = { "allowDiskUse": false, "let": { "bucketSizeLimit": 100 } };
-         try {
-            const prefixExpl = await runExplain(prefix, explainOpts);
-            if (planIsIndexOrdered(prefixExpl)) {
-               const fullExpl = await runExplain(windowBucketPipeline(filter, candidateSort), { ...explainOpts, ...fullLet });
-               if (!planIsIndexOrdered(fullExpl)) return null;
-               return { "sortBy": candidateSort, "hint": {}, "mode": "window" };
-            }
-            const pick = firstViableWindowHint(prefixExpl, indexes);
-            if (!pick || pick.fromWinner || !hasUserHint(pick.hint)) return null;
-            const hinted = await tryWindow(candidateSort, pick.hint);
-            if (!hinted) return null;
-            emit(`\n[blue][INFO][/] Curation planner hint [yellow]${JSON.stringify(hinted.hint)}[/] for sortBy [yellow]${JSON.stringify(candidateSort)}[/]`);
-            return hinted;
-         } catch(e) {
-            emit('\n[red][WARN][/] [yellow]Curation window explain failed[/]:', e?.message ?? e);
-            return null;
-         }
-      };
-
-      const tryPolicyB = async (forcedHint, indexes) => {
-         const candidates = policyBSortCandidates(filter, indexes, sortBy);
-         const seenSort = new Set();
-         let probes = 0;
-         for (const cand of candidates) {
-            if (probes >= POLICY_B_MAX_PROBES) break;
-            if (hasUserHint(forcedHint)) {
-               probes++;
-               const win = await tryWindow(cand.sortBy, forcedHint);
-               if (win) {
-                  emit(`\n[blue][INFO][/] Curation Policy B window sortBy [yellow]${JSON.stringify(win.sortBy)}[/]`);
-                  return win;
-               }
-               continue;
-            }
-            const sig = JSON.stringify(cand.sortBy);
-            if (seenSort.has(sig)) continue;
-            seenSort.add(sig);
-            probes++;
-            const win = await tryWindowFromPlanner(cand.sortBy, indexes);
-            if (win) {
-               emit(`\n[blue][INFO][/] Curation Policy B window sortBy [yellow]${JSON.stringify(win.sortBy)}[/]`);
-               return win;
-            }
-         }
-         return null;
-      };
 
       const indexes = await listCurationIndexes(namespace);
 
       if (hasUserHint(userHint)) {
-         const win = await tryWindow(sortBy, userHint);
+         const win = await tryWindow(namespace, filter, explainOpts, sortBy, userHint);
          if (win) return win;
-         const b = await tryPolicyB(userHint, indexes);
+         const b = await tryPolicyB(namespace, filter, explainOpts, sortBy, userHint, indexes);
          if (b) return b;
          emit('\n[red][WARN][/] [yellow]curation plan may use COLLSCAN/blocking SORT despite user hint[/]; sortBy:', JSON.stringify(sortBy));
-         return await idScan();
+         return await idScan(namespace, filter, explainOpts);
       }
 
-      const trusted = await tryWindowFromPlanner(sortBy, indexes);
+      const trusted = await tryWindowFromPlanner(namespace, filter, explainOpts, sortBy, indexes);
       if (trusted) return trusted;
-      const b = await tryPolicyB({}, indexes);
+      const b = await tryPolicyB(namespace, filter, explainOpts, sortBy, {}, indexes);
       if (b) return b;
-      return await idScan();
+      return await idScan(namespace, filter, explainOpts);
    }
 
    async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
