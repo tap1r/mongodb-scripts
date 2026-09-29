@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.7.7"
+    *  Version: "0.7.8"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -66,7 +66,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.7.7" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.7.8" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -1384,13 +1384,13 @@
       return null;
    }
 
-   function hasUserHint(h) {
-      return h != null && typeof h === 'object' && !Array.isArray(h) && Object.keys(h).length > 0;
+   function hasNonEmptyDoc(d) {
+      return d != null && typeof d === 'object' && !Array.isArray(d) && Object.keys(d).length > 0;
    }
 
-   function hasUserCollation(c) {
-      return c != null && typeof c === 'object' && !Array.isArray(c) && Object.keys(c).length > 0;
-   }
+   function hasUserHint(h) { return hasNonEmptyDoc(h); }
+
+   function hasUserCollation(c) { return hasNonEmptyDoc(c); }
 
    // Per-command readPreference only — mongosh Mongo.setReadPref() reconnects the client
    // (resetConnectionOptions → close) and runCommand ignores connection RP (mongosh 2.0+).
