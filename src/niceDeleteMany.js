@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.5.0"
+    *  Version: "0.6.0"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,7 +11,7 @@
     *  Legacy archive line: v0.4.11 is the snapshot for this script. mongosh-only
     *  (async IIFE, optional chaining; incompatible with legacy mongo). Still
     *  the demarked version for the whole-tree freeze. Further feature work
-    *  (per-shard WT via discovery, Policy B curation) targets mongosh; see
+    *  (per-shard WT via discovery) targets mongosh; see
     *  ROADMAP.md → Legacy mongo shell retirement.
     *
     *  Notes:
@@ -21,6 +21,7 @@
     *  - Window mode: index-ordered $match+$sort + $setWindowFields (semi-blocking bucket estimates)
     *  - Scan mode: hinted {_id:1} find(), residual FETCH, in-process buckets (no $setWindowFields)
     *  - User hint is kept only when the hinted explain is IXSCAN without a blocking SORT; otherwise WARN and _id scan
+    *  - Policy B: compound equality prefix → trailing index sort when the first filter field is not index-ordered
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
     *  - Atlas M0/Flex (no WT vitals) always walk _id via find(); leftover window SORT cannot spill
@@ -32,7 +33,6 @@
     *  TODOs:
     *  - better sharding (per-shard WT vitals via listShards / discovery)
     *  - revise lowPriorityAdmissionBypassThreshold for backward compatibility
-    *  - refine curation order (Policy B: compound equality→trailing sort probes)
     */
 
    // Syntax: mongosh [connection options] [--quiet] [--eval 'var dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>, interactive = <bool>;'] [-f|--file] </path/to/>niceDeleteMany.js
@@ -65,7 +65,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.5.0" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.6.0" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -506,6 +506,108 @@
       return '_id';
    }
 
+   function isEqualityOperand(v) {
+      if (v === undefined) return false;
+      if (v === null) return true;
+      const t = typeof v;
+      if (t === 'string' || t === 'number' || t === 'boolean' || t === 'bigint') return true;
+      if (t !== 'object') return false;
+      if (Array.isArray(v)) return true;
+      if (v instanceof Date || v instanceof RegExp) return v instanceof Date;
+      const ctor = v.constructor?.name ?? '';
+      if (/^(ObjectId|Long|Int32|Double|Decimal128|Binary|UUID|Timestamp|MinKey|MaxKey|Code)$/.test(ctor)) return true;
+      const keys = Object.keys(v);
+      if (keys.length === 0) return true;
+      if (keys.some(k => k.startsWith('$'))) {
+         if (keys.length === 1 && keys[0] === '$eq') return isEqualityOperand(v.$eq);
+         if (keys.length === 1 && keys[0] === '$in' && Array.isArray(v.$in) && v.$in.length === 1) return true;
+         return false;
+      }
+      return true; // subdocument equality
+   }
+
+   function equalityFieldsFromFilter(filter = {}, acc = []) {
+      if (filter == null || typeof filter !== 'object' || Array.isArray(filter)) return acc;
+      for (const [k, v] of Object.entries(filter)) {
+         if (k === '$and' && Array.isArray(v)) {
+            for (const clause of v) equalityFieldsFromFilter(clause, acc);
+            continue;
+         }
+         if (k.startsWith('$')) continue;
+         if (isEqualityOperand(v) && !acc.includes(k)) acc.push(k);
+      }
+      return acc;
+   }
+
+   async function listCurationIndexes(namespace) {
+      /*
+       *  btree indexes only. Skip _id (scan fallback), hidden, text/hashed/geo/wildcard.
+       */
+      try {
+         let specs = namespace.getIndexes();
+         if (specs && typeof specs.then === 'function') specs = await specs;
+         if (!Array.isArray(specs)) return [];
+         const out = [];
+         for (const spec of specs) {
+            if (!spec || spec.hidden) continue;
+            const key = spec.key;
+            if (key == null || typeof key !== 'object' || Array.isArray(key)) continue;
+            const fields = Object.entries(key);
+            if (!fields.length) continue;
+            if (fields.length === 1 && fields[0][0] === '_id') continue;
+            if (fields.some(([f, d]) =>
+               f === '_fts' || f.includes('$')
+               || d === 'hashed' || d === 'text' || d === '2dsphere' || d === '2d'
+               || typeof d !== 'number'
+            )) continue;
+            out.push({ "name": spec.name, "key": key, "fields": fields });
+         }
+         return out;
+      } catch(_) {
+         return [];
+      }
+   }
+
+   function policyBSortCandidates(filter, indexes, policyASort) {
+      /*
+       *  Compound equality → trailing sort (ESR). For each btree whose prefix
+       *  keys are equality fields of the filter, probe:
+       *    - prefix keys in index order (absorbed $sort)
+       *    - the next key after that prefix (Howto Example D: createdAt)
+       */
+      const eqs = equalityFieldsFromFilter(filter);
+      if (!eqs.length || !Array.isArray(indexes) || !indexes.length) return [];
+      const eqSet = new Set(eqs);
+      const skipA = JSON.stringify(policyASort ?? {});
+      const seen = new Set();
+      const candidates = [];
+      const add = (sortBy, hint) => {
+         if (sortBy == null || typeof sortBy !== 'object' || !Object.keys(sortBy).length) return;
+         if (JSON.stringify(sortBy) === skipA && !hasUserHint(hint)) return;
+         const sig = JSON.stringify(sortBy) + '\0' + JSON.stringify(hint ?? {});
+         if (seen.has(sig)) return;
+         seen.add(sig);
+         candidates.push({ "sortBy": sortBy, "hint": hint ?? {} });
+      };
+      for (const idx of indexes) {
+         const fields = idx.fields;
+         let i = 0;
+         while (i < fields.length && eqSet.has(fields[i][0])) i++;
+         if (i === 0) continue;
+         const prefixSort = {};
+         for (let j = 0; j < i; j++) prefixSort[fields[j][0]] = fields[j][1];
+         add(prefixSort, {});
+         add(prefixSort, idx.key);
+         if (i < fields.length) {
+            const [tf, td] = fields[i];
+            const trail = { [tf]: td };
+            add(trail, {});
+            add(trail, idx.key);
+         }
+      }
+      return candidates;
+   }
+
    function walkPlanNodes(node, visit, seen = new Set()) {
       if (node == null || typeof node !== 'object') return;
       if (seen.has(node)) return;
@@ -678,12 +780,15 @@
        *  - Otherwise mode 'scan': find() hinted {_id:1} walk, residual filter,
        *    bucket in-process. idScan explains that find() (same hint/sort/projection).
        *  - User hint is honored only when that hinted explain is index-ordered;
-       *    otherwise WARN and take the _id scan. Policy B = alternate indexes.
+       *    otherwise WARN and take the _id scan.
+       *  - Policy B: when the first filter field is not index-ordered, probe
+       *    compound equality prefixes and trailing btree keys (ESR / Howto Example D).
        */
       const idSort = { "_id": 1 };
       const idHint = { "_id": 1 };
       const sortField = sortKeyFromFilter(filter);
       const sortBy = { [sortField]: 1 };
+      const POLICY_B_MAX_PROBES = 8;
       const explainOpts = {};
       if (hasUserCollation(collation)) explainOpts.collation = collation;
       if (readPreference?.mode) explainOpts.readPreference = commandReadPreference(readPreference);
@@ -738,15 +843,36 @@
          }
       };
 
+      const tryPolicyB = async (forcedHint) => {
+         const indexes = await listCurationIndexes(namespace);
+         const candidates = policyBSortCandidates(filter, indexes, sortBy);
+         let probes = 0;
+         for (const cand of candidates) {
+            if (probes >= POLICY_B_MAX_PROBES) break;
+            const h = hasUserHint(forcedHint) ? forcedHint : cand.hint;
+            probes++;
+            const win = await tryWindow(cand.sortBy, h);
+            if (win) {
+               emit(`\n\x1b[34m[INFO]\x1b[0m Curation Policy B window sortBy \x1b[33m${JSON.stringify(win.sortBy)}\x1b[0m`);
+               return win;
+            }
+         }
+         return null;
+      };
+
       if (hasUserHint(userHint)) {
          const win = await tryWindow(sortBy, userHint);
          if (win) return win;
+         const b = await tryPolicyB(userHint);
+         if (b) return b;
          emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mcuration plan may use COLLSCAN/blocking SORT despite user hint\x1b[0m; sortBy:', JSON.stringify(sortBy));
          return await idScan();
       }
 
       const trusted = await tryWindow(sortBy, {});
       if (trusted) return trusted;
+      const b = await tryPolicyB({});
+      if (b) return b;
       return await idScan();
    }
 
