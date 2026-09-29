@@ -789,38 +789,27 @@
       }
    }
 
+   function cachedFetch(cache, ttlMs, fetchFn, fallback = {}) {
+      // TTL + try/catch + store. hostInfo / rsStatus share this; getParameter is keyed; serverStatus stays inflight.
+      const now = Date.now();
+      if (cache.value !== null && (now - cache.at) < ttlMs) return cache.value;
+      let value = fallback;
+      try {
+         value = fetchFn();
+      } catch(_) { /* restricted / unavailable — keep fallback */ }
+      cache.value = value;
+      cache.at = now;
+      return value;
+   }
+
    function hostInfo() {
       // Near-static (cores, RAM limits, OS). 60s TTL is plenty; container limit changes are rare.
-      const now = Date.now();
-      if (_hostInfoCache.value !== null && (now - _hostInfoCache.at) < HOST_INFO_CACHE_TTL_MS) {
-         return _hostInfoCache.value;
-      }
-      let hostInfo = {};
-      try {
-         hostInfo = db.hostInfo();
-      } catch(e) {
-         // console.debug(`[red][WARN][/] [yellow]insufficient rights to execute db.hostInfo()\n${e}[/]`);
-      }
-      _hostInfoCache.value = hostInfo;
-      _hostInfoCache.at = now;
-      return hostInfo;
+      return cachedFetch(_hostInfoCache, HOST_INFO_CACHE_TTL_MS, () => db.hostInfo());
    }
 
    function rsStatus() {
       // Member set/health changes slowly; optimes move faster. TTL balances lag freshness vs rs.status() cost.
-      const now = Date.now();
-      if (_rsStatusCache.value !== null && (now - _rsStatusCache.at) < RS_STATUS_CACHE_TTL_MS) {
-         return _rsStatusCache.value;
-      }
-      let rsStatus = {};
-      try {
-         rsStatus = rs.status();
-      } catch(e) {
-         // console.debug(`[red][WARN][/] [yellow]insufficient rights to execute rs.status()\n${e}[/]`);
-      }
-      _rsStatusCache.value = rsStatus;
-      _rsStatusCache.at = now;
-      return rsStatus;
+      return cachedFetch(_rsStatusCache, RS_STATUS_CACHE_TTL_MS, () => rs.status());
    }
 
    function isMongos() {
