@@ -33,10 +33,10 @@ A `$setWindowFields` whose `sortBy` is the first ordering stage injects a physic
 
 1. Derive `sortBy` from the filter (`{}` / non-field predicates → `_id`).
 2. Atlas M0/Flex (`pace` admission with no WT vitals) take **scan** immediately. `queryPlanner` can look index-ordered while a live `$setWindowFields` still injects a SORT, and these tiers cannot spill.
-3. Explain `$match` + `$sort` (`queryPlanner`) with the candidate hint when one is in play.
-4. When that plan is index-ordered, also explain the **full v3 window pipeline** (both `$setWindowFields` stages) with `allowDiskUse: false`.
+3. Explain `$match` + `$sort` (`queryPlanner`) **unhinted**. If `winningPlan` is IXSCAN-without-SORT, keep it with no hint. Else walk `rejectedPlans` in planner order and **hint** the first plan that is IXSCAN-without-SORT on a window-safe btree (`listCurationIndexes`). Empty viable set continues below.
+4. When a prefix plan is index-ordered, also explain the **full v3 window pipeline** (both `$setWindowFields` stages) with `allowDiskUse: false` (and that hint, if any).
 5. **Window** mode only when **both** plans are IXSCAN with no `COLLSCAN` and no blocking `SORT` / `SORT_KEY_GENERATOR`.
-6. **Policy B:** if that first-field `sortBy` is not index-ordered, probe btree indexes whose prefix keys are **equality** fields of the filter: prefix keys in index order, then the next (trailing) key — ESR, Example D. Cap 8 explains. A user hint is reused on those probes when one was given.
+6. **Policy B:** if that first-field `sortBy` has no viable ranked plan, probe btree indexes whose prefix keys are **equality** fields of the filter: prefix keys in index order, then the next (trailing) key — ESR, Example D. Each unique `sortBy` uses the same unhinted ranked-plan matching. Cap 8. A user hint is reused on those probes when one was given (hinted explains, no ranked fallback).
 7. Otherwise **scan** mode: hinted `{_id:1}` `find()`, residual filter as FETCH, buckets assembled in-process.
 8. A user hint is honored only when that hinted explain is index-ordered; otherwise WARN and take the `_id` scan.
 9. If a live window cursor still hits the 32MiB sort budget (`QueryExceededMemoryLimitNoDiskUseAllowed`), close it and continue as scan.
@@ -279,6 +279,8 @@ db.collection.explain("queryPlanner").aggregate(windowPipeline, {
   let: { bucketSizeLimit: 100 }
 });
 ```
+
+Unhinted prefix explain also reads `rejectedPlans`. A COLLSCAN+SORT winner with a rejected IXSCAN-without-SORT on a window-safe btree takes that `keyPattern` as the fallback hint.
 
 `explainOpts` carry the candidate **hint** (when one is in play), **collation**, and the same per-command **readPreference** as the live cursor.
 
