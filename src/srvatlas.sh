@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.5.0"
+# Version: "0.5.1"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -30,6 +30,9 @@ _policy='HIGH:!EXPORT:!aNULL@STRENGTH' # MongoDB compiled default
 _compressors='snappy,zstd,zlib' # MongoDB compiled default
 _zlibLevel=-1
 _lb=false # serverless testing
+_expectTls=false # set when the namespace profile requires TLS
+_failures=0
+_txtReplicaSet=
 _targets=()
 _srvHosts=()
 
@@ -84,13 +87,15 @@ validate_cluster_name() {
         exit 1
     }
 
-    [[ -n $_txt && -z $_a ]] || {
-        echo -e "WARNING: record resolves to a valid host ${_a}, ensure the correct cluster name is used for SRV resolution" 1>&2
-        exit 1
+    # An A record on the SRV name is optional. Atlas omits it so a non-SRV hostname fails closed.
+    [[ -z $_a ]] || {
+        echo -e "WARNING: ${_clusterName} also has an A record (${_a//$'\n'/, }). mongodb+srv bootstrap does not require its absence." 1>&2
     }
 
     echo -e "\nValidating Atlas cluster name:\t$_clusterName"
     echo -e "\n\tTXT resource record:\t$_txt"
+    _txtReplicaSet=
+    [[ $_txt =~ replicaSet=([^&\"]+) ]] && _txtReplicaSet=${BASH_REMATCH[1]}
 
     _targets=()
     _srvHosts=()
@@ -158,6 +163,7 @@ apply_atlas_namespace() {
         echo "Atlas detected: adding TLS and Auth options"
         _shellOpts+=("--tls")
         _authUser="admin.mms-automation"
+        _expectTls=true
     }
 }
 
@@ -169,6 +175,20 @@ apply_serverless_options() {
         _uriOpts+="&loadBalanced=true"
         _lb=true
     }
+}
+
+note_failure() {
+    echo -e "ERROR: $*" 1>&2
+    _failures=$((_failures + 1))
+}
+
+list_has() {
+    local _haystack=$1 _needle=$2 _item
+    local IFS=','
+    for _item in $_haystack; do
+        [[ $_item == "$_needle" ]] && return 0
+    done
+    return 1
 }
 
 run_deadline() {
@@ -288,6 +308,10 @@ test_host_connectivity() {
         _queryRegex="CONNECTION (ESTABLISHED)"
         [[ ${_isTLSenabled} =~ $_queryRegex ]] && _tlsEnabled=${BASH_REMATCH[1]}
         echo -e "\n\tnode:\t\t\t${_target}\n\tTCP connectivity:\t${_reachable}\n\tTLS enablement:\t\t${_tlsEnabled}"
+        [[ $_reachable == succeeded ]] || note_failure "TCP connectivity failed for ${_target}"
+        if $_expectTls; then
+            [[ $_tlsEnabled == ESTABLISHED ]] || note_failure "TLS was not established for ${_target}"
+        fi
     } # &
     done
     # wait
@@ -301,6 +325,7 @@ evaluate_connection_properties() {
     _helloHosts=()
     _helloSet=()
     _helloTags=()
+    _helloOk=()
     echo -e "\nEvaluating connection properties to individual nodes: ${_targets[@]}"
     for _target in "${_targets[@]}"; do {
         _uri="mongodb://${_target}/?${_uriOpts}"
@@ -313,11 +338,15 @@ evaluate_connection_properties() {
         _helloHosts+=("$_rsHosts")
         _helloSet+=("$_rsName")
         _helloTags+=("$_rsTags")
+        _helloOk+=("$_ok")
         echo -e "\n\tnode:\t\t\t$_target"
         echo -e "\tsaslSupportedMechs:\t${_saslSupportedMechs}"
         echo -e "\tcompression mechs:\t${_compressionMechs}"
         echo -e "\tmaxWireVersion:\t\t$_maxWireVersion"
-        [[ $_ok == 1 ]] || echo -e "\thello:\t\t\t${_err:-${_helloOut%%$'\n'*}}"
+        if [[ $_ok != 1 ]]; then
+            echo -e "\thello:\t\t\t${_err:-${_helloOut%%$'\n'*}}"
+            note_failure "hello failed for ${_target}${_err:+: ${_err}}"
+        fi
         echo -e "\tTLS cipher scanning:";
         for _suite in "${_cipherSuites[@]}"; do {
             _negotiatedCiphers="None"
@@ -350,9 +379,10 @@ evaluate_connection_properties() {
 
 test_replset_consistency() {
     # detect mongod/mongos and replset consistency
-    local _target _i=0
+    local _target _i=0 _srv _nodeAgree
 
     echo -e "\nReplica set consistency tests:"
+    [[ -n $_txtReplicaSet ]] && echo -e "\tTXT replicaSet:\t${_txtReplicaSet}"
     for _target in "${_targets[@]}"; do {
         _proc=
         _identity=${_helloMe[_i]}
@@ -370,7 +400,38 @@ test_replset_consistency() {
             echo -e "\treplset hosts:\t${_rsHosts}"
             echo -e "\treplset tags:\t${_rsTags}"
         else
-            echo -e "\tHost is of type ${_proc}, skipping replica set tests."
+            echo -e "\tHost is of type ${_proc}."
+        fi
+        if [[ ${_helloOk[_i]} != 1 ]]; then
+            echo -e "\tagreement:\tskipped"
+        else
+            _nodeAgree=1
+            if [[ $_proc == mongod && -n $_txtReplicaSet && $_rsName != "$_txtReplicaSet" ]]; then
+                note_failure "${_target} replset name '${_rsName:-empty}' does not match TXT replicaSet '${_txtReplicaSet}'"
+                _nodeAgree=0
+            fi
+            if ! $_lb; then
+                if [[ $_identity != "$_target" ]]; then
+                    note_failure "${_target} identity '${_identity:-empty}' does not match SRV target '${_target}'"
+                    _nodeAgree=0
+                fi
+                if [[ -n $_rsHosts ]]; then
+                    for _srv in "${_targets[@]}"; do
+                        list_has "$_rsHosts" "$_srv" || {
+                            note_failure "${_target} replset hosts do not include SRV target '${_srv}'"
+                            _nodeAgree=0
+                        }
+                    done
+                elif [[ $_proc == mongod ]]; then
+                    note_failure "${_target} replset hosts are empty"
+                    _nodeAgree=0
+                fi
+            fi
+            if [[ $_nodeAgree -eq 1 ]]; then
+                echo -e "\tagreement:\tok"
+            else
+                echo -e "\tagreement:\tfailed"
+            fi
         fi
         _i=$((_i + 1))
     } # &
@@ -392,6 +453,10 @@ main() {
     test_host_connectivity
     evaluate_connection_properties
     test_replset_consistency
+    if [[ $_failures -gt 0 ]]; then
+        echo -e "\n${_failures} required check(s) failed.\n" 1>&2
+        exit 1
+    fi
     echo -e "\nComplete!\n"
 }
 
