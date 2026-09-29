@@ -1,13 +1,36 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.5.1"
+# Version: "0.6.0"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 #
-# Usage: "bash srvatlas.sh <atlas-cluster-name>"
+# Usage: "bash srvatlas.sh [--ciphers] <atlas-cluster-name>"
+# --ciphers  handshake every local cipher for tls1, tls1_1, tls1_2, and tls1_3
 
-_clusterName="${1:?'Usage: srvatlas.sh atlas-cluster-name'}"
+_usage='Usage: srvatlas.sh [--ciphers] <atlas-cluster-name>'
+_cipherScan=false
+_clusterName=
+for _arg in "$@"; do
+    case $_arg in
+        --ciphers) _cipherScan=true ;;
+        -*)
+            echo "$_usage" 1>&2
+            exit 1
+            ;;
+        *)
+            if [[ -n $_clusterName ]]; then
+                echo "$_usage" 1>&2
+                exit 1
+            fi
+            _clusterName=$_arg
+            ;;
+    esac
+done
+[[ -n $_clusterName ]] || {
+    echo "$_usage" 1>&2
+    exit 1
+}
 
 ### script defaults
 #
@@ -292,6 +315,42 @@ EOF
     done <<< "$_helloOut"
 }
 
+read_tls_brief() {
+    # OpenSSL s_client -brief reports the one negotiated protocol and ciphersuite.
+    local _text=$1
+    _tlsProtocol=
+    _tlsCipher=
+    [[ $_text =~ Protocol\ version:\ ([^[:space:]]+) ]] && _tlsProtocol=${BASH_REMATCH[1]}
+    [[ $_text =~ Ciphersuite:\ ([^[:space:]]+) ]] && _tlsCipher=${BASH_REMATCH[1]}
+}
+
+build_cipher_lists() {
+    # The local cipher list does not depend on the target. Build it once per run.
+    local _suite _raw
+    _ciphersTls1=
+    _ciphersTls11=
+    _ciphersTls12=
+    _ciphersTls13=
+    for _suite in "${_cipherSuites[@]}"; do
+        _raw=$("$_openssl" ciphers -s "-$_suite" -ciphersuites "$_tls1_3_suites" "$_policy" 2>/dev/null || true)
+        case $_suite in
+            tls1) _ciphersTls1=$_raw ;;
+            tls1_1) _ciphersTls11=$_raw ;;
+            tls1_2) _ciphersTls12=$_raw ;;
+            tls1_3) _ciphersTls13=$_raw ;;
+        esac
+    done
+}
+
+cipher_list_for() {
+    case $1 in
+        tls1) printf '%s' "$_ciphersTls1" ;;
+        tls1_1) printf '%s' "$_ciphersTls11" ;;
+        tls1_2) printf '%s' "$_ciphersTls12" ;;
+        tls1_3) printf '%s' "$_ciphersTls13" ;;
+    esac
+}
+
 test_host_connectivity() {
     # detect open socket & detect TLS
     local _target
@@ -301,13 +360,16 @@ test_host_connectivity() {
         _uri="mongodb://${_target}/?${_uriOpts}"
         _reachable=
         _tlsEnabled=
+        _tlsProtocol=
+        _tlsCipher=
         _isTLSenabled=$(run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "${_target}" -brief </dev/null 2>&1)
         _isReachable=$("$_networkCmd" -zv -G "$_connectTimeout" "${_target%%:*}." "${_target##*:}" 2>&1)
         _queryRegex="Connection.+(succeeded)"
         [[ ${_isReachable} =~ $_queryRegex ]] && _reachable=${BASH_REMATCH[1]}
         _queryRegex="CONNECTION (ESTABLISHED)"
         [[ ${_isTLSenabled} =~ $_queryRegex ]] && _tlsEnabled=${BASH_REMATCH[1]}
-        echo -e "\n\tnode:\t\t\t${_target}\n\tTCP connectivity:\t${_reachable}\n\tTLS enablement:\t\t${_tlsEnabled}"
+        read_tls_brief "$_isTLSenabled"
+        echo -e "\n\tnode:\t\t\t${_target}\n\tTCP connectivity:\t${_reachable}\n\tTLS enablement:\t\t${_tlsEnabled}\n\tTLS protocol:\t\t${_tlsProtocol}\n\tTLS ciphersuite:\t${_tlsCipher}"
         [[ $_reachable == succeeded ]] || note_failure "TCP connectivity failed for ${_target}"
         if $_expectTls; then
             [[ $_tlsEnabled == ESTABLISHED ]] || note_failure "TLS was not established for ${_target}"
@@ -326,6 +388,10 @@ evaluate_connection_properties() {
     _helloSet=()
     _helloTags=()
     _helloOk=()
+    if $_cipherScan; then
+        echo -e "\nEnumerating local TLS ciphers (--ciphers). This probes every suite on every node."
+        build_cipher_lists
+    fi
     echo -e "\nEvaluating connection properties to individual nodes: ${_targets[@]}"
     for _target in "${_targets[@]}"; do {
         _uri="mongodb://${_target}/?${_uriOpts}"
@@ -347,29 +413,31 @@ evaluate_connection_properties() {
             echo -e "\thello:\t\t\t${_err:-${_helloOut%%$'\n'*}}"
             note_failure "hello failed for ${_target}${_err:+: ${_err}}"
         fi
-        echo -e "\tTLS cipher scanning:";
-        for _suite in "${_cipherSuites[@]}"; do {
-            _negotiatedCiphers="None"
-            _ciphers=$("$_openssl" ciphers -s "-$_suite" -ciphersuites "$_tls1_3_suites" "$_policy" 2>/dev/null)
-            if [[ $_suite == tls1_3 ]]; then
-                _tlsFlags=(-tls1_3)
-            else
-                _tlsFlags=("-$_suite")
-            fi
-            for _cipher in ${_ciphers//:/ }; do
-                [[ -n $_cipher ]] || continue
+        if $_cipherScan; then
+            echo -e "\tTLS cipher scanning:";
+            for _suite in "${_cipherSuites[@]}"; do {
+                _negotiatedCiphers="None"
+                _ciphers=$(cipher_list_for "$_suite")
                 if [[ $_suite == tls1_3 ]]; then
-                    run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_target" "${_tlsFlags[@]}" -ciphersuites "$_cipher" -async </dev/null >/dev/null 2>&1 && _negotiatedCiphers+=("$_cipher")
+                    _tlsFlags=(-tls1_3)
                 else
-                    run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_target" "${_tlsFlags[@]}" -cipher "$_cipher" -async </dev/null >/dev/null 2>&1 && _negotiatedCiphers+=("$_cipher")
+                    _tlsFlags=("-$_suite")
                 fi
+                for _cipher in ${_ciphers//:/ }; do
+                    [[ -n $_cipher ]] || continue
+                    if [[ $_suite == tls1_3 ]]; then
+                        run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_target" "${_tlsFlags[@]}" -ciphersuites "$_cipher" -async </dev/null >/dev/null 2>&1 && _negotiatedCiphers+=("$_cipher")
+                    else
+                        run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_target" "${_tlsFlags[@]}" -cipher "$_cipher" -async </dev/null >/dev/null 2>&1 && _negotiatedCiphers+=("$_cipher")
+                    fi
+                done
+                [[ ${#_negotiatedCiphers[@]} -gt 1 ]] && unset '_negotiatedCiphers[0]'
+                echo -e "\n\t\t$_suite: ${_negotiatedCiphers[@]}"
+                unset _negotiatedCiphers
+            } # &
             done
-            [[ ${#_negotiatedCiphers[@]} -gt 1 ]] && unset '_negotiatedCiphers[0]'
-            echo -e "\n\t\t$_suite: ${_negotiatedCiphers[@]}"
-            unset _negotiatedCiphers
-        } # &
-        done
-        # wait
+            # wait
+        fi
     } # &
     done
     # wait
