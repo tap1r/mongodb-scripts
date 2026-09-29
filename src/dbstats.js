@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.22"
+ *  Version: "0.12.23"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -113,7 +113,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.22" };
+   const __script = { "name": "dbstats.js", "version": "0.12.23" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -144,7 +144,9 @@
       // Legacy mongo often has code 13 / errmsg only — same idea as $collStats.
       if (e.codeName == 'Unauthorized' || +e.code === 13
             || /not authorized|unauthorized/i.test(e.errmsg || e.message || '')) {
-         console.log('[red][ERR] MongoServerError: Unauthorized user requires authentication[/]');
+         __dbstatsAuthRequired = true;
+         const jsonCli = (typeof options !== 'undefined' && options && options.output && options.output.format === 'json');
+         if (!jsonCli) console.log('[red][ERR] MongoServerError: Unauthorized user requires authentication[/]');
       }
    }
 
@@ -327,7 +329,7 @@
       delete dbPath.compressor;
 
       const dbNames = stableSort(getDBNames(dbFilter), compareBy(v => v, 1));
-      console.log('');
+      if (outputOptions.format !== 'json') console.log('');
       // Map: build per-DB metas only. Reduce: rollupDbPath aggregates totals (no map side-effects).
       dbPath.databases = dbNames.map(dbName => buildDatabaseMeta(dbName, dbPath.shards));
       rollupDbPath(dbPath, dbPath.databases);
@@ -384,8 +386,10 @@
       const dbFetchTasks = dbPath.databases.map(async database => {
          const collFetchTasks = database.collections.map(async({ 'name': collName }) => {
             // Prefer catalog name if $collStats stub/defaults omit it (legacy Unauthorized without codeName).
-            let collection = new MetaStats($collStats(database.name, collName) || { "name": collName });
+            const collRaw = $collStats(database.name, collName) || { "name": collName };
+            let collection = new MetaStats(collRaw);
             if (!collection.name) collection.name = collName;
+            if (collRaw.statsError) collection.statsError = collRaw.statsError;
             delete collection.databases;
             delete collection.collections;
             delete collection.views;
@@ -411,6 +415,7 @@
       dbPath.databases = stableSort(dbPath.databases, sortBy('db'));
 
       applyFreeStorageRollup(dbPath);
+      dbPath.gatherWarnings = collectGatherWarnings(dbPath);
 
       return dbPath;
    }
@@ -419,7 +424,10 @@
       /*
        *  Pure-ish: $stats → MetaStats for one DB (no cluster rollup mutation)
        */
-      let database = new MetaStats($stats(dbName));
+      const dbRaw = $stats(dbName);
+      let database = new MetaStats(dbRaw);
+      if (dbRaw.statsError) database.statsError = dbRaw.statsError;
+      if (dbRaw.unauthorized) database.unauthorized = true;
       delete database.databases;
       delete database.instance;
       delete database.hostname;
@@ -451,20 +459,50 @@
       return /\(unauthorized\)\s*$/.test(collection.name || '');
    }
 
+   function isUnavailableCollection(collection = {}) {
+      return /\(unavailable\)\s*$/.test(collection.name || '');
+   }
+
+   function catalogName(collection = {}) {
+      return String(collection.name || '').replace(/\s*\((unauthorized|unavailable)\)\s*$/, '');
+   }
+
+   function collectGatherWarnings(dbPath) {
+      const warnings = [];
+      for (const database of dbPath.databases || []) {
+         if (database.statsError) {
+            warnings.push({
+               "code": database.unauthorized ? 'dbStatsUnauthorized' : 'dbStatsFailed',
+               "db": database.name,
+               "message": String(database.statsError)
+            });
+         }
+         for (const collection of database.collections || []) {
+            if (!isUnavailableCollection(collection)) continue;
+            warnings.push({
+               "code": 'collStatsFailed',
+               "ns": `${database.name}.${catalogName(collection)}`,
+               "message": String(collection.statsError || 'collStats failed')
+            });
+         }
+      }
+      return warnings;
+   }
+
    function catalogCoverageComplete(database) {
       /*
        *  Fetched collections cover db.stats() ncollections (no authz/filter holes).
        *  Sharded ncollections is a per-shard array — skip the count check.
        */
       const collections = database.collections || [];
-      if (collections.some(isUnauthorizedCollection)) return false;
+      if (collections.some(c => isUnauthorizedCollection(c) || isUnavailableCollection(c))) return false;
       const ncoll = database.ncollections;
       if (typeof ncoll === 'number' && Number.isFinite(ncoll) && collections.length !== ncoll) return false;
       return true;
    }
 
    function collectionIndexFreeBytes(collection) {
-      if (isUnauthorizedCollection(collection)) return null;
+      if (isUnauthorizedCollection(collection) || isUnavailableCollection(collection)) return null;
       if (freeStorageKnown(collection.totalIndexBytesReusable)) return +collection.totalIndexBytesReusable;
       const indexes = collection.indexes || [];
       if (!indexes.length) return (+collection.nindexes === 0) ? 0 : null;
@@ -472,7 +510,7 @@
    }
 
    function collectionIndexFreeComplete(collection) {
-      if (isUnauthorizedCollection(collection)) return false;
+      if (isUnauthorizedCollection(collection) || isUnavailableCollection(collection)) return false;
       if (freeStorageKnown(collection.totalIndexBytesReusable)) return true;
       const indexes = collection.indexes || [];
       if (!indexes.length) return +collection.nindexes === 0;
@@ -643,27 +681,28 @@
 
    function nsTableOut(dbStats = {}) {
       /*
-       *  Print aggregated namespaces tabular report
+       *  Print aggregated namespaces tabular report.
+       *  Copy rows — do not mutate live collection objects.
        */
-      const namespaces = dbStats.databases.flatMap(database => {
-         return database.collections.reduce((collections, collection) => {
-            const namespace = database.name + '.' + collection.name;
-            delete collection.name;
-            const updatedCollection = { ...{ "namespace": namespace }, ...collection, ...{ compression: 0 }
-            // , ...{ get compression() {
-            //    return this.dataSize / (this.storageSize - this.freeStorageSize);
-            // } }
-            };
-            collections.push(updatedCollection);
-            return collections;
-         }, []);
-      });
+      const namespaces = dbStats.databases.flatMap(database =>
+         (database.collections || []).map(collection => ({
+            "namespace": database.name + '.' + collection.name,
+            "name": collection.name,
+            "dataSize": collection.dataSize,
+            "compression": collection.compression,
+            "compressor": collection.compressor,
+            "storageSize": collection.storageSize,
+            "freeStorageSize": collection.freeStorageSize,
+            "objects": collection.objects,
+            "indexes": collection.indexes
+         }))
+      );
       const sortedNamespaces = stableSort(namespaces, sortBy('namespace'));
 
       printNSHeader(sortedNamespaces.length);
       sortedNamespaces.forEach(namespace => {
          printNamespace(namespace);
-         namespace.indexes.forEach(printIndex);
+         (namespace.indexes || []).forEach(printIndex);
       });
       printDbPath(dbStats);
 
@@ -723,9 +762,8 @@
 
    function jsonCollection(dbName, collection = {}) {
       const unauthorized = isUnauthorizedCollection(collection);
-      const name = unauthorized
-                 ? String(collection.name || '').replace(/\s*\(unauthorized\)\s*$/, '')
-                 : (collection.name || '');
+      const unavailable = isUnavailableCollection(collection);
+      const name = catalogName(collection) || (collection.name || '');
       const ns = `${dbName}.${name}`;
       const storageSize = jsonNumber(collection.storageSize);
       const freeStorageSize = jsonFree(collection.freeStorageSize);
@@ -737,6 +775,7 @@
          ns, "db": dbName, name,
          "kind": 'collection',
          unauthorized,
+         unavailable,
          dataSize, storageSize, freeStorageSize,
          "reuse": jsonReuse(freeStorageSize, storageSize),
          "objects": jsonNumber(collection.objects),
@@ -768,6 +807,8 @@
       const idxIncomplete = database.totalIndexBytesReusableComplete === false;
       return {
          name,
+         "unauthorized": database.unauthorized === true,
+         "statsError": database.statsError || null,
          dataSize, storageSize, freeStorageSize,
          "reuse": jsonReuse(freeStorageSize, storageSize),
          "objects": jsonNumber(database.objects),
@@ -819,6 +860,27 @@
 
    function jsonWarnings(dbStats = {}) {
       const warnings = [];
+      if (typeof __dbstatsAuthRequired !== 'undefined' && __dbstatsAuthRequired) {
+         warnings.push({
+            "code": 'authRequired',
+            "message": 'MongoServerError: Unauthorized user requires authentication.'
+         });
+      }
+      if (typeof __mdblibShellIncompatible !== 'undefined' && __mdblibShellIncompatible) {
+         warnings.push({
+            "code": 'incompatibleShell',
+            "message": `Possible incompatible non-GA shell version detected: ${__mdblibShellIncompatible}`
+         });
+      }
+      if (typeof __mdblibServerUnsupported !== 'undefined' && __mdblibServerUnsupported) {
+         warnings.push({
+            "code": 'unsupportedServer',
+            "message": `Unsupported mongod/s version detected: ${__mdblibServerUnsupported}`
+         });
+      }
+      if (Array.isArray(dbStats.gatherWarnings) && dbStats.gatherWarnings.length) {
+         warnings.push(...dbStats.gatherWarnings);
+      }
       if (typeof __dbstatsAuthzInadequate !== 'undefined' && __dbstatsAuthzInadequate) {
          warnings.push({
             "code": 'authzInadequate',
@@ -859,7 +921,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.12.22',
+         "version": '0.12.23',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
