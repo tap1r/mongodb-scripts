@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.6.0"
+    *  Version: "0.6.1"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -32,7 +32,7 @@
     *
     *  TODOs:
     *  - better sharding (per-shard WT vitals via listShards / discovery)
-    *  - revise lowPriorityAdmissionBypassThreshold for backward compatibility
+    *  - fallback hint: match queryPlanner ranked plans to indexes that stay IXSCAN-without-SORT (planner already ranks efficiency)
     */
 
    // Syntax: mongosh [connection options] [--quiet] [--eval 'var dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>, interactive = <bool>;'] [-f|--file] </path/to/>niceDeleteMany.js
@@ -65,7 +65,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.6.0" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.6.1" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -395,6 +395,20 @@
       }
       _getParameterCache[name] = { "at": now, "value": value };
       return value;
+   }
+
+   function getParameterCompat(names, fallback = null) {
+      /*
+       *  Canonical name first, then legacy aliases (7.0 storageEngineConcurrent*
+       *  vs wiredTigerConcurrent*). First defined value wins. Missing knobs on
+       *  M0/Flex/old mongod stay fallback.
+       */
+      const list = Array.isArray(names) ? names : [names];
+      for (const name of list) {
+         const value = getParameter(name, undefined);
+         if (value !== undefined) return value;
+      }
+      return fallback;
    }
 
    function isMongos() {
@@ -1278,10 +1292,17 @@
          "hostInfo": hostInfo(),
          "rsStatus": rsStatus(),
          "wiredTigerEngineRuntimeConfig": getParameter('wiredTigerEngineRuntimeConfig', ''),
-         "storageEngineConcurrentReadTransactions": getParameter('wiredTigerConcurrentReadTransactions', null),
-         // "storageEngineConcurrentReadTransactions": getParameter('storageEngineConcurrentReadTransactions', null),
-         "storageEngineConcurrentWriteTransactions": getParameter('wiredTigerConcurrentWriteTransactions', null),
-         // "lowPriorityAdmissionBypassThreshold": getParameter('lowPriorityAdmissionBypassThreshold', null),
+         "storageEngineConcurrentReadTransactions": getParameterCompat([
+            'storageEngineConcurrentReadTransactions', // 7.0+
+            'wiredTigerConcurrentReadTransactions'     // 4.4–6.0; still aliased on 7.0
+         ], null),
+         "storageEngineConcurrentWriteTransactions": getParameterCompat([
+            'storageEngineConcurrentWriteTransactions',
+            'wiredTigerConcurrentWriteTransactions'
+         ], null),
+         "lowPriorityAdmissionBypassThreshold": getParameterCompat([
+            'lowPriorityAdmissionBypassThreshold'
+         ], null),
          // https://www.mongodb.com/docs/manual/reference/command/serverStatus/#mongodb-serverstatus-serverstatus.wiredTiger.concurrentTransactions
          "serverStatus": await serverStatus(SERVER_STATUS_OPT_IN),
          "slowms": slowms()
