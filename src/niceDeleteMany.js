@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.9.2"
+    *  Version: "0.9.3"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.9.2" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.9.3" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -139,8 +139,6 @@
    const HUD_POOL_DISPLAY_MAX_CAP = 64;
    const HUD_MIN_REDRAW_MS = 100;       // TTY refresh throttle
    const HUD_LOG_REDRAW_MS = 1000;      // non-TTY append throttle (avoid log floods)
-   let lastTermCols = 0;
-   let hudResizePending = false;
 
    function termColumns() {
       try {
@@ -247,105 +245,167 @@
    )).replace(ANSI_CSI_RE, '');
    const stripAnsi = stripAnsiMarkup;
 
-   // Pinned HUD: in-place overwrite of its own rows. emit() persists into banner and
-   // lifts the HUD so log lines (curation WARN, batch errors, …) are never clobbered.
-   let hudActive = false;
-   let hudPaintedRows = 0;
-   let redrawHudFn = null;
-
-   function formatEmitArgs(args) {
-      const paint = interactive ? applyAnsiTags : stripAnsiMarkup;
-      return [...args].map(a => (typeof a === 'string' ? paint(a) : a));
-   }
-
-   function emitLineText(args) {
-      // Persist tagged source so TTY resize can re-expand; writeConsole paints.
-      return [...args].map(a => (typeof a === 'string' ? a : String(a))).join(' ');
-   }
-
-   function writeConsole(...args) {
-      console.log(...formatEmitArgs(args));
-   }
-
-   function persistBannerLine(text) {
-      // Resize / non-TTY fallback full-repaints from banner; keep every emit line.
-      if (!interactive) return;
-      const line = String(text ?? '');
-      if (!line) return;
-      if (banner.length && !banner.endsWith('\n')) banner += '\n';
-      banner += line;
-      if (!banner.endsWith('\n')) banner += '\n';
-   }
-
-   function canPinHud() {
-      return !!(interactive && typeof process !== 'undefined' && process.stdout && process.stdout.isTTY);
-   }
-
-   function visualRows(text) {
-      const cols = Math.max(1, termColumns());
-      let rows = 0;
-      for (const line of String(text).split('\n')) {
-         const w = stripAnsi(line).length;
-         rows += Math.max(1, Math.ceil(w / cols));
-      }
-      return rows;
-   }
-
-   function eraseHudRegion() {
-      if (!canPinHud() || hudPaintedRows <= 0) {
-         hudPaintedRows = 0;
-         return;
-      }
-      process.stdout.write(`\x1b[${hudPaintedRows}A\r\x1b[J`);
-      hudPaintedRows = 0;
-   }
-
-   function paintHudRegion(hudText) {
-      const body = String(hudText).replace(/\n+$/, '');
-      process.stdout.write(applyAnsiTags(body) + '\n');
-      hudPaintedRows = visualRows(body);
-   }
-
-   function emit(...args) {
-      persistBannerLine(emitLineText(args));
-      if (interactive && hudActive) {
-         if (canPinHud()) {
-            eraseHudRegion();
-            writeConsole(...args);
-            if (typeof redrawHudFn === 'function') redrawHudFn({ "force": true });
-         } else if (typeof redrawHudFn === 'function') {
-            redrawHudFn({ "force": true, "full": true });
-         } else {
-            writeConsole(...args);
-         }
-         return;
-      }
-      writeConsole(...args);
-   }
-
-   function installHudResizeWatch(onResize) {
+   function createHud({ interactive } = {}) {
       /*
-       *  Node/mongosh expose process.stdout.columns and a 'resize' event.
-       *  On resize: recompute bar widths and full-repaint from banner (persisted emit lines).
+       *  Pin/emit/resize lifecycle. Bar-drawing stays on renderHud / HUD_MARK.
+       *  start({ render }) registers the text builder; emit lifts the pin and
+       *  redraws. stop() drops the pin without erasing the last frame.
        */
-      if (!interactive || typeof process === 'undefined' || !process.stdout || typeof process.stdout.on !== 'function') {
-         return () => {};
+      let hudActive = false;
+      let hudPaintedRows = 0;
+      let lastHudAt = 0;
+      let lastTermCols = 0;
+      let hudResizePending = false;
+      let renderFn = null;
+      let uninstallResize = () => {};
+
+      function formatEmitArgs(args) {
+         const paint = interactive ? applyAnsiTags : stripAnsiMarkup;
+         return [...args].map(a => (typeof a === 'string' ? paint(a) : a));
       }
-      lastTermCols = termColumns();
-      const handler = () => {
-         const cols = termColumns();
-         if (cols === lastTermCols && !hudResizePending) return;
-         lastTermCols = cols;
-         hudResizePending = true;
-         try { onResize(); } finally { hudResizePending = false; }
-      };
-      process.stdout.on('resize', handler);
-      return () => {
-         try { process.stdout.off('resize', handler); } catch(_) {
-            try { process.stdout.removeListener('resize', handler); } catch(__) { /* ignore */ }
+
+      function emitLineText(args) {
+         // Persist tagged source so TTY resize can re-expand; writeConsole paints.
+         return [...args].map(a => (typeof a === 'string' ? a : String(a))).join(' ');
+      }
+
+      function writeConsole(...args) {
+         console.log(...formatEmitArgs(args));
+      }
+
+      function persistBannerLine(text) {
+         // Resize / non-TTY fallback full-repaints from banner; keep every emit line.
+         if (!interactive) return;
+         const line = String(text ?? '');
+         if (!line) return;
+         if (banner.length && !banner.endsWith('\n')) banner += '\n';
+         banner += line;
+         if (!banner.endsWith('\n')) banner += '\n';
+      }
+
+      function canPinHud() {
+         return !!(interactive && typeof process !== 'undefined' && process.stdout && process.stdout.isTTY);
+      }
+
+      function visualRows(text) {
+         const cols = Math.max(1, termColumns());
+         let rows = 0;
+         for (const line of String(text).split('\n')) {
+            const w = stripAnsi(line).length;
+            rows += Math.max(1, Math.ceil(w / cols));
          }
-      };
+         return rows;
+      }
+
+      function eraseHudRegion() {
+         if (!canPinHud() || hudPaintedRows <= 0) {
+            hudPaintedRows = 0;
+            return;
+         }
+         process.stdout.write(`\x1b[${hudPaintedRows}A\r\x1b[J`);
+         hudPaintedRows = 0;
+      }
+
+      function paintHudRegion(hudText) {
+         const body = String(hudText).replace(/\n+$/, '');
+         process.stdout.write(applyAnsiTags(body) + '\n');
+         hudPaintedRows = visualRows(body);
+      }
+
+      function emit(...args) {
+         persistBannerLine(emitLineText(args));
+         if (interactive && hudActive) {
+            if (canPinHud()) {
+               eraseHudRegion();
+               writeConsole(...args);
+               redraw({ "force": true });
+            } else {
+               redraw({ "force": true, "full": true });
+            }
+            return;
+         }
+         writeConsole(...args);
+      }
+
+      function installHudResizeWatch(onResize) {
+         /*
+          *  Node/mongosh expose process.stdout.columns and a 'resize' event.
+          *  On resize: recompute bar widths and full-repaint from banner (persisted emit lines).
+          */
+         if (!interactive || typeof process === 'undefined' || !process.stdout || typeof process.stdout.on !== 'function') {
+            return () => {};
+         }
+         lastTermCols = termColumns();
+         const handler = () => {
+            const cols = termColumns();
+            if (cols === lastTermCols && !hudResizePending) return;
+            lastTermCols = cols;
+            hudResizePending = true;
+            try { onResize(); } finally { hudResizePending = false; }
+         };
+         process.stdout.on('resize', handler);
+         return () => {
+            try { process.stdout.off('resize', handler); } catch(_) {
+               try { process.stdout.removeListener('resize', handler); } catch(__) { /* ignore */ }
+            }
+         };
+      }
+
+      function redraw({ force = false, final = false, full = false } = {}) {
+         if (typeof renderFn !== 'function') return;
+         const now = Date.now();
+         const minMs = interactive ? HUD_MIN_REDRAW_MS : HUD_LOG_REDRAW_MS;
+         // TTY: force refreshes immediately. Log mode: throttle always except first/final.
+         if (!final && lastHudAt !== 0) {
+            if (interactive) {
+               if (!force && (now - lastHudAt) < minMs) return;
+            } else if ((now - lastHudAt) < minMs) {
+               return;
+            }
+         }
+         lastHudAt = now;
+         const hudText = renderFn();
+         if (interactive) {
+            const pin = canPinHud() && !full;
+            if (pin) {
+               eraseHudRegion();
+               paintHudRegion(hudText);
+            } else {
+               console.clear();
+               writeConsole(banner);
+               if (canPinHud()) paintHudRegion(hudText);
+               else writeConsole(hudText);
+            }
+         } else {
+            // Append-only plain status (ANSI stripped via writeConsole); no bars / no clear.
+            writeConsole(hudText);
+         }
+      }
+
+      function start({ render } = {}) {
+         stop();
+         renderFn = typeof render === 'function' ? render : null;
+         hudActive = true;
+         lastHudAt = 0;
+         uninstallResize = installHudResizeWatch(() => {
+            if (!hudActive) return;
+            redraw({ "force": true, "full": true });
+         });
+      }
+
+      function stop() {
+         hudActive = false;
+         renderFn = null;
+         uninstallResize();
+         uninstallResize = () => {};
+      }
+
+      return { emit, redraw, start, stop, writeConsole };
    }
+
+   const hud = createHud({ interactive });
+   function emit(...args) { hud.emit(...args); }
+
    // Same vocabulary as congestionMonitor EQ: literal glyphs + colour tags (JS \xNN is
    // Latin-1 only — multi-byte UTF-8 via \xe2\x96… would not render as ░/▓).
    const HUD_MARK = {
@@ -362,7 +422,6 @@
       "free": '░',            // available within maxInFlight
       "cap": '[K]·[/]'        // bright black / dim AIMD-reserved
    };
-   let lastHudAt = 0;
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
    const _hostInfoCache = { "at": 0, "value": null };
    const _rsStatusCache = { "at": 0, "value": null };
@@ -3268,53 +3327,9 @@
          "buffered": 0
       };
 
-      function redrawHud({ force = false, final = false, full = false } = {}) {
-         const now = Date.now();
-         const minMs = interactive ? HUD_MIN_REDRAW_MS : HUD_LOG_REDRAW_MS;
-         // TTY: force refreshes immediately. Log mode: throttle always except first/final.
-         if (!final && lastHudAt !== 0) {
-            if (interactive) {
-               if (!force && (now - lastHudAt) < minMs) return;
-            } else if ((now - lastHudAt) < minMs) {
-               return;
-            }
-         }
-         lastHudAt = now;
-         const hud = renderHud({
-            "startedAt": startedAt,
-            "batchesDone": batchesDone,
-            "batchesFailed": batchesFailed,
-            "docsDeleted": docsDeleted,
-            "bucketSizeLimit": bucketSizeLimit,
-            "bars": interactive,
-            ...hudSnap
-         });
-         if (interactive) {
-            const pin = canPinHud() && !full;
-            if (pin) {
-               eraseHudRegion();
-               paintHudRegion(hud);
-            } else {
-               console.clear();
-               writeConsole(banner);
-               if (canPinHud()) paintHudRegion(hud);
-               else writeConsole(hud);
-            }
-         } else {
-            // Append-only plain status (ANSI stripped via writeConsole); no bars / no clear.
-            writeConsole(hud);
-         }
-      }
-      redrawHudFn = redrawHud;
-
-      // TTY resize → recompute bar widths and full-repaint from banner (only while HUD is live).
-      const uninstallResize = installHudResizeWatch(() => {
-         if (!hudActive) return;
-         redrawHud({ "force": true, "full": true });
-      });
       try {
          if (interactive) console.clear();
-         writeConsole(banner);
+         hud.writeConsole(banner);
          startupLogDone = true;
          const deletionList = getIds(filter, bucketSizeLimit, readSessionOpts);
          const { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
@@ -3324,8 +3339,20 @@
             emit(interactive
                ? `[blue][INFO][/] HUD: congestion / admission / pool — no % complete or ETA`
                : `[INFO] status: elapsed / congestion / admission / pool (plain, no bars) — no % complete or ETA`);
-            hudActive = true;
-            redrawHud({ "force": true });
+            hud.start({
+               render() {
+                  return renderHud({
+                     "startedAt": startedAt,
+                     "batchesDone": batchesDone,
+                     "batchesFailed": batchesFailed,
+                     "docsDeleted": docsDeleted,
+                     "bucketSizeLimit": bucketSizeLimit,
+                     "bars": interactive,
+                     ...hudSnap
+                  });
+               }
+            });
+            hud.redraw({ "force": true });
             for await (const [, deletedCount, batchOk] of asyncPool(
                prepend(initialBatch, deletionList),
                task => deleteManyTask(task, writeSessionOpts),
@@ -3334,7 +3361,7 @@
                   "admission": admissionCtl,
                   onHud(snap) {
                      hudSnap = snap;
-                     redrawHud();
+                     hud.redraw();
                   }
                }
             )) {
@@ -3345,12 +3372,11 @@
                } else {
                   admissionCtl.noteBatchOk({ "deletedCount": deletedCount ?? 0 });
                }
-               if (interactive) redrawHud({ "force": true });
+               if (interactive) hud.redraw({ "force": true });
             }
-            redrawHud({ "final": true });
-            hudActive = false;
+            hud.redraw({ "final": true });
+            hud.stop();
          }
-         uninstallResize();
          emit(`\nValidating deletion results ...please wait\n`);
          emit('...you may CTRL+C here to exit gracefully if validation is not required\n');
          // countIds uses a primary-oriented session; no connection setReadPref.
@@ -3365,9 +3391,7 @@
          });
          emit('\nDone!');
       } finally {
-         hudActive = false;
-         redrawHudFn = null;
-         uninstallResize();
+         hud.stop();
          vitalsSampling = false;
          await sampler;
          closeShardVitalsClients();
