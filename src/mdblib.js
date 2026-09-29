@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.15.13"
+ *  Version: "0.15.14"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,7 +13,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.15.13"
+      "version": "0.15.14"
 });
 
 /*  Notes:
@@ -151,13 +151,19 @@ function formatLogArgs(args, isTTY) {
 (() => {
    /*
     *  Runtime floors (see Notes). Integer major.minor — 2.10 is not 2.1.
+    *  json output (dbstats options.output.format) must stay a single JSON document.
     */
+   const jsonCli = (typeof options !== 'undefined' && options && options.output && options.output.format === 'json');
    const [, maj, min] = String(version()).match(/^(\d+)\.(\d+)/) || [0, 0, 0];
    const major = +maj, minor = +min;
-   if (!((major === 1 && minor >= 10) || (major === 2 && minor >= 10) || major >= 3))
-      console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
-   if (!serverVer(4.4))
-      console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
+   if (!((major === 1 && minor >= 10) || (major === 2 && minor >= 10) || major >= 3)) {
+      __mdblibShellIncompatible = version();
+      if (!jsonCli) console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
+   }
+   if (!serverVer(4.4)) {
+      __mdblibServerUnsupported = db.version();
+      if (!jsonCli) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
+   }
 })();
 
 // Import crypto module for Node.js/mongosh environments
@@ -433,7 +439,7 @@ function getDBNames(dbFilter = /^.+/) {
                               : [];
    const comment = `list databases with ${__lib.name} v${__lib.version}`;
    if (!(isAtlasPlatform('serverless') || isAtlasPlatform('sharedTier'))) {
-      // ignoring filter on unsupported platforms
+      // Atlas shared/serverless reject listDatabases.filter; client-side regex still applies.
       command.filter = filter;
    }
    if (fCV(4.4)) {
@@ -444,7 +450,9 @@ function getDBNames(dbFilter = /^.+/) {
              ? db.getSiblingDB('admin').runCommand(command, options)
              : db.getSiblingDB('admin').runCommand(command);
 
-   return dbs.databases.map(({ name }) => name).filter(namespace => !restrictedNamespaces.includes(namespace));
+   return dbs.databases.map(({ name }) => name)
+      .filter(namespace => !restrictedNamespaces.includes(namespace))
+      .filter(namespace => filterRegex.test(namespace));
 };
 
 /*
@@ -1516,15 +1524,51 @@ function $benford() { // TBA
    return array;
 }
 
+function isUnauthorizedError(e) {
+   if (!e) return false;
+   if (e.codeName == 'Unauthorized') return true;
+   if (+e.code === 13) return true; // Unauthorized
+   const msg = e.errmsg || e.message || String(e);
+   return /not authorized|unauthorized/i.test(msg);
+}
+
+function commandErrorMessage(e) {
+   if (!e) return 'unknown error';
+   return e.codeName || e.errmsg || e.message || String(e);
+}
+
 function $stats(dbName = db.getName()) {
    /*
     *  stats() wrapper
     */
-   let stats = db.getSiblingDB(dbName).stats( // max precision due to SERVER-69036
-      // MONGOSH-1108 (mongosh v1.2.0) & SERVER-62277 (mongod v5.0.6)
-      (serverVer('5.0.6') && shellVer(1.2))
-      ? { "freeStorage": 1, "scale": 1 } : 1
-   );
+   let stats;
+   try {
+      stats = db.getSiblingDB(dbName).stats( // max precision due to SERVER-69036
+         // MONGOSH-1108 (mongosh v1.2.0) & SERVER-62277 (mongod v5.0.6)
+         (serverVer('5.0.6') && shellVer(1.2))
+         ? { "freeStorage": 1, "scale": 1 } : 1
+      );
+   } catch(e) {
+      return {
+         "name": dbName,
+         "collections": 0,
+         "indexes": 0,
+         "views": 0,
+         "nviews": 0,
+         "namespaces": 0,
+         "objects": 0,
+         "orphans": 0,
+         "dataSize": 0,
+         "storageSize": 0,
+         "indexSize": 0,
+         "freeStorageSize": null,
+         "indexFreeStorageSize": null,
+         "totalIndexBytesReusable": null,
+         "scaleFactor": 1,
+         "statsError": commandErrorMessage(e),
+         "unauthorized": isUnauthorizedError(e)
+      };
+   }
    stats.name = dbName;
    delete stats.db;
    // Atlas M0/Flex hide WT free-space; a 0 here is not an empty free list.
@@ -1595,6 +1639,9 @@ function $collStats(dbName = db.getName(), collName = '') {
       "allowDiskUse": true,
       "cursor": { "batchSize": 1 }, // eliminates getMore roundtrip, we expect only a single document
       "readConcern": { "level": "local" },
+      "readPreference": (typeof readPref !== 'undefined') ? readPref
+                      : (hello().secondary) ? 'secondaryPreferred'
+                      : 'primaryPreferred',
       "comment": `run by ${__lib.name} sharding compatible $collStats wrapper`
    };
    const pipeline = [
@@ -1854,13 +1901,13 @@ function $collStats(dbName = db.getName(), collName = '') {
    ];
    let results;
 
-   function unauthorizedStub() {
+   function collStatsStub(tag, e) {
       /*
-       *  Legacy mongo often has code 13 / errmsg only — no codeName.
        *  Keep collName so printers are not blank when MetaStats gets defaults.
+       *  (unauthorized) = authz; (unavailable) = any other collStats failure.
        */
       return {
-         "name": `${collName} (unauthorized)`,
+         "name": `${collName} (${tag})`,
          "nodes": 0,
          "shards": [],
          "dataSize": 0,
@@ -1875,26 +1922,15 @@ function $collStats(dbName = db.getName(), collName = '') {
          "nindexes": 0,
          "indexes": [],
          "totalIndexSize": 0,
-         "totalIndexBytesReusable": null
+         "totalIndexBytesReusable": null,
+         "statsError": commandErrorMessage(e)
       };
-   }
-
-   function isUnauthorizedError(e) {
-      if (!e) return false;
-      if (e.codeName == 'Unauthorized') return true;
-      if (+e.code === 13) return true; // Unauthorized
-      const msg = e.errmsg || e.message || String(e);
-      return /not authorized|unauthorized/i.test(msg);
    }
 
    try {
       results = namespace.aggregate(pipeline, options).toArray()[0];
    } catch(e) {
-      if (isUnauthorizedError(e)) {
-         results = unauthorizedStub();
-      } else {
-         throw e;
-      }
+      results = collStatsStub(isUnauthorizedError(e) ? 'unauthorized' : 'unavailable', e);
    }
 
    return results;
