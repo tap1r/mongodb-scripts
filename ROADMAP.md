@@ -408,6 +408,7 @@ Remaining mongosh-line work (do not block the archive):
 
 - Better sharding: per-shard WT vitals via `listShards` / discovery.
 - `lowPriorityAdmissionBypassThreshold` backward compatibility.
+- Fallback hint: match `queryPlanner` ranked plans (`winningPlan` / `rejectedPlans`) to indexes that stay IXSCAN-without-SORT. The planner already ranks efficiency; pick the first ranked plan whose index is in that viable set. Policy A/B currently take the first IXSCAN-without-SORT in probe order.
 
 ### `connStats.js`
 
