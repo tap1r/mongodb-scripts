@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.11.1"
+    *  Version: "0.11.2"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.11.1" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.11.2" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -84,48 +84,7 @@
    const SHARD_VITALS_SAMPLE_INTERVAL_MS = 2000; // collection-owning shard primaries (1–5s band)
    const SHARD_CONNECT_TIMEOUT_MS = 5000;
    const SHARD_VITALS_MISS_STRIKES = 3; // consecutive mid-run misses before latching pace
-   // EWMA: α=0.2 ≈ half-life ~0.3s at 100ms samples (reduces single-sample admission chatter).
-   const EWMA_ALPHA = 0.2;
-   const ewma = {
-      "cacheUtil": null,
-      "dirtyUtil": null,
-      "dirtyUpdatesUtil": null,
-      "wtWriteTicketsUtil": null
-   };
-   // Admission FSM: trip CLOSED at *Trigger; release only at/under *Target (hysteresis).
-   const ADMISSION_COOLDOWN_MS = 1000;
-   const THROTTLE_DELAY_MIN_MS = 20;
-   const THROTTLE_DELAY_MAX_MS = 100; // at *Trigger edge within the soft band
-   // Soft-band split (fillProgress 0 at *Target → 1 at *Trigger):
-   //   below ENTER → stay OPEN with light progressive delay
-   //   at/above ENTER → THROTTLE; leave only below LEAVE (hysteresis)
-   const THROTTLE_ENTER_FRAC = 0.5; // midpoint of soft band (~12.5% if tgt 5 / trig 20)
-   const THROTTLE_LEAVE_FRAC = 0.4;
-   // mongos / no-WT: paceMaker replaces fixed jitter (see createAdmissionController).
-   const PACE_WARMUP_DELAY_MIN_MS = 20; // warm-up only until pace EWMA exists
-   const PACE_WARMUP_DELAY_MAX_MS = 50;
-   // AIMD concurrency: MD on enter CLOSED; AI while sustained OPEN (hold in THROTTLE/COOLDOWN).
-   const AIMD_INCREASE_INTERVAL_MS = 500;
-   // Hybrid repl-lag bands (seconds): soft → THROTTLE; hard → CLOSED. No EWMA (sticky rsStatus).
-   const REPL_LAG_SOFT_SEC = 15;
-   const REPL_LAG_HARD_SEC = 30;
-   // paceMaker (pace / no-WT only): EWMA clear-rate → AIMD maxInFlight + light delay.
-   // Rate samples use wall-clock windows + actual deletedCount (not drain-time clustering).
-   const PACE_EWMA_ALPHA = 0.2;
-   const PACE_AIMD_INCREASE_INTERVAL_MS = 1000; // slower probes — prefer mild stalls over peak rate
-   const PACE_MD_COOLDOWN_MS = 2000;            // longer settle after MD
-   const PACE_AI_GRACE_MS = 2000;              // longer settle after +1 before judging / next probe
-   const PACE_AI_MIN_IMPROVE = 0.05; // probe must raise EWMA ≥5% or hold (harder climb)
-   const PACE_DROP_FRAC = 0.75;     // slightly earlier MD when goodput softens
-   const PACE_MD_STRIKES = 2;       // consecutive bad windows before MD
-   const PACE_DELAY_MIN_MS = 12;    // light pacing floor (15 was a touch heavy)
-   const PACE_DELAY_MAX_MS = 80;
-   const PACE_DELAY_JITTER = 0.10;  // ±10% desync (was ±15% — slightly tighter cadence)
-   const PACE_MIN_SAMPLE_MS = 500;  // wall-clock window — absorbs clustered consumer notes
-   const PACE_INSTANT_CAP_MULT = 2.0; // clamp instant vs max(ewma, peak)
-   const PACE_PEAK_DECAY = 0.99;    // per accepted sample — forget stale spikes
-   const PACE_MAX_IN_FLIGHT_CAP = 4; // hard ceiling for pace mode — half-pool oversubscribed M0
-   // Admission FSM + paceMaker state lives on admissionCtl (createAdmissionController).
+
    let startupLogDone = false; // after writeConsole(banner); attach WARN is banner-only until then
    let shardVitalsClients = []; // [{ id, mongo, admin }, ...] collection-owning shard primaries
    let shardVitalsEnabled = false;
@@ -2348,6 +2307,49 @@
       return snap;
    }
 
+   // EWMA: α=0.2 ≈ half-life ~0.3s at 100ms samples (reduces single-sample admission chatter).
+   const EWMA_ALPHA = 0.2;
+   const ewma = {
+      "cacheUtil": null,
+      "dirtyUtil": null,
+      "dirtyUpdatesUtil": null,
+      "wtWriteTicketsUtil": null
+   };
+   // Admission FSM: trip CLOSED at *Trigger; release only at/under *Target (hysteresis).
+   const ADMISSION_COOLDOWN_MS = 1000;
+   const THROTTLE_DELAY_MIN_MS = 20;
+   const THROTTLE_DELAY_MAX_MS = 100; // at *Trigger edge within the soft band
+   // Soft-band split (fillProgress 0 at *Target → 1 at *Trigger):
+   //   below ENTER → stay OPEN with light progressive delay
+   //   at/above ENTER → THROTTLE; leave only below LEAVE (hysteresis)
+   const THROTTLE_ENTER_FRAC = 0.5; // midpoint of soft band (~12.5% if tgt 5 / trig 20)
+   const THROTTLE_LEAVE_FRAC = 0.4;
+   // mongos / no-WT: paceMaker replaces fixed jitter (see createAdmissionController).
+   const PACE_WARMUP_DELAY_MIN_MS = 20; // warm-up only until pace EWMA exists
+   const PACE_WARMUP_DELAY_MAX_MS = 50;
+   // AIMD concurrency: MD on enter CLOSED; AI while sustained OPEN (hold in THROTTLE/COOLDOWN).
+   const AIMD_INCREASE_INTERVAL_MS = 500;
+   // Hybrid repl-lag bands (seconds): soft → THROTTLE; hard → CLOSED. No EWMA (sticky rsStatus).
+   const REPL_LAG_SOFT_SEC = 15;
+   const REPL_LAG_HARD_SEC = 30;
+   // paceMaker (pace / no-WT only): EWMA clear-rate → AIMD maxInFlight + light delay.
+   // Rate samples use wall-clock windows + actual deletedCount (not drain-time clustering).
+   const PACE_EWMA_ALPHA = 0.2;
+   const PACE_AIMD_INCREASE_INTERVAL_MS = 1000; // slower probes — prefer mild stalls over peak rate
+   const PACE_MD_COOLDOWN_MS = 2000;            // longer settle after MD
+   const PACE_AI_GRACE_MS = 2000;              // longer settle after +1 before judging / next probe
+   const PACE_AI_MIN_IMPROVE = 0.05; // probe must raise EWMA ≥5% or hold (harder climb)
+   const PACE_DROP_FRAC = 0.75;     // slightly earlier MD when goodput softens
+   const PACE_MD_STRIKES = 2;       // consecutive bad windows before MD
+   const PACE_DELAY_MIN_MS = 12;    // light pacing floor (15 was a touch heavy)
+   const PACE_DELAY_MAX_MS = 80;
+   const PACE_DELAY_JITTER = 0.10;  // ±10% desync (was ±15% — slightly tighter cadence)
+   const PACE_MIN_SAMPLE_MS = 500;  // wall-clock window — absorbs clustered consumer notes
+   const PACE_INSTANT_CAP_MULT = 2.0; // clamp instant vs max(ewma, peak)
+   const PACE_PEAK_DECAY = 0.99;    // per accepted sample — forget stale spikes
+   const PACE_MAX_IN_FLIGHT_CAP = 4; // hard ceiling for pace mode — half-pool oversubscribed M0
+   // Admission FSM + paceMaker state lives on admissionCtl (createAdmissionController).
+
    function ewmaStep(prev, sample, alpha = EWMA_ALPHA) {
       if (sample == null || Number.isNaN(+sample)) return prev;
       sample = +sample;
@@ -2415,48 +2417,6 @@
       const delay = THROTTLE_DELAY_MIN_MS + (THROTTLE_DELAY_MAX_MS - THROTTLE_DELAY_MIN_MS) * t;
       const jitter = 0.8 + Math.random() * 0.4;
       return Math.floor(delay * jitter);
-   }
-
-   async function vitalsSampler(intervalMs = VITALS_SAMPLE_INTERVAL_MS) {
-      /*
-       *  Vitals are sampled on a background loop (decoupled from task scheduling);
-       *  EWMA is updated here; wtAdmissionControl reads the smoothed series.
-       *  Sleeps first so the caller's initial sample is not immediately repeated.
-       *  On mongos, sample collection-owning shard primaries (owners refreshed
-       *  each tick); consecutive misses retry, then latch to paceMaker. Last
-       *  good vitals stay in force between misses.
-       */
-      while (vitalsSampling) {
-         const waitMs = shardVitalsEnabled ? SHARD_VITALS_SAMPLE_INTERVAL_MS : intervalMs;
-         await sleep(waitMs);
-         if (!vitalsSampling) break;
-         try {
-            if (shardVitalsEnabled) {
-               const next = await sampleOwningShardVitals();
-               if (!next.ok) {
-                  if (noteShardVitalsMiss(next.detail)) break;
-                  continue;
-               }
-               shardVitalsMissStrikes = 0;
-               const cores = vitals?.numCores;
-               vitals = next.vitals;
-               if (cores != null) vitals.numCores = cores;
-               updateEwma(vitals);
-            } else {
-               // adminCommand → primary; no connection readPreference involved.
-               vitals = await congestionMonitor();
-               updateEwma(vitals);
-            }
-         } catch(e) {
-            if (shardVitalsEnabled) {
-               if (noteShardVitalsMiss(
-                  `mongos: collection-owning shard primary unreachable (${redactMessage(e?.message ?? e)}) — using paceMaker admission; maxInFlight capped`
-               )) break;
-            } else {
-               emit('[red][WARN][/] [yellow]vitals sample failed[/]:', redactMessage(e?.message ?? e));
-            }
-         }
-      }
    }
 
    function createAdmissionController() {
@@ -3018,6 +2978,48 @@
          };
       }
       throw new Error(`unknown session kind: ${kind}`);
+   }
+
+   async function vitalsSampler(intervalMs = VITALS_SAMPLE_INTERVAL_MS) {
+      /*
+       *  Vitals are sampled on a background loop (decoupled from task scheduling);
+       *  EWMA is updated here; wtAdmissionControl reads the smoothed series.
+       *  Sleeps first so the caller's initial sample is not immediately repeated.
+       *  On mongos, sample collection-owning shard primaries (owners refreshed
+       *  each tick); consecutive misses retry, then latch to paceMaker. Last
+       *  good vitals stay in force between misses.
+       */
+      while (vitalsSampling) {
+         const waitMs = shardVitalsEnabled ? SHARD_VITALS_SAMPLE_INTERVAL_MS : intervalMs;
+         await sleep(waitMs);
+         if (!vitalsSampling) break;
+         try {
+            if (shardVitalsEnabled) {
+               const next = await sampleOwningShardVitals();
+               if (!next.ok) {
+                  if (noteShardVitalsMiss(next.detail)) break;
+                  continue;
+               }
+               shardVitalsMissStrikes = 0;
+               const cores = vitals?.numCores;
+               vitals = next.vitals;
+               if (cores != null) vitals.numCores = cores;
+               updateEwma(vitals);
+            } else {
+               // adminCommand → primary; no connection readPreference involved.
+               vitals = await congestionMonitor();
+               updateEwma(vitals);
+            }
+         } catch(e) {
+            if (shardVitalsEnabled) {
+               if (noteShardVitalsMiss(
+                  `mongos: collection-owning shard primary unreachable (${redactMessage(e?.message ?? e)}) — using paceMaker admission; maxInFlight capped`
+               )) break;
+            } else {
+               emit('[red][WARN][/] [yellow]vitals sample failed[/]:', redactMessage(e?.message ?? e));
+            }
+         }
+      }
    }
 
    async function attachVitals() {
