@@ -404,9 +404,7 @@ Remaining mongosh-line work (do not block the archive):
 
 **Legacy archive line: v0.4.11** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). `--eval` must use `var` (not `let`/`const`). Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`. Post-freeze feature work proceeds on the mongosh line only.
 
-Remaining mongosh-line work (do not block the archive):
-
-- Better sharding: per-shard WT vitals via `listShards` / discovery.
+Remaining mongosh-line work (do not block the archive): none currently. Per-shard WT admission samples collection-owning shard primaries (worst-shard fold) and uses paceMaker if any of those shards is unreachable.
 
 ### `connStats.js`
 
