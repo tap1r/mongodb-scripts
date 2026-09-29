@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.21"
+    *  Version: "0.5.0"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,6 +25,7 @@
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
     *  - Atlas M0/Flex (no WT vitals) always walk _id via find(); leftover window SORT cannot spill
     *  - "pace" admission mode when WT cache vitals are unavailable (mongos/Atlas M0/Flex)
+    *  - Repl lag: lastCommittedOpTime (majority commit point) when rs.status is available; else lastWrite vs majorityWriteDate (M0/Flex)
     *  - Progress HUD shows congestion, admission, and pool utilization only — ETA is not cheap
     *  - HUD is pinned below the log; emit lines persist and are never clobbered by redraws
     *
@@ -32,9 +33,6 @@
     *  - better sharding (per-shard WT vitals via listShards / discovery)
     *  - revise lowPriorityAdmissionBypassThreshold for backward compatibility
     *  - refine curation order (Policy B: compound equality→trailing sort probes)
-    *  - majority commit lag proxy when rs.status() is unavailable (M0/Flex:
-    *    serverStatus.repl.lastWrite lastWriteDate vs majorityWriteDate);
-    *    optional metrics.getLastError.wtime on dedicated (not in M0 allowlist)
     */
 
    // Syntax: mongosh [connection options] [--quiet] [--eval 'var dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>, interactive = <bool>;'] [-f|--file] </path/to/>niceDeleteMany.js
@@ -67,7 +65,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.21" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.5.0" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -377,6 +375,7 @@
       "mem": true,
       "metrics": true,
       "queues": true,
+      "repl": true, // lastWrite / majorityWriteDate when rs.status is unavailable
       "storageEngine": true,
       "tenantMigrations": true,
       "tcmalloc": true, // 2 for more debugging
@@ -1067,6 +1066,53 @@
          return hostInfo;
       }
 
+      function timestampSec(ts) {
+         if (ts == null) return null;
+         if (typeof ts.t === 'number') return ts.t;
+         if (ts.t != null && ts.i != null) return Number(ts.t);
+         return null;
+      }
+
+      function majorityCommitLagSeconds(rsSt, ss) {
+         /*
+          *  Seconds the majority commit point / secondaries trail applied optime
+          *  (same proxy as onlineDefrag.js replLag). Do not use optimeDate min/max
+          *  (heartbeat alignment → false 0). Atlas M0/Flex: lastWriteDate vs
+          *  majorityWriteDate from serverStatus.repl.lastWrite.
+          */
+         let lag = 0, n = 0;
+         const applied = timestampSec(rsSt?.optimes?.appliedOpTime?.ts ?? rsSt?.optimes?.writtenOpTime?.ts);
+         const committed = timestampSec(rsSt?.optimes?.lastCommittedOpTime?.ts);
+         if (applied != null && committed != null) {
+            n++;
+            lag = Math.max(lag, applied - committed);
+         }
+         const members = rsSt?.members;
+         if (Array.isArray(members) && members.length) {
+            const now = rsSt.date ? +new Date(rsSt.date) : Date.now();
+            const primary = members.find(m => m.health && m.stateStr === 'PRIMARY');
+            const p = timestampSec(primary?.optime?.ts ?? primary?.optime)
+               ?? (primary?.optimeDate != null ? +new Date(primary.optimeDate) / 1000 : null);
+            if (p != null) {
+               for (const m of members) {
+                  if (!m.health || m.stateStr !== 'SECONDARY') continue;
+                  if (m.lastHeartbeat && now - +new Date(m.lastHeartbeat) > 4000) continue;
+                  const s = timestampSec(m.optime?.ts ?? m.optime)
+                     ?? (m.optimeDate != null ? +new Date(m.optimeDate) / 1000 : null);
+                  if (s == null) continue;
+                  n++;
+                  lag = Math.max(lag, p - s);
+               }
+            }
+         }
+         if (n) return Math.max(0, lag);
+         const lastWrite = ss?.repl?.lastWrite;
+         const last = lastWrite?.lastWriteDate;
+         const maj = lastWrite?.majorityWriteDate;
+         if (last == null || maj == null) return 0;
+         return Math.max(0, (new Date(last) - new Date(maj)) / 1000);
+      }
+
       function rsStatus() {
          // Member set/health changes slowly; optimes move faster. TTL balances lag freshness vs rs.status() cost.
          const now = Date.now();
@@ -1344,25 +1390,8 @@
                  : (this.checkpointRuntimeRatio > 100) ? 'high'
                  : 'medium';
          },
-         get activeReplLag() { // highest lag among healthy members (rs.status optimeDate)
-            // TBA: M0/Flex lastWrite vs majorityWriteDate; dedicated GLE wtime
-            const members = this.rsStatus?.members;
-            if (!Array.isArray(members) || members.length === 0) return 0;
-            const opTimers = members.map(({
-               stateStr,
-               health,
-               optimeDate
-            } = {}) => {
-               return {
-                  "stateStr": stateStr,
-                  "health": health,
-                  "optimeDate": optimeDate
-               };
-            }).filter(({ health, stateStr }) => {
-               return (health && (stateStr === 'PRIMARY' || stateStr === 'SECONDARY'));
-            }).map(({ optimeDate }) => optimeDate).filter(optimeDate => optimeDate != null);
-            if (opTimers.length === 0) return 0;
-            return +((Math.max(...opTimers) - Math.min(...opTimers)) / 1000).toFixed(0);
+         get activeReplLag() {
+            return +majorityCommitLagSeconds(this.rsStatus, this.serverStatus).toFixed(0);
          },
          get replLagStatus() {
             return (this.activeReplLag < this.heartbeatIntervalMillis / 1000) ? 'low'
@@ -1859,6 +1888,11 @@
       const now = Date.now();
       paceMakerAimd(now);
 
+      let lag = 0;
+      try { lag = +(vitals.activeReplLag) || 0; } catch(_) { /* no vitals yet */ }
+      const hardLag = lag >= REPL_LAG_HARD_SEC;
+      const softLag = lag >= REPL_LAG_SOFT_SEC;
+
       let delayMs;
       if (paceEwmaRate == null || pacePeakRate == null || !(pacePeakRate > 0)) {
          delayMs = paceWarmupDelay(); // warm-up
@@ -1869,16 +1903,17 @@
          const j = PACE_DELAY_JITTER;
          delayMs = Math.floor(delayMs * ((1 - j) + Math.random() * (2 * j)));
       }
+      if (softLag) delayMs = Math.max(delayMs, PACE_DELAY_MAX_MS);
 
       return {
          "state": admissionState,
-         "proceed": true,
-         "delayMs": delayMs,
+         "proceed": !hardLag,
+         "delayMs": hardLag ? 0 : delayMs,
          "maxInFlight": maxInFlight,
          "paceRate": paceEwmaRate,
          "pacePeak": pacePeakRate,
          "paceWall": paceInWall,
-         "replLag": 0,
+         "replLag": lag,
          "flowControl": false,
          "indexBuilds": false,
          "backupCursor": false
