@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.7.1"
+    *  Version: "0.7.2"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,7 +25,7 @@
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
     *  - Atlas M0/Flex (no WT vitals) always walk _id via find(); leftover window SORT cannot spill
-    *  - On mongos: WT admission from collection-owning shard primaries (worst-shard fold); paceMaker if any of those shards is unreachable
+    *  - On mongos: WT admission from collection-owning shard primaries (worst-shard fold); paceMaker if any of those shards is unreachable at attach, or after consecutive mid-run misses
     *  - "pace" admission mode when WT cache vitals are unavailable (unreachable shards / Atlas M0/Flex)
     *  - Repl lag: lastCommittedOpTime (majority commit point) when rs.status is available; else lastWrite vs majorityWriteDate (M0/Flex)
     *  - Progress HUD shows congestion, admission, and pool utilization only — ETA is not cheap
@@ -63,7 +63,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.7.1" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.7.2" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -79,6 +79,7 @@
    const VITALS_SAMPLE_INTERVAL_MS = 100;
    const SHARD_VITALS_SAMPLE_INTERVAL_MS = 2000; // collection-owning shard primaries (1–5s band)
    const SHARD_CONNECT_TIMEOUT_MS = 5000;
+   const SHARD_VITALS_MISS_STRIKES = 3; // consecutive mid-run misses before latching pace
    // EWMA: α=0.2 ≈ half-life ~0.3s at 100ms samples (reduces single-sample admission chatter).
    const EWMA_ALPHA = 0.2;
    const ewma = {
@@ -133,6 +134,7 @@
    let paceDetail = null;
    let shardVitalsClients = []; // [{ id, mongo, admin }, ...] collection-owning shard primaries
    let shardVitalsEnabled = false;
+   let shardVitalsMissStrikes = 0;
    let lastCuration = { "mode": "scan", "hint": {} }; // Policy A result for residual countIds
    let paceEwmaRate = null;       // docs/sec EWMA of successful clear rate
    let pacePeakRate = null;       // best EWMA observed (goodput high-water)
@@ -782,6 +784,24 @@
       }
       shardVitalsClients = [];
       shardVitalsEnabled = false;
+      shardVitalsMissStrikes = 0;
+   }
+
+   function noteShardVitalsMiss(latchDetail) {
+      /*
+       *  Mid-run only. Attach-time unreachable still latches immediately.
+       *  Consecutive misses (stepdown / brief network) keep last vitals;
+       *  latch to paceMaker once SHARD_VITALS_MISS_STRIKES is reached.
+       */
+      shardVitalsMissStrikes += 1;
+      if (shardVitalsMissStrikes < SHARD_VITALS_MISS_STRIKES) {
+         emit(`[red][WARN][/] [yellow]mongos: collection-owning shard vitals miss ${shardVitalsMissStrikes}/${SHARD_VITALS_MISS_STRIKES} — retrying[/]`);
+         return false;
+      }
+      enablePaceAdmission('mongos', latchDetail);
+      closeShardVitalsClients();
+      vitalsSampling = false;
+      return true;
    }
 
    function evictionConfigFromWterc(wterc = '') {
@@ -2503,7 +2523,8 @@
        *  Vitals are sampled on a background loop (decoupled from task scheduling);
        *  EWMA is updated here; admissionControl reads the smoothed series.
        *  Sleeps first so the caller's initial sample is not immediately repeated.
-       *  On mongos, sample collection-owning shard primaries; any miss → pace.
+       *  On mongos, sample collection-owning shard primaries; consecutive misses
+       *  retry, then latch to paceMaker. Last good vitals stay in force between misses.
        */
       while (vitalsSampling) {
          const waitMs = shardVitalsEnabled ? SHARD_VITALS_SAMPLE_INTERVAL_MS : intervalMs;
@@ -2513,11 +2534,10 @@
             if (shardVitalsEnabled) {
                const next = await sampleOwningShardVitals();
                if (!next.ok) {
-                  enablePaceAdmission('mongos', next.detail);
-                  closeShardVitalsClients();
-                  vitalsSampling = false;
-                  break;
+                  if (noteShardVitalsMiss(next.detail)) break;
+                  continue;
                }
+               shardVitalsMissStrikes = 0;
                const cores = vitals?.numCores;
                vitals = next.vitals;
                if (cores != null) vitals.numCores = cores;
@@ -2528,15 +2548,12 @@
                updateEwma(vitals);
             }
          } catch(e) {
-            emit('[red][WARN][/] [yellow]vitals sample failed[/]:', redactMessage(e?.message ?? e));
             if (shardVitalsEnabled) {
-               enablePaceAdmission(
-                  'mongos',
+               if (noteShardVitalsMiss(
                   `mongos: collection-owning shard primary unreachable (${redactMessage(e?.message ?? e)}) — using paceMaker admission; maxInFlight capped`
-               );
-               closeShardVitalsClients();
-               vitalsSampling = false;
-               break;
+               )) break;
+            } else {
+               emit('[red][WARN][/] [yellow]vitals sample failed[/]:', redactMessage(e?.message ?? e));
             }
          }
       }
