@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.7.10"
+    *  Version: "0.7.11"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -66,7 +66,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.7.10" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.7.11" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -717,16 +717,22 @@
       const rawUri = (typeof mongo.getURI === 'function' ? mongo.getURI() : mongo._uri) || '';
       if (!rawUri || typeof rawUri !== 'string') throw new Error('missing parent URI');
       const isSrv = /^mongodb\+srv:/i.test(rawUri);
-      const url = new URL(rawUri.replace(/^mongodb\+srv:/i, 'mongodb:'));
+      const stripped = rawUri.replace(/^mongodb\+srv:/i, 'mongodb:');
+      const url = new URL(stripped);
       const searchParams = new URLSearchParams(url.searchParams);
       searchParams.delete('srvMaxHosts');
       searchParams.delete('srvServiceName');
+      // Seed list / SRV hostname (WHATWG url.host is the first host only).
+      const authority = stripped.replace(/^mongodb:\/\//i, '').split(/[/?]/, 1)[0];
+      const at = authority.lastIndexOf('@');
+      const hosts = (at >= 0 ? authority.slice(at + 1) : authority) || url.host || '';
       return {
          "isSrv": isSrv,
          "username": url.username || '',
          "password": url.password || '',
          "pathname": url.pathname && url.pathname.length ? url.pathname : '/',
-         "searchParams": searchParams
+         "searchParams": searchParams,
+         "hosts": hosts
       };
    }
 
@@ -1466,12 +1472,7 @@
        *  mongos hello often omits me/host — fall back here for landing INFO.
        */
       try {
-         const mongo = db.getMongo();
-         const uri = (typeof mongo.getURI === 'function' ? mongo.getURI() : null) ?? mongo._uri;
-         if (!uri || typeof uri !== 'string') return null;
-         const noAuth = uri.replace(/\/\/[^@/]+@/, '//');
-         const m = noAuth.match(/^mongodb(?:\+srv)?:\/\/([^/?]+)/i);
-         return m?.[1] || null;
+         return parentConnectionParts().hosts || null;
       } catch(_) {
          return null;
       }
