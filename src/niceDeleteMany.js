@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.12.3"
+    *  Version: "0.12.4"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.12.3" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.12.4" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -2608,16 +2608,10 @@
             || hardLag
             || activeFlowControl
             || backupCursorOpen;
-         // Upper soft band (or lag / index builds / range deleter) → yellow THROTTLE.
-         const upperSoftPressure = softFill >= THROTTLE_ENTER_FRAC
-            || softLag
-            || activeIndexBuilds
-            || activeRangeDeleter;
-         // Leave THROTTLE once below leave frac (hysteresis) and lag/index/range clear.
-         const leaveThrottleOk = softFill < THROTTLE_LEAVE_FRAC
-            && !softLag
-            && !activeIndexBuilds
-            && !activeRangeDeleter;
+         // Soft lag / index builds / range deleter: same THROTTLE band (never CLOSED).
+         const throttleHold = softLag || activeIndexBuilds || activeRangeDeleter;
+         const upperSoftPressure = softFill >= THROTTLE_ENTER_FRAC || throttleHold;
+         const leaveThrottleOk = softFill < THROTTLE_LEAVE_FRAC && !throttleHold;
          // Lower soft band: stay OPEN but apply light progressive delay.
          const lowerSoftPace = softFill > 0 && softFill < THROTTLE_ENTER_FRAC;
          // CLOSED release still requires at/under *Target (full hysteresis to trigger).
@@ -2627,7 +2621,7 @@
             && activeReplLag < REPL_LAG_HARD_SEC
             && !activeFlowControl
             && !backupCursorOpen;
-         const blockAimdIncrease = softLag || activeIndexBuilds || activeRangeDeleter || softFill >= THROTTLE_ENTER_FRAC;
+         const blockAimdIncrease = throttleHold || softFill >= THROTTLE_ENTER_FRAC;
 
          const bandDelayOpts = {
             evictionDirtyTarget,
