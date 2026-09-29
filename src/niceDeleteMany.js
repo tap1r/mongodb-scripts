@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.6.2"
+    *  Version: "0.7.0"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,8 +11,7 @@
     *  Legacy archive line: v0.4.11 is the snapshot for this script. mongosh-only
     *  (async IIFE, optional chaining; incompatible with legacy mongo). Still
     *  the demarked version for the whole-tree freeze. Further feature work
-    *  (per-shard WT via discovery) targets mongosh; see
-    *  ROADMAP.md → Legacy mongo shell retirement.
+    *  targets mongosh; see ROADMAP.md → Legacy mongo shell retirement.
     *
     *  Notes:
     *  - mongosh only. Do not top-level-await this IIFE.
@@ -26,13 +25,11 @@
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
     *  - Atlas M0/Flex (no WT vitals) always walk _id via find(); leftover window SORT cannot spill
-    *  - "pace" admission mode when WT cache vitals are unavailable (mongos/Atlas M0/Flex)
+    *  - On mongos: WT admission from collection-owning shard primaries (worst-shard fold); paceMaker if any of those shards is unreachable
+    *  - "pace" admission mode when WT cache vitals are unavailable (unreachable shards / Atlas M0/Flex)
     *  - Repl lag: lastCommittedOpTime (majority commit point) when rs.status is available; else lastWrite vs majorityWriteDate (M0/Flex)
     *  - Progress HUD shows congestion, admission, and pool utilization only — ETA is not cheap
     *  - HUD is pinned below the log; emit lines persist and are never clobbered by redraws
-    *
-    *  TODOs:
-    *  - better sharding (per-shard WT vitals via listShards / discovery)
     */
 
    // Syntax: mongosh [connection options] [--quiet] [--eval 'var dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>, interactive = <bool>;'] [-f|--file] </path/to/>niceDeleteMany.js
@@ -65,7 +62,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.6.2" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.7.0" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -79,6 +76,8 @@
    const SLOWMS_CACHE_TTL_MS = 60 * 1000;
    const GET_PARAMETER_CACHE_TTL_MS = 60 * 1000;
    const VITALS_SAMPLE_INTERVAL_MS = 100;
+   const SHARD_VITALS_SAMPLE_INTERVAL_MS = 2000; // collection-owning shard primaries (1–5s band)
+   const SHARD_CONNECT_TIMEOUT_MS = 5000;
    // EWMA: α=0.2 ≈ half-life ~0.3s at 100ms samples (reduces single-sample admission chatter).
    const EWMA_ALPHA = 0.2;
    const ewma = {
@@ -126,9 +125,13 @@
    let maxInFlight = 1;
    let aimdLastIncreaseAt = 0;
    let closedSince = 0;
-   // 'wt' = WiredTiger FSM on mongod; 'pace' = paceMaker when WT vitals unavailable.
+   // 'wt' = WiredTiger FSM (mongod, or worst collection-owning shard on mongos);
+   // 'pace' = paceMaker when WT vitals unavailable.
    let admissionMode = 'wt';
    let paceReason = null; // 'mongos' | 'no-wt' | null
+   let paceDetail = null;
+   let shardVitalsClients = []; // [{ id, mongo, admin }, ...] collection-owning shard primaries
+   let shardVitalsEnabled = false;
    let lastCuration = { "mode": "scan", "hint": {} }; // Policy A result for residual countIds
    let paceEwmaRate = null;       // docs/sec EWMA of successful clear rate
    let pacePeakRate = null;       // best EWMA observed (goodput high-water)
@@ -419,9 +422,17 @@
    }
 
    function enablePaceAdmission(reason, detail) {
+      const switchingFromWt = admissionMode === 'wt';
       admissionMode = 'pace';
       paceReason = reason;
+      paceDetail = detail;
       emit(`\n\x1b[31m[WARN]\x1b[0m \x1b[33m${detail}\x1b[0m`);
+      if (switchingFromWt) {
+         maxInFlightCap = Math.max(1, Math.min(PACE_MAX_IN_FLIGHT_CAP, maxInFlightCap|0 || PACE_MAX_IN_FLIGHT_CAP));
+         maxInFlight = 1;
+         paceMakerReset();
+         admissionState = 'PACE';
+      }
    }
 
    function hasWiredTigerVitals(sample = vitals) {
@@ -499,11 +510,451 @@
    }
 
    const onMongos = isMongos();
-   if (onMongos) {
-      enablePaceAdmission(
-         'mongos',
-         'mongos detected — using paceMaker admission (no WT cache vitals); maxInFlight capped'
+
+   function redactMessage(value) {
+      return String(value ?? '').replace(/\/\/[^@/]+@/g, '//');
+   }
+
+   function timestampSec(ts) {
+      if (ts == null) return null;
+      if (typeof ts.t === 'number') return ts.t;
+      if (ts.t != null && ts.i != null) return Number(ts.t);
+      return null;
+   }
+
+   function majorityCommitLagSeconds(rsSt, ss) {
+      /*
+       *  Seconds the majority commit point / secondaries trail applied optime
+       *  (same proxy as onlineDefrag.js replLag). Do not use optimeDate min/max
+       *  (heartbeat alignment → false 0). Atlas M0/Flex: lastWriteDate vs
+       *  majorityWriteDate from serverStatus.repl.lastWrite.
+       */
+      let lag = 0, n = 0;
+      const applied = timestampSec(rsSt?.optimes?.appliedOpTime?.ts ?? rsSt?.optimes?.writtenOpTime?.ts);
+      const committed = timestampSec(rsSt?.optimes?.lastCommittedOpTime?.ts);
+      if (applied != null && committed != null) {
+         n++;
+         lag = Math.max(lag, applied - committed);
+      }
+      const members = rsSt?.members;
+      if (Array.isArray(members) && members.length) {
+         const now = rsSt.date ? +new Date(rsSt.date) : Date.now();
+         const primary = members.find(m => m.health && m.stateStr === 'PRIMARY');
+         const p = timestampSec(primary?.optime?.ts ?? primary?.optime)
+            ?? (primary?.optimeDate != null ? +new Date(primary.optimeDate) / 1000 : null);
+         if (p != null) {
+            for (const m of members) {
+               if (!m.health || m.stateStr !== 'SECONDARY') continue;
+               if (m.lastHeartbeat && now - +new Date(m.lastHeartbeat) > 4000) continue;
+               const s = timestampSec(m.optime?.ts ?? m.optime)
+                  ?? (m.optimeDate != null ? +new Date(m.optimeDate) / 1000 : null);
+               if (s == null) continue;
+               n++;
+               lag = Math.max(lag, p - s);
+            }
+         }
+      }
+      if (n) return Math.max(0, lag);
+      const lastWrite = ss?.repl?.lastWrite;
+      const last = lastWrite?.lastWriteDate;
+      const maj = lastWrite?.majorityWriteDate;
+      if (last == null || maj == null) return 0;
+      return Math.max(0, (new Date(last) - new Date(maj)) / 1000);
+   }
+
+   function localNumCores() {
+      try {
+         return db.hostInfo()?.system?.numCores ?? 4;
+      } catch(_) {
+         return 4;
+      }
+   }
+
+   function collectionOwningShardIds() {
+      /*
+       *  Shard ids that currently own the target namespace. collStats.shards
+       *  first (sharded + unsplittable), then config.chunks by uuid/ns, then
+       *  the database primary for an unsharded collection.
+       */
+      const ids = new Set();
+      try {
+         const stats = db.getSiblingDB(dbName).runCommand({ "collStats": collName });
+         if (stats?.shards && typeof stats.shards === 'object') {
+            for (const id of Object.keys(stats.shards)) {
+               if (id) ids.add(id);
+            }
+         }
+         if (typeof stats?.primary === 'string' && stats.primary) ids.add(stats.primary);
+      } catch(_) { /* missing ns / auth */ }
+
+      if (ids.size) return [...ids];
+
+      try {
+         const config = db.getSiblingDB('config');
+         const ns = `${dbName}.${collName}`;
+         const collDoc = config.getCollection('collections').findOne({
+            "$or": [{ "_id": ns }, { "ns": ns }]
+         });
+         if (collDoc && collDoc.dropped !== true) {
+            const chunkFilter = collDoc.uuid ? { "uuid": collDoc.uuid } : { "ns": ns };
+            const shards = config.getCollection('chunks').distinct('shard', chunkFilter);
+            if (Array.isArray(shards)) {
+               for (const id of shards) {
+                  if (id) ids.add(id);
+               }
+            }
+         }
+      } catch(_) { /* config auth */ }
+
+      if (ids.size) return [...ids];
+
+      try {
+         const dbDoc = db.getSiblingDB('config').getCollection('databases').findOne({ "_id": dbName });
+         if (typeof dbDoc?.primary === 'string' && dbDoc.primary) ids.add(dbDoc.primary);
+      } catch(_) { /* config auth */ }
+
+      return [...ids];
+   }
+
+   function parentConnectionParts() {
+      const mongo = db.getMongo();
+      const rawUri = (typeof mongo.getURI === 'function' ? mongo.getURI() : mongo._uri) || '';
+      if (!rawUri || typeof rawUri !== 'string') throw new Error('missing parent URI');
+      const isSrv = /^mongodb\+srv:/i.test(rawUri);
+      const url = new URL(rawUri.replace(/^mongodb\+srv:/i, 'mongodb:'));
+      const searchParams = new URLSearchParams(url.searchParams);
+      searchParams.delete('srvMaxHosts');
+      searchParams.delete('srvServiceName');
+      return {
+         "isSrv": isSrv,
+         "username": url.username || '',
+         "password": url.password || '',
+         "pathname": url.pathname && url.pathname.length ? url.pathname : '/',
+         "searchParams": searchParams
+      };
+   }
+
+   function shardPrimaryUri(shardHost) {
+      /*
+       *  Child mongodb:// URI to the shard replica-set primary (or standalone
+       *  shard). Auth/TLS follow the parent session; SRV children force tls.
+       */
+      const parent = parentConnectionParts();
+      const params = new URLSearchParams(parent.searchParams);
+      params.delete('tags');
+      params.delete('readPreferenceTags');
+      params.delete('maxStalenessSeconds');
+      params.delete('minPoolSize');
+      params.delete('readPreference');
+      params.set('maxPoolSize', '2');
+      params.set('serverSelectionTimeoutMS', String(SHARD_CONNECT_TIMEOUT_MS));
+      params.set('connectTimeoutMS', String(SHARD_CONNECT_TIMEOUT_MS));
+      params.set('socketTimeoutMS', String(SHARD_CONNECT_TIMEOUT_MS));
+      if (parent.isSrv && !params.has('tls') && !params.has('ssl')) {
+         params.set('tls', 'true');
+      }
+      const host = String(shardHost || '');
+      const slash = host.indexOf('/');
+      let hosts;
+      if (slash > 0) {
+         params.set('replicaSet', host.slice(0, slash));
+         params.set('directConnection', 'false');
+         params.set('readPreference', 'primary');
+         hosts = host.slice(slash + 1);
+      } else {
+         params.delete('replicaSet');
+         params.set('directConnection', 'true');
+         params.set('readPreference', 'primary');
+         hosts = host;
+      }
+      if (!hosts) throw new Error('shard host is empty');
+      params.sort();
+      let auth = '';
+      if (parent.username) {
+         auth = parent.username;
+         if (parent.password !== '' && parent.password != null) auth += `:${parent.password}`;
+         auth += '@';
+      }
+      const path = parent.pathname || '/';
+      const q = params.toString();
+      return `mongodb://${auth}${hosts}${path}${q ? `?${q}` : ''}`;
+   }
+
+   function openShardPrimary(uri) {
+      if (typeof Mongo === 'function') return new Mongo(uri);
+      const handle = connect(uri);
+      return (handle && typeof handle.getMongo === 'function') ? handle.getMongo() : handle;
+   }
+
+   function shardAdmin(mongo) {
+      if (mongo && typeof mongo.getDB === 'function') return mongo.getDB('admin');
+      if (mongo && typeof mongo.getSiblingDB === 'function') return mongo.getSiblingDB('admin');
+      throw new Error('shard handle has no admin db');
+   }
+
+   function closeShardVitalsClients() {
+      for (const c of shardVitalsClients) {
+         try {
+            if (c?.mongo && typeof c.mongo.close === 'function') c.mongo.close();
+         } catch(_) { /* already closed */ }
+      }
+      shardVitalsClients = [];
+      shardVitalsEnabled = false;
+   }
+
+   function evictionConfigFromWterc(wterc = '') {
+      const cfg = String(wterc || '');
+      const num = (re, d) => {
+         const m = cfg.match(re);
+         return m ? +m[1] : d;
+      };
+      return {
+         "evictionThreadsMin": num(/eviction=\(.*threads_min=(\d+).*\)/, 4),
+         "evictionThreadsMax": num(/eviction=\(.*threads_max=(\d+).*\)/, 4),
+         "evictionCheckpointTarget": num(/eviction_checkpoint_target=(\d+)/, 1),
+         "evictionDirtyTarget": num(/eviction_dirty_target=(\d+)/, 5),
+         "evictionDirtyTrigger": num(/eviction_dirty_trigger=(\d+)/, 20),
+         "evictionTarget": num(/eviction_target=(\d+)/, 80),
+         "evictionTrigger": num(/eviction_trigger=(\d+)/, 95),
+         "evictionUpdatesTarget": num(/eviction_updates_target=(\d+)/, 2.5),
+         "evictionUpdatesTrigger": num(/eviction_updates_trigger=(\d+)/, 10),
+         "checkpointIntervalMS": 1000 * num(/checkpoint=\(.*wait=(\d+).*\)/, 60)
+      };
+   }
+
+   function sampleShardPrimary(admin) {
+      const cmdOpts = { "readPreference": { "mode": "primary" } };
+      const ss = admin.runCommand({
+         "serverStatus": true,
+         ...SERVER_STATUS_OPTIONS_DEFAULTS,
+         ...SERVER_STATUS_OPT_IN
+      }, cmdOpts);
+      let wterc = '';
+      try {
+         wterc = admin.runCommand({
+            "getParameter": 1,
+            "wiredTigerEngineRuntimeConfig": 1
+         }, cmdOpts).wiredTigerEngineRuntimeConfig || '';
+      } catch(_) { /* restricted / missing */ }
+      let rsSt = {};
+      try {
+         rsSt = admin.runCommand({ "replSetGetStatus": 1 }, cmdOpts);
+      } catch(_) { /* standalone shard / auth */ }
+
+      const cache = ss.wiredTiger?.cache;
+      const cacheSizeBytes = +(cache?.['maximum bytes configured'] ?? NaN);
+      const dirtyBytes = +(cache?.['tracked dirty bytes in the cache'] ?? NaN);
+      const cachedBytes = +(cache?.['bytes currently in the cache'] ?? 0);
+      const updatesDirtyBytes = +(cache?.['bytes allocated for updates'] ?? 0);
+      if (!(cacheSizeBytes > 0) || Number.isNaN(dirtyBytes)) {
+         throw new Error('WiredTiger cache vitals unavailable');
+      }
+
+      const eviction = evictionConfigFromWterc(wterc);
+      const writeTickets = ss.wiredTiger?.concurrentTransactions?.write
+         ?? ss.queues?.execution?.write
+         ?? {};
+      const wtWriteTicketsUtil = (writeTickets.totalTickets > 0)
+         ? Number.parseFloat(((writeTickets.out / writeTickets.totalTickets) * 100).toFixed(2))
+         : 0;
+      const checkpointMs = +(ss.wiredTiger?.transaction?.['transaction checkpoint most recent time (msecs)']
+         ?? ss.wiredTiger?.checkpoint?.['most recent time (msecs)']
+         ?? 0);
+      const checkpointRuntimeRatio = Number.parseFloat(
+         ((checkpointMs / eviction.checkpointIntervalMS) * 100).toFixed(2)
       );
+      const checkpointStatus = checkpointRuntimeRatio < 50 ? 'low'
+         : checkpointRuntimeRatio > 100 ? 'high'
+         : 'medium';
+
+      return {
+         "cacheSizeBytes": cacheSizeBytes,
+         "dirtyBytes": dirtyBytes,
+         "cacheUtil": Number.parseFloat(((cachedBytes / cacheSizeBytes) * 100).toFixed(2)),
+         "dirtyUtil": Number.parseFloat(((dirtyBytes / cacheSizeBytes) * 100).toFixed(2)),
+         "dirtyUpdatesUtil": Number.parseFloat(((updatesDirtyBytes / cacheSizeBytes) * 100).toFixed(2)),
+         "wtWriteTicketsUtil": wtWriteTicketsUtil,
+         "activeReplLag": +majorityCommitLagSeconds(rsSt, ss).toFixed(0),
+         "activeFlowControl": ss.flowControl?.isLagged === true && ss.flowControl?.enabled === true,
+         "activeIndexBuilds": (ss.indexBuilds?.total ?? 0) > (ss.indexBuilds?.phases?.commit ?? 0)
+            || (ss.activeIndexBuilds?.total ?? 0) > 0,
+         "backupCursorOpen": !!ss.storageEngine?.backupCursorOpen,
+         "activeCheckpoint": !!(ss.wiredTiger?.transaction?.['transaction checkpoint currently running']
+            || ss.wiredTiger?.checkpoint?.['progress state']),
+         "slowRecentCheckpoint": checkpointMs > 60000,
+         "checkpointStatus": checkpointStatus,
+         "checkpointRuntimeRatio": checkpointRuntimeRatio,
+         ...eviction
+      };
+   }
+
+   function foldWorstShardVitals(namedSamples = []) {
+      /*
+       *  Conservative fold: max of util/lag, OR of boolean pressure, min of
+       *  eviction targets/triggers so any owning primary can trip the FSM.
+       */
+      const nums = key => namedSamples.map(s => +s[key]).filter(n => !Number.isNaN(n));
+      const maxNum = (key, d = 0) => {
+         const xs = nums(key);
+         return xs.length ? Math.max(...xs) : d;
+      };
+      const minNum = (key, d) => {
+         const xs = nums(key);
+         return xs.length ? Math.min(...xs) : d;
+      };
+      const rank = { "low": 0, "medium": 1, "high": 2 };
+      let checkpointStatus = 'low';
+      for (const s of namedSamples) {
+         if ((rank[s.checkpointStatus] ?? 0) > rank[checkpointStatus]) checkpointStatus = s.checkpointStatus;
+      }
+      let worst = namedSamples[0];
+      let worstScore = -1;
+      for (const s of namedSamples) {
+         const score = Math.max(
+            s.dirtyUtil || 0,
+            s.dirtyUpdatesUtil || 0,
+            s.cacheUtil || 0,
+            ((s.activeReplLag || 0) / REPL_LAG_HARD_SEC) * 100
+         );
+         if (score > worstScore) {
+            worstScore = score;
+            worst = s;
+         }
+      }
+      return {
+         "cacheSizeBytes": maxNum('cacheSizeBytes'),
+         "dirtyBytes": maxNum('dirtyBytes'),
+         "cacheUtil": maxNum('cacheUtil'),
+         "dirtyUtil": maxNum('dirtyUtil'),
+         "dirtyUpdatesUtil": maxNum('dirtyUpdatesUtil'),
+         "wtWriteTicketsUtil": maxNum('wtWriteTicketsUtil'),
+         "activeReplLag": maxNum('activeReplLag'),
+         "activeFlowControl": namedSamples.some(s => s.activeFlowControl),
+         "activeIndexBuilds": namedSamples.some(s => s.activeIndexBuilds),
+         "backupCursorOpen": namedSamples.some(s => s.backupCursorOpen),
+         "activeCheckpoint": namedSamples.some(s => s.activeCheckpoint),
+         "slowRecentCheckpoint": namedSamples.some(s => s.slowRecentCheckpoint),
+         "checkpointStatus": checkpointStatus,
+         "evictionDirtyTarget": minNum('evictionDirtyTarget', 5),
+         "evictionDirtyTrigger": minNum('evictionDirtyTrigger', 20),
+         "evictionTarget": minNum('evictionTarget', 80),
+         "evictionTrigger": minNum('evictionTrigger', 95),
+         "evictionUpdatesTarget": minNum('evictionUpdatesTarget', 2.5),
+         "evictionUpdatesTrigger": minNum('evictionUpdatesTrigger', 10),
+         "evictionCheckpointTarget": minNum('evictionCheckpointTarget', 1),
+         "checkpointIntervalMS": minNum('checkpointIntervalMS', 60000),
+         "worstShard": worst?.id,
+         "owningShards": namedSamples.map(s => s.id)
+      };
+   }
+
+   async function sampleOwningShardVitals() {
+      if (!shardVitalsClients.length) {
+         return {
+            "ok": false,
+            "detail": 'mongos: no collection-owning shard primary clients — using paceMaker admission; maxInFlight capped'
+         };
+      }
+      const settled = await Promise.allSettled(
+         shardVitalsClients.map(c => Promise.resolve().then(() => ({
+            "id": c.id,
+            ...sampleShardPrimary(c.admin)
+         })))
+      );
+      const ok = [];
+      const failed = [];
+      for (let i = 0; i < settled.length; i++) {
+         const id = shardVitalsClients[i].id;
+         if (settled[i].status === 'fulfilled') {
+            ok.push(settled[i].value);
+         } else {
+            failed.push(`${id}: ${redactMessage(settled[i].reason?.message ?? settled[i].reason)}`);
+         }
+      }
+      if (failed.length || ok.length !== shardVitalsClients.length) {
+         return {
+            "ok": false,
+            "detail": `mongos: collection-owning shard primary unreachable (${
+               failed.join('; ') || 'incomplete sample'
+            }) — using paceMaker admission; maxInFlight capped`
+         };
+      }
+      const folded = foldWorstShardVitals(ok);
+      if (vitals?.numCores != null) folded.numCores = vitals.numCores;
+      return { "ok": true, "vitals": folded };
+   }
+
+   async function attachCollectionShardVitals() {
+      /*
+       *  Direct connections to collection-owning shard primaries. Any miss
+       *  (empty owner set, listShards gap, Atlas-unreachable, no WT) stays
+       *  on paceMaker — no half-metric from mongos shardingStatistics.
+       */
+      const owning = collectionOwningShardIds();
+      if (!owning.length) {
+         return {
+            "ok": false,
+            "detail": 'mongos: no collection-owning shards found — using paceMaker admission; maxInFlight capped'
+         };
+      }
+      let listed = [];
+      try {
+         listed = db.adminCommand({ "listShards": 1 }).shards ?? [];
+      } catch(e) {
+         return {
+            "ok": false,
+            "detail": `mongos: listShards failed (${redactMessage(e?.message ?? e)}) — using paceMaker admission; maxInFlight capped`
+         };
+      }
+      const byId = new Map(listed.map(s => [s._id, s]));
+      const missing = owning.filter(id => !byId.has(id) || !byId.get(id)?.host);
+      if (missing.length) {
+         return {
+            "ok": false,
+            "detail": `mongos: owning shard(s) ${missing.join(', ')} not in listShards — using paceMaker admission; maxInFlight capped`
+         };
+      }
+      const opened = [];
+      try {
+         const settled = await Promise.allSettled(owning.map(id => Promise.resolve().then(() => {
+            const mongo = openShardPrimary(shardPrimaryUri(byId.get(id).host));
+            try {
+               return { "id": id, "mongo": mongo, "admin": shardAdmin(mongo) };
+            } catch(e) {
+               try { if (typeof mongo.close === 'function') mongo.close(); } catch(_) { /* ignore */ }
+               throw e;
+            }
+         })));
+         for (let i = 0; i < settled.length; i++) {
+            if (settled[i].status === 'fulfilled') {
+               opened.push(settled[i].value);
+            } else {
+               throw new Error(`${owning[i]}: ${redactMessage(settled[i].reason?.message ?? settled[i].reason)}`);
+            }
+         }
+         shardVitalsClients = opened;
+         shardVitalsEnabled = true;
+         const sampled = await sampleOwningShardVitals();
+         if (!sampled.ok) {
+            closeShardVitalsClients();
+            return sampled;
+         }
+         if (!hasWiredTigerVitals(sampled.vitals)) {
+            closeShardVitalsClients();
+            return {
+               "ok": false,
+               "detail": 'mongos: collection-owning shard primaries reachable but WT cache vitals missing — using paceMaker admission; maxInFlight capped'
+            };
+         }
+         return sampled;
+      } catch(e) {
+         shardVitalsClients = opened;
+         closeShardVitalsClients();
+         return {
+            "ok": false,
+            "detail": `mongos: collection-owning shard primary unreachable (${redactMessage(e?.message ?? e)}) — using paceMaker admission; maxInFlight capped`
+         };
+      }
    }
 
    function sortKeyFromFilter(filter = {}) {
@@ -1330,53 +1781,6 @@
          return hostInfo;
       }
 
-      function timestampSec(ts) {
-         if (ts == null) return null;
-         if (typeof ts.t === 'number') return ts.t;
-         if (ts.t != null && ts.i != null) return Number(ts.t);
-         return null;
-      }
-
-      function majorityCommitLagSeconds(rsSt, ss) {
-         /*
-          *  Seconds the majority commit point / secondaries trail applied optime
-          *  (same proxy as onlineDefrag.js replLag). Do not use optimeDate min/max
-          *  (heartbeat alignment → false 0). Atlas M0/Flex: lastWriteDate vs
-          *  majorityWriteDate from serverStatus.repl.lastWrite.
-          */
-         let lag = 0, n = 0;
-         const applied = timestampSec(rsSt?.optimes?.appliedOpTime?.ts ?? rsSt?.optimes?.writtenOpTime?.ts);
-         const committed = timestampSec(rsSt?.optimes?.lastCommittedOpTime?.ts);
-         if (applied != null && committed != null) {
-            n++;
-            lag = Math.max(lag, applied - committed);
-         }
-         const members = rsSt?.members;
-         if (Array.isArray(members) && members.length) {
-            const now = rsSt.date ? +new Date(rsSt.date) : Date.now();
-            const primary = members.find(m => m.health && m.stateStr === 'PRIMARY');
-            const p = timestampSec(primary?.optime?.ts ?? primary?.optime)
-               ?? (primary?.optimeDate != null ? +new Date(primary.optimeDate) / 1000 : null);
-            if (p != null) {
-               for (const m of members) {
-                  if (!m.health || m.stateStr !== 'SECONDARY') continue;
-                  if (m.lastHeartbeat && now - +new Date(m.lastHeartbeat) > 4000) continue;
-                  const s = timestampSec(m.optime?.ts ?? m.optime)
-                     ?? (m.optimeDate != null ? +new Date(m.optimeDate) / 1000 : null);
-                  if (s == null) continue;
-                  n++;
-                  lag = Math.max(lag, p - s);
-               }
-            }
-         }
-         if (n) return Math.max(0, lag);
-         const lastWrite = ss?.repl?.lastWrite;
-         const last = lastWrite?.lastWriteDate;
-         const maj = lastWrite?.majorityWriteDate;
-         if (last == null || maj == null) return 0;
-         return Math.max(0, (new Date(last) - new Date(maj)) / 1000);
-      }
-
       function rsStatus() {
          // Member set/health changes slowly; optimes move faster. TTL balances lag freshness vs rs.status() cost.
          const now = Date.now();
@@ -1957,6 +2361,7 @@
          if (admission.backupCursor) flags.push('backup');
          const lag = admission.replLag ?? vitals.activeReplLag ?? 0;
          if (lag > 0) flags.push(`lag ${Math.round(lag)}s`);
+         if (vitals.worstShard) flags.push(vitals.worstShard);
          const flagTxt = flags.length ? `  ${flags.join(' ')}` : '';
          if (peakUtil == null || Number.isNaN(+peakUtil)) {
             congDetail = '(no WT)';
@@ -2019,16 +2424,41 @@
        *  Vitals are sampled on a background loop (decoupled from task scheduling);
        *  EWMA is updated here; admissionControl reads the smoothed series.
        *  Sleeps first so the caller's initial sample is not immediately repeated.
+       *  On mongos, sample collection-owning shard primaries; any miss → pace.
        */
       while (vitalsSampling) {
-         await sleep(intervalMs);
+         const waitMs = shardVitalsEnabled ? SHARD_VITALS_SAMPLE_INTERVAL_MS : intervalMs;
+         await sleep(waitMs);
          if (!vitalsSampling) break;
          try {
-            // adminCommand → primary; no connection readPreference involved.
-            vitals = await congestionMonitor();
-            updateEwma(vitals);
+            if (shardVitalsEnabled) {
+               const next = await sampleOwningShardVitals();
+               if (!next.ok) {
+                  enablePaceAdmission('mongos', next.detail);
+                  closeShardVitalsClients();
+                  vitalsSampling = false;
+                  break;
+               }
+               const cores = vitals?.numCores;
+               vitals = next.vitals;
+               if (cores != null) vitals.numCores = cores;
+               updateEwma(vitals);
+            } else {
+               // adminCommand → primary; no connection readPreference involved.
+               vitals = await congestionMonitor();
+               updateEwma(vitals);
+            }
          } catch(e) {
-            emit('\x1b[31m[WARN]\x1b[0m \x1b[33mvitals sample failed\x1b[0m:', e);
+            emit('\x1b[31m[WARN]\x1b[0m \x1b[33mvitals sample failed\x1b[0m:', redactMessage(e?.message ?? e));
+            if (shardVitalsEnabled) {
+               enablePaceAdmission(
+                  'mongos',
+                  `mongos: collection-owning shard primary unreachable (${redactMessage(e?.message ?? e)}) — using paceMaker admission; maxInFlight capped`
+               );
+               closeShardVitalsClients();
+               vitalsSampling = false;
+               break;
+            }
          }
       }
    }
@@ -2469,22 +2899,36 @@
    async function main() {
       // One-shot vitals for concurrency sizing + WT probe; sampler runs only in 'wt' mode.
       try {
-         vitals = await congestionMonitor();
-         if (admissionMode === 'wt' && !hasWiredTigerVitals(vitals)) {
-            enablePaceAdmission(
-               'no-wt',
-               'WiredTiger cache vitals unavailable — using paceMaker admission (Atlas M0/Flex or restricted serverStatus); maxInFlight capped'
-            );
-         } else if (admissionMode === 'wt') {
-            updateEwma(vitals);
+         if (onMongos) {
+            const attached = await attachCollectionShardVitals();
+            if (attached.ok) {
+               vitals = attached.vitals;
+               vitals.numCores = localNumCores();
+               updateEwma(vitals);
+            } else {
+               enablePaceAdmission('mongos', attached.detail);
+               vitals = { "numCores": localNumCores() };
+            }
+         } else {
+            vitals = await congestionMonitor();
+            if (admissionMode === 'wt' && !hasWiredTigerVitals(vitals)) {
+               enablePaceAdmission(
+                  'no-wt',
+                  'WiredTiger cache vitals unavailable — using paceMaker admission (Atlas M0/Flex or restricted serverStatus); maxInFlight capped'
+               );
+            } else if (admissionMode === 'wt') {
+               updateEwma(vitals);
+            }
          }
       } catch(e) {
-         emit('\x1b[31m[WARN]\x1b[0m \x1b[33minitial congestionMonitor failed\x1b[0m:', e?.message ?? e);
-         vitals = {};
+         emit('\x1b[31m[WARN]\x1b[0m \x1b[33minitial congestionMonitor failed\x1b[0m:', redactMessage(e?.message ?? e));
+         vitals = { "numCores": localNumCores() };
          if (admissionMode === 'wt') {
             enablePaceAdmission(
-               'no-wt',
-               'congestionMonitor failed — using paceMaker admission; maxInFlight capped'
+               onMongos ? 'mongos' : 'no-wt',
+               onMongos
+                  ? `mongos: collection-owning shard primary unreachable (${redactMessage(e?.message ?? e)}) — using paceMaker admission; maxInFlight capped`
+                  : 'congestionMonitor failed — using paceMaker admission; maxInFlight capped'
             );
          }
       }
@@ -2537,8 +2981,13 @@
       if (safeguard) {
          banner += '\n\x1b[31m[WARN]\x1b[0m \x1b[33mSafeguard is enabled, simulating deletes only (via transaction rollbacks)\n\x1b[0m';
       }
+      if (admissionMode === 'pace' && paceDetail) {
+         banner += `\n\x1b[31m[WARN]\x1b[0m \x1b[33m${paceDetail}\x1b[0m\n`;
+      } else if (onMongos && Array.isArray(vitals.owningShards) && vitals.owningShards.length) {
+         banner += `\n\x1b[34m[INFO]\x1b[0m WT admission from collection-owning shard primaries: \x1b[33m${vitals.owningShards.join(', ')}\x1b[0m (worst-shard fold)\n`;
+      }
 
-      // WT sampler only for mongod admission; mongos uses paceMaker (no cache vitals).
+      // WT sampler for mongod and for mongos with attached shard primaries.
       const useVitalsSampler = admissionMode === 'wt';
       vitalsSampling = useVitalsSampler;
       const sampler = useVitalsSampler ? vitalsSampler() : Promise.resolve();
@@ -2653,6 +3102,7 @@
          uninstallResize();
          vitalsSampling = false;
          await sampler;
+         closeShardVitalsClients();
       }
    }
 
