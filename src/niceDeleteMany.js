@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.9.4"
+    *  Version: "0.10.0"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.9.4" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.10.0" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -3213,30 +3213,52 @@
       emitHud(admission.decide());
    }
 
-   function buildStartupBanner(heading) {
+   function sessionOpts(kind) {
       /*
-       *  Attach-time HUD header. heading is the script title plus any
-       *  persistBannerLine emits from attach. Pace WARN is one copy here;
-       *  enablePaceAdmission emits only after startupLogDone.
+       *  Curation uses secondaryPreferred; deletes and residual count use
+       *  primary (count: majority RC). On mongos, secondaryPreferred selects
+       *  eligible shard secondaries via the router.
        */
-      let text = `\n[yellow]${heading}[/]`;
-      text += `\n\nCurating '[green]_id[/]' deletion list from namespace:` +
-              `\n\n\t[green]${dbName}.${collName}[/]` +
-              `\n\nwith filter:` +
-              `\n\n\t[green]${JSON.stringify(filter)}[/]` +
-              `\n\n...please wait\n`;
-      if (safeguard) {
-         text += '\n[red][WARN][/] [yellow]Safeguard is enabled, simulating deletes only (via transaction rollbacks)\n[/]';
+      const readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // support monotonic writes
+      const curationReadPreference = {
+         // "mode": "nearest", // offload the bucket generation to a less busy node
+         "mode": "secondaryPreferred",
+         "tags": [ // Atlas friendly defaults
+            { "nodeType": "READ_ONLY", "diskState": "READY" },
+            { "nodeType": "ANALYTICS", "diskState": "READY" },
+            { "workloadType": "OPERATIONAL", "diskState": "READY" },
+            { "diskState": "READY" },
+            {}
+         ]
+      };
+      const writeReadPreference = { "mode": "primary" };
+      if (kind === 'read') {
+         return {
+            "causalConsistency": true,
+            "readConcern": readConcern,
+            "readPreference": curationReadPreference
+         };
       }
-      if (admissionCtl.mode === 'pace' && admissionCtl.detail) {
-         text += `\n[red][WARN][/] [yellow]${admissionCtl.detail}[/]\n`;
-      } else if (onMongos && Array.isArray(vitals.owningShards) && vitals.owningShards.length) {
-         text += `\n[blue][INFO][/] WT admission from collection-owning shard primaries: [yellow]${vitals.owningShards.join(', ')}[/] (worst-shard fold)\n`;
+      if (kind === 'write') {
+         return {
+            "causalConsistency": true,
+            "readConcern": readConcern,
+            "readPreference": writeReadPreference,
+            "retryWrites": true,
+            "writeConcern": writeConcern
+         };
       }
-      return text;
+      if (kind === 'count') {
+         return {
+            "causalConsistency": true,
+            "readConcern": { "level": "majority" },
+            "readPreference": writeReadPreference
+         };
+      }
+      throw new Error(`unknown session kind: ${kind}`);
    }
 
-   async function main() {
+   async function attachVitals() {
       // One-shot vitals for concurrency sizing + WT probe; sampler runs only in 'wt' mode.
       try {
          if (onMongos) {
@@ -3272,45 +3294,39 @@
             );
          }
       }
+   }
 
+   function buildStartupBanner(heading) {
+      /*
+       *  Attach-time HUD header. heading is the script title plus any
+       *  persistBannerLine emits from attach. Pace WARN is one copy here;
+       *  enablePaceAdmission emits only after startupLogDone.
+       */
+      let text = `\n[yellow]${heading}[/]`;
+      text += `\n\nCurating '[green]_id[/]' deletion list from namespace:` +
+              `\n\n\t[green]${dbName}.${collName}[/]` +
+              `\n\nwith filter:` +
+              `\n\n\t[green]${JSON.stringify(filter)}[/]` +
+              `\n\n...please wait\n`;
+      if (safeguard) {
+         text += '\n[red][WARN][/] [yellow]Safeguard is enabled, simulating deletes only (via transaction rollbacks)\n[/]';
+      }
+      if (admissionCtl.mode === 'pace' && admissionCtl.detail) {
+         text += `\n[red][WARN][/] [yellow]${admissionCtl.detail}[/]\n`;
+      } else if (onMongos && Array.isArray(vitals.owningShards) && vitals.owningShards.length) {
+         text += `\n[blue][INFO][/] WT admission from collection-owning shard primaries: [yellow]${vitals.owningShards.join(', ')}[/] (worst-shard fold)\n`;
+      }
+      return text;
+   }
+
+   async function main() {
+      await attachVitals();
       const numCores = vitals?.numCores;
       const concurrency = Math.max((numCores > 4) ? numCores : 4, 32); // admission control throttles; do not chase live write tickets
       const bucketSizeLimit = 100; // aligns with SPM-2227
-      const readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // support monotonic writes
-      /*
-       *  Curation uses secondaryPreferred; deletes and residual count use
-       *  primary (count: majority RC). On mongos, secondaryPreferred selects
-       *  eligible shard secondaries via the router.
-       */
-      const curationReadPreference = {
-         // "mode": "nearest", // offload the bucket generation to a less busy node
-         "mode": "secondaryPreferred",
-         "tags": [ // Atlas friendly defaults
-            { "nodeType": "READ_ONLY", "diskState": "READY" },
-            { "nodeType": "ANALYTICS", "diskState": "READY" },
-            { "workloadType": "OPERATIONAL", "diskState": "READY" },
-            { "diskState": "READY" },
-            {}
-         ]
-      };
-      const writeReadPreference = { "mode": "primary" };
-      const readSessionOpts = {
-         "causalConsistency": true,
-         "readConcern": readConcern,
-         "readPreference": curationReadPreference
-      };
-      const writeSessionOpts = {
-         "causalConsistency": true,
-         "readConcern": readConcern,
-         "readPreference": writeReadPreference,
-         "retryWrites": true,
-         "writeConcern": writeConcern
-      };
-      const countSessionOpts = {
-         "causalConsistency": true,
-         "readConcern": { "level": "majority" },
-         "readPreference": writeReadPreference
-      };
+      const readSessionOpts = sessionOpts('read');
+      const writeSessionOpts = sessionOpts('write');
+      const countSessionOpts = sessionOpts('count');
 
       banner = buildStartupBanner(banner);
 
