@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.12.1"
+    *  Version: "0.12.2"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.12.1" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.12.2" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -189,7 +189,6 @@
    const stripAnsiMarkup = text => String(text).replace(ANSI_TAG_RE, (all, tag) => (
       ansiTagCodeOf(tag) === undefined ? all : ''
    )).replace(ANSI_CSI_RE, '');
-   const stripAnsi = stripAnsiMarkup;
 
    function createHud({ interactive } = {}) {
       /*
@@ -237,7 +236,7 @@
          const cols = Math.max(1, termColumns());
          let rows = 0;
          for (const line of String(text).split('\n')) {
-            const w = stripAnsi(line).length;
+            const w = stripAnsiMarkup(line).length;
             rows += Math.max(1, Math.ceil(w / cols));
          }
          return rows;
@@ -2348,10 +2347,6 @@
 
    function utilAtOrBelow(util, max) {
       return util == null || Number.isNaN(util) || util <= max;
-   }
-
-   function utilInBand(util, lo, hi) {
-      return util != null && !Number.isNaN(util) && util >= lo && util <= hi;
    }
 
    function fillProgress(util, target, trigger) {
