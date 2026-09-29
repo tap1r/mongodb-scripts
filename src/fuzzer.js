@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.46"
+ *  Version: "0.6.47"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.46" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.47" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -159,7 +159,8 @@
     *  Global defaults
     */
 
-   const namespace = db.getSiblingDB(dbName).getCollection(collName);
+   const database = db.getSiblingDB(dbName);
+   const namespace = database.getCollection(collName);
    const now = new Date().getTime();
    const timestamp = $floor(now / 1000);
    let sampleSize = 8, docSize = 0, totalBatches = 1, residual = 0;
@@ -197,13 +198,8 @@
       }
 
       // (re)create the namespace
-      dropNS(dropNamespace, dbName, collName);
-      createNS(
-         dbName, collName, compressor,
-         expireAfterSeconds, collation,
-         writeConcern, tsOptions, sharding,
-         shardedOptions, capped, cappedOptions
-      );
+      dropNS();
+      createNS();
 
       // set collection/index build order, generate and bulk write the documents, create indexes
       console.log(`\nIndex build order preference "${indexPrefs.order}"`);
@@ -227,7 +223,7 @@
       // redistribute chunks if required
       if (isSharded() && (shardedOptions.reShard) && (!shardedOptions.unique) && fCV(5.0)) {
          const resharding = async() => {
-            const numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments();
+            const numInitialChunks = initialChunkCount();
             let res;
             const cmd = () => db.adminCommand({
                "reshardCollection": `${dbName}.${collName}`,
@@ -632,15 +628,16 @@
       return schemas[$getRandRatioInt(ratios)];
    }
 
-   function dropNS(dropNamespace = false, dbName = false, collName = false, msg = '') {
+   function dropNS() {
       /*
        *  drop target namespace
        */
       if (dropNamespace && !!dbName && !!collName) {
          console.log(`\nDropping namespace "${dbName}.${collName}"\n`);
-         db.getSiblingDB(dbName).getCollection(collName).drop();
+         namespace.drop();
          return;
       }
+      let msg;
       if (!dropNamespace && !namespace.exists())
          msg = `\nNominated namespace "${dbName}.${collName}" does not exist\n`;
       else
@@ -679,37 +676,52 @@
       return [compressor, msg];
    }
 
-   function createNS(
-         dbName = false, collName = false,
-         compressor = 'best', expireAfterSeconds = 0,
-         collation = { "locale": "simple" }, writeConcern,
-         tsOptions = {
-            "timeField": "timestamp",
-            "metaField": "data",
-            "granularity": "hours"
-         },
-         sharding = false,
-         shardedOptions = {
-            "key": {},
-            "unique": false,
-            "numInitialChunksPerShard": 1,
-            // "timeseries": {},
-            "reshard": false
-         },
-         capped = false, cappedOptions = {},
-         msg = ''
-      ) {
-      if (db.getSiblingDB(dbName).getCollection(collName).exists()) {
+   function initialChunkCount() {
+      return shardedOptions.numInitialChunksPerShard
+         * db.getSiblingDB('config').getCollection('shards').countDocuments({});
+   }
+
+   function shardNewNamespace() {
+      if (!(sharding && isSharded() && namespace.exists()))
+         return;
+
+      console.log(`\nSharding namespace with options: ${tojson(shardedOptions)}`);
+      const numInitialChunks = initialChunkCount();
+      console.log(`with initial chunks: ${numInitialChunks}`);
+      try {
+         (!serverVer(6.0)) && (sh.enableSharding(dbName).ok);
+         sh.shardCollection(
+            `${dbName}.${collName}`,
+            shardedOptions.key,
+            shardedOptions.unique,
+            {
+               "numInitialChunks": numInitialChunks,
+               "collation": collation,
+               // "timeseries": {}
+            }
+         );
+         // console.log(`enable balancing`);
+         sh.enableBalancing(`${dbName}.${collName}`);
+         (!serverVer(6.0)) && (sh.enableAutoSplit());
+         sh.startBalancer();
+      }
+      catch(e) {
+         console.log('[red][ERROR] Sharding namespace failed:[/]', (e.errmsg || e.message || String(e)));
+      }
+   }
+
+   function createNS() {
+      if (namespace.exists()) {
          console.log(`\nNamespace "${dbName}.${collName}" exists`);
       } else {
-         [compressor, msg] = parseCompressor(compressor);
+         let [blockCompressor, msg] = parseCompressor(compressor);
          console.log(`Creating namespace "${dbName}.${collName}"`);
-         console.log(`\twith block compressor:\t"${compressor}" ${msg}`);
+         console.log(`\twith block compressor:\t"${blockCompressor}" ${msg}`);
          console.log(`\twith collation locale:\t"${collation.locale}"`);
          let options = {
             "storageEngine": (isAtlasPlatform('sharedTier'))
                            ? undefined
-                           : { "wiredTiger": { "configString": `block_compressor=${compressor}` } },
+                           : { "wiredTiger": { "configString": `block_compressor=${blockCompressor}` } },
             "collation": collation,
             "writeConcern": writeConcern,
             // fCV(5.3) && "clusteredIndex": {},
@@ -735,36 +747,12 @@
          }
 
          try {
-            db.getSiblingDB(dbName).createCollection(collName, options);
+            database.createCollection(collName, options);
          } catch(e) {
             console.log('\n[red][ERROR] Namespace creation failed:[/]', (e.errmsg || e.message || String(e)));
          }
 
-         if (sharding && isSharded() && db.getSiblingDB(dbName).getCollection(collName).exists()) {
-            console.log(`\nSharding namespace with options: ${tojson(shardedOptions)}`);
-            const numInitialChunks = shardedOptions.numInitialChunksPerShard * db.getSiblingDB('config').getCollection('shards').countDocuments({});
-            console.log(`with initial chunks: ${numInitialChunks}`);
-            try {
-               (!serverVer(6.0)) && (sh.enableSharding(dbName).ok);
-               sh.shardCollection(
-                  `${dbName}.${collName}`,
-                  shardedOptions.key,
-                  shardedOptions.unique,
-                  {
-                     "numInitialChunks": numInitialChunks,
-                     "collation": collation,
-                     // "timeseries": {}
-                  }
-               );
-               // console.log(`enable balancing`);
-               sh.enableBalancing(`${dbName}.${collName}`);
-               (!serverVer(6.0)) && (sh.enableAutoSplit());
-               sh.startBalancer();
-            }
-            catch(e) {
-               console.log('[red][ERROR] Sharding namespace failed:[/]', (e.errmsg || e.message || String(e)));
-            }
-         }
+         shardNewNamespace();
       }
 
       return;
