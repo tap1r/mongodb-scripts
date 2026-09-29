@@ -72,7 +72,6 @@
    let vitals = {};
    let vitalsSampling = false;
    let startupLogDone = false; // after writeConsole of the startup banner; attach WARN is banner-only until then
-   let lastCuration = { "mode": "scan", "hint": {} }; // Policy A result for residual countIds
 
    // Live HUD; no % complete / ETA. Interactive: pinned bars; non-interactive: plain log lines.
    const HUD_BAR_WIDTH_MIN = 12;
@@ -1917,7 +1916,7 @@
       return await idScan(namespace, filter, explainOpts);
    }
 
-   async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
+   async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}, lastCuration = { "mode": "scan", "hint": {} }) {
       /*
        *  Curation via per-command readPreference (no Mongo.setReadPref):
        *  landing hello, Policy A explain, and bucketing aggregate share the same RP
@@ -1946,7 +1945,8 @@
          "hint": curationHint,
          "mode": curationMode
       } = await resolveCurationOrder(namespace, filter, hint, readPreference);
-      lastCuration = { "mode": curationMode, "hint": curationHint };
+      lastCuration.mode = curationMode;
+      lastCuration.hint = curationHint;
 
       if (curationMode === 'scan') {
          yield* getIdsByIdIndexScan(namespace, filter, bucketSizeLimit, cmdRP);
@@ -1980,7 +1980,8 @@
       } catch(e) {
          if (!isCurationSortMemoryError(e)) throw e;
          emit('\n[red][WARN][/] [yellow]Window curation hit in-memory SORT limit; continuing with hinted _id find() walk[/]');
-         lastCuration = { "mode": "scan", "hint": { "_id": 1 } };
+         lastCuration.mode = "scan";
+         lastCuration.hint = { "_id": 1 };
          yield* getIdsByIdIndexScan(namespace, filter, bucketSizeLimit, cmdRP);
       }
    }
@@ -2061,7 +2062,7 @@
       }
    }
 
-   function countIds(filter = {}, sessionOpts = {}) {
+   function countIds(filter = {}, sessionOpts = {}, lastCuration = { "mode": "scan", "hint": {} }) {
       /*
        *  Residual validation on primary with majority RC (matches wc:majority deletes).
        *  allowDiskUse false: $count is O(1) memory; spill is a failed plan (Policy A).
@@ -3105,7 +3106,8 @@
          if (interactive) console.clear();
          hud.writeConsole(hud.banner);
          startupLogDone = true;
-         const deletionList = getIds(filter, bucketSizeLimit, readSessionOpts);
+         const lastCuration = { "mode": "scan", "hint": {} };
+         const deletionList = getIds(filter, bucketSizeLimit, readSessionOpts, lastCuration);
          const { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
          if (initialEmptyBatch === true) {
             emit('\tNo matching documents found to match the filter, double-check the namespace and filter');
@@ -3154,7 +3156,7 @@
          emit(`\nValidating deletion results ...please wait\n`);
          emit('...you may CTRL+C here to exit gracefully if validation is not required\n');
          // countIds uses a primary-oriented session; no connection setReadPref.
-         const finalCount = countIds(filter, countSessionOpts);
+         const finalCount = countIds(filter, countSessionOpts, lastCuration);
          reportResidualValidation({
             "residual": finalCount,
             "batchesDone": batchesDone,
