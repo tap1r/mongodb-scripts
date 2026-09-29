@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.6.1"
+    *  Version: "0.6.2"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -22,6 +22,7 @@
     *  - Scan mode: hinted {_id:1} find(), residual FETCH, in-process buckets (no $setWindowFields)
     *  - User hint is kept only when the hinted explain is IXSCAN without a blocking SORT; otherwise WARN and _id scan
     *  - Policy B: compound equality prefix → trailing index sort when the first filter field is not index-ordered
+    *  - Unhinted window: if winningPlan is not IXSCAN-without-SORT, hint the first ranked rejectedPlan that is (planner order)
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
     *  - Atlas M0/Flex (no WT vitals) always walk _id via find(); leftover window SORT cannot spill
@@ -32,7 +33,6 @@
     *
     *  TODOs:
     *  - better sharding (per-shard WT vitals via listShards / discovery)
-    *  - fallback hint: match queryPlanner ranked plans to indexes that stay IXSCAN-without-SORT (planner already ranks efficiency)
     */
 
    // Syntax: mongosh [connection options] [--quiet] [--eval 'var dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>, interactive = <bool>;'] [-f|--file] </path/to/>niceDeleteMany.js
@@ -65,7 +65,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.6.1" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.6.2" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -692,6 +692,87 @@
       return ixscan && !collScan && !blockingSort;
    }
 
+   function isIxscanStage(node) {
+      const upper = String(node?.stage || node?.nodeType || '').toUpperCase();
+      return upper === 'IXSCAN' || upper === 'EXPRESS_IXSCAN' || upper === 'IDHACK'
+         || upper === 'CLUSTERED_IXSCAN' || upper === 'COUNT_SCAN' || upper === 'INDEXSCAN';
+   }
+
+   function planTreeIsIndexOrdered(planRoot) {
+      let collScan = false, blockingSort = false, ixscan = false;
+      walkPlanNodes(planRoot, (node) => {
+         const upper = String(node.stage || node.nodeType || '').toUpperCase();
+         if (upper === 'COLLSCAN' || upper === 'COLLECTIONSCAN') collScan = true;
+         if (upper === 'SORT' || upper === 'SORT_KEY_GENERATOR') blockingSort = true;
+         if (isIxscanStage(node)) ixscan = true;
+      });
+      return ixscan && !collScan && !blockingSort;
+   }
+
+   function ixscanKeyPattern(planRoot) {
+      let keyPattern = null;
+      walkPlanNodes(planRoot, (node) => {
+         if (keyPattern == null && isIxscanStage(node) && node.keyPattern != null) {
+            keyPattern = node.keyPattern;
+         }
+      });
+      return keyPattern;
+   }
+
+   function collectQueryPlanners(explainResult) {
+      const out = [];
+      const take = (obj) => {
+         if (!obj || typeof obj !== 'object') return;
+         if (obj.queryPlanner) out.push(obj.queryPlanner);
+         if (Array.isArray(obj.stages)) {
+            for (const st of obj.stages) {
+               if (st?.$cursor?.queryPlanner) out.push(st.$cursor.queryPlanner);
+            }
+         }
+         if (obj.shards && typeof obj.shards === 'object') {
+            for (const sh of Object.values(obj.shards)) take(sh);
+         }
+      };
+      take(explainResult);
+      return out;
+   }
+
+   function firstViableWindowHint(explainResult, indexes) {
+      /*
+       *  Planner order: winningPlan, then rejectedPlans. Viable = IXSCAN without
+       *  COLLSCAN/SORT whose keyPattern is a window-safe btree (listCurationIndexes).
+       *  Winner already viable → no hint. Else first ranked viable keyPattern as hint.
+       */
+      const allowed = new Set((indexes || []).map(idx => JSON.stringify(idx.key)));
+      const planners = collectQueryPlanners(explainResult);
+      if (!planners.length || !allowed.size) return null;
+      let allWinnersViable = true;
+      const viableKeys = [];
+      const seen = new Set();
+      for (const qp of planners) {
+         const winning = qp.winningPlan;
+         if (!winning || !planTreeIsIndexOrdered(winning)) {
+            allWinnersViable = false;
+         } else {
+            const kp = ixscanKeyPattern(winning);
+            if (!kp || !allowed.has(JSON.stringify(kp))) allWinnersViable = false;
+         }
+         const ranked = [winning, ...(Array.isArray(qp.rejectedPlans) ? qp.rejectedPlans : [])].filter(Boolean);
+         for (const plan of ranked) {
+            if (!planTreeIsIndexOrdered(plan)) continue;
+            const kp = ixscanKeyPattern(plan);
+            if (!kp) continue;
+            const sig = JSON.stringify(kp);
+            if (!allowed.has(sig) || seen.has(sig)) continue;
+            seen.add(sig);
+            viableKeys.push(kp);
+         }
+      }
+      if (allWinnersViable) return { "hint": {}, "fromWinner": true };
+      if (viableKeys.length) return { "hint": viableKeys[0], "fromWinner": false };
+      return null;
+   }
+
    function hasUserHint(h) {
       return h != null && typeof h === 'object' && !Array.isArray(h) && Object.keys(h).length > 0;
    }
@@ -797,6 +878,9 @@
        *    otherwise WARN and take the _id scan.
        *  - Policy B: when the first filter field is not index-ordered, probe
        *    compound equality prefixes and trailing btree keys (ESR / Howto Example D).
+       *  - Unhinted: if winningPlan is not IXSCAN-without-SORT, hint the first
+       *    ranked rejectedPlan that is (queryPlanner order, window-safe btree).
+       *    Empty viable set → _id find() scan. Catch-292 still covers live SORT.
        */
       const idSort = { "_id": 1 };
       const idHint = { "_id": 1 };
@@ -857,15 +941,53 @@
          }
       };
 
-      const tryPolicyB = async (forcedHint) => {
-         const indexes = await listCurationIndexes(namespace);
+      const tryWindowFromPlanner = async (candidateSort, indexes) => {
+         /*
+          *  Unhinted $match+$sort. If the winner is index-ordered, no hint.
+          *  Else hint the first ranked rejectedPlan that stays IXSCAN-without-SORT
+          *  on a window-safe btree. Confirm the full window pipeline.
+          */
+         const prefix = [{ "$match": filter }, { "$sort": candidateSort }];
+         const fullLet = { "allowDiskUse": false, "let": { "bucketSizeLimit": 100 } };
+         try {
+            const prefixExpl = await runExplain(prefix, explainOpts);
+            if (planIsIndexOrdered(prefixExpl)) {
+               const fullExpl = await runExplain(windowBucketPipeline(filter, candidateSort), { ...explainOpts, ...fullLet });
+               if (!planIsIndexOrdered(fullExpl)) return null;
+               return { "sortBy": candidateSort, "hint": {}, "mode": "window" };
+            }
+            const pick = firstViableWindowHint(prefixExpl, indexes);
+            if (!pick || pick.fromWinner || !hasUserHint(pick.hint)) return null;
+            const hinted = await tryWindow(candidateSort, pick.hint);
+            if (!hinted) return null;
+            emit(`\n\x1b[34m[INFO]\x1b[0m Curation planner hint \x1b[33m${JSON.stringify(hinted.hint)}\x1b[0m for sortBy \x1b[33m${JSON.stringify(candidateSort)}\x1b[0m`);
+            return hinted;
+         } catch(e) {
+            emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration window explain failed\x1b[0m:', e?.message ?? e);
+            return null;
+         }
+      };
+
+      const tryPolicyB = async (forcedHint, indexes) => {
          const candidates = policyBSortCandidates(filter, indexes, sortBy);
+         const seenSort = new Set();
          let probes = 0;
          for (const cand of candidates) {
             if (probes >= POLICY_B_MAX_PROBES) break;
-            const h = hasUserHint(forcedHint) ? forcedHint : cand.hint;
+            if (hasUserHint(forcedHint)) {
+               probes++;
+               const win = await tryWindow(cand.sortBy, forcedHint);
+               if (win) {
+                  emit(`\n\x1b[34m[INFO]\x1b[0m Curation Policy B window sortBy \x1b[33m${JSON.stringify(win.sortBy)}\x1b[0m`);
+                  return win;
+               }
+               continue;
+            }
+            const sig = JSON.stringify(cand.sortBy);
+            if (seenSort.has(sig)) continue;
+            seenSort.add(sig);
             probes++;
-            const win = await tryWindow(cand.sortBy, h);
+            const win = await tryWindowFromPlanner(cand.sortBy, indexes);
             if (win) {
                emit(`\n\x1b[34m[INFO]\x1b[0m Curation Policy B window sortBy \x1b[33m${JSON.stringify(win.sortBy)}\x1b[0m`);
                return win;
@@ -874,18 +996,20 @@
          return null;
       };
 
+      const indexes = await listCurationIndexes(namespace);
+
       if (hasUserHint(userHint)) {
          const win = await tryWindow(sortBy, userHint);
          if (win) return win;
-         const b = await tryPolicyB(userHint);
+         const b = await tryPolicyB(userHint, indexes);
          if (b) return b;
          emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mcuration plan may use COLLSCAN/blocking SORT despite user hint\x1b[0m; sortBy:', JSON.stringify(sortBy));
          return await idScan();
       }
 
-      const trusted = await tryWindow(sortBy, {});
+      const trusted = await tryWindowFromPlanner(sortBy, indexes);
       if (trusted) return trusted;
-      const b = await tryPolicyB({});
+      const b = await tryPolicyB({}, indexes);
       if (b) return b;
       return await idScan();
    }
