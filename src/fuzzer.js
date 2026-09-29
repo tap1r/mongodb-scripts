@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.45"
+ *  Version: "0.6.46"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.45" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.46" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -770,6 +770,30 @@
       return;
    }
 
+   function indexBuildMessage(result, label) {
+      if (typeof result.errmsg !== 'undefined')
+         return `${label} operation failed: ${result.errmsg}`;
+      else if (typeof result.note !== 'undefined')
+         return `${label} completed with note: ${result.note} with ${result.numIndexesAfter - result.numIndexesBefore} index changes.`;
+      else if (typeof result.ok !== 'undefined')
+         return `${label} completed!`;
+      else if (typeof result.msg !== 'undefined')
+         return `${label} build failed with message: ${result.msg}`;
+      else
+         return `${label} completed with results:\t${result}`;
+   }
+
+   function createIndexSet(keys, options, label, heading) {
+      const useCommitQuorum = fCV(4.4) && (isReplSet() || isSharded());
+      const quorum = useCommitQuorum ? indexPrefs.commitQuorum : 'disabled';
+      console.log(heading(quorum));
+      keys.forEach(index => console.log(`\tkey: ${tojson(index)}`));
+      const args = useCommitQuorum
+         ? [keys, options, indexPrefs.commitQuorum]
+         : [keys, options];
+      console.log(indexBuildMessage(namespace.createIndexes(...args), label));
+   }
+
    function buildIndexes() {
       if (dropIndexes) {
          console.log('\nDropping all existing indexes:');
@@ -778,56 +802,16 @@
 
       if (indexPrefs.build) {
          if (indexes.length > 0) {
-            console.log(`\nBuilding index${(indexes.length === 1) ? '' : 'es'} with collation locale "${collation.locale}" with commit quorum "${(fCV(4.4) && (isReplSet() || isSharded())) ? indexPrefs.commitQuorum : 'disabled'}":`);
-            indexes.forEach(index => console.log(`\tkey: ${tojson(index)}`));
-            const indexing = () => {
-               const options = (fCV(4.4) && (isReplSet() || isSharded()))
-                             ? [indexes, indexOptions, indexPrefs.commitQuorum]
-                             : [indexes, indexOptions];
-
-               return namespace.createIndexes(...options);
-            }
-            const idxResult = indexing();
-            const idxMsg = () => {
-               if (typeof idxResult.errmsg !== 'undefined')
-                  return `Indexing operation failed: ${idxResult.errmsg}`;
-               else if (typeof idxResult.note !== 'undefined') 
-                  return `Indexing completed with note: ${idxResult.note} with ${idxResult.numIndexesAfter - idxResult.numIndexesBefore} index changes.`;
-               else if (typeof idxResult.ok !== 'undefined')
-                  return 'Indexing completed!';
-               else if (typeof idxResult.msg !== 'undefined')
-                  return `Indexing build failed with message: ${idxResult.msg}`;
-               else
-                  return `Indexing completed with results:\t${idxResult}`;
-            }
-            console.log(idxMsg());
+            createIndexSet(indexes, indexOptions, 'Indexing', (quorum) =>
+               `\nBuilding index${(indexes.length === 1) ? '' : 'es'} with collation locale "${collation.locale}" with commit quorum "${quorum}":`
+            );
          } else
             console.log('No regular index builds specified.');
 
          if (specialIndexes.length > 0) {
-            console.log(`\nBuilding exceptional index${(specialIndexes.length === 1) ? '' : 'es'} (no collation support) with commit quorum "${(fCV(4.4) && (isReplSet() || isSharded())) ? indexPrefs.commitQuorum : 'disabled'}":`);
-            specialIndexes.forEach(index => console.log(`\tkey: ${tojson(index)}`));
-            const sIndexing = () => {
-               const sOptions = (fCV(4.4) && (isReplSet() || isSharded()))
-                              ? [specialIndexes, specialIndexOptions, indexPrefs.commitQuorum]
-                              : [specialIndexes, specialIndexOptions];
-
-               return namespace.createIndexes(...sOptions);
-            }
-            const sIdxResult = sIndexing();
-            const sidxMsg = () => {
-               if (typeof sIdxResult.errmsg !== 'undefined')
-                  return `Special indexing operation failed: ${sIdxResult.errmsg}`;
-               else if (typeof sIdxResult.note !== 'undefined')
-                  return `Special indexing completed with note: ${sIdxResult.note} with ${sIdxResult.numIndexesAfter - sIdxResult.numIndexesBefore} index changes.`;
-               else if (typeof sIdxResult.ok !== 'undefined')
-                  return 'Special indexing completed!';
-               else if (typeof sIdxResult.msg !== 'undefined')
-                  return `Special indexing build failed with message: ${sIdxResult.msg}`;
-               else
-                  return `Special indexing completed with results:\t${sIdxResult}`;
-            }
-            console.log(sidxMsg());
+            createIndexSet(specialIndexes, specialIndexOptions, 'Special indexing', (quorum) =>
+               `\nBuilding exceptional index${(specialIndexes.length === 1) ? '' : 'es'} (no collation support) with commit quorum "${quorum}":`
+            );
          } else
             console.log('\nNo special index builds specified.');
 
