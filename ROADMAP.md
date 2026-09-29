@@ -46,7 +46,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | **`connStats.js`** | **v0.1.14** (mongosh-only) | `$currentOp` pool stats with inprog fallback (`allUsers: false`). IPv6-bracket client parse. Further work (`whatsmyuri`, DRIVERS-3027, mongos `targetAllNodes`) is **mongosh-line**. Header documents this freeze. |
 | **`mdblib.js`** | **v0.15.10** | Dual-shell library snapshot. `fCV()` → `serverVer()` on Atlas M0/Flex is **by design** (`getParameter` FCV restricted; Atlas not on a lagging FCV). `slaveOk()` mongosh path can `setReadPref` (callers use per-command RP). `shellVer`/`serverVer` `+"x.y"` (2.10 ≡ 2.1) stays. Further work (`for(db)`, MetaStats, integer version parse) is **mongosh-line**. Header documents this freeze. |
 | **`discovery.js`** | **v0.2.1** (mongosh-only) | Not dual-shell (`async` IIFE, named capture groups). Topology fan-out stub; cmd profiles TBA. Do not top-level-await. Do not strip `(?<setName>)` for mongo. Further work (standalone/LB/arbiters, pool/jitter, primary-vs-secondary targeting) is **mongosh-line**. Header documents this freeze. |
-| **`niceDeleteMany.js`** | **v0.4.11** (mongosh-only) | Not dual-shell (`async` IIFE, `?.`). `--eval var` overlay (`typeof` probes; no in-file `const dbName`). Per-command RP (no `setReadPref`). Further work (per-shard WT via discovery, `lowPriorityAdmissionBypassThreshold`) is **mongosh-line**. Header documents this freeze. |
+| **`niceDeleteMany.js`** | **v0.4.11** (mongosh-only) | Not dual-shell (`async` IIFE, `?.`). `--eval var` overlay (`typeof` probes; no in-file `const dbName`). Per-command RP (no `setReadPref`). Further work (per-shard WT via discovery) is **mongosh-line**. Header documents this freeze. |
 | **`congestionMonitor.js`** | **v0.2.13** (mongosh-only) | Not dual-shell (`async` IIFE, `sleep` poll). Known: `.finally(process.stdout.write(…))` runs immediately — **freeze as-is** (wontfix on this line). Further work (sharding, v8 execution control, `bytes_dirty_intl`/`leaf`, auto-trim pause signal) is **mongosh-line**. Header documents this freeze. |
 | **`batchUpdater.js`** | **v0.1.6** (mongosh-only) | In-file `const dbName`/`collName` (not an `--eval` overlay). Known invalid `$expr` / `endValue === null` — **freeze as-is**. Further work (query `$type`, `--eval var`) is **mongosh-line**. Header documents this freeze. |
 | **`killAgedSessions.js`** | **v0.2.2** (mongosh-only) | Async generator + batch `killSessions`. `--eval` examples use `let` (not `var`). Further work is **mongosh-line**. Header documents this freeze. |
@@ -407,7 +407,6 @@ Remaining mongosh-line work (do not block the archive):
 Remaining mongosh-line work (do not block the archive):
 
 - Better sharding: per-shard WT vitals via `listShards` / discovery.
-- `lowPriorityAdmissionBypassThreshold` backward compatibility.
 - Fallback hint: match `queryPlanner` ranked plans (`winningPlan` / `rejectedPlans`) to indexes that stay IXSCAN-without-SORT. The planner already ranks efficiency; pick the first ranked plan whose index is in that viable set. Policy A/B currently take the first IXSCAN-without-SORT in probe order.
 
 ### `connStats.js`
