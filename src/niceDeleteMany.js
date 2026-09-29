@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.7.8"
+    *  Version: "0.7.9"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -66,7 +66,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.7.8" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.7.9" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -1392,6 +1392,16 @@
 
    function hasUserCollation(c) { return hasNonEmptyDoc(c); }
 
+   function applyUserCollation(opts) {
+      if (hasUserCollation(collation)) opts.collation = collation;
+      return opts;
+   }
+
+   function applyHint(opts, h) {
+      if (hasUserHint(h)) opts.hint = h;
+      return opts;
+   }
+
    // Per-command readPreference only — mongosh Mongo.setReadPref() reconnects the client
    // (resetConnectionOptions → close) and runCommand ignores connection RP (mongosh 2.0+).
    // adminCommand (serverStatus/getParameter) always targets the primary.
@@ -1531,7 +1541,7 @@
       const sortBy = { [sortField]: 1 };
       const POLICY_B_MAX_PROBES = 8;
       const explainOpts = {};
-      if (hasUserCollation(collation)) explainOpts.collation = collation;
+      applyUserCollation(explainOpts);
       if (readPreference?.mode) explainOpts.readPreference = commandReadPreference(readPreference);
 
       const runExplain = (pipeline, opts) => namespace.explain('queryPlanner').aggregate(pipeline, opts);
@@ -1543,7 +1553,7 @@
                "sort": idSort,
                "hint": idHint
             };
-            if (hasUserCollation(collation)) findExplainOpts.collation = collation;
+            applyUserCollation(findExplainOpts);
             if (explainOpts.readPreference) findExplainOpts.readPreference = explainOpts.readPreference;
             cursor = namespace.find(filter, { "_id": 1 }, findExplainOpts);
             cursor = await unwrapShellCursor(cursor);
@@ -1569,7 +1579,7 @@
 
       const tryWindow = async (candidateSort, candidateHint) => {
          const opts = { ...explainOpts };
-         if (hasUserHint(candidateHint)) opts.hint = candidateHint;
+         applyHint(opts, candidateHint);
          const prefix = [{ "$match": filter }, { "$sort": candidateSort }];
          const fullOpts = { ...opts, "allowDiskUse": false, "let": { "bucketSizeLimit": 100 } };
          try {
@@ -1706,8 +1716,8 @@
          "let": { "bucketSizeLimit": bucketSizeLimit },
          "readPreference": cmdRP
       };
-      if (hasUserCollation(collation)) aggOpts.collation = collation;
-      if (hasUserHint(curationHint)) aggOpts.hint = curationHint;
+      applyUserCollation(aggOpts);
+      applyHint(aggOpts, curationHint);
       const pipeline = windowBucketPipeline(filter, curationSortBy);
       // offload iterator to the shell's cursor (same RP as Policy A explain)
       try {
@@ -1763,7 +1773,7 @@
       };
       // Atlas M0/Flex reject noTimeout cursors; session idle already bounds the walk.
       if (!curationCannotSpill()) findCmd.noCursorTimeout = true;
-      if (hasUserCollation(collation)) findCmd.collation = collation;
+      applyUserCollation(findCmd);
       let cursor = database._runCursorCommand(findCmd, {
          "readPreference": driverReadPreference(cmdRP)
       });
@@ -1831,10 +1841,8 @@
                "readConcern": sessionOpts?.readConcern?.level ?? "majority",
                "comment": "Validating IDs via niceDeleteMany.js"
             };
-         if (lastCuration.mode === 'window' && hasUserHint(lastCuration.hint)) {
-            aggOpts.hint = lastCuration.hint;
-         }
-         if (hasUserCollation(collation)) aggOpts.collation = collation;
+         if (lastCuration.mode === 'window') applyHint(aggOpts, lastCuration.hint);
+         applyUserCollation(aggOpts);
          return namespace.aggregate(pipeline, aggOpts).toArray()[0]?.IDsTotal ?? 0;
       } finally {
          session.endSession();
