@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.48"
+ *  Version: "0.6.49"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.48" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.49" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -163,10 +163,8 @@
    const namespace = database.getCollection(collName);
    const now = new Date().getTime();
    const timestamp = $floor(now / 1000);
-   let sampleSize = 8, docSize = 0, totalBatches = 1, residual = 0;
-
-   fuzzer.ratios.forEach(ratio => sampleSize += parseInt(ratio));
-   sampleSize *= sampleSize;
+   const ratioSum = fuzzer.ratios.reduce((n, ratio) => n + parseInt(ratio), 0);
+   const sampleSize = (8 + ratioSum) ** 2;
 
    async function main() {
       /*
@@ -177,6 +175,7 @@
       console.log(`\nSynthesising ${totalDocs} document${(totalDocs === 1) ? '' : 's'}`);
 
       // sampling synthetic documents and estimating batch size
+      let docSize = 0;
       for (let i = 0; i < sampleSize; ++i)
          docSize += bsonsize(genDocument(fuzzer, timestamp));
 
@@ -184,18 +183,11 @@
       if (avgSize > bsonMax * 0.95)
          console.log(`\n[Warning] The average document size of ${avgSize} bytes approaches or exceeeds the BSON max size of ${bsonMax} bytes`);
       console.log(`\nSampling ${sampleSize} document${(sampleSize === 1) ? '' : 's'} each with BSON size averaging ${avgSize} byte${(avgSize === 1) ? '' : 's'}`);
-      let batchSize = (() => {
-         const sampledSize = $floor(bsonMax * 0.95 / avgSize);
-         // return (maxWriteBatchSize < sampledSize) ? maxWriteBatchSize : sampledSize;
-         return (1000 < sampledSize) ? 1000 : sampledSize;
-      })();
+      const sampledSize = $floor(bsonMax * 0.95 / avgSize);
+      const batchCap = 1000;
+      // return (maxWriteBatchSize < sampledSize) ? maxWriteBatchSize : sampledSize;
+      const batchSize = Math.min(batchCap, sampledSize);
       console.log(`Estimated optimal capacity of ${batchSize} document${(batchSize === 1) ? '' : 's'} per batch`);
-      if (totalDocs <= batchSize)
-         batchSize = totalDocs;
-      else {
-         totalBatches += $floor(totalDocs / batchSize);
-         residual = $floor(totalDocs % batchSize);
-      }
 
       // (re)create the namespace
       dropNS();
@@ -809,14 +801,17 @@
    }
 
    function genBulk(batchSize) {
-      console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} document${(totalDocs === 1) ? '' : 's'} in ${totalBatches} batch${(totalBatches === 1) ? '' : 'es'}:`);
-      for (let i = 0; i < totalBatches; ++i) {
-         if (i == totalBatches - 1 && residual > 0) batchSize = residual;
+      const batches = $ceil(totalDocs / batchSize);
+      console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} document${(totalDocs === 1) ? '' : 's'} in ${batches} batch${(batches === 1) ? '' : 'es'}:`);
+      let remaining = totalDocs;
+      for (let i = 0; remaining > 0; ++i) {
+         const n = Math.min(batchSize, remaining);
+         remaining -= n;
          const bulk = namespace.initializeUnorderedBulkOp();
-         for (let batch = 0; batch < batchSize; ++batch) bulk.insert(genDocument(fuzzer, timestamp));
+         for (let batch = 0; batch < n; ++batch) bulk.insert(genDocument(fuzzer, timestamp));
          const result = bulk.execute(writeConcern);
          const bInserted = result.insertedCount;
-         console.log(`\t[Batch ${1 + i}/${totalBatches}] bulk inserted ${bInserted} document${(bInserted === 1) ? '' : 's'}`);
+         console.log(`\t[Batch ${1 + i}/${batches}] bulk inserted ${bInserted} document${(bInserted === 1) ? '' : 's'}`);
       }
 
       return console.log('Generation completed.');
