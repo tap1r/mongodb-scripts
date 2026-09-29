@@ -351,6 +351,8 @@ db.collection.find(filter, { _id: 1 }, {
   batchSize: 100,
   readPreference: cmdRP
 });
+// Policy A scan probe is this find(), not $match+$sort aggregate:
+// db.collection.find(filter, { _id: 1 }, { sort: { _id: 1 }, hint: { _id: 1 } }).explain('queryPlanner')
 ```
 
 Typical plan: `FETCH` → `IXSCAN { _id: 1 }`. The filter is residual. Prefetch tasks still receive **100 `_id`s** per bucket, matching window mode.
