@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.7.3"
+    *  Version: "0.7.4"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -31,6 +31,9 @@
     *  - Progress HUD shows congestion, admission, and pool utilization only — ETA is not cheap
     *  - HUD is pinned below the log; emit lines persist and are never clobbered by redraws
     *  - Colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped
+    *
+    *  TODOs:
+    *  - Balancer-aware throttle from shardingStatistics.rangeDeleterTasks (THROTTLE band, same as index builds; not CLOSED; not tenantMigrations)
     */
 
    // Syntax: mongosh [connection options] [--quiet] [--eval 'var dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>, interactive = <bool>;'] [-f|--file] </path/to/>niceDeleteMany.js
@@ -63,7 +66,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.7.3" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.7.4" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -464,7 +467,6 @@
       "queues": true,
       "repl": true, // lastWrite / majorityWriteDate when rs.status is unavailable
       "storageEngine": true,
-      "tenantMigrations": true,
       "tcmalloc": true, // 2 for more debugging
       "wiredTiger": true
    };
@@ -2188,10 +2190,6 @@
             return (this.wtWriteTicketsUtil < 20) ? 'low'
                  : (this.wtWriteTicketsUtil > 75) ? 'high'
                  : 'medium';
-         },
-         get activeShardMigrations() {
-            const { currentMigrationsDonating, currentMigrationsReceiving } = this.serverStatus.tenantMigrations ?? {};
-            return (currentMigrationsDonating > 0 || currentMigrationsReceiving > 0);
          },
          get activeFlowControl() {
             return (this.serverStatus.flowControl?.isLagged === true && this.serverStatus.flowControl?.enabled === true);
