@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.19"
+    *  Version: "0.4.20"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,11 +18,11 @@
     *  - mongosh only. Do not top-level-await this IIFE.
     *  - --eval must use var (not let/const); probe typeof, do not declare
     *    dbName/collName/filter in this file.
-    *  - Curation relies on a semi-blocking operator for bucket estimations
+    *  - Window mode: index-ordered $match+$sort + $setWindowFields (semi-blocking bucket estimates)
+    *  - Scan mode: hinted {_id:1} find(), residual FETCH, in-process buckets (no $setWindowFields)
+    *  - User hint is kept only when the hinted explain is IXSCAN without a blocking SORT; otherwise WARN and _id scan
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
-    *  - Prefers index-ordered curation (avoids blocking sorts / disk spill); optional user hint supported
-    *  - If explain has no IXSCAN (or $setWindowFields would block), walk _id via find() and bucket in-process
     *  - Atlas M0/Flex (no WT vitals) always walk _id via find(); leftover window SORT cannot spill
     *  - "pace" admission mode when WT cache vitals are unavailable (mongos/Atlas M0/Flex)
     *  - Progress HUD shows congestion, admission, and pool utilization only — ETA is not cheap
@@ -67,7 +67,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.19" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.20" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
