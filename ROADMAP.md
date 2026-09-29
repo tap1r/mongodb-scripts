@@ -12,13 +12,11 @@ Status is implied by section: **planned** unless marked later / hardening.
 - **mongosh scripting guide.** Living notes for `--file` rewriter, async IIFEs, `sleep()` vs `await` delays, `--eval` `var` options. Extend when a script hits a new shell quirk. Document the consumption modes below when they land.
 - **`ProgressTracker`.** Stub in `mdblib.js` (`/* Add to mdblib.js */`) for long catalog walks (dbstats, index cache, auto-trim snapshot, **autoCompact first-pass**). Must honour the shared emit rules: TTY progress only; silent or JSON progress events in module / redirected mode — never `\r` bars in piped logs.
 - **Topology fan-out.** Per-mongod tools (`autoCompact`, WT vitals, dbstats snapshots) eventually ride `discovery.js`. Until then, operators target members with a direct connection.
-- **Legacy mongo shell retirement.** Dual-shell tree archived **2026-09-01** at [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/) (tag `legacy-mongo-shell`). Live `src/` is **mongosh-only** after the [strip pass](#3-after-the-cut--strip-and-streamline-next-general-architecture) (`mdblib.js` v0.15.11).
+- **Legacy mongo shell retirement.** Dual-shell tree archived **2026-09-01** at [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/) (tag `legacy-mongo-shell` on `c78904f`). Live `src/` is **mongosh-only** after the [strip pass](#3-after-the-cut--strip-and-streamline-next-general-architecture). Current library: **`mdblib.js` v0.15.13**.
 
 ### Legacy mongo shell retirement
 
-Today `mdblib.js` and most dual-shell scripts still target **legacy `mongo` (floor 4.4) and mongosh (floor 1.10 / 2.10+)** in one file: `isMongosh()` branches, `slaveOk` / `rs.slaveOk`, `Timestamp(t, i)` vs `Timestamp({ t, i })`, `getCollectionInfos` boolean vs options object, `runCommand(cmd)` vs `runCommand(cmd, options)`, `console` polyfill, `shellVer(2.0) && isMongosh()` for `toSorted` / second-arg options. That tax is accepted **until** the scripts are good enough to snapshot.
-
-This is a **sequenced cut**, not a now-task. Feature work (auto-trim, emit/options UX, discovery) does not wait on it; stripping shims does.
+**Done.** Dual `mongo` / `mongosh` in one file was the tax until the snapshot. Archive keeps `_getEnv`, `slaveOk`, dual `Timestamp`, boolean `getCollectionInfos`, command-body `options`, and the missing-`console` polyfill. Live `src/` does not. Feature work (auto-trim, emit/options UX, discovery) proceeds on the mongosh line only.
 
 #### 1. Nominal correctness first
 
@@ -71,18 +69,36 @@ Do **not** require auto-trim, `mdblib.for(db)`, or a unified options resolver be
 |--|--|
 | Archive path | [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/) |
 | README / DISCLAIMER | [`legacy/mongo-shell/README.md`](legacy/mongo-shell/README.md), [`legacy/mongo-shell/DISCLAIMER.md`](legacy/mongo-shell/DISCLAIMER.md) |
-| Intended git tag | `legacy-mongo-shell` (apply on the commit that adds this tree) |
+| Git tag | `legacy-mongo-shell` on `c78904f` (pushed) |
 | Frozen library | `mdblib.js` **v0.15.10** |
-| mongosh floor (GA `src/` after shim strip) | **1.10 / 2.10+** (raise only with a later floor decision) |
+| mongosh floor (GA `src/`) | **1.10 / 2.10+** (raise only with a later floor decision) |
 | mongod / legacy `mongo` floors in the archive | **4.4** |
 
 No further dual-shell feature work on the archived line. Operators who still have `mongo` use the archive. Operators on mongosh use repository `src/`.
 
-**GA `src/`:** mongosh-only after the §3 strip (`mdblib.js` v0.15.11+). Dual-shell sources remain in [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/).
+**GA `src/` (master, mongosh-only).** Live versions have moved past the freeze. Archive-only (not in live `src/`): `compact.js`, `batchUpdater.js`.
+
+| Script | Archive freeze | Live `src/` |
+|--------|----------------|-------------|
+| `mdblib.js` | 0.15.10 | **0.15.13** |
+| `dbstats.js` | 0.12.19 | **0.12.21** |
+| `autoCompact.js` | 0.4.36 | **0.4.37** |
+| `fuzzer.js` | 0.6.43 | **0.6.44** |
+| `oplogchurn.js` | 0.5.22 | **0.5.23** |
+| `latency.js` | 0.4.9 | **0.4.10** |
+| `schema-sampler.js` | 0.2.16 | **0.2.17** |
+| `sleepy.js` | 0.2.6 | **0.2.7** |
+| `docSizes.js` | 0.1.34 | **0.1.35** |
+| `niceDeleteMany.js` | 0.4.11 | **0.11.5** |
+| `onlineDefrag.js` | 0.1.4 | **1.6.1** |
+| `compact.js` | 0.2.15 | **removed** (archive only) |
+| `batchUpdater.js` | 0.1.6 | **removed** (archive only) |
+
+Unchanged vs freeze (still in live `src/`): `explainHisto` 0.1.4, `schema-import` 0.1.8, `indexCacheUtil` 0.1.5, `connStats` 0.1.14, `discovery` 0.2.1, `congestionMonitor` 0.2.13, `killAgedSessions` 0.2.2, `rtt` 0.3.0, `oidGenerator` 0.2.7, `oidFunction` 0.1.5, `ctxDemo` 0.1.0, `modifiedCountDocumentsByKey` 0.1.7.
 
 #### 3. After the cut — strip and streamline (next general architecture)
 
-**Executed in live `src/` (`mdblib.js` v0.15.11).** Archive is unchanged. Remaining helper work (`for(db)`, MetaStats) is not this pass.
+**Executed in live `src/` (`mdblib.js` v0.15.11, now v0.15.13).** Archive is unchanged. Remaining helper work (`for(db)`, MetaStats) is not this pass.
 
 Done in this pass:
 
@@ -278,7 +294,7 @@ Pin down in the implementation:
 
 ### `autoCompact.js`
 
-Executor auto-trim will call. Keep the file standalone. **Legacy archive line: v0.4.36** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Direct-to-member targeting belongs in `discovery.js`; cron/JSON/wait caps belong in `autoTrim.js`. Further feature work (progress bar, auto-trim coupling) is mongosh-line only.
+Executor auto-trim will call. Keep the file standalone. **Live: v0.4.37.** **Archive: v0.4.36.** Direct-to-member targeting belongs in `discovery.js`; cron/JSON/wait caps belong in `autoTrim.js`. Further feature work (progress bar, auto-trim coupling) is mongosh-line only.
 
 **Shipped**
 
@@ -313,9 +329,9 @@ Replace or sit beside the WTCMPCT line dump with a `ProgressTracker`-style bar f
 
 The storage snapshot other scripts want (auto-trim planner, discovery-directed jobs, later compact/onlineDefrag targeting). Current shape is still gather+print in one pass; the roadmap below assumes a **catalog-first, then stats** split so new catalog sources and output formats share one walk.
 
-Shipped recently: views listed once on the nameOnly pass; collection `$collStats` remains the second phase (Unauthorized → `name (unauthorized)`); databases sorted once after the fetch pool; section deep-merge for options (`filter` / `sort.*` / `output`); `output.format` canonical name `tabular` with `table` alias; `formatPct` / `formatRatio` guard zero/non-finite divisors (`n/a` instead of `NaN%` / `Infinity:1`); sort helpers collapsed to `compareBy` + `stableSort`; printers share `metricsCols` / `printRollupRows` / `formatShardCounts`; DB `$stats` map is pure — `rollupDbPath` aggregates totals separately; **`filter.system`** (`true`/`include` default, `false`/`exclude`, `only`) via mdblib `systemCollectionFilter` (replaces dead `systemFilter = /.+/`); authz preflight uses named booleans (`authzAdequate`); legacy Unauthorized detection on `$collStats` / features probe; **M0/Flex free-space:** `db.stats()` still wins when it is a real measurement; on shared tier (where db-level reusable bytes are hidden) db/dbPath totals roll up collection WT `$collStats` as a lower bound (`freeStorageSizeSource: 'collStatsRollup'`, `freeStorageComplete` false when authz/filters omit namespaces), with a `*` marker and footnote.
+Shipped recently: views listed once on the nameOnly pass; collection `$collStats` remains the second phase (Unauthorized → `name (unauthorized)`); databases sorted once after the fetch pool; section deep-merge for options (`filter` / `sort.*` / `output`); `output.format` canonical name `tabular` with `table` alias; `formatPct` / `formatRatio` guard zero/non-finite divisors (`n/a` instead of `NaN%` / `Infinity:1`); sort helpers collapsed to `compareBy` + `stableSort`; printers share `metricsCols` / `printRollupRows` / `formatShardCounts`; DB `$stats` map is pure — `rollupDbPath` aggregates totals separately; **`filter.system`** (`true`/`include` default, `false`/`exclude`, `only`) via mdblib `systemCollectionFilter` (replaces dead `systemFilter = /.+/`); authz preflight uses named booleans (`authzAdequate`); legacy Unauthorized detection on `$collStats` / features probe; **M0/Flex free-space:** `db.stats()` still wins when it is a real measurement; on shared tier (where db-level reusable bytes are hidden) db/dbPath totals roll up collection WT `$collStats` as a lower bound (`freeStorageSizeSource: 'collStatsRollup'`, `freeStorageComplete` false when authz/filters omit namespaces), with a `*` marker and footnote; **`output.format: json`** is a versioned contract (`JSON.stringify`, `main()` returns the same object) — not `printjson` of the MetaStats tree.
 
-**Legacy archive line for this script: v0.12.19** (requires **mdblib.js ≥ 0.15.8**). See [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1. Post-freeze feature work (JSON/module mode, dual catalog, task pool, MetaStats split, hot summary/HTML) proceeds on the mongosh line only.
+**Live: v0.12.21** (mdblib v0.15.13). **Archive: v0.12.19.** JSON is still `printjson` of the internal tree — the [json contract](#output-formats) is the next dbstats item. Dual catalog, task pool, MetaStats split, hot summary/HTML remain mongosh-line.
 
 #### System namespace filter
 
@@ -323,7 +339,7 @@ Orthogonal to `filter.db` / `filter.collection` regexes. “System” means coll
 
 #### Output formats
 
-- **`json` (near-term contract).** Today `output.format: json` mostly returns the internal tree / skips a stable print path. Promote it to a **documented, versioned object** other `--file` scripts can consume without scraping colour tables — same payload as **module / non-interactive mode** under [Script consumption](#script-consumption-unify-standalone-vs-modular). Consumers in mind: `autoTrim.js` (rank reclaimable), `discovery.js` (per-node job payloads), later `autoCompact` / `compact` / `onlineDefrag` targeting. Prefer a ranked flat list *and* the hierarchical rollup (db → collection → index), e.g. namespaces as `{ ns, kind, dataSize, storageSize, freeStorageSize, objects, compaction, … }[]` plus cluster/dbPath totals. Keep `n/a` free-space as `null`, not `0` (Atlas M0/Flex). When db/dbPath totals come from collection WT instead of `db.stats()`, include `freeStorageSizeSource` (`'dbStats'|'collStatsRollup'|'unknown'`) and `freeStorageComplete` (and the index equivalents); incomplete rollups are a lower bound — auto-trim must not use them as `G()` mass. Peel the contract to stable keys; do not leak printer-only fields.
+- **`json` (near-term contract).** `output.format: json` prints a **versioned object** (`ok`, `name`, `version`, `totals`, `databases[]`, `namespaces[]`, `warnings[]`) — same payload `main()` returns for load() / module callers. Consumers: `autoTrim.js` (rank reclaimable), `discovery.js` (per-node job payloads), later `autoCompact` / `compact` / `onlineDefrag` targeting. Ranked flat list *and* hierarchical rollup (db → collection → index); namespace rows are `{ ns, kind, dataSize, storageSize, freeStorageSize, objects, compaction, … }`. Keep `n/a` free-space as `null`, not `0` (Atlas M0/Flex). When db/dbPath totals come from collection WT instead of `db.stats()`, include `freeStorageSizeSource` (`'dbStats'|'collStatsRollup'|'unknown'`) and `freeStorageComplete` (and the index equivalents); incomplete rollups are a lower bound — auto-trim must not use them as `G()` mass. Peel the contract to stable keys; do not leak printer-only fields.
 - **`html`.** Build from the same JSON object (embed or fetch), not a parallel printer. Interactive table via a browser-side helper such as **Sortable.js** (sort by size / free / reuse / objects without re-running mongosh). Colour / verbosity options feed the same payload.
 - **Aspirational — live HTML.** HTML page calls script-side / local API hooks for refresh (re-snapshot without a full page reload). Depends on a durable run mode or companion listener; do not block the static JSON→HTML path on it.
 - Existing TBA that still matters for planners: sort/limit by `compaction`, `reuse`, `idxFreeStorageSize`; `output.verbosity: compactOnly` (candidates only); format aliases (`tabular` / `table`) cleaned up when JSON is formalised.
@@ -361,9 +377,9 @@ A compact “hot” report mode (verbosity or dedicated format): **top-N namespa
 
 Per-namespace `compact` and update-based defrag. Not auto-trim. Auto-trim’s **opt-in oplog** path is 8.0+ `compact` + `freeSpaceTargetMB` on `local.oplog.rs`, not this script’s entropy loop.
 
-**Legacy archive line for `compact.js`: v0.2.15** (requires **mdblib.js ≥ 0.15.8**). See [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1. Do not restore `const dbFilter = dbName, collFilter = collName, reportLog;` — `const` requires an initializer; those names were never read, and IIFE-scoped bindings are invisible to `load('dbstats.js')` anyway. `let options` is not an `--eval` overlay (that needs the `typeof options === 'undefined'` probe and **no** in-file binding). Post-freeze feature work (dbstats module/JSON, discovery, Atlas M0 bounce) proceeds on the mongosh line only.
+**`compact.js`:** not in live `src/` (archive **v0.2.15** only). Do not restore it without a mongosh-line rewrite. Do not restore `const … reportLog`. Entropy-loop compact is not auto-trim.
 
-**Legacy archive line for `onlineDefrag.js`: v0.1.4** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not declare `const dbName` / `collName` / `options` in-file (shadows `--eval var`). Do not invoke the IIFE as `(async() => { … })(options = {…})` — that clobbers a user `options` overlay. Do not top-level-await. Post-freeze feature work proceeds on the mongosh line only.
+**`onlineDefrag.js` live: v1.6.1** (mdblib). **Archive: v0.1.4.** `--eval var` for `dbName` / `collName` / `defragOptions`. Do not top-level-await.
 
 Remaining mongosh-line work (do not block the archive):
 
@@ -402,9 +418,9 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `niceDeleteMany.js`
 
-**Legacy archive line: v0.4.11** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). `--eval` must use `var` (not `let`/`const`). Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`. Post-freeze feature work proceeds on the mongosh line only.
+**Live: v0.11.5.** **Archive: v0.4.11.** `--eval` must use `var`. Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`.
 
-Remaining mongosh-line work (do not block the archive): balancer-aware throttle from `shardingStatistics.rangeDeleterTasks` (THROTTLE band; tabled). Per-shard WT admission samples collection-owning shard primaries (worst-shard fold) and uses paceMaker if any of those shards is unreachable.
+Remaining: balancer-aware throttle from `shardingStatistics.rangeDeleterTasks` (tabled). `(await namespace.deleteMany(…)).deletedCount` still needed (`await deleteMany().deletedCount` is always `undefined`). Uncommitted working-tree edits may already touch this file — do not bump past 0.11.5 until those land.
 
 ### `connStats.js`
 
@@ -428,10 +444,10 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `mdblib.js`
 
-**Legacy archive line: v0.15.10.** Dual-shell library snapshot — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1. Pair archived scripts with this file (not only “≥ 0.15.8”). Do not “fix” `fCV()` → `serverVer()` on M0/Flex. Post-freeze feature work proceeds on the mongosh line only.
+**Live: v0.15.13.** **Archive: v0.15.10** — pair archived scripts with 0.15.10, not live mdblib. Do not “fix” `fCV()` → `serverVer()` on M0/Flex.
 
 - Namespaced helpers / `for(db)` — **after** the library strategy change, not before.
-- **Legacy `mongo` shims** — stripped in live `src/` (`mdblib.js` v0.15.11). Archive keeps v0.15.10. Do not restore `slaveOk` / dual `Timestamp` / `_getEnv` loaders. Integer `serverVer` / `fCV` / `shellVer` are in place; do not couple further cleanup to `for(db)`. `fCV()` on M0/Flex → `serverVer()` is intentional (Atlas not on a lagging FCV).
+- **Legacy `mongo` shims** — stripped (`mdblib.js` v0.15.11+). Do not restore `slaveOk` / dual `Timestamp` / `_getEnv` loaders. Integer `serverVer` / `fCV` / `shellVer` are in place; do not couple further cleanup to `for(db)`.
 - **Shared emit helpers** (see [Script consumption](#script-consumption-unify-standalone-vs-modular)): finish the story beyond today’s `console.log` TTY overload — one path for markup→ANSI, non-TTY strip, progress suppress, and module-quiet. Bring `print` / raw-escape call sites onto it over time.
 - **System name policy (shipped):** `isSystemCollectionName` / `normalizeSystemFilter` / `acceptSystemCollectionName` / `systemCollectionFilter` — used by dbstats `filter.system`. Full catalog walkers (`getAllNonSystemNamespaces`, collections, views, `getAllSystemNamespaces`) still TBA; they should apply the same predicate after listCollections, not re-encode regexes.
 - `AutoFactor` NaN / scale clamp (the copy in `autoCompact.js` is stricter).
@@ -531,18 +547,18 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `fuzzer.js`
 
-**Legacy archive line: v0.6.43** (requires **mdblib.js ≥ 0.15.8**). See [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1. Dual-shell. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()` — mongosh reconnects and the next DB call (`exists` / `drop` / `createCollection`) hangs or rejects unhandled on a local replica set (Atlas SRV usually survives). Writes already target primary. Compact `load('fuzzer.js')` uses fuzzer’s own `dbName`/`collName`; keep them in sync by hand. Post-freeze feature work proceeds on the mongosh line only.
+**Live: v0.6.44.** **Archive: v0.6.43.** Mongosh-only. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()`. Compact is archive-only; fuzzer’s `dbName`/`collName` stay in-file.
 
 Remaining mongosh-line work (do not block the archive):
 
 - `--eval` overlay for namespace / `totalDocs` (`var` + `typeof … === 'undefined'`; do not declare `const dbName` if `--eval` is the path).
-- Reshard wait already holds the user Promise so mongosh does not exit early; legacy mongo still only logs that async reshard monitoring is unsupported.
+- Reshard wait already holds the user Promise so mongosh does not exit early.
 - `w: "majority"` with no `wtimeout` can stall `createCollection` / bulk on PSA or a lagging secondary.
 - `$genRandWord` / `$benford` stay later. Shared-tier `fCV()` → `serverVer()` is by design (see mdblib).
 
 ### `oplogchurn.js`
 
-**Legacy archive line: v0.5.22** (requires **mdblib.js ≥ 0.15.8**). See [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1. Dual-shell. Do not restore `slaveOk(readPref)` before the oplog aggregate — mdblib `slaveOk` can `setReadPref` and reconnect mongosh; Atlas shared tiers deny it. Per-command RP only: mongosh `options.readPreference = { mode: readPref }`; legacy mongo `cursor.readPref(readPref)` (do not put `readPreference` on legacy aggregate options — the server rejects the field). Keep `--eval var intervalHrs` and `typeof intervalHrs === 'undefined'` (no in-file `const intervalHrs`). Dual `Timestamp({ t, i })` / `Timestamp(t, i)` stays. Post-freeze feature work proceeds on the mongosh line only.
+**Live: v0.5.23.** **Archive: v0.5.22.** Mongosh-only. Do not restore `slaveOk(readPref)`. Per-command `options.readPreference = { mode: readPref }`. Keep `--eval var intervalHrs`. `Timestamp({ t, i })` only.
 
 Remaining mongosh-line work (do not block the archive):
 
@@ -552,17 +568,17 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `latency.js`
 
-**Legacy archive line: v0.4.9** (mongosh-first; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Inline `console` / `EJSON` polyfill for legacy mongo; do not load mdblib on this line. Keep `[mongo|mongosh]` only while that polyfill stays. Do not block the archive on `$sleep` or Atlas Flex. Post-freeze feature work proceeds on the mongosh line only.
+**Live: v0.4.10.** **Archive: v0.4.9.** Mongosh-only (inline polyfill dropped). Do not restore `[mongo|mongosh]`.
 
 Remaining mongosh-line work (do not block the archive):
 
 - Replace `$function` + `sleep` with `$sleep` when the server exposes it; Flex / `javascriptEnabled: false` still bounce.
 - `getLog("global")` can be noisy or denied on some Atlas tiers.
-- Optional mdblib load would drop the inline polyfill and the dual-shell usage claim.
+- Optional mdblib load for colour tags / version helpers.
 
 ### `schema-sampler.js`
 
-**Legacy archive line: v0.2.16** (dual-shell lite; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not restore `db.getMongo().setReadPref(readPreference)`. Per-command RP on `$sample` only. In-file `const userOptions` is not an `--eval` overlay. Post-freeze feature work proceeds on the mongosh line only.
+**Live: v0.2.17.** **Archive: v0.2.16.** Mongosh-only. Do not restore `setReadPref`. Per-command RP on `$sample`. In-file `const userOptions` is not an `--eval` overlay.
 
 Remaining mongosh-line work (do not block the archive):
 
@@ -590,15 +606,15 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `sleepy.js`
 
-**Legacy archive line: v0.2.6** (dual-shell lite; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Inline `console` polyfill; do not load mdblib on this line.
+**Live: v0.2.7.** **Archive: v0.2.6.** Mongosh-only (inline `console` polyfill dropped).
 
 ### `docSizes.js`
 
-**Legacy archive line: v0.1.34** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). In-file `const options` is not an `--eval` overlay.
+**Live: v0.1.35.** **Archive: v0.1.34.** Per-command RP on `$sample`. In-file `const options` is not an `--eval` overlay.
 
 ### `batchUpdater.js`
 
-**Legacy archive line: v0.1.6** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). In-file `const dbName`/`collName`. Invalid `$expr` / `endValue === null` is **wontfix on this line**.
+**Not in live `src/`.** Archive **v0.1.6** (strip briefly reached 0.1.7 on master then the file was removed). Invalid `$expr` / `endValue === null` stays archive-only.
 
 ### `oidGenerator.js` / `oidFunction.js`
 
