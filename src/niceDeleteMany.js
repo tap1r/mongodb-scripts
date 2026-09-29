@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.7.0"
+    *  Version: "0.7.1"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -30,6 +30,7 @@
     *  - Repl lag: lastCommittedOpTime (majority commit point) when rs.status is available; else lastWrite vs majorityWriteDate (M0/Flex)
     *  - Progress HUD shows congestion, admission, and pool utilization only — ETA is not cheap
     *  - HUD is pinned below the log; emit lines persist and are never clobbered by redraws
+    *  - Colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped
     */
 
    // Syntax: mongosh [connection options] [--quiet] [--eval 'var dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>, interactive = <bool>;'] [-f|--file] </path/to/>niceDeleteMany.js
@@ -62,7 +63,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.7.0" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.7.1" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -172,12 +173,92 @@
       return Math.min(HUD_POOL_DISPLAY_MAX_CAP, Math.max(HUD_POOL_DISPLAY_MIN, termColumns() - 40));
    }
 
+   // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped.
+   // Inlined from mdblib.js / autoCompact.js — do not load() mdblib.
+   const ansiTags = [
+      { "tag": "\/", "code": 0 },
+      { "tag": "bold", "code": 1 },
+      { "tag": "dim", "code": 2 },
+      { "tag": "italic", "code": 3 },
+      { "tag": "underline", "code": 4 },
+      { "tag": "blink", "code": 5 },
+      { "tag": "reverse", "code": 7 },
+      { "tag": "hide", "code": 8 },
+      { "tag": "strike", "code": 9 },
+      { "tag": "black", "code": 30 },
+      { "tag": "k", "code": 30 },
+      { "tag": "red", "code": 31 },
+      { "tag": "r", "code": 31 },
+      { "tag": "green", "code": 32 },
+      { "tag": "g", "code": 32 },
+      { "tag": "yellow", "code": 33 },
+      { "tag": "y", "code": 33 },
+      { "tag": "blue", "code": 34 },
+      { "tag": "b", "code": 34 },
+      { "tag": "magenta", "code": 35 },
+      { "tag": "m", "code": 35 },
+      { "tag": "cyan", "code": 36 },
+      { "tag": "c", "code": 36 },
+      { "tag": "white", "code": 37 },
+      { "tag": "e", "code": 37 },
+      { "tag": "default", "code": 39 },
+      { "tag": "bg black", "code": 40 },
+      { "tag": "bg red", "code": 41 },
+      { "tag": "bg green", "code": 42 },
+      { "tag": "bg yellow", "code": 43 },
+      { "tag": "bg blue", "code": 44 },
+      { "tag": "bg magenta", "code": 45 },
+      { "tag": "bg cyan", "code": 46 },
+      { "tag": "bg white", "code": 47 },
+      { "tag": "bg default", "code": 49 },
+      { "tag": "bright black", "code": 90 },
+      { "tag": "K", "code": 90 },
+      { "tag": "bright red", "code": 91 },
+      { "tag": "R", "code": 91 },
+      { "tag": "bright green", "code": 92 },
+      { "tag": "G", "code": 92 },
+      { "tag": "bright yellow", "code": 93 },
+      { "tag": "Y", "code": 93 },
+      { "tag": "bright blue", "code": 94 },
+      { "tag": "B", "code": 94 },
+      { "tag": "bright magenta", "code": 95 },
+      { "tag": "M", "code": 95 },
+      { "tag": "bright cyan", "code": 96 },
+      { "tag": "C", "code": 96 },
+      { "tag": "bright white", "code": 97 },
+      { "tag": "W", "code": 97 },
+      { "tag": "bg bright black", "code": 100 },
+      { "tag": "bg bright red", "code": 101 },
+      { "tag": "bg bright green", "code": 102 },
+      { "tag": "bg bright yellow", "code": 103 },
+      { "tag": "bg bright blue", "code": 104 },
+      { "tag": "bg bright magenta", "code": 105 },
+      { "tag": "bg bright cyan", "code": 106 },
+      { "tag": "bg bright white", "code": 107 }
+   ];
+   // One scan per string. TTY expands [red]/[/] … to CSI; piped output strips tags+CSI.
+   // Case-sensitive lookup first so [R] (bright red) is not eaten by [r].
+   const ANSI_TAG_RE = /\[(\/|bg bright \w+|bright \w+|bg \w+|\w+)\]/gi;
    const ANSI_CSI_RE = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
-
-   function stripAnsi(text) {
-      // Same CSI pattern as mdblib.js. Raw \x1b only — do not strip [WARN]/[INFO] as colour tags.
-      return String(text).replace(ANSI_CSI_RE, '');
-   }
+   const ansiTagCode = {};
+   ansiTags.forEach(({ tag, code }) => {
+      ansiTagCode[tag] = code;
+      const lower = tag.toLowerCase();
+      if (ansiTagCode[lower] === undefined) ansiTagCode[lower] = code;
+   });
+   const ansiTagCodeOf = tag => {
+      let code = ansiTagCode[tag];
+      if (code === undefined) code = ansiTagCode[tag.toLowerCase()];
+      return code;
+   };
+   const applyAnsiTags = text => String(text).replace(ANSI_TAG_RE, (all, tag) => {
+      const code = ansiTagCodeOf(tag);
+      return (code === undefined) ? all : `\x1b[${code}m`;
+   });
+   const stripAnsiMarkup = text => String(text).replace(ANSI_TAG_RE, (all, tag) => (
+      ansiTagCodeOf(tag) === undefined ? all : ''
+   )).replace(ANSI_CSI_RE, '');
+   const stripAnsi = stripAnsiMarkup;
 
    // Pinned HUD: in-place overwrite of its own rows. emit() persists into banner and
    // lifts the HUD so log lines (curation WARN, batch errors, …) are never clobbered.
@@ -186,12 +267,13 @@
    let redrawHudFn = null;
 
    function formatEmitArgs(args) {
-      if (interactive) return [...args];
-      return [...args].map(a => (typeof a === 'string' ? stripAnsi(a) : a));
+      const paint = interactive ? applyAnsiTags : stripAnsiMarkup;
+      return [...args].map(a => (typeof a === 'string' ? paint(a) : a));
    }
 
    function emitLineText(args) {
-      return formatEmitArgs(args).map(a => (typeof a === 'string' ? a : String(a))).join(' ');
+      // Persist tagged source so TTY resize can re-expand; writeConsole paints.
+      return [...args].map(a => (typeof a === 'string' ? a : String(a))).join(' ');
    }
 
    function writeConsole(...args) {
@@ -233,7 +315,7 @@
 
    function paintHudRegion(hudText) {
       const body = String(hudText).replace(/\n+$/, '');
-      process.stdout.write(body + '\n');
+      process.stdout.write(applyAnsiTags(body) + '\n');
       hudPaintedRows = visualRows(body);
    }
 
@@ -277,21 +359,21 @@
          }
       };
    }
-   // Same vocabulary as congestionMonitor EQ: literal glyphs + \x1b colours (JS \xNN is
+   // Same vocabulary as congestionMonitor EQ: literal glyphs + colour tags (JS \xNN is
    // Latin-1 only — multi-byte UTF-8 via \xe2\x96… would not render as ░/▓).
    const HUD_MARK = {
       "bg": '░',
-      "low": '\x1b[92m▓\x1b[0m',       // green
-      "medium": '\x1b[93m▓\x1b[0m',    // yellow
-      "high": '\x1b[91m▓\x1b[0m',      // red
+      "low": '[G]▓[/]',       // bright green
+      "medium": '[Y]▓[/]',    // bright yellow
+      "high": '[R]▓[/]',      // bright red
       "run": {
-         "low": '\x1b[92m■\x1b[0m',
-         "medium": '\x1b[93m■\x1b[0m',
-         "high": '\x1b[91m■\x1b[0m'
+         "low": '[G]■[/]',
+         "medium": '[Y]■[/]',
+         "high": '[R]■[/]'
       },
-      "buf": '\x1b[36m□\x1b[0m',       // cyan prefetch
-      "free": '░',                     // available within maxInFlight
-      "cap": '\x1b[90m·\x1b[0m'        // dim AIMD-reserved
+      "buf": '[cyan]□[/]',    // cyan prefetch
+      "free": '░',            // available within maxInFlight
+      "cap": '[K]·[/]'        // bright black / dim AIMD-reserved
    };
    let lastHudAt = 0;
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
@@ -426,7 +508,7 @@
       admissionMode = 'pace';
       paceReason = reason;
       paceDetail = detail;
-      emit(`\n\x1b[31m[WARN]\x1b[0m \x1b[33m${detail}\x1b[0m`);
+      emit(`\n[red][WARN][/] [yellow]${detail}[/]`);
       if (switchingFromWt) {
          maxInFlightCap = Math.max(1, Math.min(PACE_MAX_IN_FLIGHT_CAP, maxInFlightCap|0 || PACE_MAX_IN_FLIGHT_CAP));
          maxInFlight = 1;
@@ -1360,19 +1442,19 @@
             if (explainOpts.readPreference) cursor = applyCursorReadPref(cursor, explainOpts.readPreference);
             const expl = await cursor.explain('queryPlanner');
             if (!planIsIndexOrdered(expl)) {
-               emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33m_id find() explain is not IXSCAN-without-SORT; scan will still force hinted {_id:1}\x1b[0m');
+               emit('\n[red][WARN][/] [yellow]_id find() explain is not IXSCAN-without-SORT; scan will still force hinted {_id:1}[/]');
             }
          } catch(e) {
-            emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration _id find() explain failed\x1b[0m:', e?.message ?? e);
+            emit('\n[red][WARN][/] [yellow]Curation _id find() explain failed[/]:', e?.message ?? e);
          } finally {
             try { if (cursor && typeof cursor.close === 'function') await cursor.close(); } catch(_) { /* already closed */ }
          }
-         emit(why ?? '\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)\x1b[0m');
+         emit(why ?? '\n[red][WARN][/] [yellow]Curation falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)[/]');
          return { "sortBy": idSort, "hint": idHint, "mode": "scan" };
       };
 
       if (curationCannotSpill()) {
-         return await idScan('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration forcing hinted _id find() walk — this host cannot spill a leftover $setWindowFields SORT (Atlas M0/Flex / no WT vitals)\x1b[0m');
+         return await idScan('\n[red][WARN][/] [yellow]Curation forcing hinted _id find() walk — this host cannot spill a leftover $setWindowFields SORT (Atlas M0/Flex / no WT vitals)[/]');
       }
 
       const tryWindow = async (candidateSort, candidateHint) => {
@@ -1387,7 +1469,7 @@
             if (!planIsIndexOrdered(fullExpl)) return null;
             return { "sortBy": candidateSort, "hint": candidateHint, "mode": "window" };
          } catch(e) {
-            emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration window explain failed\x1b[0m:', e?.message ?? e);
+            emit('\n[red][WARN][/] [yellow]Curation window explain failed[/]:', e?.message ?? e);
             return null;
          }
       };
@@ -1411,10 +1493,10 @@
             if (!pick || pick.fromWinner || !hasUserHint(pick.hint)) return null;
             const hinted = await tryWindow(candidateSort, pick.hint);
             if (!hinted) return null;
-            emit(`\n\x1b[34m[INFO]\x1b[0m Curation planner hint \x1b[33m${JSON.stringify(hinted.hint)}\x1b[0m for sortBy \x1b[33m${JSON.stringify(candidateSort)}\x1b[0m`);
+            emit(`\n[blue][INFO][/] Curation planner hint [yellow]${JSON.stringify(hinted.hint)}[/] for sortBy [yellow]${JSON.stringify(candidateSort)}[/]`);
             return hinted;
          } catch(e) {
-            emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration window explain failed\x1b[0m:', e?.message ?? e);
+            emit('\n[red][WARN][/] [yellow]Curation window explain failed[/]:', e?.message ?? e);
             return null;
          }
       };
@@ -1429,7 +1511,7 @@
                probes++;
                const win = await tryWindow(cand.sortBy, forcedHint);
                if (win) {
-                  emit(`\n\x1b[34m[INFO]\x1b[0m Curation Policy B window sortBy \x1b[33m${JSON.stringify(win.sortBy)}\x1b[0m`);
+                  emit(`\n[blue][INFO][/] Curation Policy B window sortBy [yellow]${JSON.stringify(win.sortBy)}[/]`);
                   return win;
                }
                continue;
@@ -1440,7 +1522,7 @@
             probes++;
             const win = await tryWindowFromPlanner(cand.sortBy, indexes);
             if (win) {
-               emit(`\n\x1b[34m[INFO]\x1b[0m Curation Policy B window sortBy \x1b[33m${JSON.stringify(win.sortBy)}\x1b[0m`);
+               emit(`\n[blue][INFO][/] Curation Policy B window sortBy [yellow]${JSON.stringify(win.sortBy)}[/]`);
                return win;
             }
          }
@@ -1454,7 +1536,7 @@
          if (win) return win;
          const b = await tryPolicyB(userHint, indexes);
          if (b) return b;
-         emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mcuration plan may use COLLSCAN/blocking SORT despite user hint\x1b[0m; sortBy:', JSON.stringify(sortBy));
+         emit('\n[red][WARN][/] [yellow]curation plan may use COLLSCAN/blocking SORT despite user hint[/]; sortBy:', JSON.stringify(sortBy));
          return await idScan();
       }
 
@@ -1475,7 +1557,7 @@
       const readPreference = sessionOpts.readPreference ?? { "mode": "primary" };
       const cmdRP = commandReadPreference(readPreference);
       const { host, role, tags } = curationLandingNode(readPreference);
-      const landingLine = `\x1b[34m[INFO]\x1b[0m Curation query target: \x1b[33m${host} (${role})\x1b[0m tags: \x1b[33m${JSON.stringify(tags)}\x1b[0m`;
+      const landingLine = `[blue][INFO][/] Curation query target: [yellow]${host} (${role})[/] tags: [yellow]${JSON.stringify(tags)}[/]`;
       emit(landingLine);
       if (
          role === 'PRIMARY' &&
@@ -1483,7 +1565,7 @@
          readPreference.mode &&
          readPreference.mode !== 'primary'
       ) {
-         emit('\x1b[31m[WARN]\x1b[0m \x1b[33mCuration expected a secondary but landed on PRIMARY — connect via replica-set/SRV seed list (not directConnection to primary), and ensure eligible secondaries exist\x1b[0m');
+         emit('[red][WARN][/] [yellow]Curation expected a secondary but landed on PRIMARY — connect via replica-set/SRV seed list (not directConnection to primary), and ensure eligible secondaries exist[/]');
       }
 
       const namespace = db.getSiblingDB(dbName).getCollection(collName);
@@ -1526,7 +1608,7 @@
          }
       } catch(e) {
          if (!isCurationSortMemoryError(e)) throw e;
-         emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mWindow curation hit in-memory SORT limit; continuing with hinted _id find() walk\x1b[0m');
+         emit('\n[red][WARN][/] [yellow]Window curation hit in-memory SORT limit; continuing with hinted _id find() walk[/]');
          lastCuration = { "mode": "scan", "hint": { "_id": 1 } };
          yield* getIdsByIdIndexScan(namespace, filter, bucketSizeLimit, cmdRP);
       }
@@ -1538,7 +1620,7 @@
        *  no blocking SORT / $setWindowFields. Bucket in-process to the same
        *  shape as the window pipeline ({ bucketId, ids, bucketSize, ... }).
        */
-      emit('\x1b[34m[INFO]\x1b[0m Curation using hinted \x1b[33m_id\x1b[0m index walk (find); filter applied as residual');
+      emit('[blue][INFO][/] Curation using hinted [yellow]_id[/] index walk (find); filter applied as residual');
       // Same per-command RP as aggregate (secondaryPreferred + Atlas tags).
       // Wire batchSize = bucketSizeLimit _id docs per getMore (= one yielded bucket).
       // Agg path uses cursor.batchSize 1 because each agg doc is already that bucket.
@@ -1653,14 +1735,14 @@
                deletedCount = await deleteMany();
             } catch(e) {
                batchOk = false;
-               emit('\x1b[31m[WARN]\x1b[0m \x1b[33mtransaction error (batch', bucketId, ')\x1b[0m:', e?.message ?? e);
+               emit('[red][WARN][/] [yellow]transaction error (batch', bucketId, ')[/]:', e?.message ?? e);
             } finally {
                if (txnStarted) {
                   try {
                      session.abortTransaction();
                   } catch(e) {
                      batchOk = false;
-                     emit('\x1b[31m[WARN]\x1b[0m \x1b[33mabort transaction error (batch', bucketId, ')\x1b[0m:', e?.message ?? e);
+                     emit('[red][WARN][/] [yellow]abort transaction error (batch', bucketId, ')[/]:', e?.message ?? e);
                   }
                }
             }
@@ -1669,7 +1751,7 @@
                deletedCount = await deleteMany();
             } catch(e) {
                batchOk = false;
-               emit('\x1b[31m[WARN]\x1b[0m \x1b[33mdeleteMany error (batch', bucketId, ')\x1b[0m:', e?.message ?? e);
+               emit('[red][WARN][/] [yellow]deleteMany error (batch', bucketId, ')[/]:', e?.message ?? e);
             }
          }
 
@@ -1703,24 +1785,24 @@
       emit('\tResidual document count matching filter:', fmtNum(residual));
 
       if (safeguard) {
-         emit('\n\x1b[34m[INFO]\x1b[0m Safeguard was enabled — deletes ran in transactions that were rolled back.');
-         emit('\tResidual matching documents are \x1b[33mexpected\x1b[0m (this run should not have removed data).');
-         emit('\tTo actually remove matches, re-run with \x1b[33msafeguard = false\x1b[0m.');
+         emit('\n[blue][INFO][/] Safeguard was enabled — deletes ran in transactions that were rolled back.');
+         emit('\tResidual matching documents are [yellow]expected[/] (this run should not have removed data).');
+         emit('\tTo actually remove matches, re-run with [yellow]safeguard = false[/].');
          return;
       }
 
       if (batchesFailed > 0) {
-         emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mSome batches failed\x1b[0m — residual may include IDs that were not deleted.');
+         emit('\n[red][WARN][/] [yellow]Some batches failed[/] — residual may include IDs that were not deleted.');
       }
 
       if (residual > 0) {
-         emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mResidual documents still match the filter.\x1b[0m');
+         emit('\n[red][WARN][/] [yellow]Residual documents still match the filter.[/]');
          emit('\tPossible causes: failed batches, concurrent inserts/updates that match the filter,');
          emit('\tor documents that appeared after the curation cursor passed.');
-         emit('\x1b[34m[INFO]\x1b[0m Recommendation: re-run this script with the \x1b[33msame filter\x1b[0m');
-         emit('\tand \x1b[33msafeguard = false\x1b[0m to clear remaining matches (or investigate concurrent writers).');
+         emit('[blue][INFO][/] Recommendation: re-run this script with the [yellow]same filter[/]');
+         emit('\tand [yellow]safeguard = false[/] to clear remaining matches (or investigate concurrent writers).');
       } else {
-         emit('\n\x1b[34m[INFO]\x1b[0m No residual documents match the filter.');
+         emit('\n[blue][INFO][/] No residual documents match the filter.');
          if (batchesFailed > 0) {
             emit('\t(Reported delete counts may still be incomplete due to batch errors.)');
          }
@@ -1774,7 +1856,7 @@
          try {
             hostInfo = db.hostInfo();
          } catch(e) {
-            // console.debug(`\x1b[31m[WARN]\x1b[0m \x1b[33minsufficient rights to execute db.hostInfo()\n${e}\x1b[0m`);
+            // console.debug(`[red][WARN][/] [yellow]insufficient rights to execute db.hostInfo()\n${e}[/]`);
          }
          _hostInfoCache.value = hostInfo;
          _hostInfoCache.at = now;
@@ -1791,7 +1873,7 @@
          try {
             rsStatus = rs.status();
          } catch(e) {
-            // console.debug(`\x1b[31m[WARN]\x1b[0m \x1b[33minsufficient rights to execute rs.status()\n${e}\x1b[0m`);
+            // console.debug(`[red][WARN][/] [yellow]insufficient rights to execute rs.status()\n${e}[/]`);
          }
          _rsStatusCache.value = rsStatus;
          _rsStatusCache.at = now;
@@ -1808,7 +1890,7 @@
          try {
             slowms = db.getSiblingDB('admin').getProfilingStatus().slowms;
          } catch(e) {
-            // console.debug(`\x1b[31m[WARN]\x1b[0m \x1b[33minsufficient rights to execute getProfilingStatus()\n${e}\x1b[0m`);
+            // console.debug(`[red][WARN][/] [yellow]insufficient rights to execute getProfilingStatus()\n${e}[/]`);
          }
          _slowmsCache.value = slowms;
          _slowmsCache.at = now;
@@ -2167,21 +2249,18 @@
 
    function hudStatusColour(status) {
       // Match congestionMonitor EQ: low=green, medium=yellow, high=red.
-      return status === 'high' ? '\x1b[91m'
-         : status === 'medium' ? '\x1b[93m'
-         : '\x1b[92m';
+      return status === 'high' ? '[R]'
+         : status === 'medium' ? '[Y]'
+         : '[G]';
    }
 
    // HUD text: metric names green, values yellow (bars keep their own colours).
-   // Non-TTY log mode still builds these; emit() strips ANSI via stripAnsi().
-   const HUD_LABEL_COLOUR = '\x1b[92m';
-   const HUD_VALUE_COLOUR = '\x1b[93m';
-   const HUD_TEXT_RESET = '\x1b[0m';
+   // Non-TTY log mode still builds these; emit()/writeConsole strip tags via stripAnsiMarkup.
    function hudLabel(text) {
-      return `${HUD_LABEL_COLOUR}${text}${HUD_TEXT_RESET}`;
+      return `[G]${text}[/]`;
    }
    function hudValue(text) {
-      return `${HUD_VALUE_COLOUR}${text}${HUD_TEXT_RESET}`;
+      return `[Y]${text}[/]`;
    }
 
    function hudFillMark(status = 'low') {
@@ -2212,7 +2291,7 @@
       const left = Math.floor(pad / 2);
       const right = pad - left;
       const mark = hudFillMark(status);
-      const colouredLabel = hudStatusColour(status) + label + '\x1b[0m';
+      const colouredLabel = hudStatusColour(status) + label + '[/]';
       return '[' + mark.repeat(left) + colouredLabel + mark.repeat(right) + ']';
    }
 
@@ -2449,7 +2528,7 @@
                updateEwma(vitals);
             }
          } catch(e) {
-            emit('\x1b[31m[WARN]\x1b[0m \x1b[33mvitals sample failed\x1b[0m:', redactMessage(e?.message ?? e));
+            emit('[red][WARN][/] [yellow]vitals sample failed[/]:', redactMessage(e?.message ?? e));
             if (shardVitalsEnabled) {
                enablePaceAdmission(
                   'mongos',
@@ -2921,7 +3000,7 @@
             }
          }
       } catch(e) {
-         emit('\x1b[31m[WARN]\x1b[0m \x1b[33minitial congestionMonitor failed\x1b[0m:', redactMessage(e?.message ?? e));
+         emit('[red][WARN][/] [yellow]initial congestionMonitor failed[/]:', redactMessage(e?.message ?? e));
          vitals = { "numCores": localNumCores() };
          if (admissionMode === 'wt') {
             enablePaceAdmission(
@@ -2972,19 +3051,19 @@
          "readPreference": writeReadPreference
       };
 
-      banner = `\n\x1b[33m${banner}\x1b[0m`;
-      banner += `\n\nCurating '\x1b[32m_id\x1b[0m' deletion list from namespace:` +
-                `\n\n\t\x1b[32m${dbName}.${collName}\x1b[0m` +
+      banner = `\n[yellow]${banner}[/]`;
+      banner += `\n\nCurating '[green]_id[/]' deletion list from namespace:` +
+                `\n\n\t[green]${dbName}.${collName}[/]` +
                 `\n\nwith filter:` +
-                `\n\n\t\x1b[32m${JSON.stringify(filter)}\x1b[0m` +
+                `\n\n\t[green]${JSON.stringify(filter)}[/]` +
                 `\n\n...please wait\n`;
       if (safeguard) {
-         banner += '\n\x1b[31m[WARN]\x1b[0m \x1b[33mSafeguard is enabled, simulating deletes only (via transaction rollbacks)\n\x1b[0m';
+         banner += '\n[red][WARN][/] [yellow]Safeguard is enabled, simulating deletes only (via transaction rollbacks)\n[/]';
       }
       if (admissionMode === 'pace' && paceDetail) {
-         banner += `\n\x1b[31m[WARN]\x1b[0m \x1b[33m${paceDetail}\x1b[0m\n`;
+         banner += `\n[red][WARN][/] [yellow]${paceDetail}[/]\n`;
       } else if (onMongos && Array.isArray(vitals.owningShards) && vitals.owningShards.length) {
-         banner += `\n\x1b[34m[INFO]\x1b[0m WT admission from collection-owning shard primaries: \x1b[33m${vitals.owningShards.join(', ')}\x1b[0m (worst-shard fold)\n`;
+         banner += `\n[blue][INFO][/] WT admission from collection-owning shard primaries: [yellow]${vitals.owningShards.join(', ')}[/] (worst-shard fold)\n`;
       }
 
       // WT sampler for mongod and for mongos with attached shard primaries.
@@ -3055,7 +3134,7 @@
             emit('\tNo matching documents found to match the filter, double-check the namespace and filter');
          } else {
             emit(interactive
-               ? `\x1b[34m[INFO]\x1b[0m HUD: congestion / admission / pool — no % complete or ETA`
+               ? `[blue][INFO][/] HUD: congestion / admission / pool — no % complete or ETA`
                : `[INFO] status: elapsed / congestion / admission / pool (plain, no bars) — no % complete or ETA`);
             hudActive = true;
             redrawHud({ "force": true });
