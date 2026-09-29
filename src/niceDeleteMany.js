@@ -2202,14 +2202,10 @@
        *  Atlas M0/Flex (and some restricted roles) omit serverStatus.wiredTiger.
        *  Without cache size / dirty bytes the WT admission FSM cannot pace safely.
        */
-      try {
-         const cacheSize = sample?.cacheSizeBytes;
-         const dirty = sample?.dirtyBytes ?? sample?.dirtyUtil;
-         return cacheSize != null && !Number.isNaN(+cacheSize) && +cacheSize > 0
-            && dirty != null && !Number.isNaN(+dirty);
-      } catch(_) {
-         return false;
-      }
+      const cacheSize = sample?.cacheSizeBytes;
+      const dirty = sample?.dirtyBytes ?? sample?.dirtyUtil;
+      return cacheSize != null && !Number.isNaN(+cacheSize) && +cacheSize > 0
+         && dirty != null && !Number.isNaN(+dirty);
    }
 
    function evictionConfigFromWterc(wterc = '') {
@@ -2547,8 +2543,7 @@
          const now = Date.now();
          paceMakerAimd(now);
 
-         let lag = 0;
-         try { lag = +(vitals.activeReplLag) || 0; } catch(_) { /* no vitals yet */ }
+         const lag = +(vitals.activeReplLag) || 0;
          const hardLag = lag >= REPL_LAG_HARD_SEC;
          const softLag = lag >= REPL_LAG_SOFT_SEC;
 
