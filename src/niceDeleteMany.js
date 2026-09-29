@@ -511,6 +511,60 @@
       return (okBatches * (bucketSizeLimit|0)) / elapsedSec;
    }
 
+   function renderCongestion(snap, vitals, admission) {
+      /*
+       *  Pace vs WT congestion line. Fill, flags (ckpt/flow/idx/range/backup/lag/worstShard),
+       *  and labels; drawing math stays in renderHud.
+       */
+      let congMetric = 'n/a';
+      let congDetail = '';
+      let congStatus = 'low';
+      let congFill = 0;
+      if (snap.mode === 'pace') {
+         const why = snap.reason === 'mongos' ? 'pace mongos'
+            : snap.reason === 'no-wt' ? 'no WT (M0/Flex?)'
+            : 'pace';
+         congDetail = `(${why}; paceMaker)`;
+         return { congMetric, congDetail, congStatus, congFill };
+      }
+      const dirtyTarget = vitals.evictionDirtyTarget ?? 5;
+      const dirtyTrigger = vitals.evictionDirtyTrigger ?? 20;
+      const updatesTarget = vitals.evictionUpdatesTarget ?? 2.5;
+      const updatesTrigger = vitals.evictionUpdatesTrigger ?? 10;
+      const dirtyUtil = snap.ewma?.dirtyUtil ?? vitals.dirtyUtil;
+      const dirtyUpdatesUtil = snap.ewma?.dirtyUpdatesUtil ?? vitals.dirtyUpdatesUtil;
+      const dirtyFill = fillProgress(dirtyUtil, dirtyTarget, dirtyTrigger);
+      const updatesFill = fillProgress(dirtyUpdatesUtil, updatesTarget, updatesTrigger);
+      const peakIsUpdates = updatesFill > dirtyFill;
+      congFill = Math.max(dirtyFill, updatesFill);
+      const peakUtil = peakIsUpdates ? dirtyUpdatesUtil : dirtyUtil;
+      const peakLabel = peakIsUpdates ? 'updates' : 'dirty';
+      const tgt = peakIsUpdates ? updatesTarget : dirtyTarget;
+      const trig = peakIsUpdates ? updatesTrigger : dirtyTrigger;
+      // Colour tracks soft-band split: lower=green, upper=yellow, ≥trigger=red.
+      const peakFill = fillProgress(peakUtil, tgt, trig);
+      congStatus = utilAbove(peakUtil, trig) || peakFill >= 1 ? 'high'
+         : peakFill >= THROTTLE_ENTER_FRAC ? 'medium'
+         : 'low';
+      const flags = [];
+      if (vitals.checkpointStatus === 'high' || vitals.activeCheckpoint) flags.push('ckpt');
+      if (admission.flowControl) flags.push('flow');
+      if (admission.indexBuilds) flags.push('idx');
+      if (admission.rangeDeleter) flags.push('range');
+      if (admission.backupCursor) flags.push('backup');
+      const lag = admission.replLag ?? vitals.activeReplLag ?? 0;
+      if (lag > 0) flags.push(`lag ${Math.round(lag)}s`);
+      if (vitals.worstShard) flags.push(vitals.worstShard);
+      const flagTxt = flags.length ? `  ${flags.join(' ')}` : '';
+      if (peakUtil == null || Number.isNaN(+peakUtil)) {
+         congDetail = '(no WT)';
+      } else {
+         congMetric = `${peakLabel} ${Number(peakUtil).toFixed(1)}%`;
+         congDetail = `(tgt ${tgt} → trig ${trig})${flagTxt}`;
+      }
+      return { congMetric, congDetail, congStatus, congFill };
+   }
+
    function renderHud({
       startedAt,
       batchesDone = 0,
@@ -548,53 +602,7 @@
          `   ${hudLabel('deleted')}  ${hudValue(fmtNum(docsDeleted))}` +
          `   ${hudLabel('rate')}  ${hudValue(fmtRate(rate))}` + paceBit;
 
-      // Congestion: max(dirty, updates) soft-band fill (reuse fillProgress).
-      let congMetric = 'n/a';
-      let congDetail = '';
-      let congStatus = 'low';
-      let congFill = 0;
-      if (snap.mode === 'pace') {
-         const why = snap.reason === 'mongos' ? 'pace mongos'
-            : snap.reason === 'no-wt' ? 'no WT (M0/Flex?)'
-            : 'pace';
-         congDetail = `(${why}; paceMaker)`;
-      } else {
-         const dirtyTarget = vitals.evictionDirtyTarget ?? 5;
-         const dirtyTrigger = vitals.evictionDirtyTrigger ?? 20;
-         const updatesTarget = vitals.evictionUpdatesTarget ?? 2.5;
-         const updatesTrigger = vitals.evictionUpdatesTrigger ?? 10;
-         const dirtyUtil = snap.ewma?.dirtyUtil ?? vitals.dirtyUtil;
-         const dirtyUpdatesUtil = snap.ewma?.dirtyUpdatesUtil ?? vitals.dirtyUpdatesUtil;
-         const dirtyFill = fillProgress(dirtyUtil, dirtyTarget, dirtyTrigger);
-         const updatesFill = fillProgress(dirtyUpdatesUtil, updatesTarget, updatesTrigger);
-         const peakIsUpdates = updatesFill > dirtyFill;
-         congFill = Math.max(dirtyFill, updatesFill);
-         const peakUtil = peakIsUpdates ? dirtyUpdatesUtil : dirtyUtil;
-         const peakLabel = peakIsUpdates ? 'updates' : 'dirty';
-         const tgt = peakIsUpdates ? updatesTarget : dirtyTarget;
-         const trig = peakIsUpdates ? updatesTrigger : dirtyTrigger;
-         // Colour tracks soft-band split: lower=green, upper=yellow, ≥trigger=red.
-         const peakFill = fillProgress(peakUtil, tgt, trig);
-         congStatus = utilAbove(peakUtil, trig) || peakFill >= 1 ? 'high'
-            : peakFill >= THROTTLE_ENTER_FRAC ? 'medium'
-            : 'low';
-         const flags = [];
-         if (vitals.checkpointStatus === 'high' || vitals.activeCheckpoint) flags.push('ckpt');
-         if (admission.flowControl) flags.push('flow');
-         if (admission.indexBuilds) flags.push('idx');
-         if (admission.rangeDeleter) flags.push('range');
-         if (admission.backupCursor) flags.push('backup');
-         const lag = admission.replLag ?? vitals.activeReplLag ?? 0;
-         if (lag > 0) flags.push(`lag ${Math.round(lag)}s`);
-         if (vitals.worstShard) flags.push(vitals.worstShard);
-         const flagTxt = flags.length ? `  ${flags.join(' ')}` : '';
-         if (peakUtil == null || Number.isNaN(+peakUtil)) {
-            congDetail = '(no WT)';
-         } else {
-            congMetric = `${peakLabel} ${Number(peakUtil).toFixed(1)}%`;
-            congDetail = `(tgt ${tgt} → trig ${trig})${flagTxt}`;
-         }
-      }
+      const { congMetric, congDetail, congStatus, congFill } = renderCongestion(snap, vitals, admission);
 
       const closedSec = (state === 'CLOSED' && snap.closedSince > 0)
          ? `  ${hudLabel('closed')} ${hudValue(`${Math.round((Date.now() - snap.closedSince) / 1000)}s`)}`
