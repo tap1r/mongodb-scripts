@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.18"
+    *  Version: "0.4.19"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -67,7 +67,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.18" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.19" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -671,7 +671,7 @@
       }
    }
 
-   function resolveCurationOrder(namespace, filter = {}, userHint = {}, readPreference = null) {
+   async function resolveCurationOrder(namespace, filter = {}, userHint = {}, readPreference = null) {
       /*
        *  Curation order (Policy A):
        *  - Derive sortBy from the filter ({} / non-field predicates → _id).
@@ -682,7 +682,7 @@
        *  - Atlas M0/Flex (paceReason 'no-wt') skip window even when those explains
        *    look index-ordered: leftover SWF SORT cannot spill (32MiB).
        *  - Otherwise mode 'scan': find() hinted {_id:1} walk, residual filter,
-       *    bucket in-process.
+       *    bucket in-process. idScan explains that find() (same hint/sort/projection).
        *  - User hint is honored only when that hinted explain is index-ordered;
        *    otherwise WARN and take the _id scan. Policy B = alternate indexes.
        */
@@ -696,35 +696,46 @@
 
       const runExplain = (pipeline, opts) => namespace.explain('queryPlanner').aggregate(pipeline, opts);
 
-      const idScan = (why) => {
+      const idScan = async (why) => {
+         let cursor;
          try {
-            const expl = runExplain(
-               [{ "$match": filter }, { "$sort": idSort }],
-               { ...explainOpts, "hint": idHint }
-            );
+            const findExplainOpts = {
+               "sort": idSort,
+               "hint": idHint
+            };
+            if (hasUserCollation(collation)) findExplainOpts.collation = collation;
+            if (explainOpts.readPreference) findExplainOpts.readPreference = explainOpts.readPreference;
+            cursor = namespace.find(filter, { "_id": 1 }, findExplainOpts);
+            cursor = await unwrapShellCursor(cursor);
+            if (typeof cursor.sort === 'function') cursor = cursor.sort(idSort) ?? cursor;
+            if (typeof cursor.hint === 'function') cursor = cursor.hint(idHint) ?? cursor;
+            if (explainOpts.readPreference) cursor = applyCursorReadPref(cursor, explainOpts.readPreference);
+            const expl = await cursor.explain('queryPlanner');
             if (!planIsIndexOrdered(expl)) {
-               emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33m_id hint explain is not IXSCAN-without-SORT; find() will still force {_id:1}\x1b[0m');
+               emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33m_id find() explain is not IXSCAN-without-SORT; scan will still force hinted {_id:1}\x1b[0m');
             }
          } catch(e) {
-            emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration _id hint explain failed\x1b[0m:', e?.message ?? e);
+            emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration _id find() explain failed\x1b[0m:', e?.message ?? e);
+         } finally {
+            try { if (cursor && typeof cursor.close === 'function') await cursor.close(); } catch(_) { /* already closed */ }
          }
          emit(why ?? '\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)\x1b[0m');
          return { "sortBy": idSort, "hint": idHint, "mode": "scan" };
       };
 
       if (curationCannotSpill()) {
-         return idScan('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration forcing hinted _id find() walk — this host cannot spill a leftover $setWindowFields SORT (Atlas M0/Flex / no WT vitals)\x1b[0m');
+         return await idScan('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration forcing hinted _id find() walk — this host cannot spill a leftover $setWindowFields SORT (Atlas M0/Flex / no WT vitals)\x1b[0m');
       }
 
-      const tryWindow = (candidateSort, candidateHint) => {
+      const tryWindow = async (candidateSort, candidateHint) => {
          const opts = { ...explainOpts };
          if (hasUserHint(candidateHint)) opts.hint = candidateHint;
          const prefix = [{ "$match": filter }, { "$sort": candidateSort }];
          const fullOpts = { ...opts, "allowDiskUse": false, "let": { "bucketSizeLimit": 100 } };
          try {
-            const prefixExpl = runExplain(prefix, opts);
+            const prefixExpl = await runExplain(prefix, opts);
             if (!planIsIndexOrdered(prefixExpl)) return null;
-            const fullExpl = runExplain(windowBucketPipeline(filter, candidateSort), fullOpts);
+            const fullExpl = await runExplain(windowBucketPipeline(filter, candidateSort), fullOpts);
             if (!planIsIndexOrdered(fullExpl)) return null;
             return { "sortBy": candidateSort, "hint": candidateHint, "mode": "window" };
          } catch(e) {
@@ -734,15 +745,15 @@
       };
 
       if (hasUserHint(userHint)) {
-         const win = tryWindow(sortBy, userHint);
+         const win = await tryWindow(sortBy, userHint);
          if (win) return win;
          emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mcuration plan may use COLLSCAN/blocking SORT despite user hint\x1b[0m; sortBy:', JSON.stringify(sortBy));
-         return idScan();
+         return await idScan();
       }
 
-      const trusted = tryWindow(sortBy, {});
+      const trusted = await tryWindow(sortBy, {});
       if (trusted) return trusted;
-      return idScan();
+      return await idScan();
    }
 
    async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}) {
@@ -771,7 +782,7 @@
          "sortBy": curationSortBy,
          "hint": curationHint,
          "mode": curationMode
-      } = resolveCurationOrder(namespace, filter, hint, readPreference);
+      } = await resolveCurationOrder(namespace, filter, hint, readPreference);
       lastCuration = { "mode": curationMode, "hint": curationHint };
 
       if (curationMode === 'scan') {
