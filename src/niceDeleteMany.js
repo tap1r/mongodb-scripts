@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.12.2"
+    *  Version: "0.12.3"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.12.2" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.12.3" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -874,11 +874,8 @@
    }
 
    function localNumCores() {
-      try {
-         return db.hostInfo()?.system?.numCores ?? 4;
-      } catch(_) {
-         return 4;
-      }
+      // Share hostInfo()'s 60s TTL; missing / restricted → 4.
+      return hostInfo()?.system?.numCores ?? 4;
    }
 
    const SHARD_VITALS_SAMPLE_INTERVAL_MS = 2000; // collection-owning shard primaries (1–5s band)
