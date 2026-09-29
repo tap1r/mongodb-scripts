@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.7.12"
+    *  Version: "0.7.13"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -66,7 +66,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.7.12" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.7.13" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -1699,7 +1699,6 @@
          return;
       }
 
-      // const buckets = Math.pow(2, 31) - 1; // max 32bit Int
       const aggOpts = {
          // Fail closed: a blocking SORT / spill means the plan is wrong (Policy A
          // should have forced the _id find() walk). Do not opt in to external sort.
@@ -1850,11 +1849,6 @@
       try {
          const namespace = session.getDatabase(dbName).getCollection(collName);
          const txnOpts = {
-            // "readConcern": { "level": "local" },
-            // "writeConcern": {
-            //    "w": "majority",
-            //    "j": false
-            // },
             "comment": `Simulating deleteMany(${JSON.stringify(filter)}) workload via niceDeleteMany.js`
          };
          const deleteManyFilter = { "_id": { "$in": ids } };
@@ -2059,16 +2053,6 @@
          Object.assign(vitalsView, data);
          return vitalsView;
       }
-      // WT eviction defaults (https://kb.corp.mongodb.com/article/000019073)
-      // evictionThreadsMin,
-      // evictionThreadsMax,
-      // evictionCheckpointTarget,
-      // evictionDirtyTarget,    // operate in a similar way to the overall targets but only apply to dirty data in cache
-      // evictionDirtyTrigger,   // application threads will be throttled if the percentage of dirty data reaches the eviction_dirty_trigger
-      // evictionTarget,         // the level at which WiredTiger attempts to keep the overall cache usage
-      // evictionTrigger,        // the level at which application threads start to perform the eviction
-      // evictionUpdatesTarget,  // eviction in worker threads when the cache contains at least this many bytes of updates
-      // evictionUpdatesTrigger, // application threads to perform eviction when the cache contains at least this many bytes of updates
       vitalsView = {
          ...data,
          wterc(regex) {
