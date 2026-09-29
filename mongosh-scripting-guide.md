@@ -249,6 +249,35 @@ When a script needs **WiredTiger / replica-set vitals** on shards but must delet
 2. **Vitals plane** → optional direct connections to shard members using **allowlisted** commands only; probe reachability first.
 3. **Fallback** → if Atlas networking (for example VPC peering) blocks shard hosts, or auth fails, degrade to mongos-only behaviour (for example time-based pacing when `serverStatus.wiredTiger` is missing).
 
+Used by bucketed delete scripts that sample collection-owning shard primaries for WT admission (`listShards` + child `Mongo()`), and by `discovery.js` for directed topology commands.
+
+### Child `mongodb://` URIs to shard primaries
+
+`mongos` has no process-wide WiredTiger cache. `$collStats` through the router is per-table, not shard-process dirty/triggers. `rs.status()` on a mongos session is the **config replica set**, not shard lag.
+
+To sample a shard primary from a router session:
+
+1. Resolve owners (`collStats.shards`, else `config.chunks`, else the database primary). Map ids through `listShards` — `host` is `setName/h1:27017,h2:27017` or a standalone `host:port`.
+2. Rebuild a **legacy `mongodb://` child URI**. Parse the parent with `URL` after rewriting `mongodb+srv:` → `mongodb:` so the constructor accepts it. Hosts come from topology discovery, not a second SRV lookup.
+3. Copy parent username/password and query params (`authSource`, `tlsCAFile`, …). Drop `srvMaxHosts` / `srvServiceName`. If the parent was SRV and `tls`/`ssl` are absent, set `tls=true`.
+4. Replica-set shards: `replicaSet=<setName>`, `directConnection=false`, `readPreference=primary`. Standalone shards: `directConnection=true`, `readPreference=primary`. Short `serverSelectionTimeoutMS` so Atlas-unreachable fails fast.
+5. Open with `new Mongo(uri)` (or `connect(uri)`), run allowlisted commands on that handle, close the child in `finally`. Do **not** `Mongo.setReadPref` (reconnects the client).
+6. Shard lag is `admin.runCommand({ replSetGetStatus: 1 })` on the **child**. Do not use the parent `rs` helper.
+
+Do not log the rebuilt URI (credentials). If any required shard is unreachable, keep mongos-only fallback rather than half-metrics from `shardingStatistics`.
+
+```javascript
+// Parent may be mongodb+srv://user:pass@cluster.mongodb.net/?authSource=admin
+// listShards host: "shard0/s0a:27017,s0b:27017"
+const child = new Mongo(
+  'mongodb://user:pass@s0a:27017,s0b:27017/?replicaSet=shard0&readPreference=primary&directConnection=false&tls=true&authSource=admin'
+);
+const admin = child.getDB('admin');
+const ss = admin.runCommand({ serverStatus: 1 }, { readPreference: { mode: 'primary' } });
+const rsSt = admin.runCommand({ replSetGetStatus: 1 }, { readPreference: { mode: 'primary' } });
+child.close();
+```
+
 ---
 
 ## Atlas / shared tiers
@@ -273,6 +302,8 @@ When a script needs **WiredTiger / replica-set vitals** on shards but must delet
 | `--eval 'var options = {…}'` and probe `typeof` in the file | Declare the same binding in the `--file` script |
 | Follow [script considerations](https://www.mongodb.com/docs/mongodb-shell/write-scripts/considerations/) for classes/generators | Put DB calls in sync constructors |
 | Route user data ops through `mongos` on 8.0+ | Plan general CRUD via direct shard connections |
+| Rebuild child `mongodb://` from parent auth/TLS + `listShards` host | Re-expand `mongodb+srv` DNS for shard members |
+| `replSetGetStatus` on the shard `Mongo()` handle | `rs.status()` on mongos (that is CSRS) |
 | Gate coloured HUDs on TTY; strip ANSI in logs | Assume `console.clear` + colour is CI-safe |
 
 ---
