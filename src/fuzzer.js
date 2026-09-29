@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.50"
+ *  Version: "0.6.51"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.50" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.51" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -166,13 +166,21 @@
    const ratioSum = fuzzer.ratios.reduce((n, ratio) => n + parseInt(ratio), 0);
    const sampleSize = (8 + ratioSum) ** 2;
 
+   function plural(n, one, many) {
+      return (n === 1) ? one : many;
+   }
+
+   function errText(e) {
+      return e.errmsg || e.message || String(e);
+   }
+
    async function main() {
       /*
        *  main
        */
       // Do not Mongo.setReadPref(): mongosh reconnects and the next
       // DB call (exists/drop/create) hangs or rejects on a local RS.
-      console.log(`\nSynthesising ${totalDocs} document${(totalDocs === 1) ? '' : 's'}`);
+      console.log(`\nSynthesising ${totalDocs} ${plural(totalDocs, 'document', 'documents')}`);
 
       // sampling synthetic documents and estimating batch size
       let docSize = 0;
@@ -182,12 +190,12 @@
       const avgSize = $floor(docSize / sampleSize);
       if (avgSize > bsonMax * 0.95)
          console.log(`\n[Warning] The average document size of ${avgSize} bytes approaches or exceeds the BSON max size of ${bsonMax} bytes`);
-      console.log(`\nSampling ${sampleSize} document${(sampleSize === 1) ? '' : 's'} each with BSON size averaging ${avgSize} byte${(avgSize === 1) ? '' : 's'}`);
+      console.log(`\nSampling ${sampleSize} ${plural(sampleSize, 'document', 'documents')} each with BSON size averaging ${avgSize} ${plural(avgSize, 'byte', 'bytes')}`);
       const sampledSize = $floor(bsonMax * 0.95 / avgSize);
       const batchCap = 1000;
       // return (maxWriteBatchSize < sampledSize) ? maxWriteBatchSize : sampledSize;
       const batchSize = Math.min(batchCap, sampledSize);
-      console.log(`Estimated optimal capacity of ${batchSize} document${(batchSize === 1) ? '' : 's'} per batch`);
+      console.log(`Estimated optimal capacity of ${batchSize} ${plural(batchSize, 'document', 'documents')} per batch`);
 
       // (re)create the namespace
       dropNS();
@@ -591,7 +599,7 @@
          sh.startBalancer();
       }
       catch(e) {
-         console.log('[red][ERROR] Sharding namespace failed:[/]', (e.errmsg || e.message || String(e)));
+         console.log('[red][ERROR] Sharding namespace failed:[/]', errText(e));
       }
    }
 
@@ -621,7 +629,7 @@
          try {
             await cmd();
          } catch(e) {
-            console.log('Resharding attempt:', (e.errmsg || e.message || String(e)));
+            console.log('Resharding attempt:', errText(e));
          }
       };
       const rebalancingOps = () => {
@@ -740,7 +748,7 @@
          try {
             database.createCollection(collName, options);
          } catch(e) {
-            console.log('\n[red][ERROR] Namespace creation failed:[/]', (e.errmsg || e.message || String(e)));
+            console.log('\n[red][ERROR] Namespace creation failed:[/]', errText(e));
          }
 
          shardNewNamespace();
@@ -782,14 +790,14 @@
       if (indexPrefs.build) {
          if (indexes.length > 0) {
             createIndexSet(indexes, indexOptions, 'Indexing', (quorum) =>
-               `\nBuilding index${(indexes.length === 1) ? '' : 'es'} with collation locale "${collation.locale}" with commit quorum "${quorum}":`
+               `\nBuilding ${plural(indexes.length, 'index', 'indexes')} with collation locale "${collation.locale}" with commit quorum "${quorum}":`
             );
          } else
             console.log('No regular index builds specified.');
 
          if (specialIndexes.length > 0) {
             createIndexSet(specialIndexes, specialIndexOptions, 'Special indexing', (quorum) =>
-               `\nBuilding exceptional index${(specialIndexes.length === 1) ? '' : 'es'} (no collation support) with commit quorum "${quorum}":`
+               `\nBuilding exceptional ${plural(specialIndexes.length, 'index', 'indexes')} (no collation support) with commit quorum "${quorum}":`
             );
          } else
             console.log('\nNo special index builds specified.');
@@ -802,7 +810,7 @@
 
    function genBulk(batchSize) {
       const batches = $ceil(totalDocs / batchSize);
-      console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} document${(totalDocs === 1) ? '' : 's'} in ${batches} batch${(batches === 1) ? '' : 'es'}:`);
+      console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} ${plural(totalDocs, 'document', 'documents')} in ${batches} ${plural(batches, 'batch', 'batches')}:`);
       let remaining = totalDocs;
       for (let i = 0; remaining > 0; ++i) {
          const n = Math.min(batchSize, remaining);
@@ -811,7 +819,7 @@
          for (let batch = 0; batch < n; ++batch) bulk.insert(genDocument(fuzzer, timestamp));
          const result = bulk.execute(writeConcern);
          const bInserted = result.insertedCount;
-         console.log(`\t[Batch ${1 + i}/${batches}] bulk inserted ${bInserted} document${(bInserted === 1) ? '' : 's'}`);
+         console.log(`\t[Batch ${1 + i}/${batches}] bulk inserted ${bInserted} ${plural(bInserted, 'document', 'documents')}`);
       }
 
       return console.log('Generation completed.');
@@ -820,7 +828,7 @@
    try {
       await main();
    } catch(e) {
-      console.log('[red][ERROR][/]', e.errmsg || e.message || String(e));
+      console.log('[red][ERROR][/]', errText(e));
       throw e;
    }
 })();
