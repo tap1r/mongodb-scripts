@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.9.1"
+    *  Version: "0.9.2"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -31,6 +31,8 @@
     *  - Progress HUD shows congestion, admission, and pool utilization only — ETA is not cheap
     *  - HUD is pinned below the log; emit lines persist and are never clobbered by redraws
     *  - Colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped
+    *  - Forked from congestionMonitor.js v0.2.13 (do not load that file): 2s
+    *    rs.status TTL, collection-owning shard fold, SERVER_STATUS_OPT_IN
     *
     *  TODOs:
     *  - Balancer-aware throttle from shardingStatistics.rangeDeleterTasks (THROTTLE band, same as index builds; not CLOSED; not tenantMigrations)
@@ -66,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.9.1" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.9.2" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
