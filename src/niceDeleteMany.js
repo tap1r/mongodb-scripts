@@ -1503,39 +1503,54 @@
       }
    }
 
-   function inspectCurationPlan(explainResult) {
+   function collectExplainTree(explainResult) {
       /*
-       *  Inspect winningPlan physical stages only. Do NOT walk the full explain doc —
-       *  it can echo the command pipeline (including $sort), which falsely looks like
-       *  a blocking SORT. A separate agg-stage $sort after $cursor is blocking only
-       *  when that $sort was not absorbed into the $cursor query plan.
+       *  One walk of queryPlanner / $cursor / shards. leftoverBlockingSort is
+       *  leftover agg $sort.sortPattern after $cursor (explain stages carry
+       *  sortPattern; bare pipeline echoes do not). Do not walk the full
+       *  explain for blocking SORT — command pipeline echo of $sort is not
+       *  a physical SORT stage.
        */
-      let collScan = false, blockingSort = false, ixscan = false;
-      const roots = [];
-      const takeRoot = (obj) => {
+      const planners = [];
+      const winningPlans = [];
+      let leftoverBlockingSort = false;
+      const take = (obj) => {
          if (!obj || typeof obj !== 'object') return;
-         if (obj.queryPlanner?.winningPlan) roots.push(obj.queryPlanner.winningPlan);
-         if (obj.winningPlan) roots.push(obj.winningPlan);
+         if (obj.queryPlanner) planners.push(obj.queryPlanner);
+         if (obj.queryPlanner?.winningPlan) winningPlans.push(obj.queryPlanner.winningPlan);
+         if (obj.winningPlan) winningPlans.push(obj.winningPlan);
          if (Array.isArray(obj.stages)) {
             for (const st of obj.stages) {
+               if (st?.$cursor?.queryPlanner) planners.push(st.$cursor.queryPlanner);
                if (st?.$cursor?.queryPlanner?.winningPlan) {
-                  roots.push(st.$cursor.queryPlanner.winningPlan);
+                  winningPlans.push(st.$cursor.queryPlanner.winningPlan);
                } else if (
                   st && typeof st === 'object' &&
                   Object.prototype.hasOwnProperty.call(st, '$sort') &&
-                  // Explain $sort stages carry sortPattern; bare pipeline echoes do not.
                   st.$sort?.sortPattern != null
                ) {
-                  blockingSort = true;
+                  leftoverBlockingSort = true;
                }
             }
          }
          if (obj.shards && typeof obj.shards === 'object') {
-            for (const shardExpl of Object.values(obj.shards)) takeRoot(shardExpl);
+            for (const shardExpl of Object.values(obj.shards)) take(shardExpl);
          }
       };
-      takeRoot(explainResult);
-      for (const root of roots) {
+      take(explainResult);
+      return { planners, winningPlans, leftoverBlockingSort };
+   }
+
+   function inspectCurationPlan(explainResult) {
+      /*
+       *  Inspect winningPlan physical stages only, plus leftover agg $sort
+       *  after $cursor. Do NOT walk the full explain doc — it can echo the
+       *  command pipeline (including $sort), which falsely looks like a
+       *  blocking SORT.
+       */
+      const { winningPlans, leftoverBlockingSort } = collectExplainTree(explainResult);
+      let collScan = false, blockingSort = leftoverBlockingSort, ixscan = false;
+      for (const root of winningPlans) {
          const cls = classifyPlanRoot(root);
          collScan = collScan || cls.collScan;
          blockingSort = blockingSort || cls.blockingSort;
@@ -1583,21 +1598,7 @@
    }
 
    function collectQueryPlanners(explainResult) {
-      const out = [];
-      const take = (obj) => {
-         if (!obj || typeof obj !== 'object') return;
-         if (obj.queryPlanner) out.push(obj.queryPlanner);
-         if (Array.isArray(obj.stages)) {
-            for (const st of obj.stages) {
-               if (st?.$cursor?.queryPlanner) out.push(st.$cursor.queryPlanner);
-            }
-         }
-         if (obj.shards && typeof obj.shards === 'object') {
-            for (const sh of Object.values(obj.shards)) take(sh);
-         }
-      };
-      take(explainResult);
-      return out;
+      return collectExplainTree(explainResult).planners;
    }
 
    function firstViableWindowHint(explainResult, indexes) {
