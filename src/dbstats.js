@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.21"
+ *  Version: "0.12.22"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -113,7 +113,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.21" };
+   const __script = { "name": "dbstats.js", "version": "0.12.22" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -128,7 +128,8 @@
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    // console.clear();
-   console.log(`\n\n[yellow]${__comment}[/]`);
+   const jsonCli = (typeof options !== 'undefined' && options && options.output && options.output.format === 'json');
+   if (!jsonCli) console.log(`\n\n[yellow]${__comment}[/]`);
 })();
 
 (() => {
@@ -167,8 +168,10 @@
    const isUnauthenticated = authenticatedUsers.length === 0; // localhost exception / auth off
    const hasMonitorAndRead = hasMonitorRole && hasReadAnyRole;
    const authzAdequate = isUnauthenticated || hasAdminRole || hasMonitorAndRead;
+   const jsonCli = (typeof options !== 'undefined' && options && options.output && options.output.format === 'json');
+   __dbstatsAuthzInadequate = !authzAdequate;
 
-   if (!authzAdequate) {
+   if (!authzAdequate && !jsonCli) {
       console.log(`[red][WARN] The connecting user's authz privileges may be inadequate to report all namespaces statistics[/]`);
       console.log(`[red][WARN] consider inheriting the built-in roles for 'clusterMonitor@admin' and 'readAnyDatabase@admin' at a minimum[/]`);
    }
@@ -292,10 +295,7 @@
 
       switch (formatOutput) {
          case 'json':
-            jsonOut(dbStats);
-            // return dbStats;
-            // dbStats
-            break;
+            return jsonOut(dbStats);
          case 'html':
             htmlOut(dbStats);
             break;
@@ -307,7 +307,7 @@
             tableOut(dbStats);
       }
 
-      return;
+      return toJsonContract(dbStats);
    }
 
    async function getStats() {
@@ -670,14 +670,224 @@
       return;
    }
 
+   function jsonNumber(n) {
+      if (n == null || n === '') return null;
+      if (typeof n === 'object' && typeof n.toNumber === 'function') n = n.toNumber();
+      const v = +n;
+      return Number.isFinite(v) ? v : null;
+   }
+
+   function jsonCount(n) {
+      if (Array.isArray(n)) return n.map(v => jsonNumber(v));
+      return jsonNumber(n);
+   }
+
+   function jsonFree(n) {
+      if (!freeStorageKnown(n)) return null;
+      return jsonNumber(n);
+   }
+
+   function jsonReuse(freeStorageSize, storageSize) {
+      if (!freeStorageKnown(freeStorageSize) || !(+storageSize > 0)) return null;
+      const ratio = +freeStorageSize / +storageSize;
+      return Number.isFinite(ratio) ? ratio : null;
+   }
+
+   function jsonCompression(dataSize, storageSize, freeStorageSize) {
+      if (!freeStorageKnown(freeStorageSize) || !(+storageSize > 0)) return null;
+      const denom = +storageSize - +freeStorageSize;
+      if (!(denom > 0)) return null;
+      const ratio = +dataSize / denom;
+      return Number.isFinite(ratio) ? ratio : null;
+   }
+
+   function jsonCompaction(kind, storageSize, freeStorageSize, extra = {}) {
+      const label = formatCompaction(kind, storageSize, freeStorageSize, extra);
+      if (!label || label === 'n/a' || label === '———— ') return null;
+      return label;
+   }
+
+   function jsonIndex(index = {}) {
+      const name = index.name || '';
+      const storageSize = jsonNumber(index.storageSize);
+      const freeStorageSize = jsonFree(index.freeStorageSize);
+      return {
+         "name": name,
+         "kind": 'index',
+         "storageSize": storageSize,
+         "freeStorageSize": freeStorageSize,
+         "reuse": jsonReuse(freeStorageSize, storageSize),
+         "compaction": jsonCompaction('index', storageSize, freeStorageSize, { "idIndex": name === '_id_' })
+      };
+   }
+
+   function jsonCollection(dbName, collection = {}) {
+      const unauthorized = isUnauthorizedCollection(collection);
+      const name = unauthorized
+                 ? String(collection.name || '').replace(/\s*\(unauthorized\)\s*$/, '')
+                 : (collection.name || '');
+      const ns = `${dbName}.${name}`;
+      const storageSize = jsonNumber(collection.storageSize);
+      const freeStorageSize = jsonFree(collection.freeStorageSize);
+      const dataSize = jsonNumber(collection.dataSize);
+      const totalIndexSize = jsonNumber(collection.totalIndexSize);
+      const totalIndexBytesReusable = jsonFree(collection.totalIndexBytesReusable);
+      const indexes = (collection.indexes || []).map(jsonIndex);
+      return {
+         ns, "db": dbName, name,
+         "kind": 'collection',
+         unauthorized,
+         dataSize, storageSize, freeStorageSize,
+         "reuse": jsonReuse(freeStorageSize, storageSize),
+         "objects": jsonNumber(collection.objects),
+         "orphans": jsonNumber(collection.orphans),
+         "compression": jsonCompression(dataSize, storageSize, freeStorageSize),
+         "compressor": collection.compressor || null,
+         "nindexes": jsonNumber(collection.nindexes) ?? indexes.length,
+         totalIndexSize, totalIndexBytesReusable,
+         "idxReuse": jsonReuse(totalIndexBytesReusable, totalIndexSize),
+         "compaction": jsonCompaction('collection', storageSize, freeStorageSize, { "oplog": ns === 'local.oplog.rs' }),
+         indexes
+      };
+   }
+
+   function jsonDatabase(database = {}) {
+      const name = database.name || '';
+      const collections = (database.collections || []).map(c => jsonCollection(name, c));
+      const views = (database.views || []).map(v => ({
+         "name": v.name,
+         "ns": `${name}.${v.name}`,
+         "kind": 'view'
+      }));
+      const storageSize = jsonNumber(database.storageSize);
+      const freeStorageSize = jsonFree(database.freeStorageSize);
+      const dataSize = jsonNumber(database.dataSize);
+      const totalIndexSize = jsonNumber(database.totalIndexSize);
+      const totalIndexBytesReusable = jsonFree(database.totalIndexBytesReusable);
+      const freeIncomplete = database.freeStorageComplete === false;
+      const idxIncomplete = database.totalIndexBytesReusableComplete === false;
+      return {
+         name,
+         dataSize, storageSize, freeStorageSize,
+         "reuse": jsonReuse(freeStorageSize, storageSize),
+         "objects": jsonNumber(database.objects),
+         "ncollections": jsonCount(database.ncollections),
+         "nviews": jsonCount(database.nviews),
+         "namespaces": jsonCount(database.namespaces),
+         "nindexes": jsonCount(database.nindexes),
+         totalIndexSize, totalIndexBytesReusable,
+         "idxReuse": jsonReuse(totalIndexBytesReusable, totalIndexSize),
+         "compression": jsonCompression(dataSize, storageSize, freeStorageSize),
+         "freeStorageSizeSource": database.freeStorageSizeSource || 'unknown',
+         "freeStorageComplete": database.freeStorageComplete === true,
+         "totalIndexBytesReusableSource": database.totalIndexBytesReusableSource || 'unknown',
+         "totalIndexBytesReusableComplete": database.totalIndexBytesReusableComplete === true,
+         "compaction": jsonCompaction('collection', storageSize, freeStorageSize, { "incomplete": freeIncomplete }),
+         "idxCompaction": jsonCompaction('index', totalIndexSize, totalIndexBytesReusable, { "incomplete": idxIncomplete }),
+         collections,
+         views
+      };
+   }
+
+   function jsonTotals(dbStats = {}) {
+      const storageSize = jsonNumber(dbStats.storageSize);
+      const freeStorageSize = jsonFree(dbStats.freeStorageSize);
+      const dataSize = jsonNumber(dbStats.dataSize);
+      const totalIndexSize = jsonNumber(dbStats.totalIndexSize);
+      const totalIndexBytesReusable = jsonFree(dbStats.totalIndexBytesReusable);
+      const freeIncomplete = dbStats.freeStorageComplete === false;
+      const idxIncomplete = dbStats.totalIndexBytesReusableComplete === false;
+      return {
+         dataSize, storageSize, freeStorageSize,
+         "reuse": jsonReuse(freeStorageSize, storageSize),
+         "objects": jsonNumber(dbStats.objects),
+         "ncollections": jsonCount(dbStats.ncollections),
+         "nviews": jsonCount(dbStats.nviews),
+         "namespaces": jsonCount(dbStats.namespaces),
+         "nindexes": jsonCount(dbStats.nindexes),
+         totalIndexSize, totalIndexBytesReusable,
+         "idxReuse": jsonReuse(totalIndexBytesReusable, totalIndexSize),
+         "compression": jsonCompression(dataSize, storageSize, freeStorageSize),
+         "freeStorageSizeSource": dbStats.freeStorageSizeSource || 'unknown',
+         "freeStorageComplete": dbStats.freeStorageComplete === true,
+         "totalIndexBytesReusableSource": dbStats.totalIndexBytesReusableSource || 'unknown',
+         "totalIndexBytesReusableComplete": dbStats.totalIndexBytesReusableComplete === true,
+         "compaction": jsonCompaction('dbPath', storageSize, freeStorageSize, { "incomplete": freeIncomplete }),
+         "idxCompaction": jsonCompaction('index', totalIndexSize, totalIndexBytesReusable, { "incomplete": idxIncomplete })
+      };
+   }
+
+   function jsonWarnings(dbStats = {}) {
+      const warnings = [];
+      if (typeof __dbstatsAuthzInadequate !== 'undefined' && __dbstatsAuthzInadequate) {
+         warnings.push({
+            "code": 'authzInadequate',
+            "message": "The connecting user's authz privileges may be inadequate to report all namespace statistics. Inherit clusterMonitor@admin and readAnyDatabase@admin at a minimum."
+         });
+      }
+      const rolled = dbStats.freeStorageSizeSource === 'collStatsRollup'
+                  || dbStats.totalIndexBytesReusableSource === 'collStatsRollup';
+      const incomplete = dbStats.freeStorageComplete === false
+                      || dbStats.totalIndexBytesReusableComplete === false;
+      const unknown = !freeStorageKnown(dbStats.freeStorageSize)
+                   || !freeStorageKnown(dbStats.totalIndexBytesReusable);
+      if (rolled && incomplete) {
+         warnings.push({
+            "code": 'freeStorageIncomplete',
+            "message": 'Free blocks rolled up from collection WiredTiger stats; db.stats() omits reusable bytes on this tier. Totals may exclude unauthorized or filtered namespaces and are a lower bound.'
+         });
+      } else if (rolled) {
+         warnings.push({
+            "code": 'freeStorageCollStatsRollup',
+            "message": 'Free blocks rolled up from collection WiredTiger stats; db.stats() omits reusable bytes on this tier.'
+         });
+      } else if (unknown) {
+         warnings.push({
+            "code": 'freeStorageUnavailable',
+            "message": 'Free blocks / reuse unavailable (WiredTiger free-space stats hidden on this tier).'
+         });
+      }
+      return warnings;
+   }
+
+   function toJsonContract(dbStats = {}) {
+      /*
+       *  Versioned snapshot: bytes as numbers, unknown free-space as null.
+       *  Hierarchical rollup plus a flat namespaces list. No printer fields.
+       */
+      const databases = (dbStats.databases || []).map(jsonDatabase);
+      return {
+         "ok": 1,
+         "name": 'dbstats.js',
+         "version": '0.12.22',
+         "generatedAt": new Date(),
+         "hostname": dbStats.hostname || null,
+         "proc": dbStats.proc || null,
+         "instance": dbStats.instance || null,
+         "mongod": db.version(),
+         "dbPath": dbStats.dbPath || null,
+         "shards": Array.isArray(dbStats.shards) ? dbStats.shards : [],
+         "totals": jsonTotals(dbStats),
+         databases,
+         "namespaces": databases.flatMap(d => d.collections),
+         "warnings": jsonWarnings(dbStats)
+      };
+   }
+
+   function jsonStringifyReplacer(_key, value) {
+      if (value instanceof Date) return value.toISOString();
+      if (value != null && typeof value === 'object' && typeof value.toNumber === 'function') return value.toNumber();
+      return value;
+   }
+
    function jsonOut(dbStats = {}) {
       /*
-       *  JSON out
+       *  CLI JSON: strict JSON.stringify of the versioned contract (jq-safe).
+       *  Return value is the same object for load() / module callers.
        */
-      console.log('');
-      printjson(dbStats);
-
-      return;
+      const payload = toJsonContract(dbStats);
+      console.log(JSON.stringify(payload, jsonStringifyReplacer, 2));
+      return payload;
    }
 
    function htmlOut(dbStats = {}) {
