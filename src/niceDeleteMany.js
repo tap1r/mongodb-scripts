@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.17"
+    *  Version: "0.4.18"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -67,7 +67,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.17" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.18" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -610,6 +610,17 @@
       return next ?? cursor;
    }
 
+   async function unwrapShellCursor(cursor) {
+      /*
+       *  mongosh FindCursor/AggregationCursor are thenable (await → toArray).
+       *  Unwrap only a bare Promise (no .close). Do not use .sort — agg cursors lack it.
+       */
+      if (cursor && typeof cursor.then === 'function' && typeof cursor.close !== 'function') {
+         return await cursor;
+      }
+      return cursor;
+   }
+
    function connectionHostsLabel() {
       /*
        *  Host label from the mongosh connection URI (credentials stripped).
@@ -786,7 +797,8 @@
       const pipeline = windowBucketPipeline(filter, curationSortBy);
       // offload iterator to the shell's cursor (same RP as Policy A explain)
       try {
-         const cursor = namespace.aggregate(pipeline, aggOpts);
+         let cursor = namespace.aggregate(pipeline, aggOpts);
+         cursor = await unwrapShellCursor(cursor);
          try {
             yield* cursor;
          } finally {
@@ -821,11 +833,7 @@
       };
       if (hasUserCollation(collation)) findOpts.collation = collation;
       let cursor = namespace.find(filter, { "_id": 1 }, findOpts);
-      // mongosh FindCursor/AggregationCursor are thenable (await → toArray).
-      // Only unwrap a bare Promise (no .close). Do not use .sort — agg cursors lack it.
-      if (cursor && typeof cursor.then === 'function' && typeof cursor.close !== 'function') {
-         cursor = await cursor;
-      }
+      cursor = await unwrapShellCursor(cursor);
       if (typeof cursor.sort === 'function') cursor = cursor.sort({ "_id": 1 }) ?? cursor;
       if (typeof cursor.hint === 'function') cursor = cursor.hint({ "_id": 1 }) ?? cursor;
       cursor = applyCursorReadPref(cursor, cmdRP);
