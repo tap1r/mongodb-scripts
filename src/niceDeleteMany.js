@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.11.0"
+    *  Version: "0.11.1"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.11.0" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.11.1" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -421,6 +421,272 @@
       "free": '░',            // available within maxInFlight
       "cap": '[K]·[/]'        // bright black / dim AIMD-reserved
    };
+
+   function fmtElapsed(ms) {
+      const s = Math.max(0, Math.floor(ms / 1000));
+      const hh = Math.floor(s / 3600);
+      const mm = Math.floor((s % 3600) / 60);
+      const ss = s % 60;
+      const p = n => String(n).padStart(2, '0');
+      return hh > 0 ? `${p(hh)}:${p(mm)}:${p(ss)}` : `${p(mm)}:${p(ss)}`;
+   }
+
+   function fmtNum(n) {
+      return Number(n || 0).toLocaleString('en-US');
+   }
+
+   function hudStatusColour(status) {
+      // Match congestionMonitor EQ: low=green, medium=yellow, high=red.
+      return status === 'high' ? '[R]'
+         : status === 'medium' ? '[Y]'
+         : '[G]';
+   }
+
+   // HUD text: metric names green, values yellow (bars keep their own colours).
+   // Non-TTY log mode still builds these; emit()/writeConsole strip tags via stripAnsiMarkup.
+   function hudLabel(text) {
+      return `[G]${text}[/]`;
+   }
+   function hudValue(text) {
+      return `[Y]${text}[/]`;
+   }
+
+   function hudFillMark(status = 'low') {
+      return HUD_MARK[status] ?? HUD_MARK.low;
+   }
+
+   function renderMeterBar(fill01, width = hudBarWidth(), status = 'low') {
+      const t = Math.min(1, Math.max(0, +fill01 || 0));
+      const filled = Math.round(t * width);
+      const mark = hudFillMark(status);
+      let out = '[';
+      for (let i = 0; i < width; i++) {
+         out += i < filled ? mark : HUD_MARK.bg;
+      }
+      return out + ']';
+   }
+
+   function admitStateStatus(state) {
+      if (state === 'CLOSED') return 'high';
+      if (state === 'OPEN') return 'low';
+      return 'medium'; // THROTTLE | COOLDOWN | PACE
+   }
+
+   function renderAdmitBand(state, width = hudBarWidth()) {
+      const status = admitStateStatus(state);
+      const label = ` ${state} `;
+      const pad = Math.max(0, width - label.length);
+      const left = Math.floor(pad / 2);
+      const right = pad - left;
+      const mark = hudFillMark(status);
+      const colouredLabel = hudStatusColour(status) + label + '[/]';
+      return '[' + mark.repeat(left) + colouredLabel + mark.repeat(right) + ']';
+   }
+
+   function pushPoolSlots(target, run, buf, free, cap, admitStatus) {
+      const runMark = HUD_MARK.run[admitStatus] ?? HUD_MARK.run.low;
+      for (let i = 0; i < run; i++) target.push(runMark);
+      for (let i = 0; i < buf; i++) target.push(HUD_MARK.buf);
+      for (let i = 0; i < free; i++) target.push(HUD_MARK.free);
+      for (let i = 0; i < cap; i++) target.push(HUD_MARK.cap);
+   }
+
+   function renderPoolBar(poolSize, executing, buffered, inFlightLimit, admitStatus) {
+      const run = Math.max(0, Math.min(poolSize, executing|0));
+      const buf = Math.max(0, Math.min(poolSize - run, buffered|0));
+      const free = Math.max(0, Math.min(poolSize - run - buf, Math.max(0, inFlightLimit - run - buf)));
+      const cap = Math.max(0, poolSize - run - buf - free);
+      const slots = [];
+      pushPoolSlots(slots, run, buf, free, cap, admitStatus);
+
+      let display = slots;
+      const poolDisplayMax = hudPoolDisplayMax();
+      if (poolSize > poolDisplayMax) {
+         const scale = poolDisplayMax / poolSize;
+         const counts = [
+            Math.round(run * scale),
+            Math.round(buf * scale),
+            Math.round(free * scale),
+            Math.round(cap * scale)
+         ];
+         // Fix rounding so display width is exact.
+         let sum = counts.reduce((a, b) => a + b, 0);
+         while (sum > poolDisplayMax) {
+            const idx = counts.indexOf(Math.max(...counts));
+            counts[idx]--;
+            sum--;
+         }
+         while (sum < poolDisplayMax) {
+            counts[3]++; // grow cap visually
+            sum++;
+         }
+         display = [];
+         pushPoolSlots(display, counts[0], counts[1], counts[2], counts[3], admitStatus);
+      }
+      return {
+         "bar": '[' + display.join('') + ']',
+         "run": run,
+         "buf": buf,
+         "free": free,
+         "cap": cap
+      };
+   }
+
+   function fmtRate(docsPerSec) {
+      if (docsPerSec == null || !Number.isFinite(docsPerSec) || docsPerSec < 0) return 'n/a';
+      if (docsPerSec >= 100) return `${Math.round(docsPerSec)}/s`;
+      if (docsPerSec >= 10) return `${docsPerSec.toFixed(1)}/s`;
+      return `${docsPerSec.toFixed(2)}/s`;
+   }
+
+   function estimatedDeleteRate({
+      batchesDone = 0,
+      batchesFailed = 0,
+      bucketSizeLimit = 100,
+      elapsedMs = 0
+   } = {}) {
+      /*
+       *  (completed − failed) × bucketSizeLimit / elapsed.
+       *  Approximate throughput from successful batch slots (last batch may be smaller).
+       */
+      const okBatches = Math.max(0, (batchesDone|0) - (batchesFailed|0));
+      const elapsedSec = Math.max(0, elapsedMs) / 1000;
+      if (elapsedSec <= 0 || okBatches <= 0) return null;
+      return (okBatches * (bucketSizeLimit|0)) / elapsedSec;
+   }
+
+   function renderHud({
+      startedAt,
+      batchesDone = 0,
+      batchesFailed = 0,
+      docsDeleted = 0,
+      bucketSizeLimit = 100,
+      admission = {},
+      poolSize = 1,
+      executing = 0,
+      buffered = 0,
+      bars = interactive
+   } = {}) {
+      const elapsedMs = Date.now() - (startedAt || Date.now());
+      const elapsed = fmtElapsed(elapsedMs);
+      const snap = admissionCtl.snapshot();
+      const state = admission.state ?? snap.state;
+      const delayMs = admission.delayMs ?? 0;
+      const mif = admission.maxInFlight ?? snap.maxInFlight;
+      const mifCap = snap.maxInFlightCap;
+      const inFlightLimit = Math.max(1, Math.min(poolSize, mif));
+      const admitStatus = admitStateStatus(state);
+      const rate = estimatedDeleteRate({
+         batchesDone, batchesFailed, bucketSizeLimit, elapsedMs
+      });
+      const paceBit = (snap.mode === 'pace' && snap.paceEwmaRate != null)
+         ? `   ${hudLabel('pace')}  ${hudValue(fmtRate(snap.paceEwmaRate))}` +
+            (snap.pacePeakRate != null
+               ? ` (${hudLabel('peak')} ${hudValue(fmtRate(snap.pacePeakRate))})`
+               : '') +
+            (snap.paceInWall ? ` ${hudValue('WALL')}` : '')
+         : '';
+      const statsLine = `${hudLabel('elapsed')}  ${hudValue(elapsed)}` +
+         `   ${hudLabel('batches')}  ${hudValue(fmtNum(batchesDone))}` +
+         `   ${hudLabel('failed')}  ${hudValue(fmtNum(batchesFailed))}` +
+         `   ${hudLabel('deleted')}  ${hudValue(fmtNum(docsDeleted))}` +
+         `   ${hudLabel('rate')}  ${hudValue(fmtRate(rate))}` + paceBit;
+
+      // Congestion: max(dirty, updates) soft-band fill (reuse fillProgress).
+      let congMetric = 'n/a';
+      let congDetail = '';
+      let congStatus = 'low';
+      let congFill = 0;
+      if (snap.mode === 'pace') {
+         const why = snap.reason === 'mongos' ? 'pace mongos'
+            : snap.reason === 'no-wt' ? 'no WT (M0/Flex?)'
+            : 'pace';
+         congDetail = `(${why}; paceMaker)`;
+      } else {
+         const dirtyTarget = vitals.evictionDirtyTarget ?? 5;
+         const dirtyTrigger = vitals.evictionDirtyTrigger ?? 20;
+         const updatesTarget = vitals.evictionUpdatesTarget ?? 2.5;
+         const updatesTrigger = vitals.evictionUpdatesTrigger ?? 10;
+         const dirtyUtil = ewma.dirtyUtil ?? vitals.dirtyUtil;
+         const dirtyUpdatesUtil = ewma.dirtyUpdatesUtil ?? vitals.dirtyUpdatesUtil;
+         const dirtyFill = fillProgress(dirtyUtil, dirtyTarget, dirtyTrigger);
+         const updatesFill = fillProgress(dirtyUpdatesUtil, updatesTarget, updatesTrigger);
+         const peakIsUpdates = updatesFill > dirtyFill;
+         congFill = Math.max(dirtyFill, updatesFill);
+         const peakUtil = peakIsUpdates ? dirtyUpdatesUtil : dirtyUtil;
+         const peakLabel = peakIsUpdates ? 'updates' : 'dirty';
+         const tgt = peakIsUpdates ? updatesTarget : dirtyTarget;
+         const trig = peakIsUpdates ? updatesTrigger : dirtyTrigger;
+         // Colour tracks soft-band split: lower=green, upper=yellow, ≥trigger=red.
+         const peakFill = fillProgress(peakUtil, tgt, trig);
+         congStatus = utilAbove(peakUtil, trig) || peakFill >= 1 ? 'high'
+            : peakFill >= THROTTLE_ENTER_FRAC ? 'medium'
+            : 'low';
+         const flags = [];
+         try { if (vitals.checkpointStatus === 'high' || vitals.activeCheckpoint) flags.push('ckpt'); } catch(_) { /* ignore */ }
+         if (admission.flowControl) flags.push('flow');
+         if (admission.indexBuilds) flags.push('idx');
+         if (admission.backupCursor) flags.push('backup');
+         const lag = admission.replLag ?? vitals.activeReplLag ?? 0;
+         if (lag > 0) flags.push(`lag ${Math.round(lag)}s`);
+         if (vitals.worstShard) flags.push(vitals.worstShard);
+         const flagTxt = flags.length ? `  ${flags.join(' ')}` : '';
+         if (peakUtil == null || Number.isNaN(+peakUtil)) {
+            congDetail = '(no WT)';
+         } else {
+            congMetric = `${peakLabel} ${Number(peakUtil).toFixed(1)}%`;
+            congDetail = `(tgt ${tgt} → trig ${trig})${flagTxt}`;
+         }
+      }
+
+      const closedSec = (state === 'CLOSED' && snap.closedSince > 0)
+         ? `  ${hudLabel('closed')} ${hudValue(`${Math.round((Date.now() - snap.closedSince) / 1000)}s`)}`
+         : '';
+      const pool = {
+         "run": Math.max(0, Math.min(poolSize, executing|0)),
+         "buf": 0,
+         "free": 0,
+         "cap": 0,
+         "bar": ''
+      };
+      pool.buf = Math.max(0, Math.min(poolSize - pool.run, buffered|0));
+      pool.free = Math.max(0, Math.min(poolSize - pool.run - pool.buf, Math.max(0, inFlightLimit - pool.run - pool.buf)));
+      pool.cap = Math.max(0, poolSize - pool.run - pool.buf - pool.free);
+
+      // Coloured labels/values for both modes; emit() strips ANSI when non-TTY.
+      // Glyph bars only when bars=true (interactive).
+      const congText = snap.mode === 'pace' || congMetric === 'n/a'
+         ? `${hudValue('n/a')} ${hudValue(congDetail)}`.trimEnd()
+         : `${hudValue(congMetric)}  ${hudValue(congDetail)}`.trimEnd();
+      const admitText = `${hudLabel('delay')} ${hudValue(`${delayMs}ms`)}` +
+         `  ${hudLabel('maxInFlight')} ${hudValue(`${mif}/${mifCap}`)}${closedSec}`;
+      const poolText = `${hudLabel('run')} ${hudValue(String(pool.run))}` +
+         `  ${hudLabel('buf')} ${hudValue(String(pool.buf))}` +
+         `  ${hudLabel('free')} ${hudValue(String(pool.free))}` +
+         `  ${hudLabel('cap')} ${hudValue(String(pool.cap))}` +
+         `  ${hudLabel('pool')} ${hudValue(String(poolSize))}`;
+
+      if (!bars) {
+         return [
+            statsLine,
+            `${hudLabel('congestion')}  ${congText}`,
+            `${hudLabel('admission')}   ${hudValue(state)}  ${admitText}`,
+            `${hudLabel('task pool')}   ${poolText}`
+         ].join('\n');
+      }
+
+      const barW = hudBarWidth();
+      const congLine = `${hudLabel('congestion')} ${
+         snap.mode === 'pace' || congMetric === 'n/a'
+            ? renderMeterBar(0, barW, 'low')
+            : renderMeterBar(congFill, barW, congStatus)
+      }  ${congText}`;
+      const admitLine = `${hudLabel('admission')}  ${renderAdmitBand(state, barW)}  ${admitText}`;
+      const pooled = renderPoolBar(poolSize, executing, buffered, inFlightLimit, admitStatus);
+      const poolLine = `${hudLabel('task pool')}  ${pooled.bar}  ${poolText}`;
+      return `${statsLine}\n${congLine}\n${admitLine}\n${poolLine}`;
+   }
+
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
    const _hostInfoCache = { "at": 0, "value": null };
    const _rsStatusCache = { "at": 0, "value": null };
@@ -2149,271 +2415,6 @@
       const delay = THROTTLE_DELAY_MIN_MS + (THROTTLE_DELAY_MAX_MS - THROTTLE_DELAY_MIN_MS) * t;
       const jitter = 0.8 + Math.random() * 0.4;
       return Math.floor(delay * jitter);
-   }
-
-   function fmtElapsed(ms) {
-      const s = Math.max(0, Math.floor(ms / 1000));
-      const hh = Math.floor(s / 3600);
-      const mm = Math.floor((s % 3600) / 60);
-      const ss = s % 60;
-      const p = n => String(n).padStart(2, '0');
-      return hh > 0 ? `${p(hh)}:${p(mm)}:${p(ss)}` : `${p(mm)}:${p(ss)}`;
-   }
-
-   function fmtNum(n) {
-      return Number(n || 0).toLocaleString('en-US');
-   }
-
-   function hudStatusColour(status) {
-      // Match congestionMonitor EQ: low=green, medium=yellow, high=red.
-      return status === 'high' ? '[R]'
-         : status === 'medium' ? '[Y]'
-         : '[G]';
-   }
-
-   // HUD text: metric names green, values yellow (bars keep their own colours).
-   // Non-TTY log mode still builds these; emit()/writeConsole strip tags via stripAnsiMarkup.
-   function hudLabel(text) {
-      return `[G]${text}[/]`;
-   }
-   function hudValue(text) {
-      return `[Y]${text}[/]`;
-   }
-
-   function hudFillMark(status = 'low') {
-      return HUD_MARK[status] ?? HUD_MARK.low;
-   }
-
-   function renderMeterBar(fill01, width = hudBarWidth(), status = 'low') {
-      const t = Math.min(1, Math.max(0, +fill01 || 0));
-      const filled = Math.round(t * width);
-      const mark = hudFillMark(status);
-      let out = '[';
-      for (let i = 0; i < width; i++) {
-         out += i < filled ? mark : HUD_MARK.bg;
-      }
-      return out + ']';
-   }
-
-   function admitStateStatus(state) {
-      if (state === 'CLOSED') return 'high';
-      if (state === 'OPEN') return 'low';
-      return 'medium'; // THROTTLE | COOLDOWN | PACE
-   }
-
-   function renderAdmitBand(state, width = hudBarWidth()) {
-      const status = admitStateStatus(state);
-      const label = ` ${state} `;
-      const pad = Math.max(0, width - label.length);
-      const left = Math.floor(pad / 2);
-      const right = pad - left;
-      const mark = hudFillMark(status);
-      const colouredLabel = hudStatusColour(status) + label + '[/]';
-      return '[' + mark.repeat(left) + colouredLabel + mark.repeat(right) + ']';
-   }
-
-   function pushPoolSlots(target, run, buf, free, cap, admitStatus) {
-      const runMark = HUD_MARK.run[admitStatus] ?? HUD_MARK.run.low;
-      for (let i = 0; i < run; i++) target.push(runMark);
-      for (let i = 0; i < buf; i++) target.push(HUD_MARK.buf);
-      for (let i = 0; i < free; i++) target.push(HUD_MARK.free);
-      for (let i = 0; i < cap; i++) target.push(HUD_MARK.cap);
-   }
-
-   function renderPoolBar(poolSize, executing, buffered, inFlightLimit, admitStatus) {
-      const run = Math.max(0, Math.min(poolSize, executing|0));
-      const buf = Math.max(0, Math.min(poolSize - run, buffered|0));
-      const free = Math.max(0, Math.min(poolSize - run - buf, Math.max(0, inFlightLimit - run - buf)));
-      const cap = Math.max(0, poolSize - run - buf - free);
-      const slots = [];
-      pushPoolSlots(slots, run, buf, free, cap, admitStatus);
-
-      let display = slots;
-      const poolDisplayMax = hudPoolDisplayMax();
-      if (poolSize > poolDisplayMax) {
-         const scale = poolDisplayMax / poolSize;
-         const counts = [
-            Math.round(run * scale),
-            Math.round(buf * scale),
-            Math.round(free * scale),
-            Math.round(cap * scale)
-         ];
-         // Fix rounding so display width is exact.
-         let sum = counts.reduce((a, b) => a + b, 0);
-         while (sum > poolDisplayMax) {
-            const idx = counts.indexOf(Math.max(...counts));
-            counts[idx]--;
-            sum--;
-         }
-         while (sum < poolDisplayMax) {
-            counts[3]++; // grow cap visually
-            sum++;
-         }
-         display = [];
-         pushPoolSlots(display, counts[0], counts[1], counts[2], counts[3], admitStatus);
-      }
-      return {
-         "bar": '[' + display.join('') + ']',
-         "run": run,
-         "buf": buf,
-         "free": free,
-         "cap": cap
-      };
-   }
-
-   function fmtRate(docsPerSec) {
-      if (docsPerSec == null || !Number.isFinite(docsPerSec) || docsPerSec < 0) return 'n/a';
-      if (docsPerSec >= 100) return `${Math.round(docsPerSec)}/s`;
-      if (docsPerSec >= 10) return `${docsPerSec.toFixed(1)}/s`;
-      return `${docsPerSec.toFixed(2)}/s`;
-   }
-
-   function estimatedDeleteRate({
-      batchesDone = 0,
-      batchesFailed = 0,
-      bucketSizeLimit = 100,
-      elapsedMs = 0
-   } = {}) {
-      /*
-       *  (completed − failed) × bucketSizeLimit / elapsed.
-       *  Approximate throughput from successful batch slots (last batch may be smaller).
-       */
-      const okBatches = Math.max(0, (batchesDone|0) - (batchesFailed|0));
-      const elapsedSec = Math.max(0, elapsedMs) / 1000;
-      if (elapsedSec <= 0 || okBatches <= 0) return null;
-      return (okBatches * (bucketSizeLimit|0)) / elapsedSec;
-   }
-
-   function renderHud({
-      startedAt,
-      batchesDone = 0,
-      batchesFailed = 0,
-      docsDeleted = 0,
-      bucketSizeLimit = 100,
-      admission = {},
-      poolSize = 1,
-      executing = 0,
-      buffered = 0,
-      bars = interactive
-   } = {}) {
-      const elapsedMs = Date.now() - (startedAt || Date.now());
-      const elapsed = fmtElapsed(elapsedMs);
-      const snap = admissionCtl.snapshot();
-      const state = admission.state ?? snap.state;
-      const delayMs = admission.delayMs ?? 0;
-      const mif = admission.maxInFlight ?? snap.maxInFlight;
-      const mifCap = snap.maxInFlightCap;
-      const inFlightLimit = Math.max(1, Math.min(poolSize, mif));
-      const admitStatus = admitStateStatus(state);
-      const rate = estimatedDeleteRate({
-         batchesDone, batchesFailed, bucketSizeLimit, elapsedMs
-      });
-      const paceBit = (snap.mode === 'pace' && snap.paceEwmaRate != null)
-         ? `   ${hudLabel('pace')}  ${hudValue(fmtRate(snap.paceEwmaRate))}` +
-            (snap.pacePeakRate != null
-               ? ` (${hudLabel('peak')} ${hudValue(fmtRate(snap.pacePeakRate))})`
-               : '') +
-            (snap.paceInWall ? ` ${hudValue('WALL')}` : '')
-         : '';
-      const statsLine = `${hudLabel('elapsed')}  ${hudValue(elapsed)}` +
-         `   ${hudLabel('batches')}  ${hudValue(fmtNum(batchesDone))}` +
-         `   ${hudLabel('failed')}  ${hudValue(fmtNum(batchesFailed))}` +
-         `   ${hudLabel('deleted')}  ${hudValue(fmtNum(docsDeleted))}` +
-         `   ${hudLabel('rate')}  ${hudValue(fmtRate(rate))}` + paceBit;
-
-      // Congestion: max(dirty, updates) soft-band fill (reuse fillProgress).
-      let congMetric = 'n/a';
-      let congDetail = '';
-      let congStatus = 'low';
-      let congFill = 0;
-      if (snap.mode === 'pace') {
-         const why = snap.reason === 'mongos' ? 'pace mongos'
-            : snap.reason === 'no-wt' ? 'no WT (M0/Flex?)'
-            : 'pace';
-         congDetail = `(${why}; paceMaker)`;
-      } else {
-         const dirtyTarget = vitals.evictionDirtyTarget ?? 5;
-         const dirtyTrigger = vitals.evictionDirtyTrigger ?? 20;
-         const updatesTarget = vitals.evictionUpdatesTarget ?? 2.5;
-         const updatesTrigger = vitals.evictionUpdatesTrigger ?? 10;
-         const dirtyUtil = ewma.dirtyUtil ?? vitals.dirtyUtil;
-         const dirtyUpdatesUtil = ewma.dirtyUpdatesUtil ?? vitals.dirtyUpdatesUtil;
-         const dirtyFill = fillProgress(dirtyUtil, dirtyTarget, dirtyTrigger);
-         const updatesFill = fillProgress(dirtyUpdatesUtil, updatesTarget, updatesTrigger);
-         const peakIsUpdates = updatesFill > dirtyFill;
-         congFill = Math.max(dirtyFill, updatesFill);
-         const peakUtil = peakIsUpdates ? dirtyUpdatesUtil : dirtyUtil;
-         const peakLabel = peakIsUpdates ? 'updates' : 'dirty';
-         const tgt = peakIsUpdates ? updatesTarget : dirtyTarget;
-         const trig = peakIsUpdates ? updatesTrigger : dirtyTrigger;
-         // Colour tracks soft-band split: lower=green, upper=yellow, ≥trigger=red.
-         const peakFill = fillProgress(peakUtil, tgt, trig);
-         congStatus = utilAbove(peakUtil, trig) || peakFill >= 1 ? 'high'
-            : peakFill >= THROTTLE_ENTER_FRAC ? 'medium'
-            : 'low';
-         const flags = [];
-         try { if (vitals.checkpointStatus === 'high' || vitals.activeCheckpoint) flags.push('ckpt'); } catch(_) { /* ignore */ }
-         if (admission.flowControl) flags.push('flow');
-         if (admission.indexBuilds) flags.push('idx');
-         if (admission.backupCursor) flags.push('backup');
-         const lag = admission.replLag ?? vitals.activeReplLag ?? 0;
-         if (lag > 0) flags.push(`lag ${Math.round(lag)}s`);
-         if (vitals.worstShard) flags.push(vitals.worstShard);
-         const flagTxt = flags.length ? `  ${flags.join(' ')}` : '';
-         if (peakUtil == null || Number.isNaN(+peakUtil)) {
-            congDetail = '(no WT)';
-         } else {
-            congMetric = `${peakLabel} ${Number(peakUtil).toFixed(1)}%`;
-            congDetail = `(tgt ${tgt} → trig ${trig})${flagTxt}`;
-         }
-      }
-
-      const closedSec = (state === 'CLOSED' && snap.closedSince > 0)
-         ? `  ${hudLabel('closed')} ${hudValue(`${Math.round((Date.now() - snap.closedSince) / 1000)}s`)}`
-         : '';
-      const pool = {
-         "run": Math.max(0, Math.min(poolSize, executing|0)),
-         "buf": 0,
-         "free": 0,
-         "cap": 0,
-         "bar": ''
-      };
-      pool.buf = Math.max(0, Math.min(poolSize - pool.run, buffered|0));
-      pool.free = Math.max(0, Math.min(poolSize - pool.run - pool.buf, Math.max(0, inFlightLimit - pool.run - pool.buf)));
-      pool.cap = Math.max(0, poolSize - pool.run - pool.buf - pool.free);
-
-      // Coloured labels/values for both modes; emit() strips ANSI when non-TTY.
-      // Glyph bars only when bars=true (interactive).
-      const congText = snap.mode === 'pace' || congMetric === 'n/a'
-         ? `${hudValue('n/a')} ${hudValue(congDetail)}`.trimEnd()
-         : `${hudValue(congMetric)}  ${hudValue(congDetail)}`.trimEnd();
-      const admitText = `${hudLabel('delay')} ${hudValue(`${delayMs}ms`)}` +
-         `  ${hudLabel('maxInFlight')} ${hudValue(`${mif}/${mifCap}`)}${closedSec}`;
-      const poolText = `${hudLabel('run')} ${hudValue(String(pool.run))}` +
-         `  ${hudLabel('buf')} ${hudValue(String(pool.buf))}` +
-         `  ${hudLabel('free')} ${hudValue(String(pool.free))}` +
-         `  ${hudLabel('cap')} ${hudValue(String(pool.cap))}` +
-         `  ${hudLabel('pool')} ${hudValue(String(poolSize))}`;
-
-      if (!bars) {
-         return [
-            statsLine,
-            `${hudLabel('congestion')}  ${congText}`,
-            `${hudLabel('admission')}   ${hudValue(state)}  ${admitText}`,
-            `${hudLabel('task pool')}   ${poolText}`
-         ].join('\n');
-      }
-
-      const barW = hudBarWidth();
-      const congLine = `${hudLabel('congestion')} ${
-         snap.mode === 'pace' || congMetric === 'n/a'
-            ? renderMeterBar(0, barW, 'low')
-            : renderMeterBar(congFill, barW, congStatus)
-      }  ${congText}`;
-      const admitLine = `${hudLabel('admission')}  ${renderAdmitBand(state, barW)}  ${admitText}`;
-      const pooled = renderPoolBar(poolSize, executing, buffered, inFlightLimit, admitStatus);
-      const poolLine = `${hudLabel('task pool')}  ${pooled.bar}  ${poolText}`;
-      return `${statsLine}\n${congLine}\n${admitLine}\n${poolLine}`;
    }
 
    async function vitalsSampler(intervalMs = VITALS_SAMPLE_INTERVAL_MS) {
