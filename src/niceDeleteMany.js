@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.10.1"
+    *  Version: "0.11.0"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,11 +68,10 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.10.1" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.11.0" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
-   let vitalsView = null; // singleton congestion snapshot (getters created once)
 
    // TTL caches: serverStatus is hot-path; hostInfo is near-static; rsStatus is low/medium volatility.
    // serverStatus uses a Promise wrapper (adminCommand is sync in mongosh) for in-flight coalescing.
@@ -1050,34 +1049,16 @@
       };
    }
 
-   function sampleShardPrimary(admin) {
-      const cmdOpts = { "readPreference": { "mode": "primary" } };
-      const ss = admin.runCommand({
-         "serverStatus": true,
-         ...SERVER_STATUS_OPTIONS_DEFAULTS,
-         ...SERVER_STATUS_OPT_IN
-      }, cmdOpts);
-      let wterc = '';
-      try {
-         wterc = admin.runCommand({
-            "getParameter": 1,
-            "wiredTigerEngineRuntimeConfig": 1
-         }, cmdOpts).wiredTigerEngineRuntimeConfig || '';
-      } catch(_) { /* restricted / missing */ }
-      let rsSt = {};
-      try {
-         rsSt = admin.runCommand({ "replSetGetStatus": 1 }, cmdOpts);
-      } catch(_) { /* standalone shard / auth */ }
-
+   function vitalsFromServerStatus(ss = {}, rsSt = {}, wterc = '') {
+      /*
+       *  Plain WT snapshot used by mongod congestionMonitor and shard
+       *  sampleShardPrimary. Admission and HUD read these fields only.
+       */
       const cache = ss.wiredTiger?.cache;
       const cacheSizeBytes = +(cache?.['maximum bytes configured'] ?? NaN);
       const dirtyBytes = +(cache?.['tracked dirty bytes in the cache'] ?? NaN);
       const cachedBytes = +(cache?.['bytes currently in the cache'] ?? 0);
       const updatesDirtyBytes = +(cache?.['bytes allocated for updates'] ?? 0);
-      if (!(cacheSizeBytes > 0) || Number.isNaN(dirtyBytes)) {
-         throw new Error('WiredTiger cache vitals unavailable');
-      }
-
       const eviction = evictionConfigFromWterc(wterc);
       const writeTickets = ss.wiredTiger?.concurrentTransactions?.write
          ?? ss.queues?.execution?.write
@@ -1094,7 +1075,6 @@
       const checkpointStatus = checkpointRuntimeRatio < 50 ? 'low'
          : checkpointRuntimeRatio > 100 ? 'high'
          : 'medium';
-
       return {
          "cacheSizeBytes": cacheSizeBytes,
          "dirtyBytes": dirtyBytes,
@@ -1114,6 +1094,31 @@
          "checkpointRuntimeRatio": checkpointRuntimeRatio,
          ...eviction
       };
+   }
+
+   function sampleShardPrimary(admin) {
+      const cmdOpts = { "readPreference": { "mode": "primary" } };
+      const ss = admin.runCommand({
+         "serverStatus": true,
+         ...SERVER_STATUS_OPTIONS_DEFAULTS,
+         ...SERVER_STATUS_OPT_IN
+      }, cmdOpts);
+      let wterc = '';
+      try {
+         wterc = admin.runCommand({
+            "getParameter": 1,
+            "wiredTigerEngineRuntimeConfig": 1
+         }, cmdOpts).wiredTigerEngineRuntimeConfig || '';
+      } catch(_) { /* restricted / missing */ }
+      let rsSt = {};
+      try {
+         rsSt = admin.runCommand({ "replSetGetStatus": 1 }, cmdOpts);
+      } catch(_) { /* standalone shard / auth */ }
+      const snap = vitalsFromServerStatus(ss, rsSt, wterc);
+      if (!hasWiredTigerVitals(snap)) {
+         throw new Error('WiredTiger cache vitals unavailable');
+      }
+      return snap;
    }
 
    function foldWorstShardVitals(namedSamples = []) {
@@ -2062,262 +2067,19 @@
 
    async function congestionMonitor() {
       /*
-       *  Assemble the singleton vitalsView from cached hostInfo, rs.status,
-       *  getParameter knobs, and opt-in serverStatus. Accessors live next
-       *  to getParameterCompat. Getters are created once; later calls
-       *  Object.assign the dynamic fields.
+       *  Mongod WT snapshot: cached hostInfo / rs.status / wterc / opt-in
+       *  serverStatus, projected through vitalsFromServerStatus. Shard
+       *  primaries use sampleShardPrimary (same projection, separate loop).
        */
-      const data = {
-         "hostInfo": hostInfo(),
-         "rsStatus": rsStatus(),
-         "wiredTigerEngineRuntimeConfig": getParameter('wiredTigerEngineRuntimeConfig', ''),
-         "storageEngineConcurrentReadTransactions": getParameterCompat([
-            'storageEngineConcurrentReadTransactions', // 7.0+
-            'wiredTigerConcurrentReadTransactions'     // 4.4–6.0; still aliased on 7.0
-         ], null),
-         "storageEngineConcurrentWriteTransactions": getParameterCompat([
-            'storageEngineConcurrentWriteTransactions',
-            'wiredTigerConcurrentWriteTransactions'
-         ], null),
-         "lowPriorityAdmissionBypassThreshold": getParameterCompat([
-            'lowPriorityAdmissionBypassThreshold'
-         ], null),
-         // https://www.mongodb.com/docs/manual/reference/command/serverStatus/#mongodb-serverstatus-serverstatus.wiredTiger.concurrentTransactions
-         "serverStatus": await serverStatus(SERVER_STATUS_OPT_IN),
-         "slowms": slowms()
-      };
-      if (vitalsView !== null) {
-         Object.assign(vitalsView, data);
-         return vitalsView;
-      }
-      vitalsView = {
-         ...data,
-         wterc(regex) {
-            // { "wiredTigerEngineRuntimeConfig": "eviction=(threads_min=8,threads_max=8),eviction_dirty_target=2,eviction_updates_trigger=8,checkpoint=(wait=60,log_size=2GB)" }
-            return this.wiredTigerEngineRuntimeConfig.match(regex)?.[1] ?? null;
-         },
-         get evictionThreadsMin() {
-            return +(this.wterc(/eviction=\(.*threads_min=(\d+).*\)/) ?? 4);
-         },
-         get evictionThreadsMax() {
-            return +(this.wterc(/eviction=\(.*threads_max=(\d+).*\)/) ?? 4);
-         },
-         get evictionCheckpointTarget() {
-            return +(this.wterc(/eviction_checkpoint_target=(\d+)/) ?? 1);
-         },
-         get evictionDirtyTarget() {
-            return +(this.wterc(/eviction_dirty_target=(\d+)/) ?? 5);
-         },
-         get evictionDirtyTrigger() {
-            return +(this.wterc(/eviction_dirty_trigger=(\d+)/) ?? 20);
-         },
-         get evictionTarget() {
-            return +(this.wterc(/eviction_target=(\d+)/) ?? 80);
-         },
-         get evictionTrigger() {
-            return +(this.wterc(/eviction_trigger=(\d+)/) ?? 95);
-         },
-         get evictionUpdatesTarget() {
-            return +(this.wterc(/eviction_updates_target=(\d+)/) ?? 2.5);
-         },
-         get evictionUpdatesTrigger() {
-            return +(this.wterc(/eviction_updates_trigger=(\d+)/) ?? 10);
-         },
-         get checkpointIntervalMS() { // checkpoint=(wait=60
-            return 1000 * (this.wterc(/checkpoint=\(.*wait=(\d+).*\)/) ?? 60);
-         },
-         // Atlas M0/Flex omit serverStatus.wiredTiger; main() probes and switches to pace admission.
-         get updatesDirtyBytes() {
-            return this.serverStatus.wiredTiger?.cache?.['bytes allocated for updates'];
-         },
-         get dirtyBytes() {
-            return +this.serverStatus.wiredTiger?.cache?.['tracked dirty bytes in the cache'];
-         },
-         get cacheSizeBytes() {
-            return +this.serverStatus.wiredTiger?.cache?.['maximum bytes configured'];
-         },
-         get cachedBytes() {
-            return this.serverStatus.wiredTiger?.cache?.['bytes currently in the cache'];
-         },
-         get cacheUtil() {
-            return Number.parseFloat(((this.cachedBytes / this.cacheSizeBytes) * 100).toFixed(2));
-         },
-         get cacheStatus() {
-            return (this.cacheUtil < this.evictionTarget) ? 'low'
-                 : (this.cacheUtil > this.evictionTrigger) ? 'high'
-                 : 'medium';
-         },
-         get dirtyUtil() {
-            return Number.parseFloat(((this.dirtyBytes / this.cacheSizeBytes) * 100).toFixed(2));
-         },
-         get dirtyStatus() {
-            return (this.dirtyUtil < this.evictionDirtyTarget) ? 'low'
-                 : (this.dirtyUtil > this.evictionDirtyTrigger) ? 'high'
-                 : 'medium';
-         },
-         get dirtyUpdatesUtil() {
-            return Number.parseFloat(((this.updatesDirtyBytes / this.cacheSizeBytes) * 100).toFixed(2));
-         },
-         get dirtyUpdatesStatus() {
-            return (this.dirtyUpdatesUtil < this.evictionUpdatesTarget) ? 'low'
-                 : (this.dirtyUpdatesUtil > this.evictionUpdatesTrigger) ? 'high'
-                 : 'medium';
-         },
-         get cacheEvictions() {
-            return (this.cacheUtil > this.evictionTrigger);
-         },
-         get dirtyCacheEvictions() {
-            return (this.dirtyUtil > this.evictionDirtyTrigger);
-         },
-         get dirtyUpdatesCacheEvictions() {
-            return (this.dirtyUpdatesUtil > this.evictionUpdatesTrigger);
-         },
-         get evictionsTriggered() {
-            return (this.cacheEvictions || this.dirtyCacheEvictions || this.dirtyUpdatesCacheEvictions);
-         },
-         get cacheHitRatio() {
-            const hitBytes = this.serverStatus.wiredTiger?.cache?.['pages requested from the cache'];
-            const missBytes = this.serverStatus.wiredTiger?.cache?.['pages read into cache'];
-            return Number.parseFloat((100 * (hitBytes - missBytes) / hitBytes).toFixed(2));
-         },
-         get cacheHitStatus() {
-            return (this.cacheHitRatio < 20) ? 'high'
-                 : (this.cacheHitRatio > 75) ? 'low'
-                 : 'medium';
-         },
-         get cacheMissRatio() {
-            const hitBytes = this.serverStatus.wiredTiger?.cache?.['pages requested from the cache'];
-            const missBytes = this.serverStatus.wiredTiger?.cache?.['pages read into cache'];
-            return Number.parseFloat((100 * (1 - (hitBytes - missBytes) / hitBytes)).toFixed(2));
-         },
-         get cacheMissStatus() {
-            return (this.cacheMissRatio < 20) ? 'low'
-                 : (this.cacheMissRatio > 75) ? 'high'
-                 : 'medium';
-         },
-         get memSizeBytes() {
-            // return (this?.hostInfo?.system?.memSizeMB ?? 1024) * 1024 * 1024;
-            return (this?.hostInfo?.system?.memLimitMB ?? 1024) * 1024 * 1024;
-         },
-         get numCores() {
-            // else max 4 is probably a good default aligning with concurrency limits
-            return this?.hostInfo?.system?.numCores ?? 4;
-         },
-         get memResidentBytes() {
-            return (this.serverStatus.mem?.resident ?? 0) * 1024 * 1024;
-         },
-         get currentAllocatedBytes() {
-            return +(this.serverStatus?.tcmalloc?.generic?.current_allocated_bytes ?? 0);
-         },
-         get heapSize() {
-            return +(this.serverStatus?.tcmalloc?.generic?.heap_size ?? (this.memSizeBytes / 64));
-         },
-         get heapUtil() {
-            return Number.parseFloat((100 * (this.currentAllocatedBytes / this.heapSize)).toFixed(2));
-         },
-         get pageheapFreeBytes() {
-            // assume zero fragmentation if we cannot measure pageheap_free_bytes
-            return +(this.serverStatus?.tcmalloc?.tcmalloc?.pageheap_free_bytes ?? 0);
-         },
-         get totalFreeBytes() {
-            return +(this.serverStatus?.tcmalloc?.tcmalloc?.total_free_bytes ?? 0);
-         },
-         get memoryFragmentationRatio() {
-            return Number.parseFloat(((this.pageheapFreeBytes / this.memSizeBytes) * 100).toFixed(2));
-         },
-         get memoryFragmentationStatus() {
-            // mimicing the (bad) t2 derived metric for now
-            return (this.memoryFragmentationRatio < 10) ? 'low'  // 25 is more realistic
-                 : (this.memoryFragmentationRatio > 30) ? 'high' // 50 is more realistic
-                 : 'medium';
-         },
-         get backupCursorOpen() {
-            return this.serverStatus.storageEngine?.backupCursorOpen;
-         },
-         // WT tickets available
-         // v6.0 (and older)
-         // {
-         //    write: { out: 0, available: 128, totalTickets: 128 },
-         //    read: { out: 0, available: 128, totalTickets: 128 }
-         //  }
-         // v7.0+
-         //    write: {
-         //      out: 0,
-         //      available: 13,
-         //      totalTickets: 13,
-         //      queueLength: Long('0'),
-         //      processing: Long('0')
-         //    },
-         //    read: {
-         //      out: 0,
-         //      available: 13,
-         //      totalTickets: 13,
-         //      queueLength: Long('0'),
-         //      processing: Long('0')
-         //    }
-         // v8.0 see db.serverStats().queues.execution
-         get wtReadTicketsUtil() {
-            const { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read ?? {};
-            return Number.parseFloat(((out / totalTickets) * 100).toFixed(2));
-         },
-         get wtReadTicketsAvail() {
-            const { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read ?? {};
-            return Number.parseFloat(((available / totalTickets) * 100).toFixed(2));
-         },
-         get wtWriteTicketsUtil() {
-            const { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write ?? {};
-            return Number.parseFloat(((out / totalTickets) * 100).toFixed(2));
-         },
-         get wtWriteTicketsAvail() {
-            const { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write ?? {};
-            return Number.parseFloat(((available / totalTickets) * 100).toFixed(2));
-         },
-         get wtReadTicketsStatus() {
-            return (this.wtReadTicketsUtil < 20) ? 'low'
-                 : (this.wtReadTicketsUtil > 75) ? 'high'
-                 : 'medium';
-         },
-         get wtWriteTicketsStatus() {
-            return (this.wtWriteTicketsUtil < 20) ? 'low'
-                 : (this.wtWriteTicketsUtil > 75) ? 'high'
-                 : 'medium';
-         },
-         get activeFlowControl() {
-            return (this.serverStatus.flowControl?.isLagged === true && this.serverStatus.flowControl?.enabled === true);
-         },
-         get activeIndexBuilds() {
-            return (this.serverStatus?.indexBuilds?.total ?? 0) > (this.serverStatus?.indexBuilds?.phases?.commit ?? 0) || (this.serverStatus?.activeIndexBuilds?.total ?? 0) > 0;
-         },
-         get activeCheckpoint() {
-            return !!(this.serverStatus.wiredTiger?.transaction?.['transaction checkpoint currently running'] || this.serverStatus.wiredTiger?.checkpoint?.['progress state']);
-         },
-         get slowRecentCheckpoint() {
-            return (this.serverStatus.wiredTiger?.transaction?.['transaction checkpoint most recent time (msecs)'] > 60000);
-         },
-         get checkpointRuntimeRatio() {
-            return Number.parseFloat((((this.serverStatus.wiredTiger?.transaction?.['transaction checkpoint most recent time (msecs)'] ?? this.serverStatus.wiredTiger?.checkpoint?.['most recent time (msecs)']) / this.checkpointIntervalMS) * 100).toFixed(2));
-         },
-         get checkpointStatus() {
-            return (this.checkpointRuntimeRatio < 50) ? 'low'
-                 : (this.checkpointRuntimeRatio > 100) ? 'high'
-                 : 'medium';
-         },
-         get activeReplLag() {
-            return +majorityCommitLagSeconds(this.rsStatus, this.serverStatus).toFixed(0);
-         },
-         get replLagStatus() {
-            return (this.activeReplLag < this.heartbeatIntervalMillis / 1000) ? 'low'
-                 : (this.activeReplLag > 90) ? 'high' // maxStalenessSeconds
-                 : 'medium';
-         },
-         get replLagScale() {
-            return 30;
-         },
-         get heartbeatIntervalMillis() {
-            return this.rsStatus?.heartbeatIntervalMillis ?? 2000;
-         }
-      };
-      return vitalsView;
+      const ss = await serverStatus(SERVER_STATUS_OPT_IN);
+      const snap = vitalsFromServerStatus(
+         ss,
+         rsStatus(),
+         getParameter('wiredTigerEngineRuntimeConfig', '') || ''
+      );
+      const hi = hostInfo();
+      snap.numCores = hi?.system?.numCores ?? 4;
+      return snap;
    }
 
    function ewmaStep(prev, sample, alpha = EWMA_ALPHA) {
