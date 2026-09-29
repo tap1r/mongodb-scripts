@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.15"
+    *  Version: "0.4.16"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -23,6 +23,7 @@
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
     *  - Prefers index-ordered curation (avoids blocking sorts / disk spill); optional user hint supported
     *  - If explain has no IXSCAN (or $setWindowFields would block), walk _id via find() and bucket in-process
+    *  - Atlas M0/Flex (no WT vitals) always walk _id via find(); leftover window SORT cannot spill
     *  - "pace" admission mode when WT cache vitals are unavailable (mongos/Atlas M0/Flex)
     *  - Progress HUD shows congestion, admission, and pool utilization only — ETA is not cheap
     *  - HUD is pinned below the log; emit lines persist and are never clobbered by redraws
@@ -66,7 +67,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.15" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.16" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -424,6 +425,65 @@
       }
    }
 
+   function curationCannotSpill() {
+      /*
+       *  Atlas M0/Flex (and mongod with no WT in serverStatus) ignore
+       *  allowDiskUse. A leftover $setWindowFields SORT fails at 32MiB.
+       *  mongos pace is different: shards can spill, so window mode stays eligible.
+       *  Set in main() before getIds (paceReason 'no-wt').
+       */
+      return admissionMode === 'pace' && paceReason === 'no-wt';
+   }
+
+   function isCurationSortMemoryError(err) {
+      const code = err?.code ?? err?.codeName;
+      if (code === 292 || code === 'QueryExceededMemoryLimitNoDiskUseAllowed') return true;
+      const msg = String(err?.message ?? err ?? '');
+      return /Sort exceeded \d+ bytes/i.test(msg)
+         || /did not opt in to external sorting/i.test(msg);
+   }
+
+   function windowBucketPipeline(filter, sortBy) {
+      /*
+       *  v3 window pipeline. $sort immediately after $match so an index can
+       *  provide order. History: Howto-streaming-sort.md
+       */
+      return [
+         { "$match": filter },
+         { "$sort": sortBy },
+         { "$setWindowFields": { // assign ordinal numbers in curation order
+            "sortBy": sortBy,
+            "output": { "ordinal": { "$documentNumber": {} } }
+         } },
+         { "$set": {
+            "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
+            "cardinal": 1 // unit contribution per document within its bucket
+         } },
+         { "$setWindowFields": { // per-bucket running count + id list
+            "partitionBy": "$bucketId",
+            "sortBy": sortBy,
+            "output": {
+               "idsInBucket": { // was IDsCumulative (per-bucket only, not global)
+                  "$sum": "$cardinal",
+                  "window": { "documents": ["unbounded", "current"] }
+               },
+               "ids": { "$push": "$_id" },
+               "bucketSize": { "$sum": 1 }
+            }
+         } },
+         { "$match": { // emit only the last document of each bucket
+            "$expr": { "$eq": ["$idsInBucket", "$bucketSize"] }
+         } },
+         { "$project": {
+            "_id": 0,
+            "bucketId": 1,
+            "bucketSize": 1,
+            "bucketSizeLimit": "$$bucketSizeLimit",
+            "ids": 1
+         } }
+      ];
+   }
+
    const onMongos = isMongos();
    if (onMongos) {
       enablePaceAdmission(
@@ -604,11 +664,13 @@
        *  Curation order (Policy A):
        *  - Derive sortBy from the filter ({} / non-field predicates → _id).
        *  - Explain $match+$sort (queryPlanner), with the candidate hint when one
-       *    is in play. Index-ordered (IXSCAN, no COLLSCAN / blocking SORT) may
-       *    use the $setWindowFields pipeline.
+       *    is in play. Then explain the full v3 window pipeline (both SWF stages).
+       *    Index-ordered (IXSCAN, no COLLSCAN / blocking SORT) may use the
+       *    $setWindowFields pipeline — except on hosts that cannot spill.
+       *  - Atlas M0/Flex (paceReason 'no-wt') skip window even when those explains
+       *    look index-ordered: leftover SWF SORT cannot spill (32MiB).
        *  - Otherwise mode 'scan': find() hinted {_id:1} walk, residual filter,
-       *    bucket in-process. $setWindowFields would inject a blocking SORT
-       *    (32MiB / no spill on Atlas M0).
+       *    bucket in-process.
        *  - User hint is honored only when that hinted explain is index-ordered;
        *    otherwise WARN and take the _id scan. Policy B = alternate indexes.
        */
@@ -622,16 +684,7 @@
 
       const runExplain = (pipeline, opts) => namespace.explain('queryPlanner').aggregate(pipeline, opts);
 
-      const windowPrefix = sortSpec => [
-         { "$match": filter },
-         { "$sort": sortSpec },
-         { "$setWindowFields": {
-            "sortBy": sortSpec,
-            "output": { "ordinal": { "$documentNumber": {} } }
-         } }
-      ];
-
-      const idScan = () => {
+      const idScan = (why) => {
          try {
             const expl = runExplain(
                [{ "$match": filter }, { "$sort": idSort }],
@@ -643,19 +696,24 @@
          } catch(e) {
             emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration _id hint explain failed\x1b[0m:', e?.message ?? e);
          }
-         emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)\x1b[0m');
+         emit(why ?? '\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)\x1b[0m');
          return { "sortBy": idSort, "hint": idHint, "mode": "scan" };
       };
+
+      if (curationCannotSpill()) {
+         return idScan('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration forcing hinted _id find() walk — this host cannot spill a leftover $setWindowFields SORT (Atlas M0/Flex / no WT vitals)\x1b[0m');
+      }
 
       const tryWindow = (candidateSort, candidateHint) => {
          const opts = { ...explainOpts };
          if (hasUserHint(candidateHint)) opts.hint = candidateHint;
          const prefix = [{ "$match": filter }, { "$sort": candidateSort }];
+         const fullOpts = { ...opts, "allowDiskUse": false, "let": { "bucketSizeLimit": 100 } };
          try {
             const prefixExpl = runExplain(prefix, opts);
             if (!planIsIndexOrdered(prefixExpl)) return null;
-            const winExpl = runExplain(windowPrefix(candidateSort), opts);
-            if (!planIsIndexOrdered(winExpl)) return null;
+            const fullExpl = runExplain(windowBucketPipeline(filter, candidateSort), fullOpts);
+            if (!planIsIndexOrdered(fullExpl)) return null;
             return { "sortBy": candidateSort, "hint": candidateHint, "mode": "window" };
          } catch(e) {
             emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mCuration window explain failed\x1b[0m:', e?.message ?? e);
@@ -723,49 +781,19 @@
       };
       if (hasUserCollation(collation)) aggOpts.collation = collation;
       if (hasUserHint(curationHint)) aggOpts.hint = curationHint;
-      // Streaming bucket pipeline (v3). History: Howto-streaming-sort.md
-      // $sort immediately after $match so an index can provide order.
-      // Do not $project before $sort. Scan mode is used when this would block.
-      const pipeline = [
-         { "$match": filter },
-         { "$sort": curationSortBy },
-         { "$setWindowFields": { // assign ordinal numbers in curation order
-            "sortBy": curationSortBy,
-            "output": { "ordinal": { "$documentNumber": {} } }
-         } },
-         { "$set": {
-            "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
-            "cardinal": 1 // unit contribution per document within its bucket
-         } },
-         { "$setWindowFields": { // per-bucket running count + id list
-            "partitionBy": "$bucketId",
-            "sortBy": curationSortBy,
-            "output": {
-               "idsInBucket": { // was IDsCumulative (per-bucket only, not global)
-                  "$sum": "$cardinal",
-                  "window": { "documents": ["unbounded", "current"] }
-               },
-               "ids": { "$push": "$_id" },
-               "bucketSize": { "$sum": 1 }
-            }
-         } },
-         { "$match": { // emit only the last document of each bucket
-            "$expr": { "$eq": ["$idsInBucket", "$bucketSize"] }
-         } },
-         { "$project": {
-            "_id": 0,
-            "bucketId": 1,
-            "bucketSize": 1,
-            "bucketSizeLimit": "$$bucketSizeLimit",
-            "ids": 1
-         } }
-      ];
+      const pipeline = windowBucketPipeline(filter, curationSortBy);
       // offload iterator to the shell's cursor (same RP as Policy A explain)
-      const cursor = namespace.aggregate(pipeline, aggOpts);
       try {
-         yield* cursor;
-      } finally {
-         try { await cursor.close(); } catch(_) { /* exhausted or already closed */ }
+         const cursor = namespace.aggregate(pipeline, aggOpts);
+         try {
+            yield* cursor;
+         } finally {
+            try { await cursor.close(); } catch(_) { /* exhausted or already closed */ }
+         }
+      } catch(e) {
+         if (!isCurationSortMemoryError(e)) throw e;
+         emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mWindow curation hit in-memory SORT limit; continuing with hinted _id find() walk\x1b[0m');
+         yield* getIdsByIdIndexScan(namespace, filter, bucketSizeLimit, cmdRP);
       }
    }
 
