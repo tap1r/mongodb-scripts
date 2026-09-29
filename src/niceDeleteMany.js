@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.11.5"
+    *  Version: "0.12.0"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -33,9 +33,9 @@
     *  - Colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped
     *  - Forked from congestionMonitor.js v0.2.13 (do not load that file): 2s
     *    rs.status TTL, collection-owning shard fold, SERVER_STATUS_OPT_IN
-    *
-    *  TODOs:
-    *  - Balancer-aware throttle from shardingStatistics.rangeDeleterTasks (THROTTLE band, same as index builds; not CLOSED; not tenantMigrations)
+    *  - Balancer: rangeDeleterTasks > 0 on collection-owning shard primaries
+    *    trips THROTTLE (same band as index builds); never CLOSED; not
+    *    tenantMigrations / countDonorMoveChunkStarted
     */
 
    // Syntax: mongosh [connection options] [--quiet] [--eval 'var dbName = "", collName = "", filter = {}, hint = {}, collation = {}, safeguard = <bool>, interactive = <bool>;'] [-f|--file] </path/to/>niceDeleteMany.js
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.11.5" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.12.0" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -573,6 +573,7 @@
          try { if (vitals.checkpointStatus === 'high' || vitals.activeCheckpoint) flags.push('ckpt'); } catch(_) { /* ignore */ }
          if (admission.flowControl) flags.push('flow');
          if (admission.indexBuilds) flags.push('idx');
+         if (admission.rangeDeleter) flags.push('range');
          if (admission.backupCursor) flags.push('backup');
          const lag = admission.replLag ?? vitals.activeReplLag ?? 0;
          if (lag > 0) flags.push(`lag ${Math.round(lag)}s`);
@@ -725,6 +726,7 @@
       "metrics": true,
       "queues": true,
       "repl": true, // lastWrite / majorityWriteDate when rs.status is unavailable
+      "shardingStatistics": true, // rangeDeleterTasks gauge (shard members)
       "storageEngine": true,
       "tcmalloc": true, // 2 for more debugging
       "wiredTiger": true
@@ -1201,6 +1203,7 @@
          "activeReplLag": maxNum('activeReplLag'),
          "activeFlowControl": namedSamples.some(s => s.activeFlowControl),
          "activeIndexBuilds": namedSamples.some(s => s.activeIndexBuilds),
+         "activeRangeDeleter": namedSamples.some(s => s.activeRangeDeleter),
          "backupCursorOpen": namedSamples.some(s => s.backupCursorOpen),
          "activeCheckpoint": namedSamples.some(s => s.activeCheckpoint),
          "slowRecentCheckpoint": namedSamples.some(s => s.slowRecentCheckpoint),
@@ -2236,6 +2239,9 @@
          "activeFlowControl": ss.flowControl?.isLagged === true && ss.flowControl?.enabled === true,
          "activeIndexBuilds": (ss.indexBuilds?.total ?? 0) > (ss.indexBuilds?.phases?.commit ?? 0)
             || (ss.activeIndexBuilds?.total ?? 0) > 0,
+         // Gauge of queued/running range deletions after chunk migration.
+         // Missing on mongos/unsharded. Do not use countDonorMoveChunkStarted (lifetime).
+         "activeRangeDeleter": +(ss.shardingStatistics?.rangeDeleterTasks ?? 0) > 0,
          "backupCursorOpen": !!ss.storageEngine?.backupCursorOpen,
          "activeCheckpoint": !!(ss.wiredTiger?.transaction?.['transaction checkpoint currently running']
             || ss.wiredTiger?.checkpoint?.['progress state']),
@@ -2558,6 +2564,7 @@
             "replLag": lag,
             "flowControl": false,
             "indexBuilds": false,
+            "rangeDeleter": false,
             "backupCursor": false
          };
       }
@@ -2572,7 +2579,8 @@
           *  Soft-band fill: 0 at *Target → 1 at *Trigger (dirty/updates). Steady ~8–14%
           *  with tgt 5 / trig 20 stays OPEN (below midpoint) instead of sticky THROTTLE.
           *  Repl lag: >=15s soft → THROTTLE; >=30s hard → CLOSED.
-          *  Booleans: flowControl + backupCursor → CLOSED; activeIndexBuilds → THROTTLE.
+          *  Booleans: flowControl + backupCursor → CLOSED;
+          *  activeIndexBuilds + activeRangeDeleter → THROTTLE (never CLOSED).
           */
 
          const {
@@ -2594,9 +2602,10 @@
          const hardLag = activeReplLag >= REPL_LAG_HARD_SEC;
 
          // Boolean vitals getters may throw if serverStatus sections are missing.
-         let activeFlowControl = false, activeIndexBuilds = false, backupCursorOpen = false;
+         let activeFlowControl = false, activeIndexBuilds = false, activeRangeDeleter = false, backupCursorOpen = false;
          try { activeFlowControl = !!vitals.activeFlowControl; } catch(_) { /* ignore */ }
          try { activeIndexBuilds = !!vitals.activeIndexBuilds; } catch(_) { /* ignore */ }
+         try { activeRangeDeleter = !!vitals.activeRangeDeleter; } catch(_) { /* ignore */ }
          try { backupCursorOpen = !!vitals.backupCursorOpen; } catch(_) { /* ignore */ }
 
          const dirtySoftFill = fillProgress(dirtyUtil, evictionDirtyTarget, evictionDirtyTrigger);
@@ -2609,14 +2618,16 @@
             || hardLag
             || activeFlowControl
             || backupCursorOpen;
-         // Upper soft band (or lag / index builds) → yellow THROTTLE.
+         // Upper soft band (or lag / index builds / range deleter) → yellow THROTTLE.
          const upperSoftPressure = softFill >= THROTTLE_ENTER_FRAC
             || softLag
-            || activeIndexBuilds;
-         // Leave THROTTLE once below leave frac (hysteresis) and lag/index clear.
+            || activeIndexBuilds
+            || activeRangeDeleter;
+         // Leave THROTTLE once below leave frac (hysteresis) and lag/index/range clear.
          const leaveThrottleOk = softFill < THROTTLE_LEAVE_FRAC
             && !softLag
-            && !activeIndexBuilds;
+            && !activeIndexBuilds
+            && !activeRangeDeleter;
          // Lower soft band: stay OPEN but apply light progressive delay.
          const lowerSoftPace = softFill > 0 && softFill < THROTTLE_ENTER_FRAC;
          // CLOSED release still requires at/under *Target (full hysteresis to trigger).
@@ -2626,7 +2637,7 @@
             && activeReplLag < REPL_LAG_HARD_SEC
             && !activeFlowControl
             && !backupCursorOpen;
-         const blockAimdIncrease = softLag || activeIndexBuilds || softFill >= THROTTLE_ENTER_FRAC;
+         const blockAimdIncrease = softLag || activeIndexBuilds || activeRangeDeleter || softFill >= THROTTLE_ENTER_FRAC;
 
          const bandDelayOpts = {
             evictionDirtyTarget,
@@ -2684,6 +2695,7 @@
             "replLag": activeReplLag,
             "flowControl": activeFlowControl,
             "indexBuilds": activeIndexBuilds,
+            "rangeDeleter": activeRangeDeleter,
             "backupCursor": backupCursorOpen
          };
 
