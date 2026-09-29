@@ -920,7 +920,7 @@
    function createShardVitals() {
       /*
        *  Owns child Mongo clients, enabled, and miss strikes.
-       *  Public: attach / sample / close / noteMiss / enabled.
+       *  Public: attach / sample / close (closeClients) / noteMiss / enabled.
        *  Child URI helpers stay inside; construction unchanged.
        */
       let clients = []; // [{ id, mongo, admin }, ...] collection-owning shard primaries
@@ -1037,7 +1037,7 @@
          } catch(_) { /* already closed */ }
       }
 
-      function close() {
+      function closeClients() {
          for (const c of clients) closeShardClient(c);
          clients = [];
          enabled = false;
@@ -1145,7 +1145,7 @@
             return false;
          }
          admissionCtl.enablePace('mongos', latchDetail);
-         close();
+         closeClients();
          vitalsSampling = false;
          return true;
       }
@@ -1288,11 +1288,11 @@
          if (!rec.ok) return rec;
          const sampled = await sample({ "reconcile": false });
          if (!sampled.ok) {
-            close();
+            closeClients();
             return sampled;
          }
          if (!hasWiredTigerVitals(sampled.vitals)) {
-            close();
+            closeClients();
             return {
                "ok": false,
                "detail": 'mongos: collection-owning shard primaries reachable but WT cache vitals missing — using paceMaker admission; maxInFlight capped'
@@ -1304,7 +1304,7 @@
       return {
          attach,
          sample,
-         close,
+         close: closeClients,
          noteMiss,
          get enabled() { return enabled; }
       };
@@ -2929,49 +2929,49 @@
       emitHud(admission.decide());
    }
 
+   const SESSION_READ_CONCERN = { "level": "local" }; // support monotonic writes
+   const SESSION_WRITE_CONCERN = { "w": "majority" };
+   const SESSION_CURATION_READ_PREFERENCE = {
+      // "mode": "nearest", // offload the bucket generation to a less busy node
+      "mode": "secondaryPreferred",
+      "tags": [ // Atlas friendly defaults
+         { "nodeType": "READ_ONLY", "diskState": "READY" },
+         { "nodeType": "ANALYTICS", "diskState": "READY" },
+         { "workloadType": "OPERATIONAL", "diskState": "READY" },
+         { "diskState": "READY" },
+         {}
+      ]
+   };
+   const SESSION_WRITE_READ_PREFERENCE = { "mode": "primary" };
+   const SESSION_OPTS = {
+      "read": {
+         "causalConsistency": true,
+         "readConcern": SESSION_READ_CONCERN,
+         "readPreference": SESSION_CURATION_READ_PREFERENCE
+      },
+      "write": {
+         "causalConsistency": true,
+         "readConcern": SESSION_READ_CONCERN,
+         "readPreference": SESSION_WRITE_READ_PREFERENCE,
+         "retryWrites": true,
+         "writeConcern": SESSION_WRITE_CONCERN
+      },
+      "count": {
+         "causalConsistency": true,
+         "readConcern": { "level": "majority" },
+         "readPreference": SESSION_WRITE_READ_PREFERENCE
+      }
+   };
+
    function sessionOpts(kind) {
       /*
        *  Curation uses secondaryPreferred; deletes and residual count use
        *  primary (count: majority RC). On mongos, secondaryPreferred selects
        *  eligible shard secondaries via the router.
        */
-      const readConcern = { "level": "local" }, writeConcern = { "w": "majority" }; // support monotonic writes
-      const curationReadPreference = {
-         // "mode": "nearest", // offload the bucket generation to a less busy node
-         "mode": "secondaryPreferred",
-         "tags": [ // Atlas friendly defaults
-            { "nodeType": "READ_ONLY", "diskState": "READY" },
-            { "nodeType": "ANALYTICS", "diskState": "READY" },
-            { "workloadType": "OPERATIONAL", "diskState": "READY" },
-            { "diskState": "READY" },
-            {}
-         ]
-      };
-      const writeReadPreference = { "mode": "primary" };
-      if (kind === 'read') {
-         return {
-            "causalConsistency": true,
-            "readConcern": readConcern,
-            "readPreference": curationReadPreference
-         };
-      }
-      if (kind === 'write') {
-         return {
-            "causalConsistency": true,
-            "readConcern": readConcern,
-            "readPreference": writeReadPreference,
-            "retryWrites": true,
-            "writeConcern": writeConcern
-         };
-      }
-      if (kind === 'count') {
-         return {
-            "causalConsistency": true,
-            "readConcern": { "level": "majority" },
-            "readPreference": writeReadPreference
-         };
-      }
-      throw new Error(`unknown session kind: ${kind}`);
+      const opts = SESSION_OPTS[kind];
+      if (opts == null) throw new Error(`unknown session kind: ${kind}`);
+      return opts;
    }
 
    async function vitalsSampler(intervalMs = VITALS_SAMPLE_INTERVAL_MS) {
@@ -2983,28 +2983,32 @@
        *  each tick); consecutive misses retry, then latch to paceMaker. Last
        *  good vitals stay in force between misses.
        */
+      const useShard = shardVitals.enabled;
+      const waitMs = useShard ? SHARD_VITALS_SAMPLE_INTERVAL_MS : intervalMs;
+      const sampleFn = useShard
+         ? async() => {
+            const next = await shardVitals.sample();
+            if (!next.ok) return next;
+            const cores = vitals?.numCores;
+            vitals = next.vitals;
+            if (cores != null) vitals.numCores = cores;
+            admissionCtl.noteSample(vitals);
+            return { "ok": true };
+         }
+         : async() => {
+            // adminCommand → primary; no connection readPreference involved.
+            vitals = await congestionMonitor();
+            admissionCtl.noteSample(vitals);
+            return { "ok": true };
+         };
       while (vitalsSampling) {
-         const waitMs = shardVitals.enabled ? SHARD_VITALS_SAMPLE_INTERVAL_MS : intervalMs;
          await sleep(waitMs);
          if (!vitalsSampling) break;
          try {
-            if (shardVitals.enabled) {
-               const next = await shardVitals.sample();
-               if (!next.ok) {
-                  if (shardVitals.noteMiss(next.detail)) break;
-                  continue;
-               }
-               const cores = vitals?.numCores;
-               vitals = next.vitals;
-               if (cores != null) vitals.numCores = cores;
-               admissionCtl.noteSample(vitals);
-            } else {
-               // adminCommand → primary; no connection readPreference involved.
-               vitals = await congestionMonitor();
-               admissionCtl.noteSample(vitals);
-            }
+            const next = await sampleFn();
+            if (!next.ok && shardVitals.noteMiss(next.detail)) break;
          } catch(e) {
-            if (shardVitals.enabled) {
+            if (useShard) {
                if (shardVitals.noteMiss(
                   `mongos: collection-owning shard primary unreachable (${redactMessage(e?.message ?? e)}) — using paceMaker admission; maxInFlight capped`
                )) break;
