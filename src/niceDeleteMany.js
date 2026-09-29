@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.7.2"
+    *  Version: "0.7.3"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,7 +25,7 @@
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
     *  - Atlas M0/Flex (no WT vitals) always walk _id via find(); leftover window SORT cannot spill
-    *  - On mongos: WT admission from collection-owning shard primaries (worst-shard fold); paceMaker if any of those shards is unreachable at attach, or after consecutive mid-run misses
+    *  - On mongos: WT admission from collection-owning shard primaries (worst-shard fold, owners refreshed each sample); paceMaker if any of those shards is unreachable at attach, or after consecutive mid-run misses
     *  - "pace" admission mode when WT cache vitals are unavailable (unreachable shards / Atlas M0/Flex)
     *  - Repl lag: lastCommittedOpTime (majority commit point) when rs.status is available; else lastWrite vs majorityWriteDate (M0/Flex)
     *  - Progress HUD shows congestion, admission, and pool utilization only — ETA is not cheap
@@ -63,7 +63,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.7.2" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.7.3" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -776,15 +776,106 @@
       throw new Error('shard handle has no admin db');
    }
 
+   function closeShardClient(c) {
+      try {
+         if (c?.mongo && typeof c.mongo.close === 'function') c.mongo.close();
+      } catch(_) { /* already closed */ }
+   }
+
    function closeShardVitalsClients() {
-      for (const c of shardVitalsClients) {
-         try {
-            if (c?.mongo && typeof c.mongo.close === 'function') c.mongo.close();
-         } catch(_) { /* already closed */ }
-      }
+      for (const c of shardVitalsClients) closeShardClient(c);
       shardVitalsClients = [];
       shardVitalsEnabled = false;
       shardVitalsMissStrikes = 0;
+   }
+
+   async function openShardClient(id, host) {
+      const mongo = openShardPrimary(shardPrimaryUri(host));
+      try {
+         return { "id": id, "mongo": mongo, "admin": shardAdmin(mongo) };
+      } catch(e) {
+         closeShardClient({ "mongo": mongo });
+         throw e;
+      }
+   }
+
+   function listShardMap() {
+      try {
+         const listed = db.adminCommand({ "listShards": 1 }).shards ?? [];
+         return { "ok": true, "byId": new Map(listed.map(s => [s._id, s])) };
+      } catch(e) {
+         return {
+            "ok": false,
+            "detail": `mongos: listShards failed (${redactMessage(e?.message ?? e)}) — using paceMaker admission; maxInFlight capped`
+         };
+      }
+   }
+
+   async function reconcileOwningShardClients({ latchOnEmpty = false } = {}) {
+      /*
+       *  Refresh collection-owning shard primaries. Discovery failure mid-run
+       *  leaves the current client set in place (sampler strikes then latch).
+       *  New owners are opened before old ones are dropped so a connect miss
+       *  does not shrink the last-good set.
+       */
+      const owning = collectionOwningShardIds();
+      if (!owning.length) {
+         if (latchOnEmpty || !shardVitalsClients.length) {
+            return {
+               "ok": false,
+               "detail": 'mongos: no collection-owning shards found — using paceMaker admission; maxInFlight capped'
+            };
+         }
+         return {
+            "ok": false,
+            "detail": 'mongos: collection-owning shard discovery returned empty — using paceMaker admission; maxInFlight capped'
+         };
+      }
+      const mapped = listShardMap();
+      if (!mapped.ok) return mapped;
+      const missing = owning.filter(id => !mapped.byId.has(id) || !mapped.byId.get(id)?.host);
+      if (missing.length) {
+         return {
+            "ok": false,
+            "detail": `mongos: owning shard(s) ${missing.join(', ')} not in listShards — using paceMaker admission; maxInFlight capped`
+         };
+      }
+
+      const have = new Map(shardVitalsClients.map(c => [c.id, c]));
+      const desired = new Set(owning);
+      const toAdd = owning.filter(id => !have.has(id));
+      const toDrop = shardVitalsClients.filter(c => !desired.has(c.id));
+      const opened = [];
+      try {
+         if (toAdd.length) {
+            const settled = await Promise.allSettled(toAdd.map(id => Promise.resolve().then(() =>
+               openShardClient(id, mapped.byId.get(id).host)
+            )));
+            for (let i = 0; i < settled.length; i++) {
+               if (settled[i].status === 'fulfilled') {
+                  opened.push(settled[i].value);
+               } else {
+                  throw new Error(`${toAdd[i]}: ${redactMessage(settled[i].reason?.message ?? settled[i].reason)}`);
+               }
+            }
+         }
+      } catch(e) {
+         for (const c of opened) closeShardClient(c);
+         return {
+            "ok": false,
+            "detail": `mongos: collection-owning shard primary unreachable (${redactMessage(e?.message ?? e)}) — using paceMaker admission; maxInFlight capped`
+         };
+      }
+
+      const hadClients = shardVitalsClients.length > 0;
+      for (const c of toDrop) closeShardClient(c);
+      const addedById = new Map(opened.map(c => [c.id, c]));
+      shardVitalsClients = owning.map(id => have.get(id) || addedById.get(id)).filter(Boolean);
+      shardVitalsEnabled = shardVitalsClients.length > 0;
+      if (hadClients && (toAdd.length || toDrop.length)) {
+         emit(`[blue][INFO][/] WT owning shards now: [yellow]${owning.join(', ')}[/]`);
+      }
+      return { "ok": true, "added": toAdd, "removed": toDrop.map(c => c.id) };
    }
 
    function noteShardVitalsMiss(latchDetail) {
@@ -950,7 +1041,11 @@
       };
    }
 
-   async function sampleOwningShardVitals() {
+   async function sampleOwningShardVitals({ reconcile = true } = {}) {
+      if (reconcile) {
+         const rec = await reconcileOwningShardClients();
+         if (!rec.ok) return rec;
+      }
       if (!shardVitalsClients.length) {
          return {
             "ok": false,
@@ -991,72 +1086,23 @@
        *  Direct connections to collection-owning shard primaries. Any miss
        *  (empty owner set, listShards gap, Atlas-unreachable, no WT) stays
        *  on paceMaker — no half-metric from mongos shardingStatistics.
+       *  The sampler later re-runs reconcileOwningShardClients each tick.
        */
-      const owning = collectionOwningShardIds();
-      if (!owning.length) {
-         return {
-            "ok": false,
-            "detail": 'mongos: no collection-owning shards found — using paceMaker admission; maxInFlight capped'
-         };
-      }
-      let listed = [];
-      try {
-         listed = db.adminCommand({ "listShards": 1 }).shards ?? [];
-      } catch(e) {
-         return {
-            "ok": false,
-            "detail": `mongos: listShards failed (${redactMessage(e?.message ?? e)}) — using paceMaker admission; maxInFlight capped`
-         };
-      }
-      const byId = new Map(listed.map(s => [s._id, s]));
-      const missing = owning.filter(id => !byId.has(id) || !byId.get(id)?.host);
-      if (missing.length) {
-         return {
-            "ok": false,
-            "detail": `mongos: owning shard(s) ${missing.join(', ')} not in listShards — using paceMaker admission; maxInFlight capped`
-         };
-      }
-      const opened = [];
-      try {
-         const settled = await Promise.allSettled(owning.map(id => Promise.resolve().then(() => {
-            const mongo = openShardPrimary(shardPrimaryUri(byId.get(id).host));
-            try {
-               return { "id": id, "mongo": mongo, "admin": shardAdmin(mongo) };
-            } catch(e) {
-               try { if (typeof mongo.close === 'function') mongo.close(); } catch(_) { /* ignore */ }
-               throw e;
-            }
-         })));
-         for (let i = 0; i < settled.length; i++) {
-            if (settled[i].status === 'fulfilled') {
-               opened.push(settled[i].value);
-            } else {
-               throw new Error(`${owning[i]}: ${redactMessage(settled[i].reason?.message ?? settled[i].reason)}`);
-            }
-         }
-         shardVitalsClients = opened;
-         shardVitalsEnabled = true;
-         const sampled = await sampleOwningShardVitals();
-         if (!sampled.ok) {
-            closeShardVitalsClients();
-            return sampled;
-         }
-         if (!hasWiredTigerVitals(sampled.vitals)) {
-            closeShardVitalsClients();
-            return {
-               "ok": false,
-               "detail": 'mongos: collection-owning shard primaries reachable but WT cache vitals missing — using paceMaker admission; maxInFlight capped'
-            };
-         }
+      const rec = await reconcileOwningShardClients({ "latchOnEmpty": true });
+      if (!rec.ok) return rec;
+      const sampled = await sampleOwningShardVitals({ "reconcile": false });
+      if (!sampled.ok) {
+         closeShardVitalsClients();
          return sampled;
-      } catch(e) {
-         shardVitalsClients = opened;
+      }
+      if (!hasWiredTigerVitals(sampled.vitals)) {
          closeShardVitalsClients();
          return {
             "ok": false,
-            "detail": `mongos: collection-owning shard primary unreachable (${redactMessage(e?.message ?? e)}) — using paceMaker admission; maxInFlight capped`
+            "detail": 'mongos: collection-owning shard primaries reachable but WT cache vitals missing — using paceMaker admission; maxInFlight capped'
          };
       }
+      return sampled;
    }
 
    function sortKeyFromFilter(filter = {}) {
@@ -2523,8 +2569,9 @@
        *  Vitals are sampled on a background loop (decoupled from task scheduling);
        *  EWMA is updated here; admissionControl reads the smoothed series.
        *  Sleeps first so the caller's initial sample is not immediately repeated.
-       *  On mongos, sample collection-owning shard primaries; consecutive misses
-       *  retry, then latch to paceMaker. Last good vitals stay in force between misses.
+       *  On mongos, sample collection-owning shard primaries (owners refreshed
+       *  each tick); consecutive misses retry, then latch to paceMaker. Last
+       *  good vitals stay in force between misses.
        */
       while (vitalsSampling) {
          const waitMs = shardVitalsEnabled ? SHARD_VITALS_SAMPLE_INTERVAL_MS : intervalMs;
