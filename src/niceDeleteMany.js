@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.20"
+    *  Version: "0.4.21"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -67,7 +67,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.20" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.21" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -570,11 +570,6 @@
          });
       }
       return { collScan, blockingSort, ixscan };
-   }
-
-   function planHasCollScanOrBlockingSort(explainResult) {
-      const { collScan, blockingSort } = inspectCurationPlan(explainResult);
-      return collScan || blockingSort;
    }
 
    function planIsIndexOrdered(explainResult) {
