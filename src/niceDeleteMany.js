@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.8.0"
+    *  Version: "0.9.0"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -66,7 +66,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.8.0" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.9.0" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -478,6 +478,90 @@
          if (value !== undefined) return value;
       }
       return fallback;
+   }
+
+   async function serverStatus(serverStatusOptions = {}) {
+      /*
+       *  opt-in version of db.serverStatus() with a 100ms TTL cache.
+       *  Concurrent callers with the same options share one in-flight round trip.
+       */
+      const key = JSON.stringify(serverStatusOptions);
+      const now = Date.now();
+      if (_serverStatusCache.value !== null &&
+            _serverStatusCache.key === key &&
+            (now - _serverStatusCache.at) < SERVER_STATUS_CACHE_TTL_MS) {
+         return _serverStatusCache.value;
+      }
+      if (_serverStatusCache.inflight !== null && _serverStatusCache.key === key) {
+         return await _serverStatusCache.inflight;
+      }
+
+      // db.adminCommand() is synchronous in mongosh; wrap in a Promise so
+      // await is meaningful and concurrent callers can share one in-flight fetch.
+      _serverStatusCache.key = key;
+      _serverStatusCache.inflight = Promise.resolve().then(() => db.adminCommand({
+         "serverStatus": true,
+         ...{ ...SERVER_STATUS_OPTIONS_DEFAULTS, ...serverStatusOptions }
+      }));
+      try {
+         const value = await _serverStatusCache.inflight;
+         _serverStatusCache.value = value;
+         _serverStatusCache.at = Date.now();
+         return value;
+      } finally {
+         _serverStatusCache.inflight = null;
+      }
+   }
+
+   function hostInfo() {
+      // Near-static (cores, RAM limits, OS). 60s TTL is plenty; container limit changes are rare.
+      const now = Date.now();
+      if (_hostInfoCache.value !== null && (now - _hostInfoCache.at) < HOST_INFO_CACHE_TTL_MS) {
+         return _hostInfoCache.value;
+      }
+      let hostInfo = {};
+      try {
+         hostInfo = db.hostInfo();
+      } catch(e) {
+         // console.debug(`[red][WARN][/] [yellow]insufficient rights to execute db.hostInfo()\n${e}[/]`);
+      }
+      _hostInfoCache.value = hostInfo;
+      _hostInfoCache.at = now;
+      return hostInfo;
+   }
+
+   function rsStatus() {
+      // Member set/health changes slowly; optimes move faster. TTL balances lag freshness vs rs.status() cost.
+      const now = Date.now();
+      if (_rsStatusCache.value !== null && (now - _rsStatusCache.at) < RS_STATUS_CACHE_TTL_MS) {
+         return _rsStatusCache.value;
+      }
+      let rsStatus = {};
+      try {
+         rsStatus = rs.status();
+      } catch(e) {
+         // console.debug(`[red][WARN][/] [yellow]insufficient rights to execute rs.status()\n${e}[/]`);
+      }
+      _rsStatusCache.value = rsStatus;
+      _rsStatusCache.at = now;
+      return rsStatus;
+   }
+
+   function slowms() {
+      // Profiling threshold rarely changes at runtime.
+      const now = Date.now();
+      if (_slowmsCache.value !== null && (now - _slowmsCache.at) < SLOWMS_CACHE_TTL_MS) {
+         return _slowmsCache.value;
+      }
+      let slowms = null;
+      try {
+         slowms = db.getSiblingDB('admin').getProfilingStatus().slowms;
+      } catch(e) {
+         // console.debug(`[red][WARN][/] [yellow]insufficient rights to execute getProfilingStatus()\n${e}[/]`);
+      }
+      _slowmsCache.value = slowms;
+      _slowmsCache.at = now;
+      return slowms;
    }
 
    function isMongos() {
@@ -1913,93 +1997,11 @@
 
    async function congestionMonitor() {
       /*
-       *  congestionMonitor() function
+       *  Assemble the singleton vitalsView from cached hostInfo, rs.status,
+       *  getParameter knobs, and opt-in serverStatus. Accessors live next
+       *  to getParameterCompat. Getters are created once; later calls
+       *  Object.assign the dynamic fields.
        */
-      async function serverStatus(serverStatusOptions = {}) {
-         /*
-          *  opt-in version of db.serverStatus() with a 100ms TTL cache.
-          *  Concurrent callers with the same options share one in-flight round trip.
-          */
-         const key = JSON.stringify(serverStatusOptions);
-         const now = Date.now();
-         if (_serverStatusCache.value !== null &&
-               _serverStatusCache.key === key &&
-               (now - _serverStatusCache.at) < SERVER_STATUS_CACHE_TTL_MS) {
-            return _serverStatusCache.value;
-         }
-         if (_serverStatusCache.inflight !== null && _serverStatusCache.key === key) {
-            return await _serverStatusCache.inflight;
-         }
-
-         // db.adminCommand() is synchronous in mongosh; wrap in a Promise so
-         // await is meaningful and concurrent callers can share one in-flight fetch.
-         _serverStatusCache.key = key;
-         _serverStatusCache.inflight = Promise.resolve().then(() => db.adminCommand({
-            "serverStatus": true,
-            ...{ ...SERVER_STATUS_OPTIONS_DEFAULTS, ...serverStatusOptions }
-         }));
-         try {
-            const value = await _serverStatusCache.inflight;
-            _serverStatusCache.value = value;
-            _serverStatusCache.at = Date.now();
-            return value;
-         } finally {
-            _serverStatusCache.inflight = null;
-         }
-      }
-
-      function hostInfo() {
-         // Near-static (cores, RAM limits, OS). 60s TTL is plenty; container limit changes are rare.
-         const now = Date.now();
-         if (_hostInfoCache.value !== null && (now - _hostInfoCache.at) < HOST_INFO_CACHE_TTL_MS) {
-            return _hostInfoCache.value;
-         }
-         let hostInfo = {};
-         try {
-            hostInfo = db.hostInfo();
-         } catch(e) {
-            // console.debug(`[red][WARN][/] [yellow]insufficient rights to execute db.hostInfo()\n${e}[/]`);
-         }
-         _hostInfoCache.value = hostInfo;
-         _hostInfoCache.at = now;
-         return hostInfo;
-      }
-
-      function rsStatus() {
-         // Member set/health changes slowly; optimes move faster. TTL balances lag freshness vs rs.status() cost.
-         const now = Date.now();
-         if (_rsStatusCache.value !== null && (now - _rsStatusCache.at) < RS_STATUS_CACHE_TTL_MS) {
-            return _rsStatusCache.value;
-         }
-         let rsStatus = {};
-         try {
-            rsStatus = rs.status();
-         } catch(e) {
-            // console.debug(`[red][WARN][/] [yellow]insufficient rights to execute rs.status()\n${e}[/]`);
-         }
-         _rsStatusCache.value = rsStatus;
-         _rsStatusCache.at = now;
-         return rsStatus;
-      }
-
-      function slowms() {
-         // Profiling threshold rarely changes at runtime.
-         const now = Date.now();
-         if (_slowmsCache.value !== null && (now - _slowmsCache.at) < SLOWMS_CACHE_TTL_MS) {
-            return _slowmsCache.value;
-         }
-         let slowms = null;
-         try {
-            slowms = db.getSiblingDB('admin').getProfilingStatus().slowms;
-         } catch(e) {
-            // console.debug(`[red][WARN][/] [yellow]insufficient rights to execute getProfilingStatus()\n${e}[/]`);
-         }
-         _slowmsCache.value = slowms;
-         _slowmsCache.at = now;
-         return slowms;
-      }
-
-      // Refresh dynamic/near-static data fields; create getter-bearing view once.
       const data = {
          "hostInfo": hostInfo(),
          "rsStatus": rsStatus(),
