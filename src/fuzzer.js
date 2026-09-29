@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.47"
+ *  Version: "0.6.48"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.47" };
+   const __script = { "name": "fuzzer.js", "version": "0.6.48" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -222,114 +222,7 @@
 
       // redistribute chunks if required
       if (isSharded() && (shardedOptions.reShard) && (!shardedOptions.unique) && fCV(5.0)) {
-         const resharding = async() => {
-            const numInitialChunks = initialChunkCount();
-            let res;
-            const cmd = () => db.adminCommand({
-               "reshardCollection": `${dbName}.${collName}`,
-               // The new shard key cannot have a uniqueness constraint
-               "key": shardedOptions.key,
-               // Resharding a collection that has a uniqueness constraint is not supported
-               "unique": shardedOptions.unique,
-               "numInitialChunks": numInitialChunks,
-               "collation": collation,
-               // "zones": [
-               //       {
-               //          "min": { "<document with same shape as shardkey>" },
-               //          "max": { "<document with same shape as shardkey>" },
-               //          "zone": null // <string> | null
-               //       }
-               // ],
-               ...(fCV(8.0) && { "forceRedistribution": true })
-            });
-            try {
-               res = await cmd();
-            } catch(e) {
-               console.log('Resharding attempt:', (e.errmsg || e.message || String(e)));
-            }
-
-            return res;
-         };
-         const rebalancingOps = () => {
-            return db.getSiblingDB('admin').aggregate([
-               { "$currentOp": { "allUsers": true, "localOps": false } },
-               { "$match": {
-                  "type": "op",
-                  "originatingCommand.reshardCollection": `${dbName}.${collName}`
-               } },
-               { "$sort": { "shard": 1 } },
-               { "$set": {
-                  "migration": {
-                     "$arrayElemAt": [
-                        { "$regexFindAll": {
-                           "input": "$desc",
-                           // cater for $currentOp sharding schema change in v7
-                           "regex": /^Resharding\w+(Donor|Recipient)Service ([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})$/
-                        } },
-                        0
-                     ]
-               } } },
-               { "$group": {
-                  "_id": {
-                     "migrationId": { "$arrayElemAt": ["$migration.captures", -1] },
-                     "namespace": "$ns"
-                  },
-                  "shards": {
-                     "$push": {
-                        "shard": "$shard",
-                        "migrationService": { "$arrayElemAt": ["$migration.captures", 0] },
-                        "state": { "$ifNull": ["$donorState", "$recipientState"] },
-                        "approxDocumentsToCopy":{ "$ifNull": [{ "$toInt": "$approxDocumentsToCopy" }, "$$REMOVE"] },
-                        "documentsCopied": { "$ifNull": [{ "$toInt": "$documentsCopied" }, "$$REMOVE"] },
-                        "approxBytesToCopy": { "$ifNull": [{ "$toInt": "$approxBytesToCopy" }, "$$REMOVE"] },
-                        "bytesCopied": { "$ifNull": [{ "$toInt": "$bytesCopied" }, "$$REMOVE"] },
-                        "totalOperationTimeElapsedSecs": { "$toInt": "$totalOperationTimeElapsedSecs" },
-                        "remainingOperationTimeEstimatedSecs": { "$ifNull": [{ "$toInt": "$remainingOperationTimeEstimatedSecs" }, "$$REMOVE"] }
-               } } } },
-               { "$set": {
-                  "migrationId": "$_id.migrationId",
-                  "namespace": "$_id.namespace"
-               } },
-               { "$set": {
-                  "donors": {
-                     "$filter": {
-                        "input": "$shards",
-                        "as": "shard",
-                        "cond": { "$eq": ["$$shard.migrationService", "Donor"] }
-               } } } },
-               { "$set": {
-                  "recipients": {
-                     "$filter": {
-                        "input": "$shards",
-                        "as": "shard",
-                        "cond": { "$eq": ["$$shard.migrationService", "Recipient"] }
-               } } } },
-               { "$unset": ["_id", "shards", "donors.migrationService", "recipients.migrationService"] }
-            ],
-            { "comment": "Monitoring resharding progress by fuzzer.js" }).toArray();
-         }
-         console.log('\nResharding activated...');
-         const pollIntervalMS = 500;
-         let done = false;
-         // Hold the issuing command Promise so mongosh does not exit (and abort resharding) early.
-         // User-defined async functions are not auto-awaited by the mongosh rewriter.
-         const reshardPromise = resharding().finally(() => { done = true; });
-         sleep(3 * pollIntervalMS); // allow $currentOp to publish the initial donor/recipient ops
-         while (!done) {
-            const ops = rebalancingOps();
-            if (ops.length > 0) {
-               console.clear();
-               console.log(`\nMonitoring resharding operations:\n`);
-               printjson(...ops);
-            }
-            sleep(pollIntervalMS);
-         }
-         try {
-            await reshardPromise;
-         } catch(e) {
-            console.log('Resharding attempt:', (e.errmsg || e.message || String(e)));
-         }
-         console.log(`\nResharding complete.`);
+         await reshardNamespace();
       }
       else if (isSharded() && (shardedOptions.unique) && fCV(5.0)) {
          console.log('[red][WARN] [yellow]reshardCollection() [red]with a uniqueness constraint is not supported[/]');
@@ -708,6 +601,112 @@
       catch(e) {
          console.log('[red][ERROR] Sharding namespace failed:[/]', (e.errmsg || e.message || String(e)));
       }
+   }
+
+   // cater for $currentOp sharding schema change in v7
+   const reshardServiceDesc = /^Resharding\w+(Donor|Recipient)Service ([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})$/;
+
+   async function reshardNamespace() {
+      const resharding = async() => {
+         const numInitialChunks = initialChunkCount();
+         const cmd = () => db.adminCommand({
+            "reshardCollection": `${dbName}.${collName}`,
+            // The new shard key cannot have a uniqueness constraint
+            "key": shardedOptions.key,
+            // Resharding a collection that has a uniqueness constraint is not supported
+            "unique": shardedOptions.unique,
+            "numInitialChunks": numInitialChunks,
+            "collation": collation,
+            // "zones": [
+            //       {
+            //          "min": { "<document with same shape as shardkey>" },
+            //          "max": { "<document with same shape as shardkey>" },
+            //          "zone": null // <string> | null
+            //       }
+            // ],
+            ...(fCV(8.0) && { "forceRedistribution": true })
+         });
+         try {
+            await cmd();
+         } catch(e) {
+            console.log('Resharding attempt:', (e.errmsg || e.message || String(e)));
+         }
+      };
+      const rebalancingOps = () => {
+         return db.getSiblingDB('admin').aggregate([
+            { "$currentOp": { "allUsers": true, "localOps": false } },
+            { "$match": {
+               "type": "op",
+               "originatingCommand.reshardCollection": `${dbName}.${collName}`
+            } },
+            { "$sort": { "shard": 1 } },
+            { "$set": {
+               "migration": {
+                  "$arrayElemAt": [
+                     { "$regexFindAll": {
+                        "input": "$desc",
+                        "regex": reshardServiceDesc
+                     } },
+                     0
+                  ]
+            } } },
+            { "$group": {
+               "_id": {
+                  "migrationId": { "$arrayElemAt": ["$migration.captures", -1] },
+                  "namespace": "$ns"
+               },
+               "shards": {
+                  "$push": {
+                     "shard": "$shard",
+                     "migrationService": { "$arrayElemAt": ["$migration.captures", 0] },
+                     "state": { "$ifNull": ["$donorState", "$recipientState"] },
+                     "approxDocumentsToCopy":{ "$ifNull": [{ "$toInt": "$approxDocumentsToCopy" }, "$$REMOVE"] },
+                     "documentsCopied": { "$ifNull": [{ "$toInt": "$documentsCopied" }, "$$REMOVE"] },
+                     "approxBytesToCopy": { "$ifNull": [{ "$toInt": "$approxBytesToCopy" }, "$$REMOVE"] },
+                     "bytesCopied": { "$ifNull": [{ "$toInt": "$bytesCopied" }, "$$REMOVE"] },
+                     "totalOperationTimeElapsedSecs": { "$toInt": "$totalOperationTimeElapsedSecs" },
+                     "remainingOperationTimeEstimatedSecs": { "$ifNull": [{ "$toInt": "$remainingOperationTimeEstimatedSecs" }, "$$REMOVE"] }
+            } } } },
+            { "$set": {
+               "migrationId": "$_id.migrationId",
+               "namespace": "$_id.namespace"
+            } },
+            { "$set": {
+               "donors": {
+                  "$filter": {
+                     "input": "$shards",
+                     "as": "shard",
+                     "cond": { "$eq": ["$$shard.migrationService", "Donor"] }
+            } } } },
+            { "$set": {
+               "recipients": {
+                  "$filter": {
+                     "input": "$shards",
+                     "as": "shard",
+                     "cond": { "$eq": ["$$shard.migrationService", "Recipient"] }
+            } } } },
+            { "$unset": ["_id", "shards", "donors.migrationService", "recipients.migrationService"] }
+         ],
+         { "comment": "Monitoring resharding progress by fuzzer.js" }).toArray();
+      };
+      console.log('\nResharding activated...');
+      const pollIntervalMS = 500;
+      let done = false;
+      // Hold the issuing command Promise so mongosh does not exit (and abort resharding) early.
+      // User-defined async functions are not auto-awaited by the mongosh rewriter.
+      const reshardPromise = resharding().finally(() => { done = true; });
+      sleep(3 * pollIntervalMS); // allow $currentOp to publish the initial donor/recipient ops
+      while (!done) {
+         const ops = rebalancingOps();
+         if (ops.length > 0) {
+            console.clear();
+            console.log(`\nMonitoring resharding operations:\n`);
+            printjson(...ops);
+         }
+         sleep(pollIntervalMS);
+      }
+      await reshardPromise;
+      console.log(`\nResharding complete.`);
    }
 
    function createNS() {
