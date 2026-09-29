@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.11.4"
+    *  Version: "0.11.5"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.11.4" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.11.5" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -639,13 +639,11 @@
    const SERVER_STATUS_CACHE_TTL_MS = 100;
    const HOST_INFO_CACHE_TTL_MS = 60 * 1000;
    const RS_STATUS_CACHE_TTL_MS = 2 * 1000; // 2s matches the Atlas no-op heartbeat interval
-   const SLOWMS_CACHE_TTL_MS = 60 * 1000;
    const GET_PARAMETER_CACHE_TTL_MS = 60 * 1000;
 
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
    const _hostInfoCache = { "at": 0, "value": null };
    const _rsStatusCache = { "at": 0, "value": null };
-   const _slowmsCache = { "at": 0, "value": null };
    const _getParameterCache = Object.create(null); // name -> { at, value }
 
    // Hoisted once — avoid rebuilding ~60-key maps on every serverStatus() call.
@@ -733,7 +731,7 @@
    };
 
    function getParameter(name, fallback = null) {
-      // Near-static mongod knobs (WT runtime config, ticket limits). 60s TTL + try/catch.
+      // Near-static mongod knobs (wiredTigerEngineRuntimeConfig). 60s TTL + try/catch.
       const now = Date.now();
       const hit = _getParameterCache[name];
       if (hit && (now - hit.at) < GET_PARAMETER_CACHE_TTL_MS) return hit.value;
@@ -745,20 +743,6 @@
       }
       _getParameterCache[name] = { "at": now, "value": value };
       return value;
-   }
-
-   function getParameterCompat(names, fallback = null) {
-      /*
-       *  Canonical name first, then legacy aliases (7.0 storageEngineConcurrent*
-       *  vs wiredTigerConcurrent*). First defined value wins. Missing knobs on
-       *  M0/Flex/old mongod stay fallback.
-       */
-      const list = Array.isArray(names) ? names : [names];
-      for (const name of list) {
-         const value = getParameter(name, undefined);
-         if (value !== undefined) return value;
-      }
-      return fallback;
    }
 
    async function serverStatus(serverStatusOptions = {}) {
@@ -826,23 +810,6 @@
       _rsStatusCache.value = rsStatus;
       _rsStatusCache.at = now;
       return rsStatus;
-   }
-
-   function slowms() {
-      // Profiling threshold rarely changes at runtime.
-      const now = Date.now();
-      if (_slowmsCache.value !== null && (now - _slowmsCache.at) < SLOWMS_CACHE_TTL_MS) {
-         return _slowmsCache.value;
-      }
-      let slowms = null;
-      try {
-         slowms = db.getSiblingDB('admin').getProfilingStatus().slowms;
-      } catch(e) {
-         // console.debug(`[red][WARN][/] [yellow]insufficient rights to execute getProfilingStatus()\n${e}[/]`);
-      }
-      _slowmsCache.value = slowms;
-      _slowmsCache.at = now;
-      return slowms;
    }
 
    function isMongos() {
