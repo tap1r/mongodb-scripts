@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.4.16"
+    *  Version: "0.4.17"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -67,7 +67,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.4.16" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.4.17" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -131,6 +131,7 @@
    // 'wt' = WiredTiger FSM on mongod; 'pace' = paceMaker when WT vitals unavailable.
    let admissionMode = 'wt';
    let paceReason = null; // 'mongos' | 'no-wt' | null
+   let lastCuration = { "mode": "scan", "hint": {} }; // Policy A result for residual countIds
    let paceEwmaRate = null;       // docs/sec EWMA of successful clear rate
    let pacePeakRate = null;       // best EWMA observed (goodput high-water)
    let paceLastSampleAt = 0;
@@ -760,6 +761,7 @@
          "hint": curationHint,
          "mode": curationMode
       } = resolveCurationOrder(namespace, filter, hint, readPreference);
+      lastCuration = { "mode": curationMode, "hint": curationHint };
 
       if (curationMode === 'scan') {
          yield* getIdsByIdIndexScan(namespace, filter, bucketSizeLimit, cmdRP);
@@ -793,6 +795,7 @@
       } catch(e) {
          if (!isCurationSortMemoryError(e)) throw e;
          emit('\n\x1b[31m[WARN]\x1b[0m \x1b[33mWindow curation hit in-memory SORT limit; continuing with hinted _id find() walk\x1b[0m');
+         lastCuration = { "mode": "scan", "hint": { "_id": 1 } };
          yield* getIdsByIdIndexScan(namespace, filter, bucketSizeLimit, cmdRP);
       }
    }
@@ -856,7 +859,12 @@
    }
 
    function countIds(filter = {}, sessionOpts = {}) {
-      // residual validation on primary with majority RC (matches wc:majority deletes)
+      /*
+       *  Residual validation on primary with majority RC (matches wc:majority deletes).
+       *  allowDiskUse false: $count is O(1) memory; spill is a failed plan (Policy A).
+       *  Hint only when window mode honored a user hint. Scan drops a rejected hint
+       *  so the planner can pick a filter index for $match.
+       */
       const session = db.getMongo().startSession(sessionOpts);
       try {
          const namespace = session.getDatabase(dbName).getCollection(collName);
@@ -872,12 +880,14 @@
                } }
             ],
             aggOpts = {
-               "allowDiskUse": true,
+               "allowDiskUse": false,
                "readOnce": true, // may or may not work in aggregation?
                "readConcern": sessionOpts?.readConcern?.level ?? "majority",
-               "hint": hint,
                "comment": "Validating IDs via niceDeleteMany.js"
             };
+         if (lastCuration.mode === 'window' && hasUserHint(lastCuration.hint)) {
+            aggOpts.hint = lastCuration.hint;
+         }
          if (hasUserCollation(collation)) aggOpts.collation = collation;
          return namespace.aggregate(pipeline, aggOpts).toArray()[0]?.IDsTotal ?? 0;
       } finally {
