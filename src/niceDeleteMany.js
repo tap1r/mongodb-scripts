@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.12.0"
+    *  Version: "0.12.1"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.12.0" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.12.1" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -570,7 +570,7 @@
             : peakFill >= THROTTLE_ENTER_FRAC ? 'medium'
             : 'low';
          const flags = [];
-         try { if (vitals.checkpointStatus === 'high' || vitals.activeCheckpoint) flags.push('ckpt'); } catch(_) { /* ignore */ }
+         if (vitals.checkpointStatus === 'high' || vitals.activeCheckpoint) flags.push('ckpt');
          if (admission.flowControl) flags.push('flow');
          if (admission.indexBuilds) flags.push('idx');
          if (admission.rangeDeleter) flags.push('range');
@@ -2601,12 +2601,10 @@
          const softLag = activeReplLag >= REPL_LAG_SOFT_SEC;
          const hardLag = activeReplLag >= REPL_LAG_HARD_SEC;
 
-         // Boolean vitals getters may throw if serverStatus sections are missing.
-         let activeFlowControl = false, activeIndexBuilds = false, activeRangeDeleter = false, backupCursorOpen = false;
-         try { activeFlowControl = !!vitals.activeFlowControl; } catch(_) { /* ignore */ }
-         try { activeIndexBuilds = !!vitals.activeIndexBuilds; } catch(_) { /* ignore */ }
-         try { activeRangeDeleter = !!vitals.activeRangeDeleter; } catch(_) { /* ignore */ }
-         try { backupCursorOpen = !!vitals.backupCursorOpen; } catch(_) { /* ignore */ }
+         const activeFlowControl = !!vitals.activeFlowControl;
+         const activeIndexBuilds = !!vitals.activeIndexBuilds;
+         const activeRangeDeleter = !!vitals.activeRangeDeleter;
+         const backupCursorOpen = !!vitals.backupCursorOpen;
 
          const dirtySoftFill = fillProgress(dirtyUtil, evictionDirtyTarget, evictionDirtyTrigger);
          const updatesSoftFill = fillProgress(dirtyUpdatesUtil, evictionUpdatesTarget, evictionUpdatesTrigger);
