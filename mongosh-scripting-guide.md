@@ -28,6 +28,7 @@ collection.explain('queryPlanner').aggregate(pipeline, { readPreference: { mode:
 // find — same per-command RP in the options document (mongosh find(query, projection, options)).
 // Also apply cursor.readPref(mode, tags) so a later .sort()/.hint() cannot drop it.
 collection.find(filter, { _id: 1 }, { readPreference: { mode: 'secondaryPreferred', tags: [...] } });
+// Unknown FindOptions such as readOnce are stripped — see “readOnce and _runCursorCommand”.
 ```
 
 Background: [Read preference](https://www.mongodb.com/docs/manual/core/read-preference/), [`db.runCommand()`](https://www.mongodb.com/docs/manual/reference/method/db.runcommand/), [`Mongo.setReadPref()`](https://www.mongodb.com/docs/manual/reference/method/mongo.setreadpref/), [`cursor.readPref()`](https://www.mongodb.com/docs/manual/reference/method/cursor.readpref/).
@@ -39,6 +40,20 @@ Starting in **mongosh 2.0**, `db.runCommand()` **ignores** global read preferenc
 Documented under [Interaction with `db.runCommand()`](https://www.mongodb.com/docs/manual/reference/method/mongo.setreadpref/#interaction-with-db-runcommand--) and the [`db.runCommand()` options](https://www.mongodb.com/docs/manual/reference/method/db.runcommand/).
 
 Implication: a script that only calls `db.getMongo().setReadPref('secondaryPreferred')` and then `db.runCommand({ hello: 1 })` will still land on the **primary**. Helpers such as `db.hello()` may still follow connection RP — do not assume `runCommand` and `db.hello()` behave the same.
+
+### `RunCommandCursor` read preference
+
+`db.runCommand(..., { readPreference: { mode, tags } })` accepts a **document**. mongosh `database._runCursorCommand` builds a Node [`RunCommandCursor`](https://mongodb.github.io/node-mongodb-native/6.3/classes/RunCommandCursor.html), which stores `options.readPreference` only when the value is a driver **`ReadPreference` instance**. A `{ mode, tags }` document is ignored and the cursor defaults to **primary**, so `secondaryPreferred` and Atlas tags never take effect.
+
+```javascript
+const ReadPreference = db.getMongo()._serviceProvider.mongoClient.db(dbName).readPreference.constructor;
+const rp = ReadPreference.fromOptions({
+  readPreference: { mode: 'secondaryPreferred', tags: [{ diskState: 'READY' }, {}] }
+});
+database._runCursorCommand(findCmd, { readPreference: rp });
+```
+
+FindCursor / AggregationCursor still use `cursor.readPref(mode, tags)`. RunCommandCursor has no `readPref()`. Sending find-command flags the `find()` helper strips is covered under [`readOnce` and `_runCursorCommand`](#readonce-and-_runcursorcommand).
 
 ### `Mongo.setReadPref()` reconnects the client
 
@@ -64,7 +79,7 @@ Commands issued through [`db.adminCommand()`](https://www.mongodb.com/docs/manua
 
 It is **not** a complete substitute for secondary-targeted aggregation or `runCommand` landing checks. Also: a single session must not be used concurrently; operations on one session run sequentially ([`Mongo.startSession()`](https://www.mongodb.com/docs/manual/reference/method/mongo.startsession/)).
 
-**Example (bucketed delete scripts):** secondaryPreferred + Atlas tags belong on the **read path** that builds `_id` batches (`hello` / `explain` / `aggregate` options). Deletes and majority residual counts stay on **primary-oriented sessions**. Do not assume one session RP covers both.
+**Example (bucketed delete scripts):** secondaryPreferred + Atlas tags belong on the **read path** that builds `_id` batches (`hello` / `explain` / `aggregate` options, and `_runCursorCommand` with a driver `ReadPreference` instance). Deletes and majority residual counts stay on **primary-oriented sessions**. Do not assume one session RP covers both.
 
 ---
 
@@ -77,6 +92,53 @@ Practical lessons:
 - Running `explain` on a **DriverSession** and then expecting a long aggregation on the same session to survive can fail with session-expiry errors (`MongoExpiredSessionError` in the driver/mongosh stack). For long batching pipelines, prefer connection-scoped collection helpers for explain + aggregate, or manage explicit session refresh if you must use a session ([`refreshSessions`](https://www.mongodb.com/docs/manual/reference/command/refreshSessions/)).
 - If you open a cursor yourself, close it in `finally` (`cursor.close()`), ignoring “already closed” where appropriate.
 - Do **not** `await` a mongosh cursor to “unwrap” it — see [Thenable cursors](#thenable-cursors-do-not-await-a-live-cursor).
+
+### `readOnce` and `_runCursorCommand`
+
+[`readOnce`](https://www.mongodb.com/docs/manual/reference/command/find/) is a **find-command** flag. It tells WiredTiger the scan is one-shot, so those pages need not stay in cache. The field is IDL **unstable / deprecated**. It exists on `find` only.
+
+mongosh `collection.find(query, projection, options)` forwards **known FindOptions** only. Extra keys such as `readOnce` are dropped before the command is built — the helper succeeds and the profiler shows no `readOnce`. Confirm with `system.profile` / a `command.comment`.
+
+`collection.aggregate(pipeline, { readOnce: true })` is the same silent drop. `runCommand({ aggregate, …, readOnce: true })` fails with **40415** `IDLUnknownField` because the aggregate command is strict and has no such field.
+
+Public `db.runCursorCommand` is a Help object (`typeof` is `object`, not a function). mongosh’s path is `database._runCursorCommand(findCmd, options)`, which wraps the Node `RunCommandCursor`. That cursor **pins getMore** to the member that served `find`. `runCommand({ find })` followed by `runCommand({ getMore })` with `secondaryPreferred` selects a server per command and can miss the cursor owner (`CursorNotFound`).
+
+Read preference on this cursor is a driver **instance** — see [`RunCommandCursor` read preference](#runcursorcommand-read-preference). Shell `RunCommandCursor.batchSize()` throws (`batchSize must be configured on the command document directly, to configure getMore.batchSize use cursor.setBatchSize()`). `find.batchSize` is **firstBatch**; later getMore size is `cursor._cursor.setBatchSize(n)`.
+
+`_runCursorCommand` is a plain `async` method (the rewriter does not unwrap it), so the first value is `Promise<RunCommandCursor>`. Unwrap only while there is no `.close`, then stream — see [Thenable cursors](#thenable-cursors-do-not-await-a-live-cursor). Keep the cursor connection-scoped (implicit session); a DriverSession can expire under a long walk.
+
+Hit in `niceDeleteMany.js` on the hinted `_id` scan walk (`getIdsByIdIndexScan`). Window `$setWindowFields` stays on `aggregate()`. Residual `countIds` stays on aggregate without `readOnce`.
+
+```javascript
+const database = db.getSiblingDB(dbName);
+const ReadPreference = db.getMongo()._serviceProvider.mongoClient.db(dbName).readPreference.constructor;
+const findCmd = {
+  find: collName,
+  filter,
+  projection: { _id: 1 },
+  sort: { _id: 1 },
+  hint: { _id: 1 },
+  batchSize: 100,          // firstBatch
+  maxTimeMS: 0,
+  noCursorTimeout: true,
+  readOnce: true,
+  comment: 'one-shot _id walk'
+};
+let cursor = database._runCursorCommand(findCmd, {
+  readPreference: ReadPreference.fromOptions({ readPreference: cmdRP })
+});
+if (cursor && typeof cursor.then === 'function' && typeof cursor.close !== 'function') {
+  cursor = await cursor;
+}
+if (typeof cursor._cursor?.setBatchSize === 'function') {
+  cursor._cursor.setBatchSize(100); // getMore.batchSize
+}
+try {
+  for await (const doc of cursor) { /* stream */ }
+} finally {
+  try { await cursor.close(); } catch (_) { /* already closed */ }
+}
+```
 
 ---
 
@@ -162,11 +224,11 @@ for await (const doc of cursor) { /* stream */ }
 
 Discriminate with a method **both** cursor types have, such as `.close` or `Symbol.asyncIterator`, not `.then`. Do **not** use `.sort`: that exists on `find` cursors only; an aggregation cursor has `.then` and **no** `.sort`, so a `.sort` check would treat a live agg cursor as a Promise and drain it.
 
-A `Promise` has `.then` and no `.close`; a mongosh find or aggregation cursor has both.
+A `Promise` has `.then` and no `.close`; a mongosh find, aggregation, or `RunCommandCursor` has both.
 
-In `--file` scripts the [async rewriter](https://www.npmjs.com/package/@mongosh/async-rewriter2) already inserts implicit `await` around marked **shell-API** methods (`find`, `aggregate`, …). You usually receive a **cursor object**, not `Promise<Cursor>`. Stream it with `for await` or `yield*`. Do not `await` it first.
+In `--file` scripts the [async rewriter](https://www.npmjs.com/package/@mongosh/async-rewriter2) already inserts implicit `await` around marked **shell-API** methods (`find`, `aggregate`, …). You usually receive a **cursor object**, not `Promise<Cursor>`. `Database._runCursorCommand` is a plain `async` method (not rewriter-marked), so the first value **is** `Promise<RunCommandCursor>` — unwrap that Promise, then stream. Do not `await` a live cursor.
 
-Hit in `niceDeleteMany.js` on the hinted `_id` `find()` fallback: `typeof cursor.then === 'function'` was true for a live cursor, and `await cursor` would materialise every matching `_id` instead of yielding 100-id buckets. Both the window `aggregate()` path and the `find()` walk unwrap only a bare Promise (no `.close`), then stream (`yield*` / `for await`).
+Hit in `niceDeleteMany.js`: window `aggregate()` and the `_runCursorCommand` `_id` walk both unwrap only a bare Promise (no `.close`), then stream (`yield*` / `for await`). `await` on the live cursor would materialise every matching `_id` instead of yielding 100-id buckets.
 
 The object you hold is the **mongosh cursor**, not the server cursor. It wraps a Node driver cursor (`_cursor`). `for await` / `yield*` on the shell object uses `Symbol.asyncIterator`, which (unless `.map()` is set) **delegates to the driver iterator**. `close()` is `await this._cursor.close()` (killCursors on the server when the id is still live).
 
@@ -176,7 +238,7 @@ That wrapper **buffers and reports its own state**:
 - **REPL print batch** — inspecting a cursor in the shell runs `_it()` with `_displayBatchSize()` (often ~20). That path is **not** used by `for await` / `yield*` / `next()`.
 - **`isClosed()`** — the driver `closed` flag, not a separate shell flag. The driver async iterator also `close()`s in its `finally` when the loop ends or breaks; a generator `finally { cursor.close() }` is then a second close on an already-closed wrapper (ignore “already closed”).
 
-So generators should keep **one** shell cursor, iterate it, and `close()` it. They cannot read the real server cursor id or remaining count through mongosh. Wire `batchSize` on `find` / `aggregate` still controls getMore size on the driver/server side.
+So generators should keep **one** shell cursor, iterate it, and `close()` it. They cannot read the real server cursor id or remaining count through mongosh. Wire `batchSize` on `find` / `aggregate` still controls getMore size on the driver/server side. On `RunCommandCursor`, `find.batchSize` is firstBatch only; getMore size is `cursor._cursor.setBatchSize(n)` — see [`readOnce` and `_runCursorCommand`](#readonce-and-_runcursorcommand).
 
 ### Blocking `sleep()` vs `await` delays
 
@@ -292,7 +354,10 @@ child.close();
 | Do | Don’t |
 |----|--------|
 | Pass `readPreference` on `runCommand` / `aggregate` / `explain` / `find` | Assume `setReadPref` alone fixes `runCommand` (mongosh 2.0+) |
-| Stream `find`/`aggregate` with `for await` / `yield*` | `await cursor` because it is thenable (drains via `toArray`) |
+| Stream `find`/`aggregate`/`_runCursorCommand` with `for await` / `yield*` | `await cursor` because it is thenable (drains via `toArray`) |
+| Put `readOnce` on `database._runCursorCommand({ find, readOnce: true })` with a driver `ReadPreference` instance + `_cursor.setBatchSize` | Pass `readOnce` on `collection.find()` / `aggregate()` (stripped) or on `runCommand({ aggregate })` (40415) |
+| Pass `ReadPreference.fromOptions({ readPreference: cmdRP })` into `_runCursorCommand` | Pass a `{ mode, tags }` document into `_runCursorCommand` (cursor defaults to primary) |
+| Pin find+getMore via `_runCursorCommand` | `runCommand({ find })` then `runCommand({ getMore })` under `secondaryPreferred` (cursor owner can change) |
 | Keep connection RP stable while cursors run | Flip `setReadPref` under concurrent load |
 | Use `runCommand` + RP to verify secondary targeting | Use `adminCommand` for secondary landing |
 | Wrap sync `adminCommand` when you need a Promise | Assume `await adminCommand` is inherently async |
@@ -316,6 +381,7 @@ child.close();
 - [Cursor methods](https://www.mongodb.com/docs/manual/reference/method/js-cursor/) / [`cursor.toArray()`](https://www.mongodb.com/docs/manual/reference/method/cursor.toArray/)
 - [`sleep()`](https://www.mongodb.com/docs/mongodb-shell/reference/native-methods/)
 - [`db.runCommand()`](https://www.mongodb.com/docs/manual/reference/method/db.runcommand/)
+- [`find` command](https://www.mongodb.com/docs/manual/reference/command/find/) (`readOnce`)
 - [`Mongo.setReadPref()`](https://www.mongodb.com/docs/manual/reference/method/mongo.setreadpref/)
 - [Read preference](https://www.mongodb.com/docs/manual/core/read-preference/)
 - [`Mongo.startSession()`](https://www.mongodb.com/docs/manual/reference/method/mongo.startsession/) / [Session options](https://www.mongodb.com/docs/manual/reference/method/sessionoptions/)
