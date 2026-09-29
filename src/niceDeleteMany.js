@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.11.2"
+    *  Version: "0.11.3"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.11.2" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.11.3" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -856,20 +856,6 @@
       return db.hello().msg === 'isdbgrid';
    }
 
-   function enablePaceAdmission(reason, detail) {
-      /*
-       *  Attach-time WARN is appended once on the reconstructed banner
-       *  (writeConsole(banner)). emit() here would print a second copy
-       *  on non-TTY before that dump. After the banner is written
-       *  (mid-run latch, or latch during curation) emit so the HUD
-       *  lifts and TTY resize persist keeps the line.
-       */
-      admissionCtl.enablePace(reason, detail);
-      if (startupLogDone) {
-         emit(`\n[red][WARN][/] [yellow]${detail}[/]`);
-      }
-   }
-
    function hasWiredTigerVitals(sample = vitals) {
       /*
        *  Atlas M0/Flex (and some restricted roles) omit serverStatus.wiredTiger.
@@ -1248,7 +1234,7 @@
          emit(`[red][WARN][/] [yellow]mongos: collection-owning shard vitals miss ${shardVitalsMissStrikes}/${SHARD_VITALS_MISS_STRIKES} — retrying[/]`);
          return false;
       }
-      enablePaceAdmission('mongos', latchDetail);
+      admissionCtl.enablePace('mongos', latchDetail);
       closeShardVitalsClients();
       vitalsSampling = false;
       return true;
@@ -2419,7 +2405,7 @@
       return Math.floor(delay * jitter);
    }
 
-   function createAdmissionController() {
+   function createAdmissionController({ onWarn } = {}) {
       /*
        *  Owns WT/pace FSM lets. asyncPool calls reset/decide; the delete
        *  consumer calls noteBatchOk. HUD/banner/attach use snapshot() and
@@ -2796,6 +2782,7 @@
             paceMakerReset();
             admissionState = 'PACE';
          }
+         if (typeof onWarn === 'function') onWarn(detail);
       }
 
       function snapshot() {
@@ -2826,7 +2813,12 @@
       };
    }
 
-   const admissionCtl = createAdmissionController();
+   const admissionCtl = createAdmissionController({
+      onWarn(detail) {
+         // Attach-time WARN is banner-only until writeConsole(banner).
+         if (startupLogDone) emit(`\n[red][WARN][/] [yellow]${detail}[/]`);
+      }
+   });
 
    async function* prepend(first, rest) {
       yield first;
@@ -3032,13 +3024,13 @@
                vitals.numCores = localNumCores();
                updateEwma(vitals);
             } else {
-               enablePaceAdmission('mongos', attached.detail);
+               admissionCtl.enablePace('mongos', attached.detail);
                vitals = { "numCores": localNumCores() };
             }
          } else {
             vitals = await congestionMonitor();
             if (admissionCtl.mode === 'wt' && !hasWiredTigerVitals(vitals)) {
-               enablePaceAdmission(
+               admissionCtl.enablePace(
                   'no-wt',
                   'WiredTiger cache vitals unavailable — using paceMaker admission (Atlas M0/Flex or restricted serverStatus); maxInFlight capped'
                );
@@ -3050,7 +3042,7 @@
          emit('[red][WARN][/] [yellow]initial congestionMonitor failed[/]:', redactMessage(e?.message ?? e));
          vitals = { "numCores": localNumCores() };
          if (admissionCtl.mode === 'wt') {
-            enablePaceAdmission(
+            admissionCtl.enablePace(
                onMongos ? 'mongos' : 'no-wt',
                onMongos
                   ? `mongos: collection-owning shard primary unreachable (${redactMessage(e?.message ?? e)}) — using paceMaker admission; maxInFlight capped`
@@ -3064,7 +3056,7 @@
       /*
        *  Attach-time HUD header. heading is the script title plus any
        *  persistBannerLine emits from attach. Pace WARN is one copy here;
-       *  enablePaceAdmission emits only after startupLogDone.
+       *  enablePace onWarn emits only after startupLogDone.
        */
       let text = `\n[yellow]${heading}[/]`;
       text += `\n\nCurating '[green]_id[/]' deletion list from namespace:` +
