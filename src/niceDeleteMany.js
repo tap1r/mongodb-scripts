@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.10.0"
+    *  Version: "0.10.1"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.10.0" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.10.1" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -2330,7 +2330,7 @@
    function updateEwma(sample) {
       /*
        *  Update smoothed util series from a vitals snapshot (called each sample).
-       *  admissionControl bands on these values instead of raw point samples.
+       *  wtAdmissionControl bands on these values instead of raw point samples.
        */
       if (sample == null || typeof sample !== 'object') return;
       try {
@@ -2657,7 +2657,7 @@
    async function vitalsSampler(intervalMs = VITALS_SAMPLE_INTERVAL_MS) {
       /*
        *  Vitals are sampled on a background loop (decoupled from task scheduling);
-       *  EWMA is updated here; admissionControl reads the smoothed series.
+       *  EWMA is updated here; wtAdmissionControl reads the smoothed series.
        *  Sleeps first so the caller's initial sample is not immediately repeated.
        *  On mongos, sample collection-owning shard primaries (owners refreshed
        *  each tick); consecutive misses retry, then latch to paceMaker. Last
@@ -2883,23 +2883,18 @@
          };
       }
 
-      function admissionControl() {
+      function wtAdmissionControl() {
          /*
-          *  Admission FSM with hysteresis (see https://jira.mongodb.org/browse/SPM-1123):
+          *  WT admission FSM with hysteresis (see https://jira.mongodb.org/browse/SPM-1123):
           *    OPEN     — admit; light progressive delay in the *lower* soft band only
           *    THROTTLE — upper soft band (fill ≥ ENTER); progressive delay; leave below LEAVE
           *    CLOSED   — wait; trip at *Trigger, release only at/under *Target
           *    COOLDOWN — after CLOSED, brief paced resume to avoid thundering herd
-          *    PACE     — no WT vitals: paceMaker (EWMA clear-rate AIMD + light delay)
           *  Soft-band fill: 0 at *Target → 1 at *Trigger (dirty/updates). Steady ~8–14%
           *  with tgt 5 / trig 20 stays OPEN (below midpoint) instead of sticky THROTTLE.
           *  Repl lag: >=15s soft → THROTTLE; >=30s hard → CLOSED.
           *  Booleans: flowControl + backupCursor → CLOSED; activeIndexBuilds → THROTTLE.
           */
-
-         if (admissionMode === 'pace') {
-            return paceMakerControl();
-         }
 
          const {
             evictionTarget = 80,
@@ -3043,6 +3038,10 @@
             "maxInFlight": maxInFlight,
             ...admissionSignals
          };
+      }
+
+      function admissionControl() {
+         return admissionMode === 'pace' ? paceMakerControl() : wtAdmissionControl();
       }
 
       function reset(mode, poolSize) {
