@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.7.11"
+    *  Version: "0.7.12"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -66,7 +66,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.7.11" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.7.12" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -713,8 +713,8 @@
    }
 
    function parentConnectionParts() {
-      const mongo = db.getMongo();
-      const rawUri = (typeof mongo.getURI === 'function' ? mongo.getURI() : mongo._uri) || '';
+      // Public Mongo.getURI(); mongosh _uri is private and can lag the session.
+      const rawUri = db.getMongo().getURI();
       if (!rawUri || typeof rawUri !== 'string') throw new Error('missing parent URI');
       const isSrv = /^mongodb\+srv:/i.test(rawUri);
       const stripped = rawUri.replace(/^mongodb\+srv:/i, 'mongodb:');
@@ -1845,9 +1845,7 @@
       }
    }
 
-   async function deleteManyTask({ ids, IDs, bucketId } = {}, sessionOpts = {}) {
-      // Accept ids (v0.4.8+) with legacy IDs alias for safety during upgrades.
-      const idList = ids ?? IDs;
+   async function deleteManyTask({ ids = [], bucketId } = {}, sessionOpts = {}) {
       const session = db.getMongo().startSession(sessionOpts);
       try {
          const namespace = session.getDatabase(dbName).getCollection(collName);
@@ -1859,7 +1857,7 @@
             // },
             "comment": `Simulating deleteMany(${JSON.stringify(filter)}) workload via niceDeleteMany.js`
          };
-         const deleteManyFilter = { "_id": { "$in": idList } };
+         const deleteManyFilter = { "_id": { "$in": ids } };
          // Collation intentionally omitted: deletes are _id equality only (binary compare).
          const deleteManyOpts = {};
          let deletedCount = 0;
