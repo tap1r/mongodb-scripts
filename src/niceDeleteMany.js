@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.12.4"
+    *  Version: "0.12.5"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.12.4" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.12.5" };
    let banner = `#### Running script ${__script.name} v${__script.version} on shell v${version()}`;
    let vitals = {};
    let vitalsSampling = false;
@@ -553,8 +553,8 @@
          const dirtyTrigger = vitals.evictionDirtyTrigger ?? 20;
          const updatesTarget = vitals.evictionUpdatesTarget ?? 2.5;
          const updatesTrigger = vitals.evictionUpdatesTrigger ?? 10;
-         const dirtyUtil = ewma.dirtyUtil ?? vitals.dirtyUtil;
-         const dirtyUpdatesUtil = ewma.dirtyUpdatesUtil ?? vitals.dirtyUpdatesUtil;
+         const dirtyUtil = snap.ewma?.dirtyUtil ?? vitals.dirtyUtil;
+         const dirtyUpdatesUtil = snap.ewma?.dirtyUpdatesUtil ?? vitals.dirtyUpdatesUtil;
          const dirtyFill = fillProgress(dirtyUtil, dirtyTarget, dirtyTrigger);
          const updatesFill = fillProgress(dirtyUpdatesUtil, updatesTarget, updatesTrigger);
          const peakIsUpdates = updatesFill > dirtyFill;
@@ -2267,12 +2267,6 @@
 
    // EWMA: α=0.2 ≈ half-life ~0.3s at 100ms samples (reduces single-sample admission chatter).
    const EWMA_ALPHA = 0.2;
-   const ewma = {
-      "cacheUtil": null,
-      "dirtyUtil": null,
-      "dirtyUpdatesUtil": null,
-      "wtWriteTicketsUtil": null
-   };
    // Admission FSM: trip CLOSED at *Trigger; release only at/under *Target (hysteresis).
    const ADMISSION_COOLDOWN_MS = 1000;
    const THROTTLE_DELAY_MIN_MS = 20;
@@ -2313,22 +2307,6 @@
       sample = +sample;
       if (prev == null || Number.isNaN(prev)) return sample;
       return alpha * sample + (1 - alpha) * prev;
-   }
-
-   function updateEwma(sample) {
-      /*
-       *  Update smoothed util series from a vitals snapshot (called each sample).
-       *  wtAdmissionControl bands on these values instead of raw point samples.
-       */
-      if (sample == null || typeof sample !== 'object') return;
-      try {
-         ewma.cacheUtil = ewmaStep(ewma.cacheUtil, sample.cacheUtil);
-         ewma.dirtyUtil = ewmaStep(ewma.dirtyUtil, sample.dirtyUtil);
-         ewma.dirtyUpdatesUtil = ewmaStep(ewma.dirtyUpdatesUtil, sample.dirtyUpdatesUtil);
-         ewma.wtWriteTicketsUtil = ewmaStep(ewma.wtWriteTicketsUtil, sample.wtWriteTicketsUtil);
-      } catch(e) {
-         // getters may throw if serverStatus shape is incomplete; keep prior ewma
-      }
    }
 
    function bandStatus(util, lowMax, highMin) {
@@ -2375,9 +2353,10 @@
 
    function createAdmissionController({ onWarn } = {}) {
       /*
-       *  Owns WT/pace FSM lets. asyncPool calls reset/decide; the delete
-       *  consumer calls noteBatchOk. HUD/banner/attach use snapshot() and
-       *  mode/reason/detail getters. Do not mutate these fields from the pool.
+       *  Owns WT/pace FSM lets and the WT EWMA series. asyncPool calls
+       *  reset/decide; the delete consumer calls noteBatchOk; sampler/attach
+       *  call noteSample. HUD/banner/attach use snapshot() and mode/reason/detail
+       *  getters. Do not mutate these fields from the pool.
        */
       let admissionState = 'OPEN'; // OPEN | THROTTLE | CLOSED | COOLDOWN | PACE
       let admissionCooldownUntil = 0;
@@ -2385,6 +2364,12 @@
       let maxInFlight = 1;
       let aimdLastIncreaseAt = 0;
       let closedSince = 0;
+      const ewma = {
+         "cacheUtil": null,
+         "dirtyUtil": null,
+         "dirtyUpdatesUtil": null,
+         "wtWriteTicketsUtil": null
+      };
       // 'wt' = WiredTiger FSM (mongod, or worst collection-owning shard on mongos);
       // 'pace' = paceMaker when WT vitals unavailable.
       let admissionMode = 'wt';
@@ -2585,7 +2570,7 @@
             activeReplLag = 0
          } = vitals;
 
-         // Prefer EWMA; fall back to raw vitals until the first successful updateEwma().
+         // Prefer EWMA; fall back to raw vitals until the first successful noteSample().
          const cacheUtil = ewma.cacheUtil ?? vitals.cacheUtil;
          const dirtyUtil = ewma.dirtyUtil ?? vitals.dirtyUtil;
          const dirtyUpdatesUtil = ewma.dirtyUpdatesUtil ?? vitals.dirtyUpdatesUtil;
@@ -2751,6 +2736,15 @@
          if (typeof onWarn === 'function') onWarn(detail);
       }
 
+      function noteSample(sample) {
+         // WT util EWMA from a vitals snapshot. Sampler/attach call this after assigning vitals.
+         if (sample == null || typeof sample !== 'object') return;
+         ewma.cacheUtil = ewmaStep(ewma.cacheUtil, sample.cacheUtil);
+         ewma.dirtyUtil = ewmaStep(ewma.dirtyUtil, sample.dirtyUtil);
+         ewma.dirtyUpdatesUtil = ewmaStep(ewma.dirtyUpdatesUtil, sample.dirtyUpdatesUtil);
+         ewma.wtWriteTicketsUtil = ewmaStep(ewma.wtWriteTicketsUtil, sample.wtWriteTicketsUtil);
+      }
+
       function snapshot() {
          return {
             "mode": admissionMode,
@@ -2761,6 +2755,12 @@
             "maxInFlight": maxInFlight,
             "maxInFlightCap": maxInFlightCap,
             "closedSince": closedSince,
+            "ewma": {
+               "cacheUtil": ewma.cacheUtil,
+               "dirtyUtil": ewma.dirtyUtil,
+               "dirtyUpdatesUtil": ewma.dirtyUpdatesUtil,
+               "wtWriteTicketsUtil": ewma.wtWriteTicketsUtil
+            },
             "paceEwmaRate": paceEwmaRate,
             "pacePeakRate": pacePeakRate,
             "paceInWall": paceInWall
@@ -2771,6 +2771,7 @@
          reset,
          decide: admissionControl,
          noteBatchOk: paceMakerNoteBatchOk,
+         noteSample,
          snapshot,
          enablePace,
          get mode() { return admissionMode; },
@@ -2941,7 +2942,7 @@
    async function vitalsSampler(intervalMs = VITALS_SAMPLE_INTERVAL_MS) {
       /*
        *  Vitals are sampled on a background loop (decoupled from task scheduling);
-       *  EWMA is updated here; wtAdmissionControl reads the smoothed series.
+       *  noteSample feeds the factory EWMA; wtAdmissionControl reads that series.
        *  Sleeps first so the caller's initial sample is not immediately repeated.
        *  On mongos, sample collection-owning shard primaries (owners refreshed
        *  each tick); consecutive misses retry, then latch to paceMaker. Last
@@ -2962,11 +2963,11 @@
                const cores = vitals?.numCores;
                vitals = next.vitals;
                if (cores != null) vitals.numCores = cores;
-               updateEwma(vitals);
+               admissionCtl.noteSample(vitals);
             } else {
                // adminCommand → primary; no connection readPreference involved.
                vitals = await congestionMonitor();
-               updateEwma(vitals);
+               admissionCtl.noteSample(vitals);
             }
          } catch(e) {
             if (shardVitalsEnabled) {
@@ -2988,7 +2989,7 @@
             if (attached.ok) {
                vitals = attached.vitals;
                vitals.numCores = localNumCores();
-               updateEwma(vitals);
+               admissionCtl.noteSample(vitals);
             } else {
                admissionCtl.enablePace('mongos', attached.detail);
                vitals = { "numCores": localNumCores() };
@@ -3001,7 +3002,7 @@
                   'WiredTiger cache vitals unavailable — using paceMaker admission (Atlas M0/Flex or restricted serverStatus); maxInFlight capped'
                );
             } else if (admissionCtl.mode === 'wt') {
-               updateEwma(vitals);
+               admissionCtl.noteSample(vitals);
             }
          }
       } catch(e) {
