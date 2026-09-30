@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.7.3"
+# Version: "0.7.4"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -202,40 +202,69 @@ validate_cluster_name() {
 }
 
 measure_dns_latency() {
-    # measure DNS latency of batched lookups
-    local _srvHost _hostQuery
+    # Time one +stats pass. TXT runs with SRV, then the per-host A lookups run
+    # together. The batch line is the wall-clock of those two waves. Each sample
+    # is dig's own Query time. Jobs start in this shell: a command substitution
+    # waits for its own background dig, so $(dig … &) does not overlap.
+    local _srvHost _hostQuery _dir _i _pid _n
+    local _txtFile _srvFile _txtPid _srvPid _t0 _t1
+    local -a _aPids
 
     echo -e "\nDNS query latency:\n"
-    _totalQuery=0
     _batchLatency=0
     _aLookups=()
-    _queryRegex="Query time\: ([0-9]*) msec"
+    _txtLatency=
+    _srvLatency=
+    _slowest=
+    _queryRegex='Query time: ([0-9]+) msec'
     # The cluster name and the SRV name are absolute. Each _srvHosts entry already ends in one dot.
-    _txtQuery=$("$_lookupCmd" +stats "${_clusterName}." TXT &)
-    _srvQuery=$("$_lookupCmd" +stats "_mongodb._tcp.${_clusterName}." SRV &)
-    wait
+    _dir=$(mktemp -d "${TMPDIR:-/tmp}/srvatlas-dns.XXXXXX") || return
+    _txtFile="${_dir}/txt"
+    _srvFile="${_dir}/srv"
+    _t0=$(perl -MTime::HiRes=time -e 'printf "%d", time * 1000' 2>/dev/null || python3 -c 'import time; print(int(time.time() * 1000))')
 
-    [[ ${_txtQuery} =~ $_queryRegex ]] && {
-        _txtLatency=${BASH_REMATCH[1]}
-        echo -e "\tTXT query latency:\t${_txtLatency}ms"
-    }
+    "$_lookupCmd" +stats "${_clusterName}." TXT >"$_txtFile" 2>&1 </dev/null &
+    _txtPid=$!
+    "$_lookupCmd" +stats "_mongodb._tcp.${_clusterName}." SRV >"$_srvFile" 2>&1 </dev/null &
+    _srvPid=$!
+    wait "$_txtPid"
+    wait "$_srvPid"
 
-    [[ ${_srvQuery} =~ $_queryRegex ]] && {
-        _srvLatency=${BASH_REMATCH[1]}
-        echo -e "\tSRV query latency:\t${_srvLatency}ms"
-    }
-
+    _aPids=()
+    _i=0
     for _srvHost in "${_srvHosts[@]}"; do
-        _hostQuery=$("$_lookupCmd" +stats "$_srvHost" A)
-        [[ ${_hostQuery} =~ $_queryRegex ]] && {
-            let "_totalQuery+=${BASH_REMATCH[1]}"
-            _aLookups+=("${BASH_REMATCH[1]}")
-        }
+        "$_lookupCmd" +stats "$_srvHost" A >"${_dir}/a${_i}" 2>&1 </dev/null &
+        _aPids+=("$!")
+        _i=$((_i + 1))
+    done
+    for _pid in "${_aPids[@]}"; do
+        wait "$_pid"
     done
 
+    _t1=$(perl -MTime::HiRes=time -e 'printf "%d", time * 1000' 2>/dev/null || python3 -c 'import time; print(int(time.time() * 1000))')
+    [[ $_t0 =~ ^[0-9]+$ ]] || _t0=0
+    [[ $_t1 =~ ^[0-9]+$ ]] || _t1=0
+    if [[ $_t1 -ge $_t0 ]]; then
+        _batchLatency=$((_t1 - _t0))
+    fi
+
+    _txtQuery=$(<"${_txtFile}")
+    [[ $_txtQuery =~ $_queryRegex ]] && _txtLatency=${BASH_REMATCH[1]}
+    _srvQuery=$(<"${_srvFile}")
+    [[ $_srvQuery =~ $_queryRegex ]] && _srvLatency=${BASH_REMATCH[1]}
+    _n=${#_srvHosts[@]}
+    _i=0
+    while [[ $_i -lt $_n ]]; do
+        _hostQuery=$(<"${_dir}/a${_i}")
+        [[ $_hostQuery =~ $_queryRegex ]] && _aLookups+=("${BASH_REMATCH[1]}")
+        _i=$((_i + 1))
+    done
+    rm -rf "$_dir"
+
+    [[ -n $_txtLatency ]] && echo -e "\tTXT query latency:\t${_txtLatency}ms"
+    [[ -n $_srvLatency ]] && echo -e "\tSRV query latency:\t${_srvLatency}ms"
     _slowest=$(printf '%s\n' "${_aLookups[@]}" | sort -nr | head -n1)
-    echo -e "\tA query latency:\t${_slowest}ms (slowest A lookup)"
-    _batchLatency=$((_txtLatency + _srvLatency + _slowest))
+    [[ -n $_slowest ]] && echo -e "\tA query latency:\t${_slowest}ms (slowest A lookup)"
     echo -e "\n\tDNS batch latency:\t${_batchLatency}ms"
     echo -e "\nDNS tests done.\n"
 }
