@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.7.6"
+# Version: "0.7.7"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -870,6 +870,7 @@ test_host_connectivity() {
     _tcpUp=0
     _tlsUp=0
     _plainUp=0
+    _tcpOpen=()
     echo -e "\nHost connectivity tests on: ${_targets[@]}"
     # Serial on purpose. Hello and TLS results are globals shared across nodes.
     for _target in "${_targets[@]}"; do
@@ -904,6 +905,11 @@ test_host_connectivity() {
             _plaintext=skipped
             _tlsState=skipped
         fi
+        if tcp_open "$_reachable"; then
+            _tcpOpen+=("1")
+        else
+            _tcpOpen+=("0")
+        fi
         echo -e "\n\tnode:\t\t\t${_target}\n\tTCP connectivity:\t${_reachable}\n\tplaintext:\t\t${_plaintext}\n\tTLS:\t\t\t${_tlsState}"
         if [[ $_tlsEnabled == ESTABLISHED ]]; then
             echo -e "\tTLS protocol:\t\t${_tlsProtocol}\n\tTLS ciphersuite:\t${_tlsCipher}\n\tTLS group:\t\t${_tlsGroup}"
@@ -923,7 +929,7 @@ test_host_connectivity() {
 }
 
 evaluate_connection_properties() {
-    local _target _suite
+    local _target _suite _i=0
 
     _helloMe=()
     _helloMsg=()
@@ -938,7 +944,25 @@ evaluate_connection_properties() {
     build_group_candidates
     echo -e "\nEvaluating connection properties to individual nodes: ${_targets[@]}"
     # Serial on purpose. _ok and the negotiated-cipher list are globals shared across nodes.
+    # A closed port skips hello and the cipher peel. One empty record keeps the
+    # replica-set index aligned with _targets.
     for _target in "${_targets[@]}"; do
+        if [[ ${_tcpOpen[_i]} != 1 ]]; then
+            _helloMe+=("")
+            _helloMsg+=("")
+            _helloHosts+=("")
+            _helloSet+=("")
+            _helloTags+=("")
+            _helloOk+=("0")
+            echo -e "\n\tnode:\t\t\t$_target"
+            echo -e "\thello:\t\t\tskipped"
+            echo -e "\tTLS cipher scanning:"
+            for _suite in "${_cipherSuites[@]}"; do
+                echo -e "\n\t\t$_suite: skipped"
+            done
+            _i=$((_i + 1))
+            continue
+        fi
         _uri=$(mongo_uri "$_target" "$_uriOpts")
         collect_hello
         [[ $_ok == 1 ]] || collect_hello
@@ -987,6 +1011,7 @@ evaluate_connection_properties() {
                 echo -e "\n\t\tgroups: ${_negotiatedGroups:-None}"
             fi
         done
+        _i=$((_i + 1))
     done
 
     echo -e "\nConnectivity tests done."
