@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.7.4"
+# Version: "0.7.5"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -754,7 +754,8 @@ test_host_connectivity() {
     _tlsUp=0
     _plainUp=0
     echo -e "\nHost connectivity tests on: ${_targets[@]}"
-    for _target in "${_targets[@]}"; do {
+    # Serial on purpose. Hello and TLS results are globals shared across nodes.
+    for _target in "${_targets[@]}"; do
         _uri=$(mongo_uri "$_target" "$_uriOpts")
         _reachable=
         _tlsEnabled=
@@ -800,9 +801,7 @@ test_host_connectivity() {
         elif tcp_open "$_reachable" && [[ -z $_transport && $_tlsEnabled != ESTABLISHED && $_plaintext != enabled ]]; then
             note_failure "neither plaintext nor TLS is enabled for ${_target}"
         fi
-    } # &
     done
-    # wait
     select_transport
 }
 
@@ -821,7 +820,8 @@ evaluate_connection_properties() {
     build_cipher_lists
     build_group_candidates
     echo -e "\nEvaluating connection properties to individual nodes: ${_targets[@]}"
-    for _target in "${_targets[@]}"; do {
+    # Serial on purpose. _ok and the negotiated-cipher list are globals shared across nodes.
+    for _target in "${_targets[@]}"; do
         _uri=$(mongo_uri "$_target" "$_uriOpts")
         collect_hello
         [[ $_ok == 1 ]] || collect_hello
@@ -858,7 +858,7 @@ evaluate_connection_properties() {
             note_failure "hello failed for ${_target}${_err:+: ${_err}}"
         fi
         echo -e "\tTLS cipher scanning:"
-        for _suite in "${_cipherSuites[@]}"; do {
+        for _suite in "${_cipherSuites[@]}"; do
             if $_cipherScan; then
                 scan_each_local_cipher "$_target" "$_suite"
             else
@@ -869,12 +869,8 @@ evaluate_connection_properties() {
                 probe_ecc_groups "$_target"
                 echo -e "\n\t\tgroups: ${_negotiatedGroups:-None}"
             fi
-        } # &
         done
-        # wait
-    } # &
     done
-    # wait
 
     echo -e "\nConnectivity tests done."
 }
@@ -885,7 +881,8 @@ test_replset_consistency() {
 
     echo -e "\nReplica set consistency tests:"
     [[ -n $_txtReplicaSet ]] && echo -e "\tTXT replicaSet:\t${_txtReplicaSet}"
-    for _target in "${_targets[@]}"; do {
+    # Serial on purpose. The hello record is read one target at a time.
+    for _target in "${_targets[@]}"; do
         _proc=
         _identity=${_helloMe[_i]}
         _mongos=${_helloMsg[_i]}
@@ -936,9 +933,7 @@ test_replset_consistency() {
             fi
         fi
         _i=$((_i + 1))
-    } # &
     done
-    # wait
 
     echo -e "\nReplica set tests done."
 }
