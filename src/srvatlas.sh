@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.7.5"
+# Version: "0.7.6"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -155,85 +155,184 @@ normalize_cluster_name() {
     _clusterName=$_name
 }
 
-validate_cluster_name() {
-    # verify if the supplied cluster-name is valid
-    local _n _host _port _resolved _line
-
-    _txt=$("$_lookupCmd" +short "${_clusterName}." TXT)
-    _a=$("$_lookupCmd" +short "${_clusterName}." A)
-    [[ -n $_txt ]] || {
-        echo -e "ERROR: TXT lookup failed for $_clusterName, is it a valid cluster name?" 1>&2
-        exit 1
-    }
-
-    # An A record on the SRV name is optional. Atlas omits it so a non-SRV hostname fails closed.
-    [[ -z $_a ]] || {
-        echo -e "WARNING: ${_clusterName} also has an A record (${_a//$'\n'/, }). mongodb+srv bootstrap does not require its absence." 1>&2
-    }
-
-    echo -e "\nValidating Atlas cluster name:\t$_clusterName"
-    echo -e "\n\tTXT resource record:\t$_txt"
-    _txtReplicaSet=
-    [[ $_txt =~ replicaSet=([^&\"]+) ]] && _txtReplicaSet=${BASH_REMATCH[1]}
-
-    _targets=()
-    _srvHosts=()
-    while IFS=' ' read -r -a _line; do
-        for ((_n=0; _n+3<${#_line[@]}; _n+=4)); do
-            _host=${_line[_n+3]}
-            _port=${_line[_n+2]}
-            while [[ $_host == *. ]]; do
-                _host=${_host%.}
-            done
-            [[ -n $_host && -n $_port ]] || continue
-            _resolved=$("$_lookupCmd" +short "${_host}." A)
-            echo -e "\n\tSRV resource record:\t${_host}."
-            echo -e "\tResolves to CNAME/A:\t${_resolved//$'\n'/ / }"
-            echo -e "\tService parameter:\tTCP/$_port"
-            _targets+=("${_host}:${_port}")
-            _srvHosts+=("${_host}.")
-        done
-    done <<< "$("$_lookupCmd" +short "_mongodb._tcp.${_clusterName}." SRV)"
-
-    [[ ${#_targets[@]} -gt 0 ]] || {
-        echo -e "ERROR: SRV lookup failed for _mongodb._tcp.${_clusterName}, is it a valid cluster name?" 1>&2
-        exit 1
-    }
+epoch_ms() {
+    perl -MTime::HiRes=time -e 'printf "%d", time * 1000' 2>/dev/null \
+        || python3 -c 'import time; print(int(time.time() * 1000))'
 }
 
-measure_dns_latency() {
-    # Time one +stats pass. TXT runs with SRV, then the per-host A lookups run
-    # together. The batch line is the wall-clock of those two waves. Each sample
-    # is dig's own Query time. Jobs start in this shell: a command substitution
-    # waits for its own background dig, so $(dig … &) does not overlap.
-    local _srvHost _hostQuery _dir _i _pid _n
-    local _txtFile _srvFile _txtPid _srvPid _t0 _t1
-    local -a _aPids
+dns_abs() {
+    # Compare owners with one trailing dot. Dig prints absolute names that way.
+    local _n=$1
+    while [[ $_n == *. ]]; do
+        _n=${_n%.}
+    done
+    printf '%s.' "$_n"
+}
 
-    echo -e "\nDNS query latency:\n"
-    _batchLatency=0
+dns_same() {
+    local _a _b
+    _a=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    _b=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
+    [[ $_a == "$_b" ]]
+}
+
+dns_query_ms() {
+    local _text=$1
+    local _re='Query time: ([0-9]+) msec'
+    if [[ $_text =~ $_re ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    fi
+}
+
+dns_txt() {
+    # +short TXT is the rdata, quotes included. One record per line.
+    local _text=$1 _line
+    local _re='[[:space:]]IN[[:space:]]+TXT[[:space:]]+(.*)'
+    _text=${_text//$'\t'/ }
+    while IFS= read -r _line; do
+        [[ -z $_line || $_line == \;* ]] && continue
+        if [[ $_line =~ $_re ]]; then
+            printf '%s\n' "${BASH_REMATCH[1]}"
+        fi
+    done <<< "$_text"
+}
+
+dns_srv() {
+    # +short SRV is "priority weight port target", one record per line.
+    local _text=$1 _line
+    local _re='[[:space:]]IN[[:space:]]+SRV[[:space:]]+([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([^[:space:]]+)'
+    _text=${_text//$'\t'/ }
+    while IFS= read -r _line; do
+        [[ -z $_line || $_line == \;* ]] && continue
+        if [[ $_line =~ $_re ]]; then
+            printf '%s %s %s %s\n' \
+                "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"
+        fi
+    done <<< "$_text"
+}
+
+dns_a_short() {
+    # +short A follows the CNAME chain, then prints the address at the end.
+    local _text=$1 _origin=$2
+    local _line _owner _ttl _class _type _rdata
+    local _i _n _name _guard _hop
+    local -a _owners _types _rdatas
+    _text=${_text//$'\t'/ }
+    while IFS= read -r _line; do
+        [[ -z $_line || $_line == \;* ]] && continue
+        _owner=
+        _ttl=
+        _class=
+        _type=
+        _rdata=
+        read -r _owner _ttl _class _type _rdata <<< "$_line"
+        [[ $_class == IN && ( $_type == A || $_type == CNAME ) ]] || continue
+        _owners+=("$_owner")
+        _types+=("$_type")
+        _rdatas+=("$_rdata")
+    done <<< "$_text"
+    _name=$(dns_abs "$_origin")
+    _n=${#_owners[@]}
+    _guard=0
+    while [[ $_guard -lt 16 ]]; do
+        _hop=
+        _i=0
+        while [[ $_i -lt $_n ]]; do
+            if [[ ${_types[_i]} == CNAME ]] && dns_same "$(dns_abs "${_owners[_i]}")" "$_name"; then
+                _hop=${_rdatas[_i]}
+                break
+            fi
+            _i=$((_i + 1))
+        done
+        [[ -n $_hop ]] || break
+        printf '%s\n' "$_hop"
+        _name=$(dns_abs "$_hop")
+        _guard=$((_guard + 1))
+    done
+    _i=0
+    while [[ $_i -lt $_n ]]; do
+        if [[ ${_types[_i]} == A ]] && dns_same "$(dns_abs "${_owners[_i]}")" "$_name"; then
+            printf '%s\n' "${_rdatas[_i]}"
+        fi
+        _i=$((_i + 1))
+    done
+}
+
+validate_cluster_name() {
+    # One discovery wave. TXT, the cluster-name A, and SRV run together, then
+    # the per-host A lookups run together. dig +noall +answer +stats carries
+    # the records and Query time; +short with +stats drops the query time on
+    # DiG 9.10.6. Jobs start in this shell: a command substitution waits for
+    # its own background dig, so $(dig … &) does not overlap.
+    local _dir _txtPid _aPid _srvPid _t0 _t1 _i _pid _n
+    local _txtRaw _aRaw _srvRaw _hostRaw _pri _weight _port _host _target _resolved
+    local -a _aPids _aResolved
+
+    _txt=
+    _txtReplicaSet=
+    _targets=()
+    _srvHosts=()
     _aLookups=()
     _txtLatency=
     _srvLatency=
-    _slowest=
-    _queryRegex='Query time: ([0-9]+) msec'
-    # The cluster name and the SRV name are absolute. Each _srvHosts entry already ends in one dot.
-    _dir=$(mktemp -d "${TMPDIR:-/tmp}/srvatlas-dns.XXXXXX") || return
-    _txtFile="${_dir}/txt"
-    _srvFile="${_dir}/srv"
-    _t0=$(perl -MTime::HiRes=time -e 'printf "%d", time * 1000' 2>/dev/null || python3 -c 'import time; print(int(time.time() * 1000))')
+    _batchLatency=0
+    _dir=$(mktemp -d "${TMPDIR:-/tmp}/srvatlas-dns.XXXXXX") || {
+        echo -e "ERROR: cannot time DNS lookups for $_clusterName" 1>&2
+        exit 1
+    }
+    _t0=$(epoch_ms)
+    [[ $_t0 =~ ^[0-9]+$ ]] || _t0=0
 
-    "$_lookupCmd" +stats "${_clusterName}." TXT >"$_txtFile" 2>&1 </dev/null &
+    # The cluster name and the SRV name are absolute. Each _srvHosts entry ends in one dot.
+    "$_lookupCmd" +noall +answer +stats "${_clusterName}." TXT >"${_dir}/txt" 2>&1 </dev/null &
     _txtPid=$!
-    "$_lookupCmd" +stats "_mongodb._tcp.${_clusterName}." SRV >"$_srvFile" 2>&1 </dev/null &
+    "$_lookupCmd" +noall +answer +stats "${_clusterName}." A >"${_dir}/acluster" 2>&1 </dev/null &
+    _aPid=$!
+    "$_lookupCmd" +noall +answer +stats "_mongodb._tcp.${_clusterName}." SRV >"${_dir}/srv" 2>&1 </dev/null &
     _srvPid=$!
     wait "$_txtPid"
+    wait "$_aPid"
     wait "$_srvPid"
+
+    _txtRaw=$(<"${_dir}/txt")
+    _aRaw=$(<"${_dir}/acluster")
+    _srvRaw=$(<"${_dir}/srv")
+    _txt=$(dns_txt "$_txtRaw")
+    _txtLatency=$(dns_query_ms "$_txtRaw")
+    _srvLatency=$(dns_query_ms "$_srvRaw")
+    if [[ -z $_txt ]]; then
+        rm -rf "$_dir"
+        echo -e "ERROR: TXT lookup failed for $_clusterName, is it a valid cluster name?" 1>&2
+        exit 1
+    fi
+
+    # An A record on the SRV name is optional. Atlas omits it so a non-SRV hostname fails closed.
+    _resolved=$(dns_a_short "$_aRaw" "${_clusterName}.")
+    [[ -z $_resolved ]] || {
+        echo -e "WARNING: ${_clusterName} also has an A record (${_resolved//$'\n'/, }). mongodb+srv bootstrap does not require its absence." 1>&2
+    }
+
+    while read -r _pri _weight _port _host; do
+        [[ -n $_host && -n $_port ]] || continue
+        while [[ $_host == *. ]]; do
+            _host=${_host%.}
+        done
+        _targets+=("${_host}:${_port}")
+        _srvHosts+=("${_host}.")
+    done <<< "$(dns_srv "$_srvRaw")"
+
+    if [[ ${#_targets[@]} -eq 0 ]]; then
+        rm -rf "$_dir"
+        echo -e "\nValidating Atlas cluster name:\t$_clusterName"
+        echo -e "\n\tTXT resource record:\t$_txt"
+        echo -e "ERROR: SRV lookup failed for _mongodb._tcp.${_clusterName}, is it a valid cluster name?" 1>&2
+        exit 1
+    fi
 
     _aPids=()
     _i=0
-    for _srvHost in "${_srvHosts[@]}"; do
-        "$_lookupCmd" +stats "$_srvHost" A >"${_dir}/a${_i}" 2>&1 </dev/null &
+    for _host in "${_srvHosts[@]}"; do
+        "$_lookupCmd" +noall +answer +stats "$_host" A >"${_dir}/a${_i}" 2>&1 </dev/null &
         _aPids+=("$!")
         _i=$((_i + 1))
     done
@@ -241,26 +340,44 @@ measure_dns_latency() {
         wait "$_pid"
     done
 
-    _t1=$(perl -MTime::HiRes=time -e 'printf "%d", time * 1000' 2>/dev/null || python3 -c 'import time; print(int(time.time() * 1000))')
-    [[ $_t0 =~ ^[0-9]+$ ]] || _t0=0
+    _t1=$(epoch_ms)
     [[ $_t1 =~ ^[0-9]+$ ]] || _t1=0
     if [[ $_t1 -ge $_t0 ]]; then
         _batchLatency=$((_t1 - _t0))
     fi
 
-    _txtQuery=$(<"${_txtFile}")
-    [[ $_txtQuery =~ $_queryRegex ]] && _txtLatency=${BASH_REMATCH[1]}
-    _srvQuery=$(<"${_srvFile}")
-    [[ $_srvQuery =~ $_queryRegex ]] && _srvLatency=${BASH_REMATCH[1]}
     _n=${#_srvHosts[@]}
     _i=0
     while [[ $_i -lt $_n ]]; do
-        _hostQuery=$(<"${_dir}/a${_i}")
-        [[ $_hostQuery =~ $_queryRegex ]] && _aLookups+=("${BASH_REMATCH[1]}")
+        _hostRaw=$(<"${_dir}/a${_i}")
+        _resolved=$(dns_query_ms "$_hostRaw")
+        [[ -n $_resolved ]] && _aLookups+=("$_resolved")
+        _aResolved+=("$(dns_a_short "$_hostRaw" "${_srvHosts[_i]}")")
         _i=$((_i + 1))
     done
     rm -rf "$_dir"
 
+    echo -e "\nValidating Atlas cluster name:\t$_clusterName"
+    echo -e "\n\tTXT resource record:\t$_txt"
+    _txtReplicaSet=
+    [[ $_txt =~ replicaSet=([^&\"]+) ]] && _txtReplicaSet=${BASH_REMATCH[1]}
+    _i=0
+    for _target in "${_targets[@]}"; do
+        _host=${_target%%:*}
+        _port=${_target##*:}
+        _resolved=${_aResolved[_i]}
+        echo -e "\n\tSRV resource record:\t${_host}."
+        echo -e "\tResolves to CNAME/A:\t${_resolved//$'\n'/ / }"
+        echo -e "\tService parameter:\tTCP/$_port"
+        _i=$((_i + 1))
+    done
+}
+
+measure_dns_latency() {
+    # The discovery wave already stored dig's Query time and the wall-clock.
+    local _slowest=
+
+    echo -e "\nDNS query latency:\n"
     [[ -n $_txtLatency ]] && echo -e "\tTXT query latency:\t${_txtLatency}ms"
     [[ -n $_srvLatency ]] && echo -e "\tSRV query latency:\t${_srvLatency}ms"
     _slowest=$(printf '%s\n' "${_aLookups[@]}" | sort -nr | head -n1)
