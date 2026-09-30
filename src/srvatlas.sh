@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.6.1"
+# Version: "0.7.0"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 #
 # Usage: "bash srvatlas.sh [--ciphers] [--tls|--plaintext] <cluster-name>"
-# --ciphers    handshake every local cipher for tls1, tls1_1, tls1_2, and tls1_3
+# Each node lists the TLS versions it negotiates and every cipher that completed a handshake.
+# --ciphers    try every local cipher one at a time for tls1, tls1_1, tls1_2, and tls1_3
 # --tls        on-prem: connect with TLS. Atlas always uses TLS.
 # --plaintext  on-prem: connect without TLS. Not valid for Atlas.
 
@@ -59,7 +60,6 @@ _timeoutMS=$((_connectTimeout * 1000))
 _uriOpts="appName=ndiag&connectTimeoutMS=${_timeoutMS}&serverSelectionTimeoutMS=${_timeoutMS}"
 _authUser='local.__system' # defaults to on-prem use case
 _cipherSuites=('tls1' 'tls1_1' 'tls1_2' 'tls1_3')
-_tls1_3_suites='TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256' # OpenSSL default
 _policy='HIGH:!EXPORT:!aNULL@STRENGTH' # MongoDB compiled default
 _compressors='snappy,zstd,zlib' # MongoDB compiled default
 _zlibLevel=-1
@@ -342,28 +342,101 @@ EOF
 }
 
 read_tls_brief() {
-    # OpenSSL s_client -brief reports the one negotiated protocol and ciphersuite.
+    # OpenSSL s_client -brief reports the one negotiated protocol, ciphersuite, and group.
+    # TLS 1.3 suite names do not include the curve. The group line is the ECC (or hybrid) key exchange.
     local _text=$1
     _tlsProtocol=
     _tlsCipher=
+    _tlsGroup=
     [[ $_text =~ Protocol\ version:\ ([^[:space:]]+) ]] && _tlsProtocol=${BASH_REMATCH[1]}
-    [[ $_text =~ Ciphersuite:\ ([^[:space:]]+) ]] && _tlsCipher=${BASH_REMATCH[1]}
+    [[ $_text =~ Ciphersuite:\ ([^[:space:]]+) ]] && _tlsCipher=${BASH_REMATCH[1]//$'\r'/}
+    if [[ $_text =~ Negotiated\ TLS1\.[0-9]\ group:\ ([^[:space:]]+) ]]; then
+        _tlsGroup=${BASH_REMATCH[1]//$'\r'/}
+    elif [[ $_text =~ Peer\ Temp\ Key:\ ECDH,\ ([^,]+) ]]; then
+        _tlsGroup=${BASH_REMATCH[1]//$'\r'/}
+    elif [[ $_text =~ Peer\ Temp\ Key:\ ([^,]+), ]]; then
+        _tlsGroup=${BASH_REMATCH[1]//$'\r'/}
+    fi
+}
+
+colon_has() {
+    local _list=$1 _needle=$2 _item
+    local IFS=:
+    for _item in $_list; do
+        [[ $_item == "$_needle" ]] && return 0
+    done
+    return 1
+}
+
+drop_colon_item() {
+    local _list=$1 _drop=$2 _item _rest
+    local IFS=:
+    for _item in $_list; do
+        [[ -z $_item || $_item == "$_drop" ]] && continue
+        _rest+="${_rest:+:}$_item"
+    done
+    printf '%s' "$_rest"
+}
+
+merge_colon() {
+    local _base=$1 _extra=$2 _item
+    local IFS=:
+    for _item in $_extra; do
+        [[ $_item == TLS_* ]] || continue
+        colon_has "$_base" "$_item" || _base+="${_base:+:}$_item"
+    done
+    printf '%s' "$_base"
 }
 
 build_cipher_lists() {
     # The local cipher list does not depend on the target. Build it once per run.
-    local _suite _raw
+    # OpenSSL 4 has no TLS 1.4. TLS 1.3 is wire version 0x0304. Add tls1_4 only if this binary has the flag.
+    # TLS 1.0 and 1.1 have no ciphers at the default security level, so those probes lower it and let the server refuse.
+    local _suite _raw _policyFor _ccm _has14=false
+    for _suite in "${_cipherSuites[@]}"; do
+        [[ $_suite == tls1_4 ]] && _has14=true
+    done
+    if ! $_has14 && "$_openssl" s_client -help 2>&1 | grep -q -- '-tls1_4'; then
+        _cipherSuites+=('tls1_4')
+    fi
     _ciphersTls1=
     _ciphersTls11=
     _ciphersTls12=
     _ciphersTls13=
+    _ciphersTls14=
     for _suite in "${_cipherSuites[@]}"; do
-        _raw=$("$_openssl" ciphers -s "-$_suite" -ciphersuites "$_tls1_3_suites" "$_policy" 2>/dev/null || true)
+        _policyFor=$_policy
+        [[ $_suite == tls1 || $_suite == tls1_1 ]] && _policyFor="${_policy}:@SECLEVEL=0"
+        if [[ $_suite == tls1_3 || $_suite == tls1_4 ]]; then
+            _raw=$("$_openssl" ciphers -s "-$_suite" 2>/dev/null || true)
+            _ccm=$("$_openssl" ciphers -s "-$_suite" -ciphersuites 'TLS_AES_128_CCM_SHA256:TLS_AES_128_CCM_8_SHA256' 2>/dev/null || true)
+            _raw=$(merge_colon "$_raw" "$_ccm")
+        else
+            _raw=$("$_openssl" ciphers -s "-$_suite" "$_policyFor" 2>/dev/null || true)
+        fi
         case $_suite in
             tls1) _ciphersTls1=$_raw ;;
             tls1_1) _ciphersTls11=$_raw ;;
             tls1_2) _ciphersTls12=$_raw ;;
             tls1_3) _ciphersTls13=$_raw ;;
+            tls1_4) _ciphersTls14=$_raw ;;
+        esac
+    done
+}
+
+build_group_candidates() {
+    # ECC key exchange is a TLS group, not a TLS 1.3 ciphersuite name.
+    # Keep the NIST curves, X25519/X448, and the hybrid groups this OpenSSL can offer.
+    local _all _g
+    local IFS=:
+    _groupCandidates=()
+    _all=$("$_openssl" list -tls-groups 2>/dev/null || true)
+    _all=${_all//$'\n'/}
+    for _g in $_all; do
+        case $_g in
+            x25519|X25519|x448|X448|secp256r1|secp384r1|secp521r1|prime256v1|X25519MLKEM768|SecP256r1MLKEM768|SecP384r1MLKEM1024)
+                _groupCandidates+=("$_g")
+                ;;
         esac
     done
 }
@@ -374,7 +447,84 @@ cipher_list_for() {
         tls1_1) printf '%s' "$_ciphersTls11" ;;
         tls1_2) printf '%s' "$_ciphersTls12" ;;
         tls1_3) printf '%s' "$_ciphersTls13" ;;
+        tls1_4) printf '%s' "$_ciphersTls14" ;;
     esac
+}
+
+s_client_brief() {
+    # A dropped handshake is not an empty cipher list.
+    # Retry a reset or a timeout once. An alert is the server's answer, so it is not retried.
+    local _try=0 _out= _rc=0 _flat=
+    while [[ $_try -lt 2 ]]; do
+        _try=$((_try + 1))
+        _rc=0
+        _out=$(run_deadline "$_handshakeTimeout" "$_openssl" s_client "$@" -brief </dev/null 2>&1) || _rc=$?
+        _flat=${_out//$'\n'/ }
+        [[ $_flat == *'CONNECTION ESTABLISHED'* ]] && break
+        [[ $_flat == *'alert protocol version'* || $_flat == *'alert handshake failure'* || $_flat == *'alert internal error'* ]] && break
+        [[ $_rc -eq 124 || -z $_flat || $_flat == *'Connection reset'* || $_flat == *'unexpected eof'* ]] || break
+        [[ $_try -lt 2 ]] && sleep 1
+    done
+    printf '%s\n' "$_out"
+}
+
+scan_negotiated_ciphers() {
+    # Offer every local cipher for this version. Record the one the server picks, then offer the rest.
+    # The result is the full set that negotiates, including ECDHE suites, in server preference order.
+    local _target=$1 _suite=$2 _offer _wire _brief _picked _next _guard=0
+    _negotiatedList=
+    _offer=$(cipher_list_for "$_suite")
+    [[ -n $_offer ]] || return
+    while [[ -n $_offer && $_guard -lt 64 ]]; do
+        _guard=$((_guard + 1))
+        _wire=$_offer
+        # Names were listed at SECLEVEL=0. The handshake has to allow them or OpenSSL drops TLS 1.0/1.1 locally.
+        [[ $_suite == tls1 || $_suite == tls1_1 ]] && _wire="${_offer}:@SECLEVEL=0"
+        if [[ $_suite == tls1_3 || $_suite == tls1_4 ]]; then
+            _brief=$(s_client_brief -connect "$_target" "-$_suite" -ciphersuites "$_wire")
+        else
+            _brief=$(s_client_brief -connect "$_target" "-$_suite" -cipher "$_wire")
+        fi
+        [[ ${_brief//$'\n'/ } == *'CONNECTION ESTABLISHED'* ]] || break
+        read_tls_brief "$_brief"
+        _picked=$_tlsCipher
+        colon_has "$_offer" "$_picked" || break
+        _negotiatedList+="${_negotiatedList:+ }$_picked"
+        _next=$(drop_colon_item "$_offer" "$_picked")
+        [[ $_next == "$_offer" ]] && break
+        _offer=$_next
+    done
+}
+
+scan_each_local_cipher() {
+    # --ciphers: one handshake per local cipher. Slower than peeling the server's choice off the offer.
+    local _target=$1 _suite=$2 _cipher _ciphers _wire
+    _negotiatedList=
+    _ciphers=$(cipher_list_for "$_suite")
+    for _cipher in ${_ciphers//:/ }; do
+        [[ -n $_cipher ]] || continue
+        _wire=$_cipher
+        [[ $_suite == tls1 || $_suite == tls1_1 ]] && _wire="${_cipher}:@SECLEVEL=0"
+        if [[ $_suite == tls1_3 || $_suite == tls1_4 ]]; then
+            run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_target" "-$_suite" -ciphersuites "$_wire" -async </dev/null >/dev/null 2>&1 \
+                && _negotiatedList+="${_negotiatedList:+ }$_cipher"
+        else
+            run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_target" "-$_suite" -cipher "$_wire" -async </dev/null >/dev/null 2>&1 \
+                && _negotiatedList+="${_negotiatedList:+ }$_cipher"
+        fi
+    done
+}
+
+probe_ecc_groups() {
+    # A TLS 1.3 ciphersuite does not name a curve. Probe the ECC and hybrid groups directly.
+    local _target=$1 _suiteName _g _brief
+    _negotiatedGroups=
+    _suiteName=${_negotiatedList%% *}
+    [[ -n $_suiteName && ${#_groupCandidates[@]} -gt 0 ]] || return
+    for _g in "${_groupCandidates[@]}"; do
+        _brief=$(s_client_brief -connect "$_target" -tls1_3 -groups "$_g" -ciphersuites "$_suiteName")
+        [[ ${_brief//$'\n'/ } == *'CONNECTION ESTABLISHED'* ]] && _negotiatedGroups+="${_negotiatedGroups:+ }$_g"
+    done
 }
 
 probe_plaintext() {
@@ -427,6 +577,7 @@ test_host_connectivity() {
         _tlsEnabled=
         _tlsProtocol=
         _tlsCipher=
+        _tlsGroup=
         _plaintext=
         _isReachable=$("$_networkCmd" -zv -G "$_connectTimeout" "${_target%%:*}." "${_target##*:}" 2>&1)
         _queryRegex="Connection.+(succeeded)"
@@ -448,7 +599,7 @@ test_host_connectivity() {
         fi
         echo -e "\n\tnode:\t\t\t${_target}\n\tTCP connectivity:\t${_reachable}\n\tplaintext:\t\t${_plaintext}\n\tTLS:\t\t\t${_tlsState}"
         if [[ $_tlsEnabled == ESTABLISHED ]]; then
-            echo -e "\tTLS protocol:\t\t${_tlsProtocol}\n\tTLS ciphersuite:\t${_tlsCipher}"
+            echo -e "\tTLS protocol:\t\t${_tlsProtocol}\n\tTLS ciphersuite:\t${_tlsCipher}\n\tTLS group:\t\t${_tlsGroup}"
         fi
         [[ $_reachable == succeeded ]] || note_failure "TCP connectivity failed for ${_target}"
         if $_expectTls; then
@@ -467,7 +618,7 @@ test_host_connectivity() {
 }
 
 evaluate_connection_properties() {
-    local _target _suite _cipher _tlsFlags
+    local _target _suite
 
     _helloMe=()
     _helloMsg=()
@@ -477,12 +628,14 @@ evaluate_connection_properties() {
     _helloOk=()
     if $_cipherScan; then
         echo -e "\nEnumerating local TLS ciphers (--ciphers). This probes every suite on every node."
-        build_cipher_lists
     fi
+    build_cipher_lists
+    build_group_candidates
     echo -e "\nEvaluating connection properties to individual nodes: ${_targets[@]}"
     for _target in "${_targets[@]}"; do {
         _uri="mongodb://${_target}/?${_uriOpts}"
         collect_hello
+        [[ $_ok == 1 ]] || collect_hello
         if $_lb; then
             _identity="unsupported_when_load_balanced"
         fi
@@ -500,31 +653,21 @@ evaluate_connection_properties() {
             echo -e "\thello:\t\t\t${_err:-${_helloOut%%$'\n'*}}"
             note_failure "hello failed for ${_target}${_err:+: ${_err}}"
         fi
-        if $_cipherScan; then
-            echo -e "\tTLS cipher scanning:";
-            for _suite in "${_cipherSuites[@]}"; do {
-                _negotiatedCiphers="None"
-                _ciphers=$(cipher_list_for "$_suite")
-                if [[ $_suite == tls1_3 ]]; then
-                    _tlsFlags=(-tls1_3)
-                else
-                    _tlsFlags=("-$_suite")
-                fi
-                for _cipher in ${_ciphers//:/ }; do
-                    [[ -n $_cipher ]] || continue
-                    if [[ $_suite == tls1_3 ]]; then
-                        run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_target" "${_tlsFlags[@]}" -ciphersuites "$_cipher" -async </dev/null >/dev/null 2>&1 && _negotiatedCiphers+=("$_cipher")
-                    else
-                        run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_target" "${_tlsFlags[@]}" -cipher "$_cipher" -async </dev/null >/dev/null 2>&1 && _negotiatedCiphers+=("$_cipher")
-                    fi
-                done
-                [[ ${#_negotiatedCiphers[@]} -gt 1 ]] && unset '_negotiatedCiphers[0]'
-                echo -e "\n\t\t$_suite: ${_negotiatedCiphers[@]}"
-                unset _negotiatedCiphers
-            } # &
-            done
-            # wait
-        fi
+        echo -e "\tTLS cipher scanning:"
+        for _suite in "${_cipherSuites[@]}"; do {
+            if $_cipherScan; then
+                scan_each_local_cipher "$_target" "$_suite"
+            else
+                scan_negotiated_ciphers "$_target" "$_suite"
+            fi
+            echo -e "\n\t\t$_suite: ${_negotiatedList:-None}"
+            if [[ $_suite == tls1_3 || $_suite == tls1_4 ]] && [[ -n $_negotiatedList ]]; then
+                probe_ecc_groups "$_target"
+                echo -e "\n\t\tgroups: ${_negotiatedGroups:-None}"
+            fi
+        } # &
+        done
+        # wait
     } # &
     done
     # wait
