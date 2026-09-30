@@ -1,19 +1,30 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.6.0"
+# Version: "0.6.1"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
 #
-# Usage: "bash srvatlas.sh [--ciphers] <atlas-cluster-name>"
-# --ciphers  handshake every local cipher for tls1, tls1_1, tls1_2, and tls1_3
+# Usage: "bash srvatlas.sh [--ciphers] [--tls|--plaintext] <cluster-name>"
+# --ciphers    handshake every local cipher for tls1, tls1_1, tls1_2, and tls1_3
+# --tls        on-prem: connect with TLS. Atlas always uses TLS.
+# --plaintext  on-prem: connect without TLS. Not valid for Atlas.
 
-_usage='Usage: srvatlas.sh [--ciphers] <atlas-cluster-name>'
+_usage='Usage: srvatlas.sh [--ciphers] [--tls|--plaintext] <cluster-name>'
 _cipherScan=false
+_transport=
 _clusterName=
 for _arg in "$@"; do
     case $_arg in
         --ciphers) _cipherScan=true ;;
+        --tls)
+            [[ $_transport == plaintext ]] && { echo "$_usage" 1>&2; exit 1; }
+            _transport=tls
+            ;;
+        --plaintext)
+            [[ $_transport == tls ]] && { echo "$_usage" 1>&2; exit 1; }
+            _transport=plaintext
+            ;;
         -*)
             echo "$_usage" 1>&2
             exit 1
@@ -41,7 +52,7 @@ _openssl='openssl'
 _lookupCmd='dig' # nslookup doesn't support the +stats option
 _networkCmd='nc'
 # connection options
-_shellOpts=('--norc' '--quiet') # add --tls if required
+_shellOpts=('--norc' '--quiet') # --tls is added after the transport probe
 _connectTimeout=2 # seconds, TCP connect and server selection
 _handshakeTimeout=$((_connectTimeout * 3)) # TLS handshake; RTT can exceed the TCP connect timeout
 _timeoutMS=$((_connectTimeout * 1000))
@@ -52,8 +63,10 @@ _tls1_3_suites='TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_
 _policy='HIGH:!EXPORT:!aNULL@STRENGTH' # MongoDB compiled default
 _compressors='snappy,zstd,zlib' # MongoDB compiled default
 _zlibLevel=-1
-_lb=false # serverless testing
-_expectTls=false # set when the namespace profile requires TLS
+_lb=false # load-balanced SRV endpoint
+_profile=onprem
+_expectTls=false # Atlas requires TLS; on-prem probes plaintext and TLS
+_transportChosen=plaintext
 _failures=0
 _txtReplicaSet=
 _targets=()
@@ -180,20 +193,33 @@ measure_dns_latency() {
     echo -e "\nDNS tests done.\n"
 }
 
-apply_atlas_namespace() {
-    # detect Atlas namespace and add TLS + auth options
-    [[ ${_clusterName%\.} =~ \.mongodb\.net$ ]] && {
-        echo "Atlas detected: adding TLS and Auth options"
-        _shellOpts+=("--tls")
-        _authUser="admin.mms-automation"
+apply_profile() {
+    # Atlas TLS is mandatory. On-prem plaintext and TLS are both optional.
+    local _name=${_clusterName%.}
+    _profile=onprem
+    _expectTls=false
+    if [[ $_name =~ \.mongodbgov\.net$ ]]; then
+        _profile=atlas-gov
+    elif [[ $_name =~ \.mongodb\.net$ ]]; then
+        _profile=atlas
+    fi
+    if [[ $_profile == atlas || $_profile == atlas-gov ]]; then
         _expectTls=true
-    }
+        _authUser="admin.mms-automation"
+        if [[ $_transport == plaintext ]]; then
+            echo "ERROR: Atlas TLS is mandatory; --plaintext is not valid for ${_profile}" 1>&2
+            exit 1
+        fi
+        echo "Profile: ${_profile} (TLS mandatory)"
+    else
+        echo "Profile: onprem (plaintext and TLS are probed; both may be enabled)"
+    fi
 }
 
-apply_serverless_options() {
-    # detect Atlas serverless and add "loadBalanced=true" + "apiVersion=1" options
+apply_load_balanced_options() {
+    # detect a load-balanced SRV name and add "loadBalanced=true" + "apiVersion=1" options
     [[ ${_txt} =~ loadBalanced=true ]] && {
-        echo "Atlas serverless detected: adding 'loadBalanced' and 'apiVersion' options"
+        echo "Load-balanced endpoint detected: adding 'loadBalanced' and 'apiVersion' options"
         _shellOpts+=('--apiVersion' '1')
         _uriOpts+="&loadBalanced=true"
         _lb=true
@@ -351,10 +377,49 @@ cipher_list_for() {
     esac
 }
 
-test_host_connectivity() {
-    # detect open socket & detect TLS
-    local _target
+probe_plaintext() {
+    # A plaintext ping is independent of the TLS handshake.
+    # allowTLS and preferTLS enable both; requireTLS enables TLS only.
+    # tls=false keeps the probe off the TLS path. The printed token is split
+    # so an echoed eval source cannot look like a successful ping.
+    # directConnection hits this SRV target; loadBalanced rejects that pair.
+    local _target=$1 _probeUri _out
+    _plaintext=disabled
+    _probeUri="mongodb://${_target}/?appName=ndiag&connectTimeoutMS=${_timeoutMS}&serverSelectionTimeoutMS=${_timeoutMS}&directConnection=true&tls=false"
+    _out=$(run_deadline "$_handshakeTimeout" "$_shell" "$_probeUri" "${_shellOpts[@]}" --eval 'const r=db.runCommand({ping:1}); if (r && r.ok==1) print("PLAINTEXT=" + "enabled");' 2>&1 || true)
+    [[ ${_out//$'\n'/ } == *PLAINTEXT=enabled* ]] && _plaintext=enabled
+}
 
+select_transport() {
+    # Atlas always uses TLS. On-prem prefers TLS when every reachable node offers it.
+    _useTls=false
+    if $_expectTls || [[ $_transport == tls ]]; then
+        _useTls=true
+    elif [[ $_transport == plaintext ]]; then
+        _useTls=false
+    elif [[ $_tcpUp -gt 0 && $_tlsUp -eq $_tcpUp ]]; then
+        _useTls=true
+    elif [[ $_tcpUp -gt 0 && $_plainUp -eq $_tcpUp ]]; then
+        _useTls=false
+    elif [[ $_tlsUp -gt 0 ]]; then
+        _useTls=true
+    fi
+    if $_useTls; then
+        _shellOpts+=("--tls")
+        _transportChosen=tls
+    else
+        _transportChosen=plaintext
+    fi
+    echo -e "\nTransport: ${_transportChosen}"
+}
+
+test_host_connectivity() {
+    # detect open socket, plaintext, and TLS
+    local _target _tlsState
+
+    _tcpUp=0
+    _tlsUp=0
+    _plainUp=0
     echo -e "\nHost connectivity tests on: ${_targets[@]}"
     for _target in "${_targets[@]}"; do {
         _uri="mongodb://${_target}/?${_uriOpts}"
@@ -362,21 +427,43 @@ test_host_connectivity() {
         _tlsEnabled=
         _tlsProtocol=
         _tlsCipher=
-        _isTLSenabled=$(run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "${_target}" -brief </dev/null 2>&1)
+        _plaintext=
         _isReachable=$("$_networkCmd" -zv -G "$_connectTimeout" "${_target%%:*}." "${_target##*:}" 2>&1)
         _queryRegex="Connection.+(succeeded)"
         [[ ${_isReachable} =~ $_queryRegex ]] && _reachable=${BASH_REMATCH[1]}
-        _queryRegex="CONNECTION (ESTABLISHED)"
-        [[ ${_isTLSenabled} =~ $_queryRegex ]] && _tlsEnabled=${BASH_REMATCH[1]}
-        read_tls_brief "$_isTLSenabled"
-        echo -e "\n\tnode:\t\t\t${_target}\n\tTCP connectivity:\t${_reachable}\n\tTLS enablement:\t\t${_tlsEnabled}\n\tTLS protocol:\t\t${_tlsProtocol}\n\tTLS ciphersuite:\t${_tlsCipher}"
+        if [[ $_reachable == succeeded ]]; then
+            _isTLSenabled=$(run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "${_target}" -brief </dev/null 2>&1)
+            _queryRegex="CONNECTION (ESTABLISHED)"
+            [[ ${_isTLSenabled} =~ $_queryRegex ]] && _tlsEnabled=${BASH_REMATCH[1]}
+            read_tls_brief "$_isTLSenabled"
+            probe_plaintext "$_target"
+            _tcpUp=$((_tcpUp + 1))
+            [[ $_tlsEnabled == ESTABLISHED ]] && _tlsUp=$((_tlsUp + 1))
+            [[ $_plaintext == enabled ]] && _plainUp=$((_plainUp + 1))
+            _tlsState=disabled
+            [[ $_tlsEnabled == ESTABLISHED ]] && _tlsState=enabled
+        else
+            _plaintext=skipped
+            _tlsState=skipped
+        fi
+        echo -e "\n\tnode:\t\t\t${_target}\n\tTCP connectivity:\t${_reachable}\n\tplaintext:\t\t${_plaintext}\n\tTLS:\t\t\t${_tlsState}"
+        if [[ $_tlsEnabled == ESTABLISHED ]]; then
+            echo -e "\tTLS protocol:\t\t${_tlsProtocol}\n\tTLS ciphersuite:\t${_tlsCipher}"
+        fi
         [[ $_reachable == succeeded ]] || note_failure "TCP connectivity failed for ${_target}"
         if $_expectTls; then
             [[ $_tlsEnabled == ESTABLISHED ]] || note_failure "TLS was not established for ${_target}"
+        elif [[ $_reachable == succeeded && $_transport == tls && $_tlsEnabled != ESTABLISHED ]]; then
+            note_failure "TLS was not established for ${_target}"
+        elif [[ $_reachable == succeeded && $_transport == plaintext && $_plaintext != enabled ]]; then
+            note_failure "plaintext is not enabled for ${_target}"
+        elif [[ $_reachable == succeeded && -z $_transport && $_tlsEnabled != ESTABLISHED && $_plaintext != enabled ]]; then
+            note_failure "neither plaintext nor TLS is enabled for ${_target}"
         fi
     } # &
     done
     # wait
+    select_transport
 }
 
 evaluate_connection_properties() {
@@ -397,7 +484,7 @@ evaluate_connection_properties() {
         _uri="mongodb://${_target}/?${_uriOpts}"
         collect_hello
         if $_lb; then
-            _identity="unsupported_on_serverless"
+            _identity="unsupported_when_load_balanced"
         fi
         _helloMe+=("$_identity")
         _helloMsg+=("$_mongos")
@@ -514,10 +601,10 @@ main() {
     check_shells
     check_lookup_cmd
     check_network_cmd
+    apply_profile
     validate_cluster_name
     measure_dns_latency
-    apply_atlas_namespace
-    apply_serverless_options
+    apply_load_balanced_options
     test_host_connectivity
     evaluate_connection_properties
     test_replset_consistency
