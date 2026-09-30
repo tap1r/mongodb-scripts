@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.7.0"
+# Version: "0.7.1"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -112,12 +112,30 @@ check_network_cmd() {
     }
 }
 
+normalize_cluster_name() {
+    # Dig and the shells receive this name. Allow only a hostname, then strip
+    # every trailing dot. Lookups add exactly one so the name is absolute.
+    [[ $_clusterName =~ ^[A-Za-z0-9.-]+$ ]] || {
+        echo -e "ERROR: cluster name must contain only letters, digits, dots, and hyphens" 1>&2
+        exit 1
+    }
+    local _name="$_clusterName"
+    while [[ $_name == *. ]]; do
+        _name=${_name%.}
+    done
+    [[ -n $_name ]] || {
+        echo -e "ERROR: cluster name is empty" 1>&2
+        exit 1
+    }
+    _clusterName=$_name
+}
+
 validate_cluster_name() {
     # verify if the supplied cluster-name is valid
     local _n _host _port _resolved _line
 
-    _txt=$("$_lookupCmd" +short "$_clusterName" TXT)
-    _a=$("$_lookupCmd" +short "$_clusterName" A)
+    _txt=$("$_lookupCmd" +short "${_clusterName}." TXT)
+    _a=$("$_lookupCmd" +short "${_clusterName}." A)
     [[ -n $_txt ]] || {
         echo -e "ERROR: TXT lookup failed for $_clusterName, is it a valid cluster name?" 1>&2
         exit 1
@@ -139,15 +157,18 @@ validate_cluster_name() {
         for ((_n=0; _n+3<${#_line[@]}; _n+=4)); do
             _host=${_line[_n+3]}
             _port=${_line[_n+2]}
+            while [[ $_host == *. ]]; do
+                _host=${_host%.}
+            done
             [[ -n $_host && -n $_port ]] || continue
-            _resolved=$("$_lookupCmd" +short "$_host" A)
-            echo -e "\n\tSRV resource record:\t$_host"
+            _resolved=$("$_lookupCmd" +short "${_host}." A)
+            echo -e "\n\tSRV resource record:\t${_host}."
             echo -e "\tResolves to CNAME/A:\t${_resolved//$'\n'/ / }"
             echo -e "\tService parameter:\tTCP/$_port"
-            _targets+=("${_host%\.}:${_port}")
-            _srvHosts+=("$_host")
+            _targets+=("${_host}:${_port}")
+            _srvHosts+=("${_host}.")
         done
-    done <<< "$("$_lookupCmd" +short "_mongodb._tcp.${_clusterName}" SRV)"
+    done <<< "$("$_lookupCmd" +short "_mongodb._tcp.${_clusterName}." SRV)"
 
     [[ ${#_targets[@]} -gt 0 ]] || {
         echo -e "ERROR: SRV lookup failed for _mongodb._tcp.${_clusterName}, is it a valid cluster name?" 1>&2
@@ -164,8 +185,9 @@ measure_dns_latency() {
     _batchLatency=0
     _aLookups=()
     _queryRegex="Query time\: ([0-9]*) msec"
-    _txtQuery=$("$_lookupCmd" +stats "$_clusterName" TXT &)
-    _srvQuery=$("$_lookupCmd" +stats "_mongodb._tcp.${_clusterName}" SRV &)
+    # The cluster name and the SRV name are absolute. Each _srvHosts entry already ends in one dot.
+    _txtQuery=$("$_lookupCmd" +stats "${_clusterName}." TXT &)
+    _srvQuery=$("$_lookupCmd" +stats "_mongodb._tcp.${_clusterName}." SRV &)
     wait
 
     [[ ${_txtQuery} =~ $_queryRegex ]] && {
@@ -451,6 +473,23 @@ cipher_list_for() {
     esac
 }
 
+tls_endpoint() {
+    # $1 is host:port with no trailing dot.
+    # Connect to the absolute name. Pass the bare name as SNI.
+    # Atlas aborts a server name that ends in a dot (TLS alert 50).
+    local _host=${1%%:*}
+    _connectTo="${_host}.:${1##*:}"
+    _serverName=$_host
+}
+
+mongo_uri() {
+    # $1 is host:port with no trailing dot. $2 is the query string.
+    # The URI host is absolute for getaddrinfo. servername is the bare host:
+    # that value is the TLS SNI, and hello.me has no trailing dot.
+    local _host=${1%%:*} _port=${1##*:}
+    printf 'mongodb://%s.:%s/?%s&servername=%s' "$_host" "$_port" "$2" "$_host"
+}
+
 s_client_brief() {
     # A dropped handshake is not an empty cipher list.
     # Retry a reset or a timeout once. An alert is the server's answer, so it is not retried.
@@ -472,6 +511,7 @@ scan_negotiated_ciphers() {
     # Offer every local cipher for this version. Record the one the server picks, then offer the rest.
     # The result is the full set that negotiates, including ECDHE suites, in server preference order.
     local _target=$1 _suite=$2 _offer _wire _brief _picked _next _guard=0
+    tls_endpoint "$_target"
     _negotiatedList=
     _offer=$(cipher_list_for "$_suite")
     [[ -n $_offer ]] || return
@@ -481,9 +521,9 @@ scan_negotiated_ciphers() {
         # Names were listed at SECLEVEL=0. The handshake has to allow them or OpenSSL drops TLS 1.0/1.1 locally.
         [[ $_suite == tls1 || $_suite == tls1_1 ]] && _wire="${_offer}:@SECLEVEL=0"
         if [[ $_suite == tls1_3 || $_suite == tls1_4 ]]; then
-            _brief=$(s_client_brief -connect "$_target" "-$_suite" -ciphersuites "$_wire")
+            _brief=$(s_client_brief -connect "$_connectTo" -servername "$_serverName" "-$_suite" -ciphersuites "$_wire")
         else
-            _brief=$(s_client_brief -connect "$_target" "-$_suite" -cipher "$_wire")
+            _brief=$(s_client_brief -connect "$_connectTo" -servername "$_serverName" "-$_suite" -cipher "$_wire")
         fi
         [[ ${_brief//$'\n'/ } == *'CONNECTION ESTABLISHED'* ]] || break
         read_tls_brief "$_brief"
@@ -499,6 +539,7 @@ scan_negotiated_ciphers() {
 scan_each_local_cipher() {
     # --ciphers: one handshake per local cipher. Slower than peeling the server's choice off the offer.
     local _target=$1 _suite=$2 _cipher _ciphers _wire
+    tls_endpoint "$_target"
     _negotiatedList=
     _ciphers=$(cipher_list_for "$_suite")
     for _cipher in ${_ciphers//:/ }; do
@@ -506,10 +547,10 @@ scan_each_local_cipher() {
         _wire=$_cipher
         [[ $_suite == tls1 || $_suite == tls1_1 ]] && _wire="${_cipher}:@SECLEVEL=0"
         if [[ $_suite == tls1_3 || $_suite == tls1_4 ]]; then
-            run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_target" "-$_suite" -ciphersuites "$_wire" -async </dev/null >/dev/null 2>&1 \
+            run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_connectTo" -servername "$_serverName" "-$_suite" -ciphersuites "$_wire" -async </dev/null >/dev/null 2>&1 \
                 && _negotiatedList+="${_negotiatedList:+ }$_cipher"
         else
-            run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_target" "-$_suite" -cipher "$_wire" -async </dev/null >/dev/null 2>&1 \
+            run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_connectTo" -servername "$_serverName" "-$_suite" -cipher "$_wire" -async </dev/null >/dev/null 2>&1 \
                 && _negotiatedList+="${_negotiatedList:+ }$_cipher"
         fi
     done
@@ -518,11 +559,12 @@ scan_each_local_cipher() {
 probe_ecc_groups() {
     # A TLS 1.3 ciphersuite does not name a curve. Probe the ECC and hybrid groups directly.
     local _target=$1 _suiteName _g _brief
+    tls_endpoint "$_target"
     _negotiatedGroups=
     _suiteName=${_negotiatedList%% *}
     [[ -n $_suiteName && ${#_groupCandidates[@]} -gt 0 ]] || return
     for _g in "${_groupCandidates[@]}"; do
-        _brief=$(s_client_brief -connect "$_target" -tls1_3 -groups "$_g" -ciphersuites "$_suiteName")
+        _brief=$(s_client_brief -connect "$_connectTo" -servername "$_serverName" -tls1_3 -groups "$_g" -ciphersuites "$_suiteName")
         [[ ${_brief//$'\n'/ } == *'CONNECTION ESTABLISHED'* ]] && _negotiatedGroups+="${_negotiatedGroups:+ }$_g"
     done
 }
@@ -535,7 +577,7 @@ probe_plaintext() {
     # directConnection hits this SRV target; loadBalanced rejects that pair.
     local _target=$1 _probeUri _out
     _plaintext=disabled
-    _probeUri="mongodb://${_target}/?appName=ndiag&connectTimeoutMS=${_timeoutMS}&serverSelectionTimeoutMS=${_timeoutMS}&directConnection=true&tls=false"
+    _probeUri=$(mongo_uri "$_target" "appName=ndiag&connectTimeoutMS=${_timeoutMS}&serverSelectionTimeoutMS=${_timeoutMS}&directConnection=true&tls=false")
     _out=$(run_deadline "$_handshakeTimeout" "$_shell" "$_probeUri" "${_shellOpts[@]}" --eval 'const r=db.runCommand({ping:1}); if (r && r.ok==1) print("PLAINTEXT=" + "enabled");' 2>&1 || true)
     [[ ${_out//$'\n'/ } == *PLAINTEXT=enabled* ]] && _plaintext=enabled
 }
@@ -572,18 +614,20 @@ test_host_connectivity() {
     _plainUp=0
     echo -e "\nHost connectivity tests on: ${_targets[@]}"
     for _target in "${_targets[@]}"; do {
-        _uri="mongodb://${_target}/?${_uriOpts}"
+        _uri=$(mongo_uri "$_target" "$_uriOpts")
         _reachable=
         _tlsEnabled=
         _tlsProtocol=
         _tlsCipher=
         _tlsGroup=
         _plaintext=
+        tls_endpoint "$_target"
+        # nc takes the host and port separately. The trailing dot keeps that lookup absolute.
         _isReachable=$("$_networkCmd" -zv -G "$_connectTimeout" "${_target%%:*}." "${_target##*:}" 2>&1)
         _queryRegex="Connection.+(succeeded)"
         [[ ${_isReachable} =~ $_queryRegex ]] && _reachable=${BASH_REMATCH[1]}
         if [[ $_reachable == succeeded ]]; then
-            _isTLSenabled=$(run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "${_target}" -brief </dev/null 2>&1)
+            _isTLSenabled=$(run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_connectTo" -servername "$_serverName" -brief </dev/null 2>&1)
             _queryRegex="CONNECTION (ESTABLISHED)"
             [[ ${_isTLSenabled} =~ $_queryRegex ]] && _tlsEnabled=${BASH_REMATCH[1]}
             read_tls_brief "$_isTLSenabled"
@@ -633,7 +677,7 @@ evaluate_connection_properties() {
     build_group_candidates
     echo -e "\nEvaluating connection properties to individual nodes: ${_targets[@]}"
     for _target in "${_targets[@]}"; do {
-        _uri="mongodb://${_target}/?${_uriOpts}"
+        _uri=$(mongo_uri "$_target" "$_uriOpts")
         collect_hello
         [[ $_ok == 1 ]] || collect_hello
         if $_lb; then
@@ -740,6 +784,7 @@ test_replset_consistency() {
 }
 
 main() {
+    normalize_cluster_name
     check_openssl
     check_shells
     check_lookup_cmd
