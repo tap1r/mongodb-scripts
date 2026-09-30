@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.7.1"
+# Version: "0.7.2"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -71,25 +71,44 @@ _failures=0
 _txtReplicaSet=
 _targets=()
 _srvHosts=()
+_libressl=false
+_ncTimeoutFlag=-G
+
+have_cmd() {
+    local _bin
+    _bin=$(command -v "$1" 2>/dev/null || true)
+    [[ -n $_bin && -x $_bin ]]
+}
+
+tcp_open() {
+    # macOS nc says "succeeded". GNU nc says "open".
+    [[ $1 == succeeded || $1 == open ]]
+}
 
 check_openssl() {
     # test the OpenSSL ABI
-    [[ -x $(which $_openssl) ]] || {
+    local _ver=
+    have_cmd "$_openssl" || {
         echo -e "ERROR: OpenSSL binary $_openssl is NOT in \$PATH" 1>&2
         exit 1
     }
 
-    [[ $($_openssl version) =~ ^OpenSSL ]] || {
-        echo -e "WARNING: Unexpected OpenSSL binary $($_openssl version), results may vary" 1>&2
-    }
+    _libressl=false
+    _ver=$("$_openssl" version)
+    if [[ $_ver =~ ^LibreSSL ]]; then
+        # s_client -brief is an OpenSSL option. LibreSSL rejects it.
+        _libressl=true
+    elif [[ ! $_ver =~ ^OpenSSL ]]; then
+        echo -e "WARNING: Unexpected OpenSSL binary $_ver, results may vary" 1>&2
+    fi
 }
 
 check_shells() {
     # test for valid mongo/mongosh shells
-    [[ -x $(which $_shell) ]] || {
+    have_cmd "$_shell" || {
         echo -e "WARNING: Shell $_shell is NOT in \$PATH, attempting to substitute for the legacy shell" 1>&2
         _shell=$_legacyShell
-        [[ -x $(which $_legacyShell) ]] || {
+        have_cmd "$_legacyShell" || {
             echo -e "ERROR: Legacy shell $_legacyShell is NOT in \$PATH, a valid mongo shell is required" 1>&2
             exit 1
         }
@@ -98,7 +117,7 @@ check_shells() {
 
 check_lookup_cmd() {
     # DNS lookup binary test
-    [[ -x $(which $_lookupCmd) ]] || {
+    have_cmd "$_lookupCmd" || {
         echo -e "ERROR: $_lookupCmd is NOT in \$PATH" 1>&2
         exit 1
     }
@@ -106,10 +125,16 @@ check_lookup_cmd() {
 
 check_network_cmd() {
     # network command binary test
-    [[ -x $(which $_networkCmd) ]] || {
+    # macOS nc takes -G for the connect timeout. GNU nc takes -w and rejects -G.
+    have_cmd "$_networkCmd" || {
         echo -e "ERROR: $_networkCmd is NOT in \$PATH" 1>&2
         exit 1
     }
+    if "$_networkCmd" -h 2>&1 | grep -q -- '-G'; then
+        _ncTimeoutFlag=-G
+    else
+        _ncTimeoutFlag=-w
+    fi
 }
 
 normalize_cluster_name() {
@@ -365,20 +390,45 @@ EOF
 
 read_tls_brief() {
     # OpenSSL s_client -brief reports the one negotiated protocol, ciphersuite, and group.
+    # LibreSSL prints the classic transcript: "Protocol  :", "Cipher is", and "Server Temp Key".
     # TLS 1.3 suite names do not include the curve. The group line is the ECC (or hybrid) key exchange.
-    local _text=$1
+    local _text=$1 _cipher=
     _tlsProtocol=
     _tlsCipher=
     _tlsGroup=
-    [[ $_text =~ Protocol\ version:\ ([^[:space:]]+) ]] && _tlsProtocol=${BASH_REMATCH[1]}
-    [[ $_text =~ Ciphersuite:\ ([^[:space:]]+) ]] && _tlsCipher=${BASH_REMATCH[1]//$'\r'/}
+    if [[ $_text =~ Protocol\ version:\ ([^[:space:]]+) ]]; then
+        _tlsProtocol=${BASH_REMATCH[1]}
+    elif [[ $_text =~ Protocol[[:space:]]*:[[:space:]]*([^[:space:]]+) ]]; then
+        _tlsProtocol=${BASH_REMATCH[1]}
+    fi
+    if [[ $_text =~ Ciphersuite:\ ([^[:space:]]+) ]]; then
+        _tlsCipher=${BASH_REMATCH[1]//$'\r'/}
+    elif [[ $_text =~ Cipher\ is\ ([^[:space:]]+) ]]; then
+        _cipher=${BASH_REMATCH[1]//$'\r'/}
+        [[ $_cipher == '(NONE)' ]] || _tlsCipher=$_cipher
+    elif [[ $_text =~ Cipher[[:space:]]*:[[:space:]]*([^[:space:]]+) ]]; then
+        _cipher=${BASH_REMATCH[1]//$'\r'/}
+        [[ $_cipher == '(NONE)' || $_cipher == 0000 ]] || _tlsCipher=$_cipher
+    fi
     if [[ $_text =~ Negotiated\ TLS1\.[0-9]\ group:\ ([^[:space:]]+) ]]; then
         _tlsGroup=${BASH_REMATCH[1]//$'\r'/}
     elif [[ $_text =~ Peer\ Temp\ Key:\ ECDH,\ ([^,]+) ]]; then
         _tlsGroup=${BASH_REMATCH[1]//$'\r'/}
     elif [[ $_text =~ Peer\ Temp\ Key:\ ([^,]+), ]]; then
         _tlsGroup=${BASH_REMATCH[1]//$'\r'/}
+    elif [[ $_text =~ Server\ Temp\ Key:\ ECDH,[[:space:]]*([^,[:space:]]+) ]]; then
+        _tlsGroup=${BASH_REMATCH[1]//$'\r'/}
     fi
+}
+
+tls_session_ok() {
+    # -brief says CONNECTION ESTABLISHED. The classic transcript says "Cipher is <name>".
+    # A refused handshake still prints CONNECTED and "Cipher is (NONE)".
+    local _flat=${1//$'\n'/ } _cipher=
+    [[ $_flat == *'CONNECTION ESTABLISHED'* ]] && return 0
+    [[ $_flat =~ Cipher\ is\ ([^[:space:]]+) ]] || return 1
+    _cipher=${BASH_REMATCH[1]}
+    [[ $_cipher != '(NONE)' && $_cipher != 0000 ]]
 }
 
 colon_has() {
@@ -490,6 +540,15 @@ mongo_uri() {
     printf 'mongodb://%s.:%s/?%s&servername=%s' "$_host" "$_port" "$2" "$_host"
 }
 
+s_client_invoke() {
+    # LibreSSL s_client has no -brief. The classic transcript is the handshake result.
+    if $_libressl; then
+        run_deadline "$_handshakeTimeout" "$_openssl" s_client "$@" </dev/null 2>&1
+    else
+        run_deadline "$_handshakeTimeout" "$_openssl" s_client "$@" -brief </dev/null 2>&1
+    fi
+}
+
 s_client_brief() {
     # A dropped handshake is not an empty cipher list.
     # Retry a reset or a timeout once. An alert is the server's answer, so it is not retried.
@@ -497,9 +556,9 @@ s_client_brief() {
     while [[ $_try -lt 2 ]]; do
         _try=$((_try + 1))
         _rc=0
-        _out=$(run_deadline "$_handshakeTimeout" "$_openssl" s_client "$@" -brief </dev/null 2>&1) || _rc=$?
+        _out=$(s_client_invoke "$@") || _rc=$?
         _flat=${_out//$'\n'/ }
-        [[ $_flat == *'CONNECTION ESTABLISHED'* ]] && break
+        tls_session_ok "$_out" && break
         [[ $_flat == *'alert protocol version'* || $_flat == *'alert handshake failure'* || $_flat == *'alert internal error'* ]] && break
         [[ $_rc -eq 124 || -z $_flat || $_flat == *'Connection reset'* || $_flat == *'unexpected eof'* ]] || break
         [[ $_try -lt 2 ]] && sleep 1
@@ -525,7 +584,7 @@ scan_negotiated_ciphers() {
         else
             _brief=$(s_client_brief -connect "$_connectTo" -servername "$_serverName" "-$_suite" -cipher "$_wire")
         fi
-        [[ ${_brief//$'\n'/ } == *'CONNECTION ESTABLISHED'* ]] || break
+        tls_session_ok "$_brief" || break
         read_tls_brief "$_brief"
         _picked=$_tlsCipher
         colon_has "$_offer" "$_picked" || break
@@ -565,7 +624,7 @@ probe_ecc_groups() {
     [[ -n $_suiteName && ${#_groupCandidates[@]} -gt 0 ]] || return
     for _g in "${_groupCandidates[@]}"; do
         _brief=$(s_client_brief -connect "$_connectTo" -servername "$_serverName" -tls1_3 -groups "$_g" -ciphersuites "$_suiteName")
-        [[ ${_brief//$'\n'/ } == *'CONNECTION ESTABLISHED'* ]] && _negotiatedGroups+="${_negotiatedGroups:+ }$_g"
+        tls_session_ok "$_brief" && _negotiatedGroups+="${_negotiatedGroups:+ }$_g"
     done
 }
 
@@ -607,7 +666,7 @@ select_transport() {
 
 test_host_connectivity() {
     # detect open socket, plaintext, and TLS
-    local _target _tlsState
+    local _target _tlsState _flat= _openRe=
 
     _tcpUp=0
     _tlsUp=0
@@ -623,13 +682,17 @@ test_host_connectivity() {
         _plaintext=
         tls_endpoint "$_target"
         # nc takes the host and port separately. The trailing dot keeps that lookup absolute.
-        _isReachable=$("$_networkCmd" -zv -G "$_connectTimeout" "${_target%%:*}." "${_target##*:}" 2>&1)
-        _queryRegex="Connection.+(succeeded)"
-        [[ ${_isReachable} =~ $_queryRegex ]] && _reachable=${BASH_REMATCH[1]}
-        if [[ $_reachable == succeeded ]]; then
-            _isTLSenabled=$(run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_connectTo" -servername "$_serverName" -brief </dev/null 2>&1)
-            _queryRegex="CONNECTION (ESTABLISHED)"
-            [[ ${_isTLSenabled} =~ $_queryRegex ]] && _tlsEnabled=${BASH_REMATCH[1]}
+        _isReachable=$("$_networkCmd" -zv "$_ncTimeoutFlag" "$_connectTimeout" "${_target%%:*}." "${_target##*:}" 2>&1)
+        _flat=${_isReachable//$'\n'/ }
+        _openRe='(^|[^[:alnum:]])open([^[:alnum:]]|$)'
+        if [[ $_flat =~ succeeded ]]; then
+            _reachable=succeeded
+        elif [[ $_flat =~ $_openRe ]]; then
+            _reachable=open
+        fi
+        if tcp_open "$_reachable"; then
+            _isTLSenabled=$(s_client_invoke -connect "$_connectTo" -servername "$_serverName") || true
+            tls_session_ok "$_isTLSenabled" && _tlsEnabled=ESTABLISHED
             read_tls_brief "$_isTLSenabled"
             probe_plaintext "$_target"
             _tcpUp=$((_tcpUp + 1))
@@ -645,14 +708,14 @@ test_host_connectivity() {
         if [[ $_tlsEnabled == ESTABLISHED ]]; then
             echo -e "\tTLS protocol:\t\t${_tlsProtocol}\n\tTLS ciphersuite:\t${_tlsCipher}\n\tTLS group:\t\t${_tlsGroup}"
         fi
-        [[ $_reachable == succeeded ]] || note_failure "TCP connectivity failed for ${_target}"
+        tcp_open "$_reachable" || note_failure "TCP connectivity failed for ${_target}"
         if $_expectTls; then
             [[ $_tlsEnabled == ESTABLISHED ]] || note_failure "TLS was not established for ${_target}"
-        elif [[ $_reachable == succeeded && $_transport == tls && $_tlsEnabled != ESTABLISHED ]]; then
+        elif tcp_open "$_reachable" && [[ $_transport == tls && $_tlsEnabled != ESTABLISHED ]]; then
             note_failure "TLS was not established for ${_target}"
-        elif [[ $_reachable == succeeded && $_transport == plaintext && $_plaintext != enabled ]]; then
+        elif tcp_open "$_reachable" && [[ $_transport == plaintext && $_plaintext != enabled ]]; then
             note_failure "plaintext is not enabled for ${_target}"
-        elif [[ $_reachable == succeeded && -z $_transport && $_tlsEnabled != ESTABLISHED && $_plaintext != enabled ]]; then
+        elif tcp_open "$_reachable" && [[ -z $_transport && $_tlsEnabled != ESTABLISHED && $_plaintext != enabled ]]; then
             note_failure "neither plaintext nor TLS is enabled for ${_target}"
         fi
     } # &
