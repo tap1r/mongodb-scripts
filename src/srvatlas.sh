@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.7.2"
+# Version: "0.7.3"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -318,9 +318,10 @@ run_deadline() {
 }
 
 collect_hello() {
-    # mongosh inspect prints arrays on multiple lines, and the hello command
-    # reply has no compression field. Read the compressors the server accepted
-    # on the handshake from the driver connection description.
+    # The hello command reply has no compression field. The handshake hello on
+    # the connection description does: hello.compression is the server's answer,
+    # and description.compressor is the one name it picked. description.compressors
+    # is only the list this client offered.
     local _probeUri _helloEval _row _key _val
 
     _probeUri="${_uri}&compressors=${_compressors}&zlibCompressionLevel=${_zlibLevel}"
@@ -330,7 +331,11 @@ collect_hello() {
     _rsName=
     _rsTags=
     _saslSupportedMechs=
-    _compressionMechs=
+    _saslField=
+    _compRead=
+    _serverComp=
+    _chosenComp=
+    _unsupportedComp=
     _maxWireVersion=
     _ok=
     _err=
@@ -356,16 +361,60 @@ const tags = h.tags || {};
 const tagParts = Object.keys(tags).map(function (k) { return k + ":" + tags[k]; });
 show("TAGS", tagParts.length ? "{" + tagParts.join(",") + "}" : "");
 show("SASL", (h.saslSupportedMechs || []).join(","));
-let comps = [];
+show("SASL_FIELD", h.saslSupportedMechs == null ? "missing" : "present");
+function clientCan(name) {
+  if ("${_shell}" === "mongo") return name === "snappy" || name === "zlib" || name === "zstd";
+  if (name === "zlib") return typeof zlib !== "undefined";
+  var mod = name === "snappy" ? "snappy" : (name === "zstd" ? "@mongodb-js/zstd" : "");
+  if (!mod) return false;
+  try { require(mod); return true; } catch (e) { return false; }
+}
+function walkConns(list, fn) {
+  if (!list) return;
+  if (typeof list.forEach === "function") { list.forEach(fn); return; }
+  var node = list.head;
+  var guard = 0;
+  while (node && guard < 32) {
+    fn(node.value != null ? node.value : node);
+    node = node.next;
+    guard++;
+  }
+}
+var serverComp = [];
+var chosen = "";
+var read = "miss";
 try {
-  const client = db.getMongo()._serviceProvider.mongoClient;
+  var client = db.getMongo()._serviceProvider.mongoClient;
   client.topology.s.servers.forEach(function (srv) {
-    const conn = srv.monitor && srv.monitor.connection;
-    const list = conn && conn.description && conn.description.compressors;
-    if (Array.isArray(list) && list.length) comps = list;
+    function note(desc) {
+      if (!desc) return;
+      var server = desc.hello && desc.hello.compression;
+      if (Array.isArray(server) && server.length) serverComp = server;
+      if (desc.compressor) chosen = desc.compressor;
+    }
+    var mon = srv.monitor && srv.monitor.connection;
+    if (mon) note(mon.description);
+    var pool = srv.pool;
+    if (!pool) return;
+    walkConns(pool.connections, function (conn) { note(conn && conn.description); });
+    walkConns(pool.checkedOut, function (conn) { note(conn && conn.description); });
   });
+  read = "ok";
 } catch (e) {}
-show("COMP", comps.join(","));
+var unsupported = [];
+function consider(name) {
+  if (!name || clientCan(name)) return;
+  var i;
+  for (i = 0; i < unsupported.length; i++) if (unsupported[i] === name) return;
+  unsupported.push(name);
+}
+var si;
+for (si = 0; si < serverComp.length; si++) consider(serverComp[si]);
+consider(chosen);
+show("COMP_READ", read);
+show("SERVER_COMP", serverComp.join(","));
+show("CHOSEN", chosen);
+show("UNSUPPORTED", unsupported.join(","));
 EOF
 )
     _helloOut=$("$_shell" "$_probeUri" "${_shellOpts[@]}" --eval "$_helloEval" 2>&1)
@@ -383,7 +432,11 @@ EOF
             HOSTS) _rsHosts=$_val ;;
             TAGS) _rsTags=$_val ;;
             SASL) _saslSupportedMechs=$_val ;;
-            COMP) _compressionMechs=$_val ;;
+            SASL_FIELD) _saslField=$_val ;;
+            COMP_READ) _compRead=$_val ;;
+            SERVER_COMP) _serverComp=$_val ;;
+            CHOSEN) _chosenComp=$_val ;;
+            UNSUPPORTED) _unsupportedComp=$_val ;;
         esac
     done <<< "$_helloOut"
 }
@@ -754,7 +807,22 @@ evaluate_connection_properties() {
         _helloOk+=("$_ok")
         echo -e "\n\tnode:\t\t\t$_target"
         echo -e "\tsaslSupportedMechs:\t${_saslSupportedMechs}"
-        echo -e "\tcompression mechs:\t${_compressionMechs}"
+        if [[ $_ok == 1 && $_saslField == missing ]]; then
+            echo -e "\t\t${_authUser} is not visible to an unauthenticated hello"
+        fi
+        if [[ $_ok == 1 && $_compRead != ok ]]; then
+            echo -e "\tcompression:\t\thandshake description unread"
+        elif [[ $_ok == 1 && -n $_serverComp ]]; then
+            echo -e "\tcompression:\t\t${_serverComp}"
+        elif [[ $_ok == 1 ]]; then
+            echo -e "\tcompression:\t\thello named no compressor"
+        fi
+        if [[ $_ok == 1 && $_compRead == ok ]]; then
+            echo -e "\tchosen compressor:\t${_chosenComp}"
+            if [[ -n $_unsupportedComp ]]; then
+                echo -e "\tcompression client:\tserver accepted ${_unsupportedComp}; this shell cannot use it"
+            fi
+        fi
         echo -e "\tmaxWireVersion:\t\t$_maxWireVersion"
         if [[ $_ok != 1 ]]; then
             echo -e "\thello:\t\t\t${_err:-${_helloOut%%$'\n'*}}"
