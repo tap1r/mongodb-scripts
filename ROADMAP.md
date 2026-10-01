@@ -10,9 +10,9 @@ Status is implied by section: **planned** unless marked later / hardening.
 
 - **Library / `load()` / multi-tenant `db`.** `mdblib.js` today is a global `load()` with a free `db`. `ctxDemo.js` sketches `mdblib.for(db)`. That story will change; do not refactor other scripts to depend on a new module layout until it exists.
 - **mongosh scripting guide.** Living notes for `--file` rewriter, async IIFEs, `sleep()` vs `await` delays, `--eval` `var` options. Extend when a script hits a new shell quirk. Document the consumption modes below when they land.
-- **`ProgressTracker` / mini-HUD.** Stub in `mdblib.js` today (`console.log('\\r')` is not an overwrite). First real consumer is **dbstats P1**: catalog-first gives a known denominator, then a bounded `$collStats` pool can drive a TTY mini-HUD (`done/total`, pool in-flight, optional ETA). Shared emit rules: TTY progress only; silent or `onProgress` in module / json / redirected mode — never `\\r` bars in piped logs. Finite walks (dbstats) may show % / ETA; long-running AIMD tools (niceDeleteMany) stay congestion-only. Clear the HUD before the tabular report.
+- **`MiniHud` / `mapPool`.** Shipped in `mdblib.js` **v0.17.0** (`process.stdout.write('\\r')`, never `console.log`). **dbstats P1** (v0.14.0) is the first consumer: catalog-first `N`, then a per-DB bounded `$collStats` pool drives a TTY mini-HUD (`done/total`, in-flight/queued, optional ETA). Shared emit rules: TTY progress only; silent in json / html / redirected mode — never `\\r` bars in piped logs. Finite walks (dbstats) may show % / ETA; long-running AIMD tools (niceDeleteMany) stay congestion-only. Clear the HUD before the tabular report.
 - **Topology fan-out.** Per-mongod tools (`autoCompact`, WT vitals, dbstats snapshots) eventually ride `discovery.js`. Until then, operators target members with a direct connection.
-- **Legacy mongo shell retirement.** Dual-shell tree archived **2026-09-01** at [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/) (tag `legacy-mongo-shell` on `c78904f`). Live `src/` is **mongosh-only** after the [strip pass](#3-after-the-cut--strip-and-streamline-next-general-architecture). Current library: **`mdblib.js` v0.16.1**.
+- **Legacy mongo shell retirement.** Dual-shell tree archived **2026-09-01** at [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/) (tag `legacy-mongo-shell` on `c78904f`). Live `src/` is **mongosh-only** after the [strip pass](#3-after-the-cut--strip-and-streamline-next-general-architecture). Current library: **`mdblib.js` v0.17.0**.
 
 ### Legacy mongo shell retirement
 
@@ -80,8 +80,8 @@ No further dual-shell feature work on the archived line. Operators who still hav
 
 | Script | Archive freeze | Live `src/` |
 |--------|----------------|-------------|
-| `mdblib.js` | 0.15.10 | **0.16.1** |
-| `dbstats.js` | 0.12.19 | **0.13.1** |
+| `mdblib.js` | 0.15.10 | **0.17.0** |
+| `dbstats.js` | 0.12.19 | **0.14.0** |
 | `autoCompact.js` | 0.4.36 | **0.4.37** |
 | `fuzzer.js` | 0.6.43 | **0.6.44** |
 | `oplogchurn.js` | 0.5.22 | **0.5.23** |
@@ -131,7 +131,7 @@ Homogenise how scripts talk to the console — prefer a small shared emit surfac
 |--------|------------------|------------------------------|---------------------------|
 | Human report | Colour markup (`[yellow]…[/]`), tables, banners | **Strip ANSI** (already partly done when `mdblib` overloads `console.log`) | Off — no report noise |
 | Warnings / errors | Coloured | Plain text, still on stderr if we split streams later | Structured fields on the result object (`warnings[]`, `ok`) and/or minimal plain stderr |
-| Progress (`ProgressTracker`, spinners) | `\r` / bar updates | **Suppressed** (or single-line plain milestones) | Off — optional `onProgress` callback only |
+| Progress (`MiniHud`, spinners) | `\r` / bar updates | **Suppressed** (or single-line plain milestones) | Off — optional `onProgress` callback only |
 | Result payload | Optional | Optional | **Primary:** return / assign the JSON contract |
 
 Rules of thumb:
@@ -327,11 +327,11 @@ Replace or sit beside the WTCMPCT line dump with a `ProgressTracker`-style bar f
 
 ### `dbstats.js`
 
-The storage snapshot other scripts want (auto-trim planner, discovery-directed jobs, later compact/onlineDefrag targeting). Current shape is still gather+print in one pass; the roadmap below assumes a **catalog-first, then stats** split so new catalog sources and output formats share one walk.
+The storage snapshot other scripts want (auto-trim planner, discovery-directed jobs, later compact/onlineDefrag targeting). Gather is **catalog-first, then stats** (P1); printers still consume one tree. Dual `$listCatalog` and new formats share that walk.
 
 Shipped recently: views listed once on the nameOnly pass; collection `$collStats` remains the second phase (Unauthorized → `name (unauthorized)`); databases sorted once after the fetch pool; section deep-merge for options (`filter` / `sort.*` / `output`); `output.format` canonical name `tabular` with `table` alias; `formatPct` / `formatRatio` guard zero/non-finite divisors (`n/a` instead of `NaN%` / `Infinity:1`); sort helpers collapsed to `compareBy` + `stableSort`; printers share `metricsCols` / `printRollupRows` / `formatShardCounts`; DB `$stats` map is pure — `rollupDbPath` aggregates totals separately; **`filter.system`** (`true`/`include` default, `false`/`exclude`, `only`) via mdblib `systemCollectionFilter` (replaces dead `systemFilter = /.+/`); authz preflight uses named booleans (`authzAdequate`); legacy Unauthorized detection on `$collStats` / features probe; **M0/Flex free-space:** `db.stats()` still wins when it is a real measurement; on shared tier (where db-level reusable bytes are hidden) db/dbPath totals roll up collection WT `$collStats` as a lower bound (`freeStorageSizeSource: 'collStatsRollup'`, `freeStorageComplete` false when authz/filters omit namespaces), with a `*` marker and footnote; **`output.format: json`** is a versioned contract (`JSON.stringify`, `main()` returns the same object) — not `printjson` of the MetaStats tree; **P0:** json stdout gated (no gather blank line / features / mdblib version banners); `nsTableOut` copies rows (no `delete`, real compression); `getDBNames` applies `filter.db` client-side on every platform (Atlas shared/serverless still omit server-side `listDatabases.filter`); `$collStats` passes `readPreference`; `$stats` / non-auth `$collStats` failures stub + `warnings[]` (`(unavailable)`), report continues; **storageSize:** MetaStats no longer coerces `0 → 4096`; stubs/JSON keep 0; tabular collection/index files may show the WT 4 KiB alloc floor; **P1:** names → `$stats` all DBs → nameOnly catalog → per-DB bounded `$collStats` (`output.concurrency`) → per-DB free rollup → dbPath; TTY mini-HUD (`done/N`, current DB, run/q, ETA), cleared before the report.
 
-**Live: v0.13.1** (mdblib v0.16.1). **Archive: v0.12.19.** JSON contract is shipped. **P1:** catalog-first then DB-grouped `$collStats` pools (`output.concurrency`, default 8/4) with TTY mini-HUD; json/html quiet. Dual `$listCatalog`, MetaStats split, hot summary/HTML remain. Measured `storageSize` 0 stays 0 (including stubs); tabular collection/index rows may display the WT 4 KiB allocation floor.
+**Live: v0.14.0** (mdblib v0.17.0). **Archive: v0.12.19.** JSON contract is shipped. **P1:** catalog-first then DB-grouped `$collStats` pools (`output.concurrency`, default 8/4) with TTY mini-HUD; json/html quiet. Dual `$listCatalog`, MetaStats split, hot summary/HTML remain. Measured `storageSize` 0 stays 0 (including stubs); tabular collection/index rows may display the WT 4 KiB allocation floor.
 
 #### System namespace filter
 
@@ -373,7 +373,7 @@ P1 walk:
 
 Pool size is an option (default conservative on mongos). Default **one DB’s collStats pool at a time** so mutation stays on one `database.collections` and rollup can finish before moving on. Do not flatten namespaces into a single global queue.
 
-**Mini-HUD** (TTY tabular only; json / `load()` quiet): phase 1–2 light (`dbs i/D`); after catalog, `done/N` plus current DB and in-flight/queued in that DB’s pool; cheap ETA is fine (finite `N`). Clear the HUD before the report. The current `ProgressTracker` class is not that HUD — replace or wrap it (`\\r` via `console.log` prints a new line; `finish()` references a non-member `formatTime`).
+**Mini-HUD** (shipped, TTY tabular/nsTable; json / html / piped quiet): phase 1–2 light (`dbStats i/D`, `catalog i/D`); after catalog, `done/N` plus current DB and in-flight/queued in that DB’s pool; cheap ETA. `MiniHud` + `mapPool` in mdblib. Clear the HUD before the report (including on gather failure).
 
 #### Sharding and topology
 
@@ -456,7 +456,7 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `mdblib.js`
 
-**Live: v0.16.1.** **Archive: v0.15.10** — pair archived scripts with 0.15.10, not live mdblib. Do not “fix” `fCV()` → `serverVer()` on M0/Flex. MiniHud + `mapPool` replace the stub `ProgressTracker`.
+**Live: v0.17.0.** **Archive: v0.15.10** — pair archived scripts with 0.15.10, not live mdblib. Do not “fix” `fCV()` → `serverVer()` on M0/Flex. MiniHud + `mapPool` replace the stub `ProgressTracker`.
 
 - Namespaced helpers / `for(db)` — **after** the library strategy change, not before.
 - **Legacy `mongo` shims** — stripped (`mdblib.js` v0.15.11+). Do not restore `slaveOk` / dual `Timestamp` / `_getEnv` loaders. Integer `serverVer` / `fCV` / `shellVer` are in place; do not couple further cleanup to `for(db)`.
