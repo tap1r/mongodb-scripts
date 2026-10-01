@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.14.0"
+ *  Version: "0.14.1"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.14.0" };
+   const __script = { "name": "fuzzer.js", "version": "0.14.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -251,16 +251,19 @@
          case 'pre':
             console.log('Building indexing metadata first');
             buildIndexes();
-            genBulk(batchSize);
+            if (genBulk(batchSize) === false)
+               return;
             break;
          case 'post':
             console.log('Populating collection first');
-            genBulk(batchSize);
+            if (genBulk(batchSize) === false)
+               return;
             buildIndexes();
             break;
          default:
             console.log(`Unsupported index build preference "${indexPrefs.order}": defaulting to "post"`);
-            genBulk(batchSize);
+            if (genBulk(batchSize) === false)
+               return;
             buildIndexes();
       }
 
@@ -1017,13 +1020,30 @@
       return;
    }
 
+   function insertedFromWrite(value) {
+      if (!value || typeof value !== 'object')
+         return 0;
+      const ids = value.insertedIds;
+      if (ids && typeof ids === 'object') {
+         const n = Object.keys(ids).length;
+         if (n > 0)
+            return n;
+      }
+      if (typeof value.insertedCount === 'number')
+         return value.insertedCount;
+      if (value.result && value.result !== value)
+         return insertedFromWrite(value.result);
+      return 0;
+   }
+
    function genBulk(batchSize) {
       if (!(batchSize >= 1)) {
          console.log(`\n[Warning] Batch size ${batchSize} is below 1. Skipping bulk insert.`);
-         return;
+         return true;
       }
       const batches = $ceil(totalDocs / batchSize);
       console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} ${plural(totalDocs, 'document', 'documents')} in ${batches} ${plural(batches, 'batch', 'batches')}:`);
+      let inserted = 0;
       let remaining = totalDocs;
       for (let i = 0; remaining > 0; i++) {
          const n = Math.min(batchSize, remaining);
@@ -1032,16 +1052,31 @@
          for (let batch = 0; batch < n; batch++)
             docs.push(genDocument(fuzzer, timestamp));
          // mongosh Bulk.execute ignores its writeConcern argument.
-         const result = namespace.insertMany(docs, {
-            "ordered": false,
-            "writeConcern": writeConcern
-         });
-         const bInserted = Object.keys(result.insertedIds || {}).length;
+         let bInserted = 0;
+         let writeError = null;
+         try {
+            const result = namespace.insertMany(docs, {
+               "ordered": false,
+               "writeConcern": writeConcern
+            });
+            bInserted = Object.keys(result.insertedIds || {}).length;
+         } catch(e) {
+            bInserted = insertedFromWrite(e);
+            writeError = e;
+         }
+         inserted += bInserted;
          console.log(`\t[Batch ${1 + i}/${batches}] bulk inserted ${bInserted} ${plural(bInserted, 'document', 'documents')}`);
+         if (writeError || bInserted < n) {
+            const shortfall = totalDocs - inserted;
+            console.log(`\n[red][ERROR][/] Bulk insert stopped after ${inserted} of ${totalDocs} documents (${shortfall} short)`);
+            if (writeError)
+               console.log(errText(writeError));
+            return false;
+         }
       }
 
       console.log('Generation completed.');
-      return;
+      return true;
    }
 
    try {
