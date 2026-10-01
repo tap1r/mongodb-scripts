@@ -12,7 +12,7 @@ Status is implied by section: **planned** unless marked later / hardening.
 - **mongosh scripting guide.** Living notes for `--file` rewriter, async IIFEs, `sleep()` vs `await` delays, `--eval` `var` options. Extend when a script hits a new shell quirk. Document the consumption modes below when they land.
 - **`ProgressTracker`.** Stub in `mdblib.js` (`/* Add to mdblib.js */`) for long catalog walks (dbstats, index cache, auto-trim snapshot, **autoCompact first-pass**). Must honour the shared emit rules: TTY progress only; silent or JSON progress events in module / redirected mode — never `\r` bars in piped logs.
 - **Topology fan-out.** Per-mongod tools (`autoCompact`, WT vitals, dbstats snapshots) eventually ride `discovery.js`. Until then, operators target members with a direct connection.
-- **Legacy mongo shell retirement.** Dual-shell tree archived **2026-09-01** at [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/) (tag `legacy-mongo-shell` on `c78904f`). Live `src/` is **mongosh-only** after the [strip pass](#3-after-the-cut--strip-and-streamline-next-general-architecture). Current library: **`mdblib.js` v0.15.14**.
+- **Legacy mongo shell retirement.** Dual-shell tree archived **2026-09-01** at [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/) (tag `legacy-mongo-shell` on `c78904f`). Live `src/` is **mongosh-only** after the [strip pass](#3-after-the-cut--strip-and-streamline-next-general-architecture). Current library: **`mdblib.js` v0.16.0**.
 
 ### Legacy mongo shell retirement
 
@@ -80,8 +80,8 @@ No further dual-shell feature work on the archived line. Operators who still hav
 
 | Script | Archive freeze | Live `src/` |
 |--------|----------------|-------------|
-| `mdblib.js` | 0.15.10 | **0.15.14** |
-| `dbstats.js` | 0.12.19 | **0.12.23** |
+| `mdblib.js` | 0.15.10 | **0.16.0** |
+| `dbstats.js` | 0.12.19 | **0.13.0** |
 | `autoCompact.js` | 0.4.36 | **0.4.37** |
 | `fuzzer.js` | 0.6.43 | **0.6.44** |
 | `oplogchurn.js` | 0.5.22 | **0.5.23** |
@@ -329,9 +329,9 @@ Replace or sit beside the WTCMPCT line dump with a `ProgressTracker`-style bar f
 
 The storage snapshot other scripts want (auto-trim planner, discovery-directed jobs, later compact/onlineDefrag targeting). Current shape is still gather+print in one pass; the roadmap below assumes a **catalog-first, then stats** split so new catalog sources and output formats share one walk.
 
-Shipped recently: views listed once on the nameOnly pass; collection `$collStats` remains the second phase (Unauthorized → `name (unauthorized)`); databases sorted once after the fetch pool; section deep-merge for options (`filter` / `sort.*` / `output`); `output.format` canonical name `tabular` with `table` alias; `formatPct` / `formatRatio` guard zero/non-finite divisors (`n/a` instead of `NaN%` / `Infinity:1`); sort helpers collapsed to `compareBy` + `stableSort`; printers share `metricsCols` / `printRollupRows` / `formatShardCounts`; DB `$stats` map is pure — `rollupDbPath` aggregates totals separately; **`filter.system`** (`true`/`include` default, `false`/`exclude`, `only`) via mdblib `systemCollectionFilter` (replaces dead `systemFilter = /.+/`); authz preflight uses named booleans (`authzAdequate`); legacy Unauthorized detection on `$collStats` / features probe; **M0/Flex free-space:** `db.stats()` still wins when it is a real measurement; on shared tier (where db-level reusable bytes are hidden) db/dbPath totals roll up collection WT `$collStats` as a lower bound (`freeStorageSizeSource: 'collStatsRollup'`, `freeStorageComplete` false when authz/filters omit namespaces), with a `*` marker and footnote; **`output.format: json`** is a versioned contract (`JSON.stringify`, `main()` returns the same object) — not `printjson` of the MetaStats tree; **P0:** json stdout gated (no gather blank line / features / mdblib version banners); `nsTableOut` copies rows (no `delete`, real compression); `getDBNames` applies `filter.db` client-side on every platform (Atlas shared/serverless still omit server-side `listDatabases.filter`); `$collStats` passes `readPreference`; `$stats` / non-auth `$collStats` failures stub + `warnings[]` (`(unavailable)`), report continues.
+Shipped recently: views listed once on the nameOnly pass; collection `$collStats` remains the second phase (Unauthorized → `name (unauthorized)`); databases sorted once after the fetch pool; section deep-merge for options (`filter` / `sort.*` / `output`); `output.format` canonical name `tabular` with `table` alias; `formatPct` / `formatRatio` guard zero/non-finite divisors (`n/a` instead of `NaN%` / `Infinity:1`); sort helpers collapsed to `compareBy` + `stableSort`; printers share `metricsCols` / `printRollupRows` / `formatShardCounts`; DB `$stats` map is pure — `rollupDbPath` aggregates totals separately; **`filter.system`** (`true`/`include` default, `false`/`exclude`, `only`) via mdblib `systemCollectionFilter` (replaces dead `systemFilter = /.+/`); authz preflight uses named booleans (`authzAdequate`); legacy Unauthorized detection on `$collStats` / features probe; **M0/Flex free-space:** `db.stats()` still wins when it is a real measurement; on shared tier (where db-level reusable bytes are hidden) db/dbPath totals roll up collection WT `$collStats` as a lower bound (`freeStorageSizeSource: 'collStatsRollup'`, `freeStorageComplete` false when authz/filters omit namespaces), with a `*` marker and footnote; **`output.format: json`** is a versioned contract (`JSON.stringify`, `main()` returns the same object) — not `printjson` of the MetaStats tree; **P0:** json stdout gated (no gather blank line / features / mdblib version banners); `nsTableOut` copies rows (no `delete`, real compression); `getDBNames` applies `filter.db` client-side on every platform (Atlas shared/serverless still omit server-side `listDatabases.filter`); `$collStats` passes `readPreference`; `$stats` / non-auth `$collStats` failures stub + `warnings[]` (`(unavailable)`), report continues; **storageSize:** MetaStats no longer coerces `0 → 4096`; stubs/JSON keep 0; tabular collection/index files may show the WT 4 KiB alloc floor.
 
-**Live: v0.12.23** (mdblib v0.15.14). **Archive: v0.12.19.** JSON contract is shipped (`JSON.stringify` + `main()` return). Dual catalog, task pool, MetaStats split, hot summary/HTML remain mongosh-line. Tabled: MetaStats `storageSize == 0 → 4096` (including unauthorized stubs) — do not change without a dedicated discussion.
+**Live: v0.13.0** (mdblib v0.16.0). **Archive: v0.12.19.** JSON contract is shipped (`JSON.stringify` + `main()` return). Dual catalog, task pool, MetaStats split, hot summary/HTML remain mongosh-line. Measured `storageSize` 0 stays 0 (including stubs); tabular collection/index rows may display the WT 4 KiB allocation floor; JSON does not invent it.
 
 #### System namespace filter
 
@@ -444,7 +444,7 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `mdblib.js`
 
-**Live: v0.15.14.** **Archive: v0.15.10** — pair archived scripts with 0.15.10, not live mdblib. Do not “fix” `fCV()` → `serverVer()` on M0/Flex.
+**Live: v0.16.0.** **Archive: v0.15.10** — pair archived scripts with 0.15.10, not live mdblib. Do not “fix” `fCV()` → `serverVer()` on M0/Flex.
 
 - Namespaced helpers / `for(db)` — **after** the library strategy change, not before.
 - **Legacy `mongo` shims** — stripped (`mdblib.js` v0.15.11+). Do not restore `slaveOk` / dual `Timestamp` / `_getEnv` loaders. Integer `serverVer` / `fCV` / `shellVer` are in place; do not couple further cleanup to `for(db)`.
