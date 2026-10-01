@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "1.6.1"
+ *  Version: "1.6.2"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -38,7 +38,7 @@
  */
 
 (() => { // User-facing comments are in the header. Mechanics live on the functions below. mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "1.6.1" };
+   const __script = { "name": "onlineDefrag.js", "version": "1.6.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -131,8 +131,8 @@
    }
 
    // mdblib $collStats for the target namespace (indexes stripped).
-   function collSnapshot() {
-      const { indexes, ...stats } = $collStats(nsDb, nsColl) || {};
+   async function collSnapshot() {
+      const { indexes, ...stats } = await $collStats(nsDb, nsColl) || {};
       return stats;
    }
 
@@ -359,7 +359,7 @@
          account.allowExtend = !!b.allowExtend;
          account.used = 0;
       };
-      account.refresh = s => account.apply(generationCap(s || collSnapshot(), cal, account.allowExtend));
+      account.refresh = async s => account.apply(generationCap(s || await collSnapshot(), cal, account.allowExtend));
       account.debit = n => { account.used += n; };
       account.remaining = () => Math.max(0, account.cap - account.used);
       account.wouldExceed = n => account.cap > 0 && account.used > 0 && account.used + n > account.cap;
@@ -367,7 +367,7 @@
          const waited = await waitForCheckpoint({ "settle": true });
          if (!waited.available && !waited.completed) await delay(statsPollMs);
          await waitForReplLag();
-         account.refresh();
+         await account.refresh();
          console.log(`generation settle ${formatGeneration(account)}`);
       };
       return account;
@@ -777,12 +777,12 @@
                       ? Math.min(+checkpointTimeoutMs, statsSettleTimeoutMs)
                       : statsSettleTimeoutMs;
       const deadline = Date.now() + timeoutMs;
-      let packed = $collStats(tmpDbName, tmpName) || {};
+      let packed = await $collStats(tmpDbName, tmpName) || {};
       let prevSz = packed.storageSize, stable = 0;
       console.log(`calibrate poll nPages=${pageStats(packed).nPages} storageSize=${packed.storageSize} objects=${packed.objects}`);
       while (Date.now() < deadline) {
          await delay(statsPollMs);
-         packed = $collStats(tmpDbName, tmpName) || {};
+         packed = await $collStats(tmpDbName, tmpName) || {};
          const nPages = pageStats(packed).nPages;
          console.log(`calibrate poll nPages=${nPages} storageSize=${packed.storageSize} objects=${packed.objects}`);
          if (packed.storageSize === prevSz) {
@@ -877,8 +877,8 @@
       return name;
    }
 
-   function packedTempStats(name, fallbackC) {
-      const packed = $collStats(tmpStatsDbName, name) || {};
+   async function packedTempStats(name, fallbackC) {
+      const packed = await $collStats(tmpStatsDbName, name) || {};
       const { indexes, ...stats } = packed;
       const ps = pageStats(stats);
       const live = liveBytes(stats);
@@ -1178,7 +1178,7 @@
          }
          await settlePackedTemps(created, 'modes');
          for (let k = 0; k < modes.length; k++) {
-            Object.assign(modes[k], packedTempStats(created[k], fallbackC));
+            Object.assign(modes[k], await packedTempStats(created[k], fallbackC));
             const close = k === modes.length - 1 ? ']' : ')';
             console.log(`calibrate mode ${k} packed=[${Math.round(modes[k].min)}, ${Math.round(modes[k].max)}${close} n=${modes[k].objects} C=${modes[k].compression.toFixed(3)} tfr=${modes[k].tfr} avgObjSize=${modes[k].avgObjSize}`);
          }
@@ -1230,7 +1230,7 @@
          }
          await settlePackedTemps(created, 'shapes');
          for (let k = 0; k < todo.length; k++) {
-            Object.assign(todo[k], packedTempStats(created[k], fallbackC));
+            Object.assign(todo[k], await packedTempStats(created[k], fallbackC));
             console.log(`calibrate shape ${k} h=${todo[k].sig} n=${todo[k].objects} C=${todo[k].compression.toFixed(3)} tfr=${todo[k].tfr} avgObjSize=${todo[k].avgObjSize}`);
          }
          return shapes;
@@ -1240,7 +1240,7 @@
    }
 
    async function samplePacked() {
-      const src = collSnapshot();
+      const src = await collSnapshot();
       const fill = pageStats(src);
       const compressor = (src.compressor && src.compressor !== 'mixed') ? src.compressor : 'snappy';
       const avg = +src.avgObjSize > 0 ? +src.avgObjSize : 256;
@@ -1278,7 +1278,7 @@
       try {
          sampleMerge(namespace, tmpName, sampleN, nObjs, `${strategy} calibrate $merge`);
          await settlePackedTemps([tmpName], '');
-         measured = packedTempStats(tmpName, 1);
+         measured = await packedTempStats(tmpName, 1);
       } catch(e) {
          dropTmpSample(tmpDb, tmpName, 'calibrate');
          throw e;
@@ -1402,7 +1402,7 @@
    }
 
    async function maybeReplay(batches, account, policy, sz0, enqueue, conc, tune, tag, drainWrites) {
-      const snap1 = collSnapshot();
+      const snap1 = await collSnapshot();
       const extended = (snap1.storageSize || 0) > sz0;
       const decision = shouldReplay({ "extended": extended, "R": account.R }, policy);
       if (!decision.replay) {
@@ -1414,7 +1414,7 @@
       await writeBatches(batches, enqueue, conc, tune, `${tag} replay`, true);
       await drainWrites();
       await account.settle();
-      return collSnapshot();
+      return await collSnapshot();
    }
 
    async function writeCover(label, cal, batchSource, nDocs, {
@@ -1430,7 +1430,7 @@
       const tune = dirtyTune();
       const { packedBudget, fillRatio, leaf, compression } = packedPageBudget(cal);
       const packedCover = estimateRewriteBytes(nDocs, cal);
-      const account = makeGeneration(collSnapshot(), cal, allowExtend);
+      const account = makeGeneration(await collSnapshot(), cal, allowExtend);
       const packedPctR = account.R > 0 ? 100 * packedCover / account.R : 0;
       const batch = tfrOverride > 0 ? tfrOverride : cal.tfr;
       console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} C=${compression.toFixed(3)} docs=${nDocs} generationRatio=${account.fractional} ${formatGeneration(account)} packedCover≈${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) writeConcurrency=${conc} replay=${policy} freezeWindow=${freezeWindow}`);
@@ -1461,7 +1461,7 @@
          await writeGate(tune, async(waited) => {
             if (waited.completed) {
                await drainWrites();
-               account.refresh();
+               await account.refresh();
                console.log(`checkpoint: settled stats ${formatGeneration(account)}`);
             }
          });
@@ -1482,12 +1482,12 @@
          packedDone += win.packed;
          const tag = `${label} ${pass}`;
          if (freezeWindow) {
-            const sz0 = collSnapshot().storageSize || 0;
+            const sz0 = (await collSnapshot()).storageSize || 0;
             console.log(`${tag} packedDone=${Math.round(packedDone)}/${Math.round(packedCover)} window n=${win.n} batches=${win.batches.length} packed=${Math.round(win.packed)} alloc=${Math.round(win.alloc)} R=${account.R} cap=${Math.round(win.windowCap)} storageSize=${sz0} rewrite 1`);
             await writeBatches(win.batches, enqueueWrite, conc, tune, tag, true);
             await drainWrites();
             await maybeReplay(win.batches, account, policy, sz0, enqueueWrite, conc, tune, tag, drainWrites);
-            const snap2 = collSnapshot();
+            const snap2 = await collSnapshot();
             const dSz = (snap2.storageSize || 0) - (prevSz || 0);
             console.log(`${label} cycle ${pass} packedDone=${Math.round(packedDone)}/${Math.round(packedCover)} alloc=${Math.round(win.alloc)} ${formatGeneration(account)} used=${Math.round(account.used)} dStorageSize=${dSz}${dSz > 0 ? ' EXTEND' : ''}`);
             if ((snap2.storageSize || 0) > (prevSz || 0)) prevSz = snap2.storageSize;
@@ -1498,7 +1498,7 @@
       }
       await drainWrites();
       console.log(`${label} done batches=${pass} packedDone=${Math.round(packedDone)} txnFailed=${txnFailed}`);
-      console.log(EJSON.stringify({ "state": "settled storage", ...collSnapshot() }));
+      console.log(EJSON.stringify({ "state": "settled storage", ...await collSnapshot() }));
    }
 
    // --- reclaim ---
@@ -1517,14 +1517,14 @@
          return;
       }
       await waitForCheckpoint({ "settle": true });
-      let snap = collSnapshot();
+      let snap = await collSnapshot();
       if (!needsReclaim(snap)) {
          console.log(`${label}: skip reclaim ${formatGeneration(generationCap(snap, cal))} (G<=reuseFloor ${reuseFloor})`);
          return;
       }
       const maxRounds = 8;
       for (let round = 1; round <= maxRounds; round++) {
-         snap = collSnapshot();
+         snap = await collSnapshot();
          const g0 = generationCap(snap, cal, true);
          if (!needsReclaim(snap)) {
             console.log(`${label}: reclaim done ${formatGeneration(generationCap(snap, cal))}`);
@@ -1540,7 +1540,7 @@
             "allowExtend": true
          });
          await waitForCheckpoint({ "settle": true });
-         const after = collSnapshot();
+         const after = await collSnapshot();
          const dSz = (after.storageSize || 0) - sz0;
          const g1 = generationCap(after, cal);
          if (dSz < 0) {
@@ -1591,12 +1591,12 @@
          }
       };
       const plan = plans[strategy];
-      const srcSnap = collSnapshot();
+      const srcSnap = await collSnapshot();
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
       const cal = await calibrateTFR();
       const nDocs0 = nDocsFrom(srcSnap);
       await eachCoverPass(1, async(pass, n) => {
-         const snap = pass === 1 ? srcSnap : collSnapshot();
+         const snap = pass === 1 ? srcSnap : await collSnapshot();
          const nDocs = pass === 1 ? nDocs0 : nDocsFrom(snap);
          const tag = n > 1 ? `${strategy} ${pass}/${n}` : strategy;
          if (n > 1) {
