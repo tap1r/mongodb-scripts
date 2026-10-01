@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.17.0"
+ *  Version: "0.18.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,7 +13,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.17.0"
+      "version": "0.18.0"
 });
 
 /*  Notes:
@@ -21,6 +21,8 @@ if (typeof __lib === 'undefined') (
  *  - floor mongod to v4.4
  *  - fCV() → serverVer() on Atlas M0/Flex is by design (getParameter FCV is
  *    restricted; Atlas is not left on a lagging FCV)
+ *  - $collStats is async; callers must await it (user-defined async is not
+ *    rewriter-awaited). Do not await the aggregate cursor (thenable drains).
  */
 
 function isMongosh() {
@@ -1677,9 +1679,12 @@ function $stats(dbName = db.getName()) {
    return stats;
 }
 
-function $collStats(dbName = db.getName(), collName = '') {
+async function $collStats(dbName = db.getName(), collName = '') {
    /*
-    *  $collStats wrapper
+    *  $collStats wrapper. Always a Promise — await the call.
+    *  Live aggregate cursors are thenable; awaiting the cursor drains it.
+    *  Await toArray() only when it is a bare Promise. An already-unwrapped
+    *  array (rewriter) is used as-is so this stays async-capable either way.
     */
    const namespace = db.getSiblingDB(dbName).getCollection(collName);
    const options = {
@@ -1975,7 +1980,15 @@ function $collStats(dbName = db.getName(), collName = '') {
    }
 
    try {
-      results = namespace.aggregate(pipeline, options).toArray()[0];
+      const cursor = namespace.aggregate(pipeline, options);
+      if (cursor && typeof cursor.then === 'function' && typeof cursor.close !== 'function') {
+         const docs = await cursor;
+         results = Array.isArray(docs) ? docs[0] : docs;
+      } else {
+         let docs = (cursor && typeof cursor.toArray === 'function') ? cursor.toArray() : cursor;
+         if (docs && typeof docs.then === 'function') docs = await docs;
+         results = Array.isArray(docs) ? docs[0] : docs;
+      }
    } catch(e) {
       results = collStatsStub(isUnauthorizedError(e) ? 'unauthorized' : 'unavailable', e);
    }
