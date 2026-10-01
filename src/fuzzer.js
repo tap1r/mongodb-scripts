@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.14.2"
+ *  Version: "0.14.3"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.14.2" };
+   const __script = { "name": "fuzzer.js", "version": "0.14.3" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -212,6 +212,11 @@
          plan.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
          return;
       }
+      const oidWindow = tsObjectIdWindow();
+      if (oidWindow.length > 0) {
+         oidWindow.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
+         return;
+      }
 
       console.log(`\nSynthesising ${totalDocs} ${plural(totalDocs, 'document', 'documents')}`);
 
@@ -282,6 +287,46 @@
       return;
    }
 
+   // ObjectId time is 4 bytes: 8 hex digits, 1970-01-01 through 2106-02-07T06:28:15Z.
+   const OID_SECONDS_MAX = 0xffffffff;
+
+   function objectIdTimePrefix(seconds) {
+      const whole = $floor(seconds);
+      if (!(whole >= 0) || whole > OID_SECONDS_MAX)
+         return null;
+      return whole.toString(16).padStart(8, '0');
+   }
+
+   function isoSeconds(seconds) {
+      const ms = seconds * 1000;
+      if (!Number.isFinite(ms) || ms > 8.64e15 || ms < -8.64e15)
+         return String(seconds);
+      return new Date(ms).toISOString();
+   }
+
+   function tsObjectIdWindow() {
+      if (String(fuzzer.id || 'ts').toLowerCase() === 'oid')
+         return [];
+      const day = 86400;
+      let lo = fuzzer.offset;
+      let hi = fuzzer.offset + fuzzer.range;
+      // normal is unbounded. 8 sigma is past any draw this run will produce.
+      if (String(fuzzer.distribution || '').toLowerCase() === 'normal') {
+         const mu = fuzzer.offset + (fuzzer.range / 2);
+         const span = 8 * (fuzzer.range / 2);
+         lo = Math.min(lo, mu - span);
+         hi = Math.max(hi, mu + span);
+      }
+      const reasons = [];
+      const minSeconds = timestamp + lo * day;
+      const maxSeconds = timestamp + hi * day;
+      if (minSeconds < 0)
+         reasons.push(`the 'ts' ObjectId time starts at ${isoSeconds(minSeconds)}, before 1970`);
+      if (maxSeconds > OID_SECONDS_MAX)
+         reasons.push(`the 'ts' ObjectId time ends at ${isoSeconds(maxSeconds)}, after 2106-02-07T06:28:15.000Z`);
+      return reasons;
+   }
+
    function genDocument({
          id = 'ts', range = 365.2422, offset = -300, interval = 7,
          distribution = 'uniform', /* schemas = [], */ ratios = [1] } = {},
@@ -317,11 +362,12 @@
          case 'oid':
             oid = new ObjectId();
             break;
-         default: // the 'ts' option
-            oid = new ObjectId( // employ native mongosh method
-               $floor(timestamp + secondsOffset).toString(16) +
-               $genRandHex(16)
-            );
+         default: { // the 'ts' option
+            const prefix = objectIdTimePrefix(timestamp + secondsOffset);
+            if (prefix === null)
+               throw new Error(`the 'ts' ObjectId time ${isoSeconds(timestamp + secondsOffset)} is outside 1970 through 2106-02-07T06:28:15.000Z`);
+            oid = new ObjectId(prefix + $genRandHex(16));
+         }
       }
       const date = new Date(now + secondsOffset * 1000);
       const ts = new Timestamp({ "t": timestamp + secondsOffset, "i": 0 });
