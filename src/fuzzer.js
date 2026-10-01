@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.10.0"
+ *  Version: "0.11.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.10.0" };
+   const __script = { "name": "fuzzer.js", "version": "0.11.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -947,10 +947,15 @@
       for (let i = 0; remaining > 0; ++i) {
          const n = Math.min(batchSize, remaining);
          remaining -= n;
-         const bulk = namespace.initializeUnorderedBulkOp();
-         for (let batch = 0; batch < n; ++batch) bulk.insert(genDocument(fuzzer, timestamp));
-         const result = bulk.execute(writeConcern);
-         const bInserted = result.insertedCount;
+         const docs = [];
+         for (let batch = 0; batch < n; ++batch)
+            docs.push(genDocument(fuzzer, timestamp));
+         // mongosh Bulk.execute ignores its writeConcern argument.
+         const result = namespace.insertMany(docs, {
+            "ordered": false,
+            "writeConcern": writeConcern
+         });
+         const bInserted = Object.keys(result.insertedIds || {}).length;
          console.log(`\t[Batch ${1 + i}/${batches}] bulk inserted ${bInserted} ${plural(bInserted, 'document', 'documents')}`);
       }
 
