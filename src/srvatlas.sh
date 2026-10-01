@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.7.10"
+# Version: "0.7.11"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -424,9 +424,11 @@ note_failure() {
     _failures=$((_failures + 1))
 }
 
-list_has() {
-    local _haystack=$1 _needle=$2 _item
-    local IFS=','
+field_has() {
+    # $1 is the separator. $2 is the list. $3 is one exact item.
+    # A comma list is hello hosts. A colon list is an OpenSSL cipher offer.
+    local _sep=$1 _haystack=$2 _needle=$3 _item
+    local IFS=$_sep
     for _item in $_haystack; do
         [[ $_item == "$_needle" ]] && return 0
     done
@@ -681,7 +683,7 @@ merge_colon() {
     local IFS=:
     for _item in $_extra; do
         [[ $_item == TLS_* ]] || continue
-        colon_has "$_base" "$_item" || _base+="${_base:+:}$_item"
+        field_has ':' "$_base" "$_item" || _base+="${_base:+:}$_item"
     done
     printf '%s' "$_base"
 }
@@ -697,11 +699,8 @@ build_cipher_lists() {
     if ! $_has14 && "$_openssl" s_client -help 2>&1 | grep -q -- '-tls1_4'; then
         _cipherSuites+=('tls1_4')
     fi
-    _ciphersTls1=
-    _ciphersTls11=
-    _ciphersTls12=
-    _ciphersTls13=
-    _ciphersTls14=
+    # _cipherLists[i] is the offer for _cipherSuites[i].
+    _cipherLists=()
     for _suite in "${_cipherSuites[@]}"; do
         _policyFor=$_policy
         [[ $_suite == tls1 || $_suite == tls1_1 ]] && _policyFor="${_policy}:@SECLEVEL=0"
@@ -712,13 +711,7 @@ build_cipher_lists() {
         else
             _raw=$("$_openssl" ciphers -s "-$_suite" "$_policyFor" 2>/dev/null || true)
         fi
-        case $_suite in
-            tls1) _ciphersTls1=$_raw ;;
-            tls1_1) _ciphersTls11=$_raw ;;
-            tls1_2) _ciphersTls12=$_raw ;;
-            tls1_3) _ciphersTls13=$_raw ;;
-            tls1_4) _ciphersTls14=$_raw ;;
-        esac
+        _cipherLists+=("$_raw")
     done
 }
 
@@ -739,14 +732,16 @@ build_group_candidates() {
     done
 }
 
-cipher_list_for() {
-    case $1 in
-        tls1) printf '%s' "$_ciphersTls1" ;;
-        tls1_1) printf '%s' "$_ciphersTls11" ;;
-        tls1_2) printf '%s' "$_ciphersTls12" ;;
-        tls1_3) printf '%s' "$_ciphersTls13" ;;
-        tls1_4) printf '%s' "$_ciphersTls14" ;;
-    esac
+cipher_offer() {
+    # $1 is a name in _cipherSuites. The offer is the same index in _cipherLists.
+    local _want=$1 _i=0 _name
+    for _name in "${_cipherSuites[@]}"; do
+        if [[ $_name == "$_want" ]]; then
+            printf '%s' "${_cipherLists[_i]}"
+            return 0
+        fi
+        _i=$((_i + 1))
+    done
 }
 
 tls_endpoint() {
@@ -792,28 +787,42 @@ s_client_brief() {
     printf '%s\n' "$_out"
 }
 
+s_client_suite() {
+    # $1 is host:port. $2 is the TLS version. $3 is the cipher offer. $4 is brief or status.
+    # TLS 1.3 and 1.4 take -ciphersuites. Older versions take -cipher.
+    # TLS 1.0 and 1.1 need @SECLEVEL=0 or this OpenSSL drops the offer locally.
+    # status is the --ciphers walk: the exit status decides, -async is set, and the transcript is discarded.
+    local _target=$1 _suite=$2 _wire=$3 _mode=$4
+    local -a _args
+    tls_endpoint "$_target"
+    [[ $_suite == tls1 || $_suite == tls1_1 ]] && _wire="${_wire}:@SECLEVEL=0"
+    _args=(-connect "$_connectTo" -servername "$_serverName" "-$_suite")
+    if [[ $_suite == tls1_3 || $_suite == tls1_4 ]]; then
+        _args+=(-ciphersuites "$_wire")
+    else
+        _args+=(-cipher "$_wire")
+    fi
+    if [[ $_mode == status ]]; then
+        run_deadline "$_handshakeTimeout" "$_openssl" s_client "${_args[@]}" -async </dev/null >/dev/null 2>&1
+    else
+        s_client_brief "${_args[@]}"
+    fi
+}
+
 scan_negotiated_ciphers() {
     # Offer every local cipher for this version. Record the one the server picks, then offer the rest.
     # The result is the full set that negotiates, including ECDHE suites, in server preference order.
-    local _target=$1 _suite=$2 _offer _wire _brief _picked _next _guard=0
-    tls_endpoint "$_target"
+    local _target=$1 _suite=$2 _offer _brief _picked _next _guard=0
     _negotiatedList=
-    _offer=$(cipher_list_for "$_suite")
+    _offer=$(cipher_offer "$_suite")
     [[ -n $_offer ]] || return
     while [[ -n $_offer && $_guard -lt 64 ]]; do
         _guard=$((_guard + 1))
-        _wire=$_offer
-        # Names were listed at SECLEVEL=0. The handshake has to allow them or OpenSSL drops TLS 1.0/1.1 locally.
-        [[ $_suite == tls1 || $_suite == tls1_1 ]] && _wire="${_offer}:@SECLEVEL=0"
-        if [[ $_suite == tls1_3 || $_suite == tls1_4 ]]; then
-            _brief=$(s_client_brief -connect "$_connectTo" -servername "$_serverName" "-$_suite" -ciphersuites "$_wire")
-        else
-            _brief=$(s_client_brief -connect "$_connectTo" -servername "$_serverName" "-$_suite" -cipher "$_wire")
-        fi
+        _brief=$(s_client_suite "$_target" "$_suite" "$_offer" brief)
         tls_session_ok "$_brief" || break
         read_tls_brief "$_brief"
         _picked=$_tlsCipher
-        colon_has "$_offer" "$_picked" || break
+        field_has ':' "$_offer" "$_picked" || break
         _negotiatedList+="${_negotiatedList:+ }$_picked"
         _next=$(drop_colon_item "$_offer" "$_picked")
         [[ $_next == "$_offer" ]] && break
@@ -823,21 +832,13 @@ scan_negotiated_ciphers() {
 
 scan_each_local_cipher() {
     # --ciphers: one handshake per local cipher. Slower than peeling the server's choice off the offer.
-    local _target=$1 _suite=$2 _cipher _ciphers _wire
-    tls_endpoint "$_target"
+    local _target=$1 _suite=$2 _cipher _ciphers
     _negotiatedList=
-    _ciphers=$(cipher_list_for "$_suite")
+    _ciphers=$(cipher_offer "$_suite")
     for _cipher in ${_ciphers//:/ }; do
         [[ -n $_cipher ]] || continue
-        _wire=$_cipher
-        [[ $_suite == tls1 || $_suite == tls1_1 ]] && _wire="${_cipher}:@SECLEVEL=0"
-        if [[ $_suite == tls1_3 || $_suite == tls1_4 ]]; then
-            run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_connectTo" -servername "$_serverName" "-$_suite" -ciphersuites "$_wire" -async </dev/null >/dev/null 2>&1 \
-                && _negotiatedList+="${_negotiatedList:+ }$_cipher"
-        else
-            run_deadline "$_handshakeTimeout" "$_openssl" s_client -connect "$_connectTo" -servername "$_serverName" "-$_suite" -cipher "$_wire" -async </dev/null >/dev/null 2>&1 \
-                && _negotiatedList+="${_negotiatedList:+ }$_cipher"
-        fi
+        s_client_suite "$_target" "$_suite" "$_cipher" status \
+            && _negotiatedList+="${_negotiatedList:+ }$_cipher"
     done
 }
 
@@ -1083,7 +1084,7 @@ test_replset_consistency() {
                 fi
                 if [[ -n $_rsHosts ]]; then
                     for _srv in "${_targets[@]}"; do
-                        list_has "$_rsHosts" "$_srv" || {
+                        field_has ',' "$_rsHosts" "$_srv" || {
                             note_failure "${_target} replset hosts do not include SRV target '${_srv}'"
                             _nodeAgree=0
                         }
