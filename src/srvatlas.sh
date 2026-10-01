@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.7.8"
+# Version: "0.7.9"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -463,38 +463,27 @@ run_deadline() {
     "$@"
 }
 
-collect_hello() {
-    # The hello command reply has no compression field. The handshake hello on
-    # the connection description does: hello.compression is the server's answer,
-    # and description.compressor is the one name it picked. description.compressors
-    # is only the list this client offered.
-    local _probeUri _helloEval _row _key _val
-
-    _probeUri="${_uri}&compressors=${_compressors}&zlibCompressionLevel=${_zlibLevel}"
-    _identity=
-    _mongos=
-    _rsHosts=
-    _rsName=
-    _rsTags=
-    _saslSupportedMechs=
-    _saslField=
-    _compRead=
-    _serverComp=
-    _chosenComp=
-    _unsupportedComp=
-    _maxWireVersion=
-    _ok=
-    _err=
-    _helloOut=
-    _helloEval=$(cat <<EOF
+build_hello_eval() {
+    # Quoted on purpose. The auth user, shell name, and script name arrive in
+    # the environment, so a quote in one of them cannot change this program.
+    _helloEval=$(cat <<'EOF'
+function env(name) {
+  try {
+    if (typeof process !== "undefined" && process.env && process.env[name] != null) return process.env[name];
+  } catch (e) {}
+  try {
+    if (typeof _getEnv === "function") return _getEnv(name) || "";
+  } catch (e) {}
+  return "";
+}
 const h = db.runCommand({
   hello: 1,
-  saslSupportedMechs: "${_authUser}",
-  comment: "run by ${0##*/}"
+  saslSupportedMechs: env("NDIAG_AUTH_USER"),
+  comment: "run by " + env("NDIAG_SCRIPT")
 });
 function show(k, v) {
   if (v == null) v = "";
-  print(k + "=" + v);
+  print("NDIAG_" + k + "=" + v);
 }
 show("OK", h.ok);
 show("ERR", h.errmsg || "");
@@ -509,7 +498,7 @@ show("TAGS", tagParts.length ? "{" + tagParts.join(",") + "}" : "");
 show("SASL", (h.saslSupportedMechs || []).join(","));
 show("SASL_FIELD", h.saslSupportedMechs == null ? "missing" : "present");
 function clientCan(name) {
-  if ("${_shell}" === "mongo") return name === "snappy" || name === "zlib" || name === "zstd";
+  if (env("NDIAG_SHELL") === "mongo") return name === "snappy" || name === "zlib" || name === "zstd";
   if (name === "zlib") return typeof zlib !== "undefined";
   var mod = name === "snappy" ? "snappy" : (name === "zstd" ? "@mongodb-js/zstd" : "");
   if (!mod) return false;
@@ -563,10 +552,48 @@ show("CHOSEN", chosen);
 show("UNSUPPORTED", unsupported.join(","));
 EOF
 )
-    _helloOut=$("$_shell" "$_probeUri" "${_shellOpts[@]}" --eval "$_helloEval" 2>&1)
+}
+
+hello_retryable() {
+    # A printed OK line is the attempt's result, including OK=0. A TLS alert
+    # is also final: the handshake died before hello could answer.
+    local _flat=${_helloOut//$'\n'/ }
+    [[ $_flat == *NDIAG_OK=* ]] && return 1
+    [[ $_flat == *'tlsv1 alert'* || $_flat == *'SSL alert'* ]] && return 1
+    return 0
+}
+
+collect_hello() {
+    # The hello command reply has no compression field. The handshake hello on
+    # the connection description does: hello.compression is the server's answer,
+    # and description.compressor is the one name it picked. description.compressors
+    # is only the list this client offered. Script lines are prefixed NDIAG_ so a
+    # shell stack trace that contains KEY=value cannot overwrite them.
+    local _probeUri _row _key _val
+
+    [[ -n $_helloEval ]] || build_hello_eval
+    _probeUri="${_uri}&compressors=${_compressors}&zlibCompressionLevel=${_zlibLevel}"
+    _identity=
+    _mongos=
+    _rsHosts=
+    _rsName=
+    _rsTags=
+    _saslSupportedMechs=
+    _saslField=
+    _compRead=
+    _serverComp=
+    _chosenComp=
+    _unsupportedComp=
+    _maxWireVersion=
+    _ok=
+    _err=
+    _helloOut=
+    _helloOut=$(NDIAG_AUTH_USER="$_authUser" NDIAG_SHELL="${_shell##*/}" NDIAG_SCRIPT="${0##*/}" \
+        "$_shell" "$_probeUri" "${_shellOpts[@]}" --eval "$_helloEval" 2>&1)
     while IFS= read -r _row; do
-        [[ $_row == *=* ]] || continue
+        [[ $_row == NDIAG_*=* ]] || continue
         _key=${_row%%=*}
+        _key=${_key#NDIAG_}
         _val=${_row#*=}
         case $_key in
             OK) _ok=$_val ;;
@@ -968,7 +995,7 @@ evaluate_connection_properties() {
         fi
         _uri=$(mongo_uri "$_target" "$_uriOpts")
         collect_hello
-        [[ $_ok == 1 ]] || collect_hello
+        hello_retryable && collect_hello
         if $_lb; then
             _identity="unsupported_when_load_balanced"
         fi
