@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.18.0"
+ *  Version: "0.18.1"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,7 +13,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.18.0"
+      "version": "0.18.1"
 });
 
 /*  Notes:
@@ -1679,6 +1679,46 @@ function $stats(dbName = db.getName()) {
    return stats;
 }
 
+let __collStatsShardCount;
+
+function expectedCollStatsShards() {
+   if (__collStatsShardCount != null) return __collStatsShardCount;
+   if (!isSharded()) {
+      __collStatsShardCount = 1;
+      return __collStatsShardCount;
+   }
+   try {
+      const list = db.adminCommand({ "listShards": 1 }).shards;
+      __collStatsShardCount = (Array.isArray(list) && list.length) ? list.length : 1;
+   } catch(_) {
+      __collStatsShardCount = 1;
+   }
+   return __collStatsShardCount;
+}
+
+function markPartialShardStats(doc) {
+   /*
+    *  $group only sees shards that returned. Keep that known-shard sum.
+    *  Multiple shard ids with listShards larger than the set → lower bound.
+    *  A single shard id is unsharded-on-mongos (or a one-shard NS).
+    */
+   if (!doc || doc.statsError) return doc;
+   const ids = Array.isArray(doc.shards)
+      ? [...new Set(doc.shards.filter(s => typeof s === 'string' && s.length))]
+      : [];
+   if (ids.length > 1 && expectedCollStatsShards() > ids.length) {
+      doc.freeStorageComplete = false;
+      doc.totalIndexBytesReusableComplete = false;
+      doc.statsIncomplete = true;
+   }
+   if (doc.totalIndexBytesReusableComplete === false && Array.isArray(doc.indexes)) {
+      doc.indexes.forEach(idx => {
+         if (idx) idx.freeStorageComplete = false;
+      });
+   }
+   return doc;
+}
+
 async function $collStats(dbName = db.getName(), collName = '') {
    /*
     *  $collStats wrapper. Always a Promise — await the call.
@@ -1795,6 +1835,7 @@ async function $collStats(dbName = db.getName(), collName = '') {
             ]
          }
       } },
+      // Sum known-shard reuse as a lower bound; complete iff every returned node is known.
       { "$group": {
          "_id": null,
          "name": { "$push": "$ns" },
@@ -1806,7 +1847,7 @@ async function $collStats(dbName = db.getName(), collName = '') {
          "orphans": { "$sum": "$storageStats.numOrphanDocs" }, // Available starting in MongoDB 6.0
          "storageSize": { "$sum": "$storageStats.storageSize" },
          "freeStorageSize": { "$sum": { "$cond": ["$storageStats.reuseKnown", { "$ifNull": ["$storageStats.reuseBytes", 0] }, 0] } },
-         "freeStorageKnown": { "$min": { "$cond": ["$storageStats.reuseKnown", 1, 0] } },
+         "freeStorageKnownCount": { "$sum": { "$cond": ["$storageStats.reuseKnown", 1, 0] } },
          "compressor": { "$push": "$storageStats.wiredTiger.compressor" },
          "internalPageSize": { "$push": "$storageStats.wiredTiger.internalPageSize" },
          "dataPageSize": { "$push": "$storageStats.wiredTiger.dataPageSize" },
@@ -1818,7 +1859,7 @@ async function $collStats(dbName = db.getName(), collName = '') {
          "indexes": { "$push": "$storageStats.indexes" },
          "indexes size in bytes": { "$sum": "$storageStats.indexDetails.file size in bytes" },
          "indexes bytes available for reuse": { "$sum": { "$cond": ["$storageStats.indexDetails.reuseKnown", { "$ifNull": ["$storageStats.indexDetails.file bytes available for reuse", 0] }, 0] } },
-         "indexReuseKnown": { "$min": { "$cond": ["$storageStats.indexDetails.reuseKnown", 1, 0] } }
+         "indexReuseKnownCount": { "$sum": { "$cond": ["$storageStats.indexDetails.reuseKnown", 1, 0] } }
       } },
       { "$set": {
          "name": { 
@@ -1840,10 +1881,22 @@ async function $collStats(dbName = db.getName(), collName = '') {
          },
          "totalIndexSize": "$indexes size in bytes",
          "totalIndexBytesReusable": {
-            "$cond": [{ "$eq": ["$indexReuseKnown", 1] }, "$indexes bytes available for reuse", null]
+            "$cond": [{ "$gt": ["$indexReuseKnownCount", 0] }, "$indexes bytes available for reuse", null]
+         },
+         "totalIndexBytesReusableComplete": {
+            "$and": [
+               { "$gt": ["$indexReuseKnownCount", 0] },
+               { "$eq": ["$indexReuseKnownCount", "$nodes"] }
+            ]
          },
          "freeStorageSize": {
-            "$cond": [{ "$eq": ["$freeStorageKnown", 1] }, "$freeStorageSize", null]
+            "$cond": [{ "$gt": ["$freeStorageKnownCount", 0] }, "$freeStorageSize", null]
+         },
+         "freeStorageComplete": {
+            "$and": [
+               { "$gt": ["$freeStorageKnownCount", 0] },
+               { "$eq": ["$freeStorageKnownCount", "$nodes"] }
+            ]
          }
       } },
       { "$set": {
@@ -1918,9 +1971,12 @@ async function $collStats(dbName = db.getName(), collName = '') {
                                     },
                                     "in": {
                                        "$cond": [
-                                          { "$or": [{ "$eq": ["$$prev", null] }, { "$eq": ["$$cur", null] }] },
+                                          { "$and": [{ "$eq": ["$$prev", null] }, { "$eq": ["$$cur", null] }] },
                                           null,
-                                          { "$sum": ["$$prev", "$$cur"] }
+                                          { "$sum": [
+                                             { "$ifNull": ["$$prev", 0] },
+                                             { "$ifNull": ["$$cur", 0] }
+                                          ] }
                                        ]
                                     }
                                  }
@@ -1947,8 +2003,8 @@ async function $collStats(dbName = db.getName(), collName = '') {
          "indexes size in bytes",
          "uri",
          "wiredTiger",
-         "freeStorageKnown",
-         "indexReuseKnown"
+         "freeStorageKnownCount",
+         "indexReuseKnownCount"
       ] }
    ];
    let results;
@@ -1975,6 +2031,8 @@ async function $collStats(dbName = db.getName(), collName = '') {
          "indexes": [],
          "totalIndexSize": 0,
          "totalIndexBytesReusable": null,
+         "freeStorageComplete": false,
+         "totalIndexBytesReusableComplete": false,
          "statsError": commandErrorMessage(e)
       };
    }
@@ -1989,6 +2047,7 @@ async function $collStats(dbName = db.getName(), collName = '') {
          if (docs && typeof docs.then === 'function') docs = await docs;
          results = Array.isArray(docs) ? docs[0] : docs;
       }
+      results = markPartialShardStats(results);
    } catch(e) {
       results = collStatsStub(isUnauthorizedError(e) ? 'unauthorized' : 'unavailable', e);
    }

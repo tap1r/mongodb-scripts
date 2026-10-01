@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.14.3"
+ *  Version: "0.14.4"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -114,7 +114,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.14.3" };
+   const __script = { "name": "dbstats.js", "version": "0.14.4" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -444,6 +444,9 @@
       let collection = new MetaStats(collRaw);
       if (!collection.name) collection.name = collName;
       if (collRaw.statsError) collection.statsError = collRaw.statsError;
+      if (collRaw.statsIncomplete) collection.statsIncomplete = true;
+      if (collRaw.freeStorageComplete === false) collection.freeStorageComplete = false;
+      if (collRaw.totalIndexBytesReusableComplete === false) collection.totalIndexBytesReusableComplete = false;
       delete collection.databases;
       delete collection.collections;
       delete collection.views;
@@ -570,10 +573,11 @@
 
    function collectionIndexFreeComplete(collection) {
       if (isUnauthorizedCollection(collection) || isUnavailableCollection(collection)) return false;
+      if (collection.totalIndexBytesReusableComplete === false) return false;
       if (freeStorageKnown(collection.totalIndexBytesReusable)) return true;
       const indexes = collection.indexes || [];
       if (!indexes.length) return +collection.nindexes === 0;
-      return indexes.every(idx => freeStorageKnown(idx.freeStorageSize));
+      return indexes.every(idx => freeStorageKnown(idx.freeStorageSize) && idx.freeStorageComplete !== false);
    }
 
    function tagDbStatsFree(database) {
@@ -595,7 +599,9 @@
       if (collRolled != null) {
          database.freeStorageSize = collRolled;
          database.freeStorageSizeSource = 'collStatsRollup';
-         database.freeStorageComplete = coverage && collections.length > 0 && collFree.every(freeStorageKnown);
+         database.freeStorageComplete = coverage && collections.length > 0
+            && collFree.every(freeStorageKnown)
+            && collections.every(c => c.freeStorageComplete !== false);
       } else {
          database.freeStorageSize = null;
          database.freeStorageSizeSource = 'unknown';
@@ -609,7 +615,8 @@
          database.totalIndexBytesReusableSource = 'collStatsRollup';
          database.totalIndexBytesReusableComplete = coverage
             && collections.length > 0
-            && collections.every(collectionIndexFreeComplete);
+            && collections.every(collectionIndexFreeComplete)
+            && collections.every(c => c.totalIndexBytesReusableComplete !== false);
       } else {
          database.totalIndexBytesReusable = null;
          database.totalIndexBytesReusableSource = 'unknown';
@@ -805,6 +812,7 @@
             "compressor": collection.compressor,
             "storageSize": collection.storageSize,
             "freeStorageSize": collection.freeStorageSize,
+            "freeStorageComplete": collection.freeStorageComplete,
             "objects": collection.objects,
             "indexes": collection.indexes,
             "allocUnit": collection.allocUnit,
@@ -870,7 +878,11 @@
          "storageSize": storageSize,
          "freeStorageSize": freeStorageSize,
          "reuse": jsonReuse(freeStorageSize, storageSize),
-         "compaction": jsonCompaction('index', storageSize, freeStorageSize, { "idIndex": name === '_id_' })
+         "freeStorageComplete": index.freeStorageComplete !== false,
+         "compaction": jsonCompaction('index', storageSize, freeStorageSize, {
+            "idIndex": name === '_id_',
+            "incomplete": index.freeStorageComplete === false
+         })
       };
    }
 
@@ -899,7 +911,13 @@
          "nindexes": jsonNumber(collection.nindexes) ?? indexes.length,
          totalIndexSize, totalIndexBytesReusable,
          "idxReuse": jsonReuse(totalIndexBytesReusable, totalIndexSize),
-         "compaction": jsonCompaction('collection', storageSize, freeStorageSize, { "oplog": ns === 'local.oplog.rs' }),
+         "freeStorageComplete": collection.freeStorageComplete !== false,
+         "totalIndexBytesReusableComplete": collection.totalIndexBytesReusableComplete !== false,
+         "statsIncomplete": collection.statsIncomplete === true,
+         "compaction": jsonCompaction('collection', storageSize, freeStorageSize, {
+            "oplog": ns === 'local.oplog.rs',
+            "incomplete": collection.freeStorageComplete === false
+         }),
          indexes
       };
    }
@@ -1041,7 +1059,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.14.3',
+         "version": '0.14.4',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1304,21 +1322,23 @@
       return;
    }
 
-   function printCollection({ name, dataSize, compression, compressor, storageSize, freeStorageSize, objects, allocUnit, internalPageSize } = {}) {
+   function printCollection({ name, dataSize, compression, compressor, storageSize, freeStorageSize, objects, allocUnit, internalPageSize, freeStorageComplete } = {}) {
       const stub = isUnauthorizedCollection({ name }) || isUnavailableCollection({ name });
-      const compaction = formatCompaction('collection', storageSize, freeStorageSize, { "oplog": name == 'oplog.rs' });
+      const incomplete = freeStorageComplete === false;
+      const compaction = formatCompaction('collection', storageSize, freeStorageSize, { "oplog": name == 'oplog.rs', incomplete });
       printRule('light');
       name = truncateLabel(name, 45, rowHeader - 4);
-      console.log(`╰>[cyan]${(' ' + name).padEnd(rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize })}`);
+      console.log(`╰>[cyan]${(' ' + name).padEnd(rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize, "lowerBound": incomplete })}`);
       return;
    }
 
-   function printNamespace({ namespace, name, dataSize, compression, compressor, storageSize, freeStorageSize, objects, allocUnit, internalPageSize } = {}) {
+   function printNamespace({ namespace, name, dataSize, compression, compressor, storageSize, freeStorageSize, objects, allocUnit, internalPageSize, freeStorageComplete } = {}) {
       const stub = isUnauthorizedCollection({ "name": name || namespace }) || isUnavailableCollection({ "name": name || namespace });
-      const compaction = formatCompaction('collection', storageSize, freeStorageSize, { "oplog": namespace == 'local.oplog.rs' });
+      const incomplete = freeStorageComplete === false;
+      const compaction = formatCompaction('collection', storageSize, freeStorageSize, { "oplog": namespace == 'local.oplog.rs', incomplete });
       printRule('light');
       namespace = truncateLabel(namespace, 45, rowHeader - 4);
-      console.log(`╰>[cyan]${(' ' + namespace).padEnd(rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize })}`);
+      console.log(`╰>[cyan]${(' ' + namespace).padEnd(rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize, "lowerBound": incomplete })}`);
       return;
    }
 
@@ -1334,12 +1354,13 @@
       return;
    }
 
-   function printIndex({ name, storageSize, freeStorageSize } = {}) {
+   function printIndex({ name, storageSize, freeStorageSize, freeStorageComplete } = {}) {
       const indexWidth = rowHeader + columnWidth * 2;
-      const compaction = formatCompaction('index', storageSize, freeStorageSize, { "idIndex": name == '_id_' });
+      const incomplete = freeStorageComplete === false;
+      const compaction = formatCompaction('index', storageSize, freeStorageSize, { "idIndex": name == '_id_', incomplete });
       console.log(`  [yellow]${'━'.repeat(termWidth - 2)}[/]`);
       name = truncateLabel(name, 64, indexWidth);
-      console.log(`  ╰» [red]${name.padEnd(indexWidth - 2)}[/] ${metricsCols({ storageSize, freeStorageSize, compaction, "mode": 'indexRow' })}`);
+      console.log(`  ╰» [red]${name.padEnd(indexWidth - 2)}[/] ${metricsCols({ storageSize, freeStorageSize, compaction, "mode": 'indexRow', "lowerBound": incomplete })}`);
       return;
    }
 
