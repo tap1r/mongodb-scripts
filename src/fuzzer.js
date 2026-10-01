@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.12.0"
+ *  Version: "0.13.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.12.0" };
+   const __script = { "name": "fuzzer.js", "version": "0.13.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -926,16 +926,9 @@
    }
 
    function indexBuildMessage(result, label) {
-      if (typeof result.errmsg !== 'undefined')
-         return `${label} operation failed: ${result.errmsg}`;
-      else if (typeof result.note !== 'undefined')
-         return `${label} completed with note: ${result.note} with ${result.numIndexesAfter - result.numIndexesBefore} index changes.`;
-      else if (typeof result.ok !== 'undefined')
-         return `${label} completed!`;
-      else if (typeof result.msg !== 'undefined')
-         return `${label} build failed with message: ${result.msg}`;
-      else
-         return `${label} completed with results:\t${result}`;
+      // mongosh createIndexes resolves to the index names. A failure throws.
+      const names = Array.isArray(result) ? result.join(',') : result;
+      return `${label} completed with results:\t${names}`;
    }
 
    function createIndexSet(keys, options, label, heading) {
@@ -946,7 +939,11 @@
       const args = useCommitQuorum
          ? [keys, options, indexPrefs.commitQuorum]
          : [keys, options];
-      console.log(indexBuildMessage(namespace.createIndexes(...args), label));
+      try {
+         console.log(indexBuildMessage(namespace.createIndexes(...args), label));
+      } catch(e) {
+         console.log(`[red][ERROR][/] ${label} operation failed:`, errText(e));
+      }
    }
 
    function dropExistingIndexes() {
