@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.16.1"
+ *  Version: "0.17.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,7 +13,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.16.1"
+      "version": "0.17.0"
 });
 
 /*  Notes:
@@ -348,26 +348,29 @@ class MiniHud {
       this.lastWrite = now;
       const cols = (process.stdout.columns > 0) ? process.stdout.columns : 80;
       let msg = String(line || '').replace(/\s+/g, ' ').trim();
-      if (msg.length > cols - 1) msg = msg.slice(0, Math.max(1, cols - 2)) + '~';
+      let visual = stripAnsiMarkup(msg);
+      const max = Math.max(1, cols - 1);
+      if (visual.length > max) {
+         visual = visual.slice(0, Math.max(1, cols - 2)) + '~';
+         msg = visual;
+      }
       const painted = applyAnsiTags(msg + '[/]');
-      const pad = (this.lastWidth > msg.length) ? ' '.repeat(this.lastWidth - msg.length) : '';
-      process.stdout.write('\r' + painted + pad);
-      this.lastWidth = msg.length;
+      process.stdout.write('\r' + painted + '\x1b[K');
+      this.lastWidth = visual.length;
    }
 
    clear() {
-      if (!this.enabled) return;
-      if (this.lastWidth > 0) {
-         process.stdout.write('\r' + ' '.repeat(this.lastWidth) + '\r');
-         this.lastWidth = 0;
-      }
+      if (!this.enabled || this.lastWidth === 0) return;
+      process.stdout.write('\r\x1b[2K');
+      this.lastWidth = 0;
    }
 }
 
 async function mapPool(items, concurrency, worker, onProgress) {
    /*
-    *  Bounded async pool. Single-threaded next++ is safe. Yields after each item
-    *  so sync mongosh commands still interleave across workers.
+    *  Bounded async pool. Single-threaded next++ is safe. Yields before and after
+    *  each item so sibling workers can start and the HUD can paint between
+    *  sync mongosh commands.
     */
    const list = items || [];
    const results = new Array(list.length);
@@ -392,6 +395,7 @@ async function mapPool(items, concurrency, worker, onProgress) {
          if (idx >= list.length) return;
          inFlight++;
          emit();
+         await Promise.resolve();
          try {
             results[idx] = await worker(list[idx], idx);
          } finally {
