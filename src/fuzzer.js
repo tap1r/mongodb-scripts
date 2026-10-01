@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.9.0"
+ *  Version: "0.9.1"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.9.0" };
+   const __script = { "name": "fuzzer.js", "version": "0.9.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -183,15 +183,23 @@
       console.log(`\nSynthesising ${totalDocs} ${plural(totalDocs, 'document', 'documents')}`);
 
       // sampling synthetic documents and estimating batch size
-      let docSize = 0;
-      for (let i = 0; i < sampleSize; ++i)
-         docSize += bsonsize(genDocument(fuzzer, timestamp));
+      let docSize = 0, maxSize = 0;
+      for (let i = 0; i < sampleSize; ++i) {
+         const size = bsonsize(genDocument(fuzzer, timestamp));
+         docSize += size;
+         if (size > maxSize)
+            maxSize = size;
+      }
 
       const avgSize = $floor(docSize / sampleSize);
-      if (avgSize > bsonMax * 0.95)
+      if (maxSize > bsonMax * 0.95)
+         console.log(`\n[Warning] The largest sample document of ${maxSize} bytes approaches or exceeds the BSON max size of ${bsonMax} bytes`);
+      else if (avgSize > bsonMax * 0.95)
          console.log(`\n[Warning] The average document size of ${avgSize} bytes approaches or exceeds the BSON max size of ${bsonMax} bytes`);
-      console.log(`\nSampling ${sampleSize} ${plural(sampleSize, 'document', 'documents')} each with BSON size averaging ${avgSize} ${plural(avgSize, 'byte', 'bytes')}`);
-      const sampledSize = $floor(bsonMax * 0.95 / avgSize);
+      console.log(`\nSampling ${sampleSize} ${plural(sampleSize, 'document', 'documents')} each with BSON size averaging ${avgSize} ${plural(avgSize, 'byte', 'bytes')}, largest ${maxSize} ${plural(maxSize, 'byte', 'bytes')}`);
+      // Size from the largest sample so a batch of heavy documents stays under the BSON max.
+      const basis = (maxSize >= 1) ? maxSize : avgSize;
+      const sampledSize = $floor(bsonMax * 0.95 / basis);
       const batchCap = 1000;
       // return (maxWriteBatchSize < sampledSize) ? maxWriteBatchSize : sampledSize;
       const batchSize = Math.min(batchCap, sampledSize);
