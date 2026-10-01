@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.5.23"
+ *  Version: "0.5.24"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -20,7 +20,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.5.23" };
+   const __script = { "name": "oplogchurn.js", "version": "0.5.24" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -37,7 +37,7 @@
    console.log(`\n\n[yellow]${__comment}[/]`);
 })();
 
-(() => {
+(async () => {
    /*
     *  Global defaults
     */
@@ -71,7 +71,7 @@
       return `${n} hr${n === 1 ? '' : 's'}`;
    }
 
-   function main() {
+   async function main() {
       /*
        *  main
        */
@@ -148,7 +148,7 @@
          storageSize = 0,
          freeStorageSize: blocksFree = 0,
          internalPageSize = 4096
-      } = $collStats('local', 'oplog.rs') || {};
+      } = await $collStats('local', 'oplog.rs') || {};
       // $collStats may report "mixed" on multi-node aggregates; fall back to 4KiB
       const overhead = (typeof internalPageSize === 'number') ? internalPageSize : 4096;
       const ratio = +((size / (storageSize - blocksFree - overhead)).toFixed(2));
@@ -180,7 +180,7 @@
       console.log('\n');
       console.log('\t[R]Host is not a replica set member....exiting![/]');
       console.log('\n');
-   } else main();
+   } else await main();
 })();
 
 // EOF
