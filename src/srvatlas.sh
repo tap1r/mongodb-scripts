@@ -659,15 +659,6 @@ tls_session_ok() {
     [[ $_cipher != '(NONE)' && $_cipher != 0000 ]]
 }
 
-colon_has() {
-    local _list=$1 _needle=$2 _item
-    local IFS=:
-    for _item in $_list; do
-        [[ $_item == "$_needle" ]] && return 0
-    done
-    return 1
-}
-
 drop_colon_item() {
     local _list=$1 _drop=$2 _item _rest
     local IFS=:
