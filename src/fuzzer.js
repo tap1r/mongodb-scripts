@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.9.2"
+ *  Version: "0.10.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.9.2" };
+   const __script = { "name": "fuzzer.js", "version": "0.10.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -133,12 +133,10 @@
          // "hidden": hidden,
          "collation": collation
       },
-      specialIndexes = [ /* hashed, 2d, and text: simple collation only */
-         { "string": "hashed" },
-         { "location.coordinates": "2d" },
-         { "quote.txt": "text" }
+      hashedIndexes = [
+         { "string": "hashed" }
       ],
-      specialIndexOptions = { /* exceptional index options */
+      hashedIndexOptions = { /* hashed accepts simple collation only */
          // "background": fCV(4.0) ? true : false,
          // "background": true,
          // "unique": false,
@@ -146,13 +144,39 @@
          // "sparse": true,
          // "expireAfterSeconds": expireAfterSeconds,
          // "hidden": hidden,
-         "collation": { "locale": "simple" },
+         "collation": { "locale": "simple" }
+      },
+      indexes2d = [
+         { "location.coordinates": "2d" }
+      ],
+      indexes2dOptions = { /* 2d rejects a collation field */
+         // "background": fCV(4.0) ? true : false,
+         // "background": true,
+         // "unique": false,
+         // "partialFilterExpression": { "$exists": true },
+         // "sparse": true,
+         // "expireAfterSeconds": expireAfterSeconds,
+         // "hidden": hidden
+      },
+      textIndexes = [
+         { "quote.txt": "text" }
+      ],
+      textIndexOptions = { /* text rejects a collation field */
+         // "background": fCV(4.0) ? true : false,
+         // "background": true,
+         // "unique": false,
+         // "partialFilterExpression": { "$exists": true },
+         // "sparse": true,
+         // "expireAfterSeconds": expireAfterSeconds,
+         // "hidden": hidden,
          "default_language": idioma
       };
    if (idxCompressor != 'default') {
       const configString = `block_compressor=${parseCompressor(idxCompressor)[0]}`;
       indexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
-      specialIndexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
+      hashedIndexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
+      indexes2dOptions.storageEngine = { "wiredTiger": { "configString": configString } };
+      textIndexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
    }
 
    /*
@@ -891,10 +915,18 @@
          } else
             console.log('No regular index builds specified.');
 
-         if (specialIndexes.length > 0) {
-            createIndexSet(specialIndexes, specialIndexOptions, 'Special indexing', (quorum) =>
-               `\nBuilding exceptional ${plural(specialIndexes.length, 'index', 'indexes')} (no collation support) with commit quorum "${quorum}":`
-            );
+         const specialSets = [
+            [hashedIndexes, hashedIndexOptions, (quorum) =>
+               `\nBuilding hashed ${plural(hashedIndexes.length, 'index', 'indexes')} with collation locale "simple" with commit quorum "${quorum}":`],
+            [indexes2d, indexes2dOptions, (quorum) =>
+               `\nBuilding 2d ${plural(indexes2d.length, 'index', 'indexes')} with commit quorum "${quorum}":`],
+            [textIndexes, textIndexOptions, (quorum) =>
+               `\nBuilding text ${plural(textIndexes.length, 'index', 'indexes')} with default language "${idioma}" with commit quorum "${quorum}":`]
+         ].filter(([keys]) => keys.length > 0);
+         if (specialSets.length > 0) {
+            specialSets.forEach(([keys, options, heading]) => {
+               createIndexSet(keys, options, 'Special indexing', heading);
+            });
          } else
             console.log('\nNo special index builds specified.');
 
