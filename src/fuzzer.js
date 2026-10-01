@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.14.1"
+ *  Version: "0.14.2"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.14.1" };
+   const __script = { "name": "fuzzer.js", "version": "0.14.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -215,6 +215,10 @@
 
       console.log(`\nSynthesising ${totalDocs} ${plural(totalDocs, 'document', 'documents')}`);
 
+      const distributionName = String(fuzzer.distribution || '').toLowerCase();
+      if (distributionName !== 'uniform' && distributionName !== 'normal')
+         console.log(`\nUnsupported distribution type: ${fuzzer.distribution}\nDefaulting to "uniform"`);
+
       // sampling synthetic documents and estimating batch size
       let docSize = 0, maxSize = 0;
       for (let i = 0; i < sampleSize; i++) {
@@ -305,8 +309,7 @@
             // $getRandExp();
             // secondsOffset = $floor($getRandExp(offset, offset + range, 128) * day);
             // break;
-         default:
-            console.log(`\nUnsupported distribution type: ${distribution}\nDefaulting to "uniform"`);
+         default: // bimodal, pareto, and exponential stay unimplemented
             secondsOffset = +$floor($getRandNum(offset, offset + range) * day);
       }
       let oid;
