@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.7.7"
+# Version: "0.7.8"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -928,15 +928,23 @@ test_host_connectivity() {
     select_transport
 }
 
+save_hello_record() {
+    # One string per target: ok, identity, mongos, set name, hosts, tags.
+    # Unit separator stays out of hello values, so a comma in the host list
+    # and a colon in a tag stay inside their fields.
+    _helloRec+=("${1}${_helloSep}${2}${_helloSep}${3}${_helloSep}${4}${_helloSep}${5}${_helloSep}${6}")
+}
+
+load_hello_record() {
+    local IFS=${_helloSep}
+    read -r _ok _identity _mongos _rsName _rsHosts _rsTags <<< "${_helloRec[$1]}"
+}
+
 evaluate_connection_properties() {
     local _target _suite _i=0
 
-    _helloMe=()
-    _helloMsg=()
-    _helloHosts=()
-    _helloSet=()
-    _helloTags=()
-    _helloOk=()
+    _helloSep=$'\x1f'
+    _helloRec=()
     if $_cipherScan; then
         echo -e "\nEnumerating local TLS ciphers (--ciphers). This probes every suite on every node."
     fi
@@ -948,17 +956,12 @@ evaluate_connection_properties() {
     # replica-set index aligned with _targets.
     for _target in "${_targets[@]}"; do
         if [[ ${_tcpOpen[_i]} != 1 ]]; then
-            _helloMe+=("")
-            _helloMsg+=("")
-            _helloHosts+=("")
-            _helloSet+=("")
-            _helloTags+=("")
-            _helloOk+=("0")
+            save_hello_record "0" "" "" "" "" ""
             echo -e "\n\tnode:\t\t\t$_target"
             echo -e "\thello:\t\t\tskipped"
             echo -e "\tTLS cipher scanning:"
             for _suite in "${_cipherSuites[@]}"; do
-                echo -e "\n\t\t$_suite: skipped"
+                echo -e "\t\t$_suite: skipped"
             done
             _i=$((_i + 1))
             continue
@@ -969,12 +972,7 @@ evaluate_connection_properties() {
         if $_lb; then
             _identity="unsupported_when_load_balanced"
         fi
-        _helloMe+=("$_identity")
-        _helloMsg+=("$_mongos")
-        _helloHosts+=("$_rsHosts")
-        _helloSet+=("$_rsName")
-        _helloTags+=("$_rsTags")
-        _helloOk+=("$_ok")
+        save_hello_record "$_ok" "$_identity" "$_mongos" "$_rsName" "$_rsHosts" "$_rsTags"
         echo -e "\n\tnode:\t\t\t$_target"
         echo -e "\tsaslSupportedMechs:\t${_saslSupportedMechs}"
         if [[ $_ok == 1 && $_saslField == missing ]]; then
@@ -1005,10 +1003,10 @@ evaluate_connection_properties() {
             else
                 scan_negotiated_ciphers "$_target" "$_suite"
             fi
-            echo -e "\n\t\t$_suite: ${_negotiatedList:-None}"
+            echo -e "\t\t$_suite: ${_negotiatedList:-None}"
             if [[ $_suite == tls1_3 || $_suite == tls1_4 ]] && [[ -n $_negotiatedList ]]; then
                 probe_ecc_groups "$_target"
-                echo -e "\n\t\tgroups: ${_negotiatedGroups:-None}"
+                echo -e "\t\tgroups: ${_negotiatedGroups:-None}"
             fi
         done
         _i=$((_i + 1))
@@ -1026,11 +1024,7 @@ test_replset_consistency() {
     # Serial on purpose. The hello record is read one target at a time.
     for _target in "${_targets[@]}"; do
         _proc=
-        _identity=${_helloMe[_i]}
-        _mongos=${_helloMsg[_i]}
-        _rsHosts=${_helloHosts[_i]}
-        _rsName=${_helloSet[_i]}
-        _rsTags=${_helloTags[_i]}
+        load_hello_record "$_i"
         echo -e "\n\tEvaluating:\t$_target\n"
         [[ -n ${_rsHosts} ]] && _proc="mongod"
         [[ ${_mongos} == "isdbgrid" ]] && _proc="mongos"
@@ -1043,7 +1037,7 @@ test_replset_consistency() {
         else
             echo -e "\tHost is of type ${_proc}."
         fi
-        if [[ ${_helloOk[_i]} != 1 ]]; then
+        if [[ $_ok != 1 ]]; then
             echo -e "\tagreement:\tskipped"
         else
             _nodeAgree=1
