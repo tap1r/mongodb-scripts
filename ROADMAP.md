@@ -361,9 +361,19 @@ Selection: capability + privilege probe, with explicit option to force legacy. O
 
 #### Concurrency (stats fetch)
 
-Once the catalog is materialised, fetch collection/index WT stats through a **bounded task pool** (optimal vs unbounded `Promise.all` on large catalogs). Pool size as an option (default conservative on mongos). Catalog build stays serial or lightly parallel; the pool applies to the stats phase.
+Stats need **both** per-DB `$stats` and per-collection `$collStats` (dedicated: `db.stats()` wins when free-space is real; M0/Flex: collStats rollup is the lower bound). That forces **DB-grouped** pooling, not a flat cluster-wide `$collStats` queue: a DB’s free-space rollup cannot run until that DB’s `$stats` and all of its collection stats are in. A global pool would keep every DB incomplete until the slowest namespace in the catalog.
 
-That split is what makes a **mini-HUD** honest: after phase 1 the walker knows `N` collections (and DBs), so phase 2 can show `done/N`, in-flight vs queued, and a cheap ETA. Phase 1 can be a lighter line (`db i/D` or “listing …”) until `N` exists. Do not ship the pool without the HUD on TTY interactive tabular; json / `load()` module stays quiet (P0 stdout purity). The current `ProgressTracker` class is not that HUD — replace or wrap it (`\\r` via `console.log` prints a new line; `finish()` references a non-member `formatTime`).
+P1 walk:
+
+1. **All DB names** (`getDBNames`).
+2. **`$stats` for every DB** (cheap; DBs ≪ collections). Dedicated free-space is known before any collStats.
+3. **Whole nameOnly catalog** (collections + views, still listed per DB). Seeds HUD `N`. Dual `$listCatalog` later still lands here.
+4. **Walk that catalog by DB:** bounded `$collStats` pool **for the current DB**, then `applyFreeStorageRollup` on that DB, then the next DB. Views stay nameOnly (no pool).
+5. **dbPath rollup** once every DB has collection stats.
+
+Pool size is an option (default conservative on mongos). Default **one DB’s collStats pool at a time** so mutation stays on one `database.collections` and rollup can finish before moving on. Do not flatten namespaces into a single global queue.
+
+**Mini-HUD** (TTY tabular only; json / `load()` quiet): phase 1–2 light (`dbs i/D`); after catalog, `done/N` plus current DB and in-flight/queued in that DB’s pool; cheap ETA is fine (finite `N`). Clear the HUD before the report. The current `ProgressTracker` class is not that HUD — replace or wrap it (`\\r` via `console.log` prints a new line; `finish()` references a non-member `formatTime`).
 
 #### Sharding and topology
 
