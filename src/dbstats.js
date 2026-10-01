@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.14.0"
+ *  Version: "0.14.1"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -114,7 +114,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.14.0" };
+   const __script = { "name": "dbstats.js", "version": "0.14.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -793,7 +793,7 @@
 
    function jsonCompaction(kind, storageSize, freeStorageSize, extra = {}) {
       const label = formatCompaction(kind, storageSize, freeStorageSize, extra);
-      if (!label || label === 'n/a' || label === '———— ') return null;
+      if (!label || label === 'n/a ' || label === '———— ') return null;
       return label;
    }
 
@@ -1090,7 +1090,7 @@
        *  Pretty format percentage. Zero/null/NaN denominator → n/a (not Infinity%/NaN%).
        */
       const num = +numerator, den = +denominator;
-      if (!Number.isFinite(num) || !Number.isFinite(den) || den === 0) return 'n/a';
+      if (!Number.isFinite(num) || !Number.isFinite(den) || den === 0) return 'n/a ';
       return `${Number.parseFloat(((num / den) * 100).toFixed(1))}%`;
    }
 
@@ -1104,29 +1104,29 @@
        *  lowerBound: collStats rollup may omit unauthorized/filtered NS (*).
        */
       if (!freeStorageKnown(bytes)) {
-         return (`n/a │${'n/a'.padStart(6)}`).padStart(columnWidth + 8);
+         return (`n/a │${'n/a '.padStart(6)}`).padStart(columnWidth + 8);
       }
       const unit = formatUnit(bytes) + (lowerBound ? '*' : '');
       return (unit + ' │' + formatPct(bytes, storageSize).padStart(6)).padStart(columnWidth + 8);
    }
 
    function formatCompaction(kind, storageSize, freeStorageSize, { oplog = false, idIndex = false, incomplete = false } = {}) {
-      if (!freeStorageKnown(freeStorageSize)) return 'n/a';
+      if (!freeStorageKnown(freeStorageSize)) return 'n/a ';
       if (kind === 'collection') {
          if (oplog && compactionHelper('collection', storageSize, freeStorageSize)) return 'wait';
          if (compactionHelper('collection', storageSize, freeStorageSize)) return 'compact';
-         return incomplete ? 'n/a' : '———— ';
+         return incomplete ? 'n/a ' : '———— ';
       }
       if (kind === 'index') {
          if (idIndex && compactionHelper('index', storageSize, freeStorageSize)) return 'compact';
          if (compactionHelper('index', storageSize, freeStorageSize)) return 'rebuild';
-         return incomplete ? 'n/a' : '———— ';
+         return incomplete ? 'n/a ' : '———— ';
       }
       if (kind === 'dbPath') {
          if (compactionHelper('dbPath', storageSize, freeStorageSize)) return 'resync';
-         return incomplete ? 'n/a' : '———— ';
+         return incomplete ? 'n/a ' : '———— ';
       }
-      return incomplete ? 'n/a' : '———— ';
+      return incomplete ? 'n/a ' : '———— ';
    }
 
    function formatRatio(metric) {
@@ -1134,7 +1134,7 @@
        *  Pretty format compression ratio. Non-finite (÷0 from MetaStats.compression) → n/a.
        */
       const value = +metric;
-      if (!Number.isFinite(value)) return 'n/a';
+      if (!Number.isFinite(value)) return 'n/a ';
       return `${Number.parseFloat(value.toFixed(2))}:1`;
    }
 
