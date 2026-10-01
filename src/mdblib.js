@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.15.14"
+ *  Version: "0.16.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,7 +13,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.15.14"
+      "version": "0.16.0"
 });
 
 /*  Notes:
@@ -217,7 +217,7 @@ class AutoFactor {
       this.number = 0;
    }
    scale(number = this.number) {
-      if (number < 1) number = 1;
+      if (!(number > 0)) return 0; // 0 B, not 1 B
       return Math.min(Math.floor(Math.log2(number) / 10), SCALE_METRICS.length - 1);
    }
    factor(number = this.number) {
@@ -248,11 +248,11 @@ class MetaStats {
     *  Storage statistics metadata class
     */
    constructor({
-         name = '', dataSize = 0, storageSize = 4096, freeStorageSize = 0,
+         name = '', dataSize = 0, storageSize = 0, freeStorageSize = null,
          objects = 0, orphans = 0, compressor = 'none', indexes = [], nindexes = -1,
-         indexSize = 4096, totalIndexSize = 4096, totalIndexBytesReusable = 0,
+         indexSize = 0, totalIndexSize = 0, totalIndexBytesReusable = null,
          collections = [], ncollections = 0, namespaces = 0, nviews = 0,
-         views = [], databases = [], internalPageSize = 4096
+         views = [], databases = [], internalPageSize
       } = {}) {
       /*
        *  https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
@@ -264,8 +264,8 @@ class MetaStats {
       // this.shards = (async() => { return (serverStatus().process === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null })();
       this.name = name;
       this.dataSize = dataSize;
-      this.storageSize = (storageSize == 0) ? 4096 : storageSize;
-      this.freeStorageSize = freeStorageSize;
+      this.storageSize = storageSize; // 0 is measured empty / unmeasured stub — do not invent WT min alloc
+      this.freeStorageSize = freeStorageSize; // null = unknown, 0 = empty free list
       this.objects = objects;
       this.orphans = orphans;
       this.compressor = compressor;
@@ -279,8 +279,10 @@ class MetaStats {
       this.nindexes = (nindexes === -1) ? +indexes : nindexes; // merge collStats and dbStats n/indexes counters
       this.totalIndexBytesReusable = totalIndexBytesReusable;
       this.totalIndexSize = (indexSize === 0) ? totalIndexSize : indexSize; // merge collStats and dbStats index size counters
-      // this.totalIndexBytesReusable = indexFreeStorageSize;
-      // this.overhead = (typeof internalPageSize === 'number') ? internalPageSize : 4096; // 4KB min allocation block size
+      this.allocUnit = (typeof internalPageSize === 'number' && internalPageSize > 0)
+                     ? internalPageSize
+                     : WIREDTIGER_MIN_ALLOC_SIZE;
+      this.internalPageSize = internalPageSize;
       this.overhead = 1024; // unused
    }
    init() { // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
@@ -300,8 +302,11 @@ class MetaStats {
       this.shards = (this.proc === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards.map(({ _id }) => _id) : [];
    }
    get compression() {
-      // return this.dataSize / (this.storageSize - this.freeStorageSize - this.overhead);
-      return this.dataSize / (this.storageSize - this.freeStorageSize);
+      // Unknown free-space is not 0. Empty/unmeasured storage is not a 4 KiB file.
+      if (this.freeStorageSize == null || Number.isNaN(+this.freeStorageSize)) return NaN;
+      const denom = +this.storageSize - +this.freeStorageSize;
+      if (!(denom > 0)) return NaN;
+      return this.dataSize / denom;
    }
    get totalStorageSize() { // unused
       return this.storageSize + (this.totalIndexSize + this.overhead) * this.nindexes;
@@ -868,6 +873,7 @@ const int64MinVal = -Math.pow(2, 63);
 const int64MaxVal = Math.pow(2, 63) - 1;
 const dec128MinVal = -10 * Math.pow(2, 110);
 const dec128MaxVal = 10 * Math.pow(2, 110) - 1;
+const WIREDTIGER_MIN_ALLOC_SIZE = 4096;             // 4 KiB: WT allocation_size / empty-file floor (display, not a stored substitute)
 const WIREDTIGER_MIN_RECLAIM_SIZE_V8 = 1048576;     // 1 MiB: WT skips compact when recoverable bytes are smaller (v8+)
 const WIREDTIGER_MIN_RECLAIM_SIZE_LEGACY = 2097152; // 2 MiB: same floor on pre-v8
 
@@ -1705,7 +1711,7 @@ function $collStats(dbName = db.getName(), collName = '') {
                   "$arrayToObject": [[
                      { "k": "name", "v": "$$indexes.k" },
                      { "k": "uri", "v": { "$ifNull": ["$$indexes.v.uri", "statistics:table:index-0-0000000000000000000"] } },
-                     { "k": "file size in bytes", "v": { "$ifNull": ["$$indexes.v.block-manager.file size in bytes", 4096] } },
+                     { "k": "file size in bytes", "v": { "$ifNull": ["$$indexes.v.block-manager.file size in bytes", 0] } },
                      { "k": "file bytes available for reuse", "v": {
                         "$cond": [
                            { "$ne": [{ "$type": "$$indexes.v.block-manager.file bytes available for reuse" }, "missing"] },
@@ -1717,7 +1723,7 @@ function $collStats(dbName = db.getName(), collName = '') {
                            ] }
                         ]
                      } },
-                     { "k": "file allocation unit size", "v": { "$ifNull": ["$$indexes.v.block-manager.file allocation unit size", 4096] } }
+                     { "k": "file allocation unit size", "v": { "$ifNull": ["$$indexes.v.block-manager.file allocation unit size", WIREDTIGER_MIN_ALLOC_SIZE] } }
          ]] } } },
          "storageStats.indexDetails.file size in bytes": {
             "$reduce": {
