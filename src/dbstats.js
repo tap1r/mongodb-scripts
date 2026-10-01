@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.13.0"
+ *  Version: "0.14.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -73,6 +73,7 @@
  *     },
  *     output: {
  *        format: <'tabular'|'table'|'nsTable'|'json'|'html'>, // 'table' aliases 'tabular'
+ *        concurrency: <int>, // 0 = auto (8 mongod / 4 mongos); $collStats pool per DB
  *        topology: <'summary'|'expanded'>, // TBA
  *        colour: <true|false>, // TBA
  *        verbosity: <'full'|'summary'|'summaryIdx'|'compactOnly'/> // TBA
@@ -113,7 +114,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.13.0" };
+   const __script = { "name": "dbstats.js", "version": "0.14.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -247,6 +248,7 @@
       },
       "output": {
          "format": "tabular", // ['tabular'|'table'|'nsTable'|'json'|'html'] ('table' → 'tabular')
+         "concurrency": 0, // 0 = auto (8 mongod / 4 mongos); per-DB $collStats pool
          "topology": "summary", // ['summary'|'expanded'] // TBA
          "colour": true, // [true|false] // TBA
          "verbosity": "full" // ['full'|'summary'|'summaryIdx'|'compactOnly'] // TBA
@@ -329,95 +331,130 @@
       delete dbPath.compressor;
 
       const dbNames = stableSort(getDBNames(dbFilter), compareBy(v => v, 1));
-      if (outputOptions.format !== 'json') console.log('');
-      // Map: build per-DB metas only. Reduce: rollupDbPath aggregates totals (no map side-effects).
-      dbPath.databases = dbNames.map(dbName => buildDatabaseMeta(dbName, dbPath.shards));
-      rollupDbPath(dbPath, dbPath.databases);
+      const jsonCli = outputOptions.format === 'json';
+      const hud = new MiniHud({
+         "enabled": !jsonCli && outputOptions.format !== 'html'
+      });
+      const concurrency = statsConcurrency();
+      const dbTotal = dbNames.length;
 
-      // add debug clause
-      // if (dbPath.shards.length > 0) {
-      //    console.log(
-      //       'Discovered distributed namespaces:',
-      //       JSON.stringify(
-      //          dbPath.shards.map((shard, _i) => {
-      //             return { [shard]: dbPath.namespaces[_i] }
-      //          }), null, 3
-      //       ).replace(/(?<![\[])(?:\n\s+)/g, ' '); // legacy shell doesn't support this
-      //    );
-      //    console.log(
-      //       'Discovered distributed indexes:',
-      //       JSON.stringify(
-      //          dbPath.shards.map((shard, _i) => {
-      //             return { [shard]: dbPath.nindexes[_i] }
-      //          }), null, 3
-      //       ).replace(/(?<![\[])(?:\n\s+)/g, ' '); // legacy shell doesn't support this
-      //    );
-      // } else {
-      //    console.log('Discovered', dbPath.namespaces, 'distinct namespaces');
-      //    console.log('Discovered', dbPath.nindexes, 'distinct indexes');
-      // }
+      if (!jsonCli && !hud.enabled) console.log('');
 
-      let collNamesTasks = dbPath.databases.map(async database => {
-         database.collections = db.getSiblingDB(database.name).getCollectionInfos({
+      try {
+         dbPath.databases = [];
+         for (let i = 0; i < dbNames.length; i++) {
+            hud.render(`[cyan]dbStats[/]  ${i + 1}/${dbTotal}  ${dbNames[i]}`, { "force": i === 0 || i + 1 === dbTotal });
+            dbPath.databases.push(buildDatabaseMeta(dbNames[i], dbPath.shards));
+         }
+         rollupDbPath(dbPath, dbPath.databases);
+
+         for (let i = 0; i < dbPath.databases.length; i++) {
+            const database = dbPath.databases[i];
+            hud.render(`[cyan]catalog[/]  ${i + 1}/${dbTotal}  ${database.name}`, { "force": i === 0 || i + 1 === dbTotal });
+            await listDatabaseCatalog(database, collFilter, acceptCollName);
+         }
+
+         const collTotal = dbPath.databases.reduce((n, d) => n + (d.collections || []).length, 0);
+         const collStarted = Date.now();
+         let collDone = 0;
+
+         for (const database of dbPath.databases) {
+            const names = (database.collections || []).map(c => c.name);
+            if (!names.length) {
+               rollupDatabaseFree(database);
+               continue;
+            }
+            const fetched = await mapPool(names, concurrency, async collName => {
+               return fetchCollectionStats(database.name, collName);
+            }, p => {
+               const done = collDone + p.done;
+               const elapsed = (Date.now() - collStarted) / 1000;
+               const frac = collTotal ? done / collTotal : 1;
+               const eta = (done > 0 && done < collTotal) ? formatHudTime((elapsed / done) * (collTotal - done)) : '--';
+               const pct = collTotal ? (frac * 100).toFixed(0) : '100';
+               hud.render(
+                  `[cyan]collStats[/] ${hud.bar(frac)} ${done}/${collTotal} ${pct}%  db=${database.name}  run=${p.inFlight} q=${p.queued}  ETA ${eta}`,
+                  { "force": p.done === 0 || done === collTotal }
+               );
+            });
+            collDone += fetched.length;
+            database.collections = stableSort(fetched, sortBy('collection'));
+            rollupDatabaseFree(database);
+         }
+
+         hud.render(
+            `[cyan]collStats[/] ${hud.bar(1)} ${collTotal}/${collTotal} 100%`,
+            { "force": true }
+         );
+
+         dbPath.databases = stableSort(dbPath.databases, sortBy('db'));
+         rollupDbPathFree(dbPath);
+         dbPath.gatherWarnings = collectGatherWarnings(dbPath);
+
+         return dbPath;
+      } finally {
+         hud.clear();
+      }
+   }
+
+   function statsConcurrency() {
+      const n = +outputOptions.concurrency;
+      if (Number.isFinite(n) && n > 0) return Math.floor(n);
+      return isSharded() ? 4 : 8;
+   }
+
+   async function listDatabaseCatalog(database, collFilter, acceptCollName) {
+      try {
+         let collections = db.getSiblingDB(database.name).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
                "name": collFilter
             },
             { "nameOnly": true, "authorizedCollections": true }
          );
+         collections = await Promise.resolve(collections);
          database.collections = stableSort(
-            database.collections.filter(acceptCollName),
+            (collections || []).filter(acceptCollName),
             compareBy('name', 1)
          );
-         database.views = db.getSiblingDB(database.name).getCollectionInfos({
+      } catch(e) {
+         database.collections = [];
+         database.catalogError = commandErrorMessage(e);
+      }
+      try {
+         let views = db.getSiblingDB(database.name).getCollectionInfos({
                "type": "view",
                "name": collFilter
             },
             { "nameOnly": true, "authorizedCollections": true }
          );
+         views = await Promise.resolve(views);
          database.views = stableSort(
-            database.views.filter(acceptCollName),
+            (views || []).filter(acceptCollName),
             sortBy('view')
          );
+      } catch(e) {
+         database.views = [];
+         if (!database.catalogError) database.catalogError = commandErrorMessage(e);
+      }
+   }
 
-         return database;
-      });
-      dbPath.databases = await Promise.all(collNamesTasks);
-
-      const dbFetchTasks = dbPath.databases.map(async database => {
-         const collFetchTasks = database.collections.map(async({ 'name': collName }) => {
-            // Prefer catalog name if $collStats stub/defaults omit it (legacy Unauthorized without codeName).
-            const collRaw = $collStats(database.name, collName) || { "name": collName };
-            let collection = new MetaStats(collRaw);
-            if (!collection.name) collection.name = collName;
-            if (collRaw.statsError) collection.statsError = collRaw.statsError;
-            delete collection.databases;
-            delete collection.collections;
-            delete collection.views;
-            delete collection.ncollections;
-            delete collection.nviews;
-            delete collection.namespaces;
-            delete collection.instance;
-            delete collection.hostname;
-            delete collection.proc;
-            delete collection.dbPath;
-            collection.indexes = stableSort(collection.indexes || [], sortBy('index'));
-
-            return collection;
-         });
-         database.collections = await Promise.all(collFetchTasks);
-         database.collections = stableSort(database.collections, sortBy('collection'));
-         // database.views already listed + sorted in collNamesTasks (nameOnly);
-         // collections above may be tagged "(unauthorized)" by $collStats on auth failure
-
-         return database;
-      });
-      dbPath.databases = await Promise.all(dbFetchTasks);
-      dbPath.databases = stableSort(dbPath.databases, sortBy('db'));
-
-      applyFreeStorageRollup(dbPath);
-      dbPath.gatherWarnings = collectGatherWarnings(dbPath);
-
-      return dbPath;
+   async function fetchCollectionStats(dbName, collName) {
+      const collRaw = await Promise.resolve($collStats(dbName, collName) || { "name": collName });
+      let collection = new MetaStats(collRaw);
+      if (!collection.name) collection.name = collName;
+      if (collRaw.statsError) collection.statsError = collRaw.statsError;
+      delete collection.databases;
+      delete collection.collections;
+      delete collection.views;
+      delete collection.ncollections;
+      delete collection.nviews;
+      delete collection.namespaces;
+      delete collection.instance;
+      delete collection.hostname;
+      delete collection.proc;
+      delete collection.dbPath;
+      collection.indexes = stableSort(collection.indexes || [], sortBy('index'));
+      return collection;
    }
 
    function buildDatabaseMeta(dbName, shards = []) {
@@ -475,6 +512,13 @@
                "code": database.unauthorized ? 'dbStatsUnauthorized' : 'dbStatsFailed',
                "db": database.name,
                "message": String(database.statsError)
+            });
+         }
+         if (database.catalogError) {
+            warnings.push({
+               "code": 'catalogFailed',
+               "db": database.name,
+               "message": String(database.catalogError)
             });
          }
          for (const collection of database.collections || []) {
@@ -558,18 +602,23 @@
       }
    }
 
+   function rollupDatabaseFree(database) {
+      if (hidesDbStatsFreeStorage()) rollupDatabaseFreeFromCollStats(database);
+      else tagDbStatsFree(database);
+   }
+
    function applyFreeStorageRollup(dbPath) {
+      (dbPath.databases || []).forEach(rollupDatabaseFree);
+      return rollupDbPathFree(dbPath);
+   }
+
+   function rollupDbPathFree(dbPath) {
       /*
        *  db.stats() wins when it is a real measurement (dedicated / self-managed).
        *  Atlas M0/Flex (and serverless) hide db-level reusable bytes — roll up
        *  collection WT $collStats as a lower bound (authz / filters may omit NS).
        */
-      const untrusted = hidesDbStatsFreeStorage();
       const databases = dbPath.databases || [];
-      databases.forEach(database => {
-         if (untrusted) rollupDatabaseFreeFromCollStats(database);
-         else tagDbStatsFree(database);
-      });
       if (!databases.length) return dbPath;
 
       const dbFrees = databases.map(d => d.freeStorageSize);
@@ -622,8 +671,8 @@
       /*
        *  Aggregate database metas into dbPath totals (sharded arrays or scalars).
        *  Empty catalog: sharded → zero-filled per-shard arrays; unsharded → leave MetaStats defaults.
-       *  freeStorageSize / totalIndexBytesReusable here follow $stats; applyFreeStorageRollup
-       *  revises them after $collStats (M0/Flex collStats rollup).
+       *  freeStorageSize / totalIndexBytesReusable here follow $stats; rollupDbPathFree
+       *  revises them after per-DB $collStats (M0/Flex collStats rollup).
        */
       const nShards = dbPath.shards.length;
       if (!databases.length) {
@@ -923,7 +972,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.13.0',
+         "version": '0.14.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
