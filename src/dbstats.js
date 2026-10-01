@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.14.2"
+ *  Version: "0.14.3"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -114,7 +114,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.14.2" };
+   const __script = { "name": "dbstats.js", "version": "0.14.3" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -361,7 +361,7 @@
          for (const database of dbPath.databases) {
             const names = (database.collections || []).map(c => c.name);
             if (!names.length) {
-               rollupDatabaseFree(database);
+               rollupDatabase(database);
                continue;
             }
             const fetched = await mapPool(names, concurrency, async collName => {
@@ -379,7 +379,7 @@
             });
             collDone += fetched.length;
             database.collections = stableSort(fetched, sortBy('collection'));
-            rollupDatabaseFree(database);
+            rollupDatabase(database);
          }
 
          hud.render(
@@ -388,6 +388,7 @@
          );
 
          dbPath.databases = stableSort(dbPath.databases, sortBy('db'));
+         rollupDbPath(dbPath, dbPath.databases);
          rollupDbPathFree(dbPath);
          dbPath.gatherWarnings = collectGatherWarnings(dbPath);
 
@@ -533,11 +534,25 @@
       return warnings;
    }
 
+   function isMatchAllNameFilter(re) {
+      if (re == null) return true;
+      const src = (re instanceof RegExp) ? re.source : String(re);
+      return src === '.+' || src === '.*' || src === '^.+$' || src === '^.*$';
+   }
+
+   function catalogFilterRestricts() {
+      if (!isMatchAllNameFilter(filterOptions.collection)) return true;
+      const mode = normalizeSystemFilter(filterOptions.system);
+      return mode === 'exclude' || mode === 'only';
+   }
+
    function catalogCoverageComplete(database) {
       /*
-       *  Fetched collections cover db.stats() ncollections (no authz/filter holes).
-       *  Sharded ncollections is a per-shard array — skip the count check.
+       *  Fetched collections cover the database the table is claiming to subtotal.
+       *  Sharded ncollections is a per-shard array (not unique NS) — skip the count check.
        */
+      if (database.catalogError) return false;
+      if (catalogFilterRestricts()) return false;
       const collections = database.collections || [];
       if (collections.some(c => isUnauthorizedCollection(c) || isUnavailableCollection(c))) return false;
       const ncoll = database.ncollections;
@@ -602,13 +617,50 @@
       }
    }
 
-   function rollupDatabaseFree(database) {
+   function collectionIndexCount(collection) {
+      if (Array.isArray(collection.indexes)) return collection.indexes.length;
+      return +collection.nindexes || 0;
+   }
+
+   function rollupDatabaseFromCollections(database) {
+      /*
+       *  Table subtotal = listed collections (filter / authz / catalog holes).
+       *  Lower bound; never G() mass. Dedicated $stats still measured the whole DB.
+       */
+      const collections = database.collections || [];
+      const views = database.views || [];
+      database.dataSize = collections.reduce((s, c) => s + (+c.dataSize || 0), 0);
+      database.storageSize = collections.reduce((s, c) => s + (+c.storageSize || 0), 0);
+      database.objects = collections.reduce((s, c) => s + (+c.objects || 0), 0);
+      database.orphans = collections.reduce((s, c) => s + (+c.orphans || 0), 0);
+      database.totalIndexSize = collections.reduce((s, c) => s + (+c.totalIndexSize || 0), 0);
+      database.ncollections = collections.length;
+      database.nviews = views.length;
+      database.namespaces = collections.length + views.length;
+      const nidx = collections.reduce((s, c) => s + collectionIndexCount(c), 0);
+      database.nindexes = nidx;
+      database.indexes = nidx;
+      rollupDatabaseFreeFromCollStats(database);
+      database.freeStorageComplete = false;
+      database.totalIndexBytesReusableComplete = false;
+   }
+
+   function rollupDatabase(database) {
+      if (!catalogCoverageComplete(database)) {
+         rollupDatabaseFromCollections(database);
+         return;
+      }
       if (hidesDbStatsFreeStorage()) rollupDatabaseFreeFromCollStats(database);
       else tagDbStatsFree(database);
    }
 
+   function rollupDatabaseFree(database) {
+      rollupDatabase(database);
+   }
+
    function applyFreeStorageRollup(dbPath) {
-      (dbPath.databases || []).forEach(rollupDatabaseFree);
+      (dbPath.databases || []).forEach(rollupDatabase);
+      rollupDbPath(dbPath, dbPath.databases || []);
       return rollupDbPathFree(dbPath);
    }
 
@@ -667,12 +719,17 @@
       );
    }
 
+   function countTotal(v) {
+      if (Array.isArray(v)) return v.reduce((s, x) => s + (+x || 0), 0);
+      return +v || 0;
+   }
+
    function rollupDbPath(dbPath, databases = []) {
       /*
        *  Aggregate database metas into dbPath totals (sharded arrays or scalars).
        *  Empty catalog: sharded → zero-filled per-shard arrays; unsharded → leave MetaStats defaults.
        *  freeStorageSize / totalIndexBytesReusable here follow $stats; rollupDbPathFree
-       *  revises them after per-DB $collStats (M0/Flex collStats rollup).
+       *  revises them after per-DB $collStats (M0/Flex and filtered-catalog rollups).
        */
       const nShards = dbPath.shards.length;
       if (!databases.length) {
@@ -686,17 +743,23 @@
          }
          return dbPath;
       }
-      if (nShards > 0) {
+      const shardCounts = nShards > 0 && databases.every(d =>
+         Array.isArray(d.ncollections) && Array.isArray(d.nviews) && Array.isArray(d.namespaces)
+            && (Array.isArray(d.indexes) || Array.isArray(d.nindexes))
+      );
+      if (shardCounts) {
          dbPath.ncollections = sumPerShard(databases.map(d => d.ncollections), nShards);
          dbPath.nviews = sumPerShard(databases.map(d => d.nviews), nShards);
          dbPath.namespaces = sumPerShard(databases.map(d => d.namespaces), nShards);
-         dbPath.indexes = sumPerShard(databases.map(d => d.indexes), nShards);
+         dbPath.indexes = sumPerShard(databases.map(d => Array.isArray(d.indexes) ? d.indexes : d.nindexes), nShards);
          dbPath.nindexes = dbPath.indexes;
       } else {
-         dbPath.ncollections = databases.reduce((s, d) => s + d.ncollections, 0);
-         dbPath.nviews = databases.reduce((s, d) => s + d.nviews, 0);
-         dbPath.namespaces = databases.reduce((s, d) => s + d.namespaces, 0);
-         dbPath.nindexes = databases.reduce((s, d) => s + +d.indexes, 0);
+         dbPath.ncollections = databases.reduce((s, d) => s + countTotal(d.ncollections), 0);
+         dbPath.nviews = databases.reduce((s, d) => s + countTotal(d.nviews), 0);
+         dbPath.namespaces = databases.reduce((s, d) => s + countTotal(d.namespaces), 0);
+         dbPath.nindexes = databases.reduce(
+            (s, d) => s + countTotal(d.nindexes != null ? d.nindexes : d.indexes), 0
+         );
       }
       dbPath.dataSize = databases.reduce((s, d) => s + d.dataSize, 0);
       dbPath.storageSize = databases.reduce((s, d) => s + d.storageSize, 0);
@@ -938,26 +1001,32 @@
             "message": "The connecting user's authz privileges may be inadequate to report all namespace statistics. Inherit clusterMonitor@admin and readAnyDatabase@admin at a minimum."
          });
       }
+      const hide = hidesDbStatsFreeStorage();
       const rolled = dbStats.freeStorageSizeSource === 'collStatsRollup'
                   || dbStats.totalIndexBytesReusableSource === 'collStatsRollup';
       const incomplete = dbStats.freeStorageComplete === false
                       || dbStats.totalIndexBytesReusableComplete === false;
       const unknown = !freeStorageKnown(dbStats.freeStorageSize)
                    || !freeStorageKnown(dbStats.totalIndexBytesReusable);
-      if (rolled && incomplete) {
+      if (hide && rolled && incomplete) {
          warnings.push({
             "code": 'freeStorageIncomplete',
             "message": 'Free blocks rolled up from collection WiredTiger stats; db.stats() omits reusable bytes on this tier. Totals may exclude unauthorized or filtered namespaces and are a lower bound.'
          });
-      } else if (rolled) {
+      } else if (hide && rolled) {
          warnings.push({
             "code": 'freeStorageCollStatsRollup',
             "message": 'Free blocks rolled up from collection WiredTiger stats; db.stats() omits reusable bytes on this tier.'
          });
-      } else if (unknown) {
+      } else if (hide && unknown) {
          warnings.push({
             "code": 'freeStorageUnavailable',
             "message": 'Free blocks / reuse unavailable (WiredTiger free-space stats hidden on this tier).'
+         });
+      } else if (incomplete) {
+         warnings.push({
+            "code": 'filteredNamespaceRollup',
+            "message": 'Database and dbPath totals are a rollup of listed collections; they exclude filtered or unauthorized namespaces and are a lower bound.'
          });
       }
       return warnings;
@@ -972,7 +1041,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.14.0',
+         "version": '0.14.3',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1211,7 +1280,7 @@
          "mode": 'indexRollup',
          "lowerBound": idxIncomplete
       });
-      if (shards.length > 0) {
+      if (shards.length > 0 && Array.isArray(namespaces) && Array.isArray(nindexes)) {
          console.log(`[bold][green]${`${nsLabel}:[/]`.padEnd(rowHeader + 4)}${nsMetrics}`);
          console.log(formatShardCounts(shards, namespaces));
          console.log(`[bold][green]${`${idxLabel}:[/]`.padEnd(rowHeader + 4)}${idxMetrics}`);
@@ -1304,21 +1373,26 @@
          freeStorageSizeSource, totalIndexBytesReusableSource,
          freeStorageComplete, totalIndexBytesReusableComplete
       } = {}) {
+      const hide = hidesDbStatsFreeStorage();
       const rolled = freeStorageSizeSource === 'collStatsRollup'
                   || totalIndexBytesReusableSource === 'collStatsRollup';
       const incomplete = freeStorageComplete === false || totalIndexBytesReusableComplete === false;
       const unknown = !freeStorageKnown(freeStorageSize) || !freeStorageKnown(totalIndexBytesReusable);
 
-      if (rolled && incomplete) {
+      if (hide && rolled && incomplete) {
          console.log('[yellow][NOTE] * Free blocks rolled up from collection WiredTiger stats; db.stats() omits reusable bytes on this tier. Totals may exclude unauthorized or filtered namespaces and are a lower bound.[/]');
          return;
       }
-      if (rolled) {
+      if (hide && rolled) {
          console.log('[yellow][NOTE] Free blocks rolled up from collection WiredTiger stats; db.stats() omits reusable bytes on this tier.[/]');
          return;
       }
-      if (unknown) {
+      if (hide && unknown) {
          console.log('[yellow][WARN] Free blocks │ reuse unavailable (WiredTiger free-space stats hidden on this tier)[/]');
+         return;
+      }
+      if (incomplete) {
+         console.log('[yellow][NOTE] * Database and dbPath totals are a rollup of listed collections; they exclude filtered or unauthorized namespaces and are a lower bound.[/]');
       }
    }
 
