@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.13.1"
+ *  Version: "0.14.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.13.1" };
+   const __script = { "name": "fuzzer.js", "version": "0.14.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -693,7 +693,9 @@
    }
 
    // cater for $currentOp sharding schema change in v7
-   const reshardServiceDesc = /^Resharding\w+(Donor|Recipient)Service ([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})$/;
+   // Documented since 5.0: "ReshardingDonorService <uuid>" / "ReshardingRecipientService <uuid>".
+   // The optional word keeps a longer service name in the same capture groups.
+   const reshardServiceDesc = /^Resharding(?:\w+)?(Donor|Recipient)Service ([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
 
    function shardKeysMatch(current, requested) {
       const currentFields = Object.keys(current);
@@ -793,7 +795,20 @@
                "shards": {
                   "$push": {
                      "shard": "$shard",
-                     "migrationService": { "$arrayElemAt": ["$migration.captures", 0] },
+                     "migrationService": {
+                        "$ifNull": [
+                           { "$arrayElemAt": ["$migration.captures", 0] },
+                           {
+                              "$switch": {
+                                 "branches": [
+                                    { "case": { "$ne": [{ "$type": "$donorState" }, "missing"] }, "then": "Donor" },
+                                    { "case": { "$ne": [{ "$type": "$recipientState" }, "missing"] }, "then": "Recipient" }
+                                 ],
+                                 "default": "$$REMOVE"
+                              }
+                           }
+                        ]
+                     },
                      "state": { "$ifNull": ["$donorState", "$recipientState"] },
                      "approxDocumentsToCopy":{ "$ifNull": [{ "$toInt": "$approxDocumentsToCopy" }, "$$REMOVE"] },
                      "documentsCopied": { "$ifNull": [{ "$toInt": "$documentsCopied" }, "$$REMOVE"] },
@@ -831,16 +846,28 @@
       // User-defined async functions are not auto-awaited by the mongosh rewriter.
       const reshardPromise = resharding().finally(() => { done = true; });
       sleep(3 * pollIntervalMS); // allow $currentOp to publish the initial donor/recipient ops
+      let monitorFailed = false;
       while (!done) {
-         const ops = rebalancingOps();
-         if (ops.length > 0) {
-            console.clear();
-            console.log(`\nMonitoring resharding operations:\n`);
-            printjson(...ops);
+         try {
+            const ops = rebalancingOps();
+            monitorFailed = false;
+            if (ops.length > 0) {
+               console.clear();
+               console.log(`\nMonitoring resharding operations:\n`);
+               ops.forEach(op => printjson(op));
+            }
+         } catch(e) {
+            if (!monitorFailed)
+               console.log('Resharding monitor:', errText(e));
+            monitorFailed = true;
          }
          sleep(pollIntervalMS);
       }
-      await reshardPromise;
+      try {
+         await reshardPromise;
+      } catch(e) {
+         console.log('Resharding attempt:', errText(e));
+      }
       if (reshardOk)
          console.log(`\nResharding complete.`);
    }
