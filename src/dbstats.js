@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.12.23"
+ *  Version: "0.13.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -113,7 +113,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.12.23" };
+   const __script = { "name": "dbstats.js", "version": "0.13.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -694,7 +694,9 @@
             "storageSize": collection.storageSize,
             "freeStorageSize": collection.freeStorageSize,
             "objects": collection.objects,
-            "indexes": collection.indexes
+            "indexes": collection.indexes,
+            "allocUnit": collection.allocUnit,
+            "internalPageSize": collection.internalPageSize
          }))
       );
       const sortedNamespaces = stableSort(namespaces, sortBy('namespace'));
@@ -921,7 +923,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.12.23',
+         "version": '0.13.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1019,6 +1021,21 @@
       return scaled.format(metric);
    }
 
+   function formatStorageSize(bytes, { stub = false, allocUnit } = {}) {
+      /*
+       *  On-disk size. Stubs stay 0. Measured empty WT tables display the allocation
+       *  unit (default 4 KiB). JSON keeps the measured number.
+       */
+      if (stub) return formatUnit(bytes == null ? 0 : bytes);
+      if (bytes == null || Number.isNaN(+bytes)) return formatUnit(0);
+      if (+bytes === 0) {
+         const unit = +allocUnit;
+         const floor = (Number.isFinite(unit) && unit > 0) ? unit : WIREDTIGER_MIN_ALLOC_SIZE;
+         return formatUnit(floor);
+      }
+      return formatUnit(bytes);
+   }
+
    function formatPct(numerator = 0, denominator = 1) {
       /*
        *  Pretty format percentage. Zero/null/NaN denominator → n/a (not Infinity%/NaN%).
@@ -1105,20 +1122,22 @@
 
    function metricsCols({
          dataSize = 0, compression = 0, compressor, storageSize = 0, freeStorageSize = 0,
-         objects, compaction = '———— ', mode = 'full', lowerBound = false
+         objects, compaction = '———— ', mode = 'full', lowerBound = false,
+         stub = false, allocUnit
       } = {}) {
       /*
        *  Shared metric columns: full NS row | index rollup | index detail row
+       *  Leaf storage (collection/index file) may display the WT min alloc; rollups do not.
        */
       const compact = String(compaction).padStart(columnWidth - 2);
       if (mode === 'indexRow') {
-         return `${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)} [cyan]${compact}[/]`;
+         return `${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)} [cyan]${compact}[/]`;
       }
       if (mode === 'indexRollup') {
          return `${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)} [cyan]${compact}[/]`;
       }
       const obj = (objects == null ? '' : objects.toString()).padStart(columnWidth);
-      return `${formatUnit(dataSize).padStart(columnWidth)} ${formatCompressionCell(compression, compressor)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj} [cyan]${compact}[/]`;
+      return `${formatUnit(dataSize).padStart(columnWidth)} ${formatCompressionCell(compression, compressor)} ${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj} [cyan]${compact}[/]`;
    }
 
    function printRollupRows({
@@ -1167,19 +1186,21 @@
       return;
    }
 
-   function printCollection({ name, dataSize, compression, compressor, storageSize, freeStorageSize, objects } = {}) {
+   function printCollection({ name, dataSize, compression, compressor, storageSize, freeStorageSize, objects, allocUnit, internalPageSize } = {}) {
+      const stub = isUnauthorizedCollection({ name }) || isUnavailableCollection({ name });
       const compaction = formatCompaction('collection', storageSize, freeStorageSize, { "oplog": name == 'oplog.rs' });
       printRule('light');
       name = truncateLabel(name, 45, rowHeader - 4);
-      console.log(`╰>[cyan]${(' ' + name).padEnd(rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction })}`);
+      console.log(`╰>[cyan]${(' ' + name).padEnd(rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize })}`);
       return;
    }
 
-   function printNamespace({ namespace, dataSize, compression, compressor, storageSize, freeStorageSize, objects } = {}) {
+   function printNamespace({ namespace, name, dataSize, compression, compressor, storageSize, freeStorageSize, objects, allocUnit, internalPageSize } = {}) {
+      const stub = isUnauthorizedCollection({ "name": name || namespace }) || isUnavailableCollection({ "name": name || namespace });
       const compaction = formatCompaction('collection', storageSize, freeStorageSize, { "oplog": namespace == 'local.oplog.rs' });
       printRule('light');
       namespace = truncateLabel(namespace, 45, rowHeader - 4);
-      console.log(`╰>[cyan]${(' ' + namespace).padEnd(rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction })}`);
+      console.log(`╰>[cyan]${(' ' + namespace).padEnd(rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize })}`);
       return;
    }
 
