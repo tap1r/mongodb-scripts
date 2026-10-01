@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.14.4"
+ *  Version: "0.14.5"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,6 +9,7 @@
  */
 
 // Usage: mongosh [connection options] --quiet [--eval 'var options = {...};'] [-f|--file] </path/to/>dbstats.js
+// load('dbstats.js') gathers quietly and returns the JSON contract (await the load() Promise).
 
 /*
  *  options = {
@@ -114,7 +115,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.14.4" };
+   const __script = { "name": "dbstats.js", "version": "0.14.5" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -129,8 +130,32 @@
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
    // console.clear();
+   function isDbstatsCliFile() {
+      /*
+       *  mongosh --file/-f (or positional *.js) targeting this script.
+       *  load() from a REPL or another --file is module mode.
+       */
+      const argv = (typeof process !== 'undefined' && Array.isArray(process.argv)) ? process.argv : [];
+      const files = [];
+      for (let i = 2; i < argv.length; i++) {
+         const a = String(argv[i]);
+         if (a === '-f' || a === '--file') {
+            if (i + 1 < argv.length) files.push(argv[++i]);
+            continue;
+         }
+         if (a.startsWith('--file=')) {
+            files.push(a.slice(7));
+            continue;
+         }
+         if (a === '--eval') { i++; continue; }
+         if (a.startsWith('--eval=') || a.startsWith('-')) continue;
+         if (/\.(js|mongodb)$/i.test(a)) files.push(a);
+      }
+      return files.some(f => /(^|[\\/])dbstats\.js$/i.test(String(f)));
+   }
+   __dbstatsCliFile = isDbstatsCliFile();
    const jsonCli = (typeof options !== 'undefined' && options && options.output && options.output.format === 'json');
-   if (!jsonCli) console.log(`\n\n[yellow]${__comment}[/]`);
+   if (__dbstatsCliFile && !jsonCli) console.log(`\n\n[yellow]${__comment}[/]`);
 })();
 
 (() => {
@@ -147,7 +172,7 @@
             || /not authorized|unauthorized/i.test(e.errmsg || e.message || '')) {
          __dbstatsAuthRequired = true;
          const jsonCli = (typeof options !== 'undefined' && options && options.output && options.output.format === 'json');
-         if (!jsonCli) console.log('[red][ERR] MongoServerError: Unauthorized user requires authentication[/]');
+         if (__dbstatsCliFile && !jsonCli) console.log('[red][ERR] MongoServerError: Unauthorized user requires authentication[/]');
       }
    }
 
@@ -174,7 +199,7 @@
    const jsonCli = (typeof options !== 'undefined' && options && options.output && options.output.format === 'json');
    __dbstatsAuthzInadequate = !authzAdequate;
 
-   if (!authzAdequate && !jsonCli) {
+   if (!authzAdequate && __dbstatsCliFile && !jsonCli) {
       console.log(`[red][WARN] The connecting user's authz privileges may be inadequate to report all namespaces statistics[/]`);
       console.log(`[red][WARN] consider inheriting the built-in roles for 'clusterMonitor@admin' and 'readAnyDatabase@admin' at a minimum[/]`);
    }
@@ -296,6 +321,7 @@
       if (formatOutput === 'table') formatOutput = 'tabular'; // alias
 
       const dbStats = await getStats();
+      if (!__dbstatsCliFile && formatOutput !== 'json') return toJsonContract(dbStats);
 
       switch (formatOutput) {
          case 'json':
@@ -333,12 +359,12 @@
       const dbNames = stableSort(getDBNames(dbFilter), compareBy(v => v, 1));
       const jsonCli = outputOptions.format === 'json';
       const hud = new MiniHud({
-         "enabled": !jsonCli && outputOptions.format !== 'html'
+         "enabled": __dbstatsCliFile && !jsonCli && outputOptions.format !== 'html'
       });
       const concurrency = statsConcurrency();
       const dbTotal = dbNames.length;
 
-      if (!jsonCli && !hud.enabled) console.log('');
+      if (__dbstatsCliFile && !jsonCli && !hud.enabled) console.log('');
 
       try {
          dbPath.databases = [];
@@ -1059,7 +1085,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.14.4',
+         "version": '0.14.5',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1447,8 +1473,7 @@
    }
 
    dbStats = await main();
-   // return dbStats;
-// })(db, options);
+   return dbStats;
 })();
 
 // EOF
