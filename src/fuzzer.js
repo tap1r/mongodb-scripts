@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.13.0"
+ *  Version: "0.13.1"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.13.0" };
+   const __script = { "name": "fuzzer.js", "version": "0.13.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -156,7 +156,10 @@
          // "partialFilterExpression": { "$exists": true },
          // "sparse": true,
          // "expireAfterSeconds": expireAfterSeconds,
-         // "hidden": hidden
+         // "hidden": hidden,
+         // Kept so a re-run matches the 2d index built when one options
+         // document was copied onto every special key.
+         "default_language": idioma
       },
       textIndexes = [
          { "quote.txt": "text" }
@@ -214,7 +217,7 @@
 
       // sampling synthetic documents and estimating batch size
       let docSize = 0, maxSize = 0;
-      for (let i = 0; i < sampleSize; ++i) {
+      for (let i = 0; i < sampleSize; i++) {
          const size = bsonsize(genDocument(fuzzer, timestamp));
          docSize += size;
          if (size > maxSize)
@@ -333,7 +336,7 @@
             // "txt": (() => {
             //    const lines = $getRandIntInc(2, 512);
             //    let string = '';
-            //    for (let line = 0; line < lines; ++line) {
+            //    for (let line = 0; line < lines; line++) {
             //       string += `${$genRandStr($getRandIntInc(8, 24)) + $genRandSymbol()}`;
             //    }
             //    return string;
@@ -622,8 +625,11 @@
    }
 
    function shardNewNamespace() {
-      if (!(sharding && isSharded() && namespace.exists())) {
-         console.log('[red][ERROR] Sharding namespace failed:[/] sharding is set and this process is not a mongos, or the namespace does not exist');
+      // A non-mongos connection skips sharding and the load continues.
+      if (!isSharded())
+         return true;
+      if (!(sharding && namespace.exists())) {
+         console.log('[red][ERROR] Sharding namespace failed:[/] the namespace does not exist');
          return false;
       }
 
@@ -857,8 +863,6 @@
          reasons.push(`time series shard key must include metaField "${tsOptions.metaField}"`);
       if (timeSeries)
          reasons.push(`time series requires timeField "${tsOptions.timeField}" as a Date and metaField "${tsOptions.metaField}"; the generated schemas do not provide them`);
-      if (sharding && !mongos)
-         reasons.push('sharding is set and this process is not a mongos');
       if (sharding && mongos && collation.locale !== 'simple')
          reasons.push('a non-simple collation on the hashed shard key conflicts with the simple hashed index');
       if (sharding && mongos) {
@@ -876,7 +880,7 @@
    function createNS() {
       if (namespace.exists()) {
          console.log(`\nNamespace "${dbName}.${collName}" exists`);
-         if (!sharding)
+         if (!(sharding && isSharded()))
             return true;
          return shardPreservedNamespace();
       } else {
@@ -919,7 +923,7 @@
             return false;
          }
 
-         if (!sharding)
+         if (!(sharding && isSharded()))
             return true;
          return shardNewNamespace();
       }
@@ -969,7 +973,7 @@
             [hashedIndexes, hashedIndexOptions, (quorum) =>
                `\nBuilding hashed ${plural(hashedIndexes.length, 'index', 'indexes')} with collation locale "simple" with commit quorum "${quorum}":`],
             [indexes2d, indexes2dOptions, (quorum) =>
-               `\nBuilding 2d ${plural(indexes2d.length, 'index', 'indexes')} with commit quorum "${quorum}":`],
+               `\nBuilding 2d ${plural(indexes2d.length, 'index', 'indexes')} with default language "${idioma}" with commit quorum "${quorum}":`],
             [textIndexes, textIndexOptions, (quorum) =>
                `\nBuilding text ${plural(textIndexes.length, 'index', 'indexes')} with default language "${idioma}" with commit quorum "${quorum}":`]
          ].filter(([keys]) => keys.length > 0);
@@ -994,11 +998,11 @@
       const batches = $ceil(totalDocs / batchSize);
       console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} ${plural(totalDocs, 'document', 'documents')} in ${batches} ${plural(batches, 'batch', 'batches')}:`);
       let remaining = totalDocs;
-      for (let i = 0; remaining > 0; ++i) {
+      for (let i = 0; remaining > 0; i++) {
          const n = Math.min(batchSize, remaining);
          remaining -= n;
          const docs = [];
-         for (let batch = 0; batch < n; ++batch)
+         for (let batch = 0; batch < n; batch++)
             docs.push(genDocument(fuzzer, timestamp));
          // mongosh Bulk.execute ignores its writeConcern argument.
          const result = namespace.insertMany(docs, {
