@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.16.0"
+ *  Version: "0.16.1"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,7 +13,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.16.0"
+      "version": "0.16.1"
 });
 
 /*  Notes:
@@ -313,65 +313,102 @@ class MetaStats {
    }
 }
 
-/* Add to mdblib.js */
-class ProgressTracker {
-   constructor(total, taskName = 'Task') {
-      this.total = total;
-      this.current = 0;
-      this.taskName = taskName;
-      this.startTime = new Date();
-      this.lastPrintTime = 0;
-      this.printInterval = 500; // ms between updates
+function formatHudTime(s) {
+   if (!Number.isFinite(s) || s < 0) return '--';
+   const sec = Math.max(0, Math.floor(s));
+   const m = Math.floor(sec / 60);
+   const r = sec % 60;
+   return m > 0 ? `${m}m${r}s` : `${r}s`;
+}
+
+class MiniHud {
+   /*
+    *  Single-line TTY progress. process.stdout.write('\\r'), never console.log.
+    *  Disabled for json / non-TTY. clear() before the report so the bar is gone.
+    */
+   constructor({ enabled = false, throttleMs = 100 } = {}) {
+      this.enabled = !!(enabled && typeof process !== 'undefined' && process.stdout && process.stdout.isTTY);
+      this.throttleMs = throttleMs;
+      this.lastWrite = 0;
+      this.lastWidth = 0;
+      this.startTime = Date.now();
    }
 
-   increment() {
-      this.current++;
+   bar(frac, width = 16) {
+      const n = Math.max(1, width);
+      const p = Number.isFinite(frac) ? Math.min(1, Math.max(0, frac)) : 0;
+      const filled = Math.round(p * n);
+      return '█'.repeat(filled) + '░'.repeat(n - filled);
+   }
+
+   render(line, { force = false } = {}) {
+      if (!this.enabled) return;
       const now = Date.now();
-      if (this.current === this.total) return this.finish(); // Last one
+      if (!force && now - this.lastWrite < this.throttleMs) return;
+      this.lastWrite = now;
+      const cols = (process.stdout.columns > 0) ? process.stdout.columns : 80;
+      let msg = String(line || '').replace(/\s+/g, ' ').trim();
+      if (msg.length > cols - 1) msg = msg.slice(0, Math.max(1, cols - 2)) + '~';
+      const painted = applyAnsiTags(msg + '[/]');
+      const pad = (this.lastWidth > msg.length) ? ' '.repeat(this.lastWidth - msg.length) : '';
+      process.stdout.write('\r' + painted + pad);
+      this.lastWidth = msg.length;
+   }
 
-      // Only print every interval to avoid spamming the TTY
-      if (now - this.lastPrintTime > this.printInterval) {
-         this.print();
-         this.lastPrintTime = now;
+   clear() {
+      if (!this.enabled) return;
+      if (this.lastWidth > 0) {
+         process.stdout.write('\r' + ' '.repeat(this.lastWidth) + '\r');
+         this.lastWidth = 0;
       }
-   }
-
-   print() {
-      const elapsed = (new Date() - this.startTime) / 1000; // seconds
-      const percent = (this.current / this.total) * 100;
-      const rate = this.current / elapsed; // items per second
-      const remaining = (this.total - this.current) / rate; // seconds remaining
-      
-      const formatTime = s => {
-         const m = Math.floor(s / 60);
-         const sec = Math.floor(s % 60);
-         return `${m}m ${sec}s`;
-      };
-
-      // Create a bar
-      const barLength = 30;
-      const filled = Math.floor(percent / 100 * barLength);
-      const empty = barLength - filled;
-      const bar = '█'.repeat(filled) + '░'.repeat(empty);
-
-      // Output: [Bar] Task (15/100) 15% | ETA: 2m 10s
-      const msg = `[blue]${bar}[/] [green]${this.taskName}[/] [cyan](${this.current}/${this.total}) ${percent.toFixed(1)}%[/] | ETA: [yellow]${formatTime(remaining)}[/]`;
-      
-      // Use \r to overwrite the line
-      console.log(`\r${msg}   `); 
-   }
-
-   finish() {
-      const elapsed = (new Date() - this.startTime) / 1000;
-      console.log(`\n[yellow][DONE] ${this.taskName} completed in ${formatTime(elapsed)}[/]\n`);
    }
 }
 
-// Helper to format time (needed outside class)
+async function mapPool(items, concurrency, worker, onProgress) {
+   /*
+    *  Bounded async pool. Single-threaded next++ is safe. Yields after each item
+    *  so sync mongosh commands still interleave across workers.
+    */
+   const list = items || [];
+   const results = new Array(list.length);
+   if (!list.length) return results;
+   const limit = Math.max(1, Math.min(Math.floor(+concurrency) || 1, list.length));
+   let next = 0, inFlight = 0, done = 0;
+
+   function emit() {
+      if (typeof onProgress === 'function') {
+         onProgress({
+            "done": done,
+            "inFlight": inFlight,
+            "queued": Math.max(0, list.length - next),
+            "total": list.length
+         });
+      }
+   }
+
+   async function runWorker() {
+      while (true) {
+         const idx = next++;
+         if (idx >= list.length) return;
+         inFlight++;
+         emit();
+         try {
+            results[idx] = await worker(list[idx], idx);
+         } finally {
+            inFlight--;
+            done++;
+            emit();
+            await Promise.resolve();
+         }
+      }
+   }
+
+   await Promise.all(Array.from({ length: limit }, () => runWorker()));
+   return results;
+}
+
 function formatTime(s) {
-   const m = Math.floor(s / 60);
-   const sec = Math.floor(s % 60);
-   return `${m}m ${sec}s`;
+   return formatHudTime(s);
 }
 
 function $rand() {
