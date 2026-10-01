@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.11.1"
+ *  Version: "0.12.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.11.1" };
+   const __script = { "name": "fuzzer.js", "version": "0.12.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -615,12 +615,31 @@
 
    let shardedThisRun = false;
 
+   function catalogShardKey() {
+      const ns = `${dbName}.${collName}`;
+      const doc = db.getSiblingDB('config').getCollection('collections').findOne({ _id: ns });
+      return (doc && doc.key) ? doc.key : null;
+   }
+
    function shardNewNamespace() {
-      if (!(sharding && isSharded() && namespace.exists()))
-         return;
+      if (!(sharding && isSharded() && namespace.exists())) {
+         console.log('[red][ERROR] Sharding namespace failed:[/] sharding is set and this process is not a mongos, or the namespace does not exist');
+         return false;
+      }
+
+      let numInitialChunks;
+      try {
+         numInitialChunks = initialChunkCount();
+      } catch(e) {
+         console.log('[red][ERROR] Sharding namespace failed:[/]', errText(e));
+         return false;
+      }
+      if (!(numInitialChunks >= 1)) {
+         console.log(`[red][ERROR] Sharding namespace failed:[/] initial chunk count is ${numInitialChunks}`);
+         return false;
+      }
 
       console.log(`\nSharding namespace with options: ${tojson(shardedOptions)}`);
-      const numInitialChunks = initialChunkCount();
       console.log(`with initial chunks: ${numInitialChunks}`);
       try {
          (!serverVer(6.0)) && (sh.enableSharding(dbName).ok);
@@ -639,10 +658,32 @@
          sh.enableBalancing(`${dbName}.${collName}`);
          (!serverVer(6.0)) && (sh.enableAutoSplit());
          sh.startBalancer();
+         return true;
       }
       catch(e) {
-         console.log('[red][ERROR] Sharding namespace failed:[/]', errText(e));
+         const text = errText(e);
+         // A preserved collection can already be sharded when config.collections
+         // is keyed by UUID and the namespace lookup misses.
+         if (/already sharded|sharding already enabled/i.test(text)) {
+            console.log(`\nNamespace "${dbName}.${collName}" is already sharded`);
+            return true;
+         }
+         console.log('[red][ERROR] Sharding namespace failed:[/]', text);
+         return false;
       }
+   }
+
+   function shardPreservedNamespace() {
+      try {
+         if (catalogShardKey()) {
+            console.log(`\nNamespace "${dbName}.${collName}" is already sharded`);
+            return true;
+         }
+      } catch(e) {
+         console.log('[red][ERROR] Sharding namespace failed:[/]', errText(e));
+         return false;
+      }
+      return shardNewNamespace();
    }
 
    // cater for $currentOp sharding schema change in v7
@@ -820,13 +861,24 @@
          reasons.push('sharding is set and this process is not a mongos');
       if (sharding && mongos && collation.locale !== 'simple')
          reasons.push('a non-simple collation on the hashed shard key conflicts with the simple hashed index');
+      if (sharding && mongos) {
+         try {
+            const chunks = initialChunkCount();
+            if (!(chunks >= 1))
+               reasons.push(`initial chunk count is ${chunks}`);
+         } catch(e) {
+            reasons.push(`config.shards is unreadable: ${errText(e)}`);
+         }
+      }
       return reasons;
    }
 
    function createNS() {
       if (namespace.exists()) {
          console.log(`\nNamespace "${dbName}.${collName}" exists`);
-         return true;
+         if (!sharding)
+            return true;
+         return shardPreservedNamespace();
       } else {
          let [blockCompressor, msg] = parseCompressor(compressor);
          console.log(`Creating namespace "${dbName}.${collName}"`);
@@ -867,10 +919,10 @@
             return false;
          }
 
-         shardNewNamespace();
+         if (!sharding)
+            return true;
+         return shardNewNamespace();
       }
-
-      return true;
    }
 
    function indexBuildMessage(result, label) {
