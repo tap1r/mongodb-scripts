@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.6.51"
+ *  Version: "0.7.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.6.51" };
+   const __script = { "name": "fuzzer.js", "version": "0.7.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -111,7 +111,6 @@
          { "date": -1 },
          { "language": 1, "schema": 1 },
          { "random": 1 },
-         { "string": "hashed" },
          { "array": 1 },
          { "timestamp": -1 },
          { "location": "2dsphere" },
@@ -134,7 +133,8 @@
          // "hidden": hidden,
          "collation": collation
       },
-      specialIndexes = [ /* index types unsupported by collations */
+      specialIndexes = [ /* hashed, 2d, and text: simple collation only */
+         { "string": "hashed" },
          { "location.coordinates": "2d" },
          { "quote.txt": "text" }
       ],
