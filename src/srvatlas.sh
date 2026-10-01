@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.7.9"
+# Version: "0.7.10"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -901,7 +901,6 @@ test_host_connectivity() {
     echo -e "\nHost connectivity tests on: ${_targets[@]}"
     # Serial on purpose. Hello and TLS results are globals shared across nodes.
     for _target in "${_targets[@]}"; do
-        _uri=$(mongo_uri "$_target" "$_uriOpts")
         _reachable=
         _tlsEnabled=
         _tlsProtocol=
@@ -922,7 +921,12 @@ test_host_connectivity() {
             _isTLSenabled=$(s_client_invoke -connect "$_connectTo" -servername "$_serverName") || true
             tls_session_ok "$_isTLSenabled" && _tlsEnabled=ESTABLISHED
             read_tls_brief "$_isTLSenabled"
-            probe_plaintext "$_target"
+            if $_expectTls; then
+                # Atlas and Atlas Gov require TLS. The profile already decides plaintext.
+                _plaintext=disabled
+            else
+                probe_plaintext "$_target"
+            fi
             _tcpUp=$((_tcpUp + 1))
             [[ $_tlsEnabled == ESTABLISHED ]] && _tlsUp=$((_tlsUp + 1))
             [[ $_plaintext == enabled ]] && _plainUp=$((_plainUp + 1))
