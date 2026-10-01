@@ -10,7 +10,7 @@ Status is implied by section: **planned** unless marked later / hardening.
 
 - **Library / `load()` / multi-tenant `db`.** `mdblib.js` today is a global `load()` with a free `db`. `ctxDemo.js` sketches `mdblib.for(db)`. That story will change; do not refactor other scripts to depend on a new module layout until it exists.
 - **mongosh scripting guide.** Living notes for `--file` rewriter, async IIFEs, `sleep()` vs `await` delays, `--eval` `var` options. Extend when a script hits a new shell quirk. Document the consumption modes below when they land.
-- **`ProgressTracker`.** Stub in `mdblib.js` (`/* Add to mdblib.js */`) for long catalog walks (dbstats, index cache, auto-trim snapshot, **autoCompact first-pass**). Must honour the shared emit rules: TTY progress only; silent or JSON progress events in module / redirected mode — never `\r` bars in piped logs.
+- **`ProgressTracker` / mini-HUD.** Stub in `mdblib.js` today (`console.log('\\r')` is not an overwrite). First real consumer is **dbstats P1**: catalog-first gives a known denominator, then a bounded `$collStats` pool can drive a TTY mini-HUD (`done/total`, pool in-flight, optional ETA). Shared emit rules: TTY progress only; silent or `onProgress` in module / json / redirected mode — never `\\r` bars in piped logs. Finite walks (dbstats) may show % / ETA; long-running AIMD tools (niceDeleteMany) stay congestion-only. Clear the HUD before the tabular report.
 - **Topology fan-out.** Per-mongod tools (`autoCompact`, WT vitals, dbstats snapshots) eventually ride `discovery.js`. Until then, operators target members with a direct connection.
 - **Legacy mongo shell retirement.** Dual-shell tree archived **2026-09-01** at [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/) (tag `legacy-mongo-shell` on `c78904f`). Live `src/` is **mongosh-only** after the [strip pass](#3-after-the-cut--strip-and-streamline-next-general-architecture). Current library: **`mdblib.js` v0.16.0**.
 
@@ -361,7 +361,9 @@ Selection: capability + privilege probe, with explicit option to force legacy. O
 
 #### Concurrency (stats fetch)
 
-Once the catalog is materialised, fetch collection/index WT stats through a **bounded task pool** (optimal vs unbounded `Promise.all` on large catalogs). Pool size as an option (default conservative on mongos). `ProgressTracker` in `mdblib` is the progress UI for long walks. Catalog build stays serial or lightly parallel; the pool applies to the stats phase.
+Once the catalog is materialised, fetch collection/index WT stats through a **bounded task pool** (optimal vs unbounded `Promise.all` on large catalogs). Pool size as an option (default conservative on mongos). Catalog build stays serial or lightly parallel; the pool applies to the stats phase.
+
+That split is what makes a **mini-HUD** honest: after phase 1 the walker knows `N` collections (and DBs), so phase 2 can show `done/N`, in-flight vs queued, and a cheap ETA. Phase 1 can be a lighter line (`db i/D` or “listing …”) until `N` exists. Do not ship the pool without the HUD on TTY interactive tabular; json / `load()` module stays quiet (P0 stdout purity). The current `ProgressTracker` class is not that HUD — replace or wrap it (`\\r` via `console.log` prints a new line; `finish()` references a non-member `formatTime`).
 
 #### Sharding and topology
 
