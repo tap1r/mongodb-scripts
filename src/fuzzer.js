@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.8.0"
+ *  Version: "0.8.1"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.8.0" };
+   const __script = { "name": "fuzzer.js", "version": "0.8.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -206,6 +206,8 @@
       dropNS();
       if (!createNS())
          return;
+
+      dropExistingIndexes();
 
       // set collection/index build order, generate and bulk write the documents, create indexes
       console.log(`\nIndex build order preference "${indexPrefs.order}"`);
@@ -814,12 +816,17 @@
       console.log(indexBuildMessage(namespace.createIndexes(...args), label));
    }
 
-   function buildIndexes() {
-      if (dropIndexes) {
-         console.log('\nDropping all existing indexes:');
-         namespace.dropIndexes();
-      }
+   function dropExistingIndexes() {
+      if (!dropIndexes || !namespace.exists())
+         return;
+      const secondary = namespace.getIndexes().filter(index => index.name !== '_id_');
+      if (secondary.length === 0)
+         return;
+      console.log('\nDropping all existing indexes:');
+      namespace.dropIndexes();
+   }
 
+   function buildIndexes() {
       if (indexPrefs.build) {
          if (indexes.length > 0) {
             createIndexSet(indexes, indexOptions, 'Indexing', (quorum) =>
