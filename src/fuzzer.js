@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.7.1"
+ *  Version: "0.8.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.7.1" };
+   const __script = { "name": "fuzzer.js", "version": "0.8.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -198,8 +198,14 @@
       console.log(`Estimated optimal capacity of ${batchSize} ${plural(batchSize, 'document', 'documents')} per batch`);
 
       // (re)create the namespace
+      const plan = collectionPlan();
+      if (plan.length > 0) {
+         plan.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
+         return;
+      }
       dropNS();
-      createNS();
+      if (!createNS())
+         return;
 
       // set collection/index build order, generate and bulk write the documents, create indexes
       console.log(`\nIndex build order preference "${indexPrefs.order}"`);
@@ -709,9 +715,35 @@
       console.log(`\nResharding complete.`);
    }
 
+   function shardKeyHasMetaField() {
+      const meta = tsOptions.metaField;
+      return Object.keys(shardedOptions.key).some(field =>
+         field === meta || field.startsWith(`${meta}.`)
+      );
+   }
+
+   function collectionPlan() {
+      const mongos = isSharded();
+      const reasons = [];
+      if (capped && timeSeries)
+         reasons.push('capped and time series cannot be combined');
+      if (capped && sharding)
+         reasons.push('capped and sharding cannot be combined');
+      if (timeSeries && sharding && !shardKeyHasMetaField())
+         reasons.push(`time series shard key must include metaField "${tsOptions.metaField}"`);
+      if (timeSeries)
+         reasons.push(`time series requires timeField "${tsOptions.timeField}" as a Date and metaField "${tsOptions.metaField}"; the generated schemas do not provide them`);
+      if (sharding && !mongos)
+         reasons.push('sharding is set and this process is not a mongos');
+      if (sharding && mongos && collation.locale !== 'simple')
+         reasons.push('a non-simple collation on the hashed shard key conflicts with the simple hashed index');
+      return reasons;
+   }
+
    function createNS() {
       if (namespace.exists()) {
          console.log(`\nNamespace "${dbName}.${collName}" exists`);
+         return true;
       } else {
          let [blockCompressor, msg] = parseCompressor(compressor);
          console.log(`Creating namespace "${dbName}.${collName}"`);
@@ -749,12 +781,13 @@
             database.createCollection(collName, options);
          } catch(e) {
             console.log('\n[red][ERROR] Namespace creation failed:[/]', errText(e));
+            return false;
          }
 
          shardNewNamespace();
       }
 
-      return;
+      return true;
    }
 
    function indexBuildMessage(result, label) {
