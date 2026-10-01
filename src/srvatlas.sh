@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Name: "srvatlas.sh"
-# Version: "0.7.11"
+# Version: "0.8.0"
 # Description: Atlas/SRV cluster name/connection validator
 # Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
 # Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -73,6 +73,7 @@ _targets=()
 _srvHosts=()
 _libressl=false
 _ncTimeoutFlag=-G
+_jobDir=
 
 have_cmd() {
     local _bin
@@ -258,13 +259,29 @@ dns_a_short() {
     done
 }
 
+dns_seed_wave() {
+    # $1 is the work directory. TXT, the cluster-name A, and SRV start together.
+    local _dir=$1 _txtPid _aPid _srvPid
+    "$_lookupCmd" +noall +answer +stats "${_clusterName}." TXT >"${_dir}/txt" 2>&1 </dev/null &
+    _txtPid=$!
+    "$_lookupCmd" +noall +answer +stats "${_clusterName}." A >"${_dir}/acluster" 2>&1 </dev/null &
+    _aPid=$!
+    "$_lookupCmd" +noall +answer +stats "_mongodb._tcp.${_clusterName}." SRV >"${_dir}/srv" 2>&1 </dev/null &
+    _srvPid=$!
+    wait "$_txtPid"
+    wait "$_aPid"
+    wait "$_srvPid"
+}
+
 validate_cluster_name() {
     # One discovery wave. TXT, the cluster-name A, and SRV run together, then
     # the per-host A lookups run together. dig +noall +answer +stats carries
     # the records and Query time; +short with +stats drops the query time on
     # DiG 9.10.6. Jobs start in this shell: a command substitution waits for
     # its own background dig, so $(dig … &) does not overlap.
-    local _dir _txtPid _aPid _srvPid _t0 _t1 _i _pid _n
+    # A resolver can return no TXT answer once. Two further attempts follow,
+    # one second apart. The error stands when all three answers are empty.
+    local _dir _t0 _t1 _i _pid _n _try
     local _txtRaw _aRaw _srvRaw _hostRaw _pri _weight _port _host _target _resolved
     local -a _aPids _aResolved
 
@@ -284,20 +301,20 @@ validate_cluster_name() {
     [[ $_t0 =~ ^[0-9]+$ ]] || _t0=0
 
     # The cluster name and the SRV name are absolute. Each _srvHosts entry ends in one dot.
-    "$_lookupCmd" +noall +answer +stats "${_clusterName}." TXT >"${_dir}/txt" 2>&1 </dev/null &
-    _txtPid=$!
-    "$_lookupCmd" +noall +answer +stats "${_clusterName}." A >"${_dir}/acluster" 2>&1 </dev/null &
-    _aPid=$!
-    "$_lookupCmd" +noall +answer +stats "_mongodb._tcp.${_clusterName}." SRV >"${_dir}/srv" 2>&1 </dev/null &
-    _srvPid=$!
-    wait "$_txtPid"
-    wait "$_aPid"
-    wait "$_srvPid"
-
-    _txtRaw=$(<"${_dir}/txt")
+    _try=0
+    while [[ $_try -lt 3 ]]; do
+        _try=$((_try + 1))
+        dns_seed_wave "$_dir"
+        _txtRaw=$(<"${_dir}/txt")
+        _txt=$(dns_txt "$_txtRaw")
+        [[ -n $_txt ]] && break
+        if [[ $_try -lt 3 ]]; then
+            echo -e "TXT lookup for $_clusterName failed, retrying (${_try} of 2)" 1>&2
+            sleep 1
+        fi
+    done
     _aRaw=$(<"${_dir}/acluster")
     _srvRaw=$(<"${_dir}/srv")
-    _txt=$(dns_txt "$_txtRaw")
     _txtLatency=$(dns_query_ms "$_txtRaw")
     _srvLatency=$(dns_query_ms "$_srvRaw")
     if [[ -z $_txt ]]; then
@@ -422,6 +439,20 @@ apply_load_balanced_options() {
 note_failure() {
     echo -e "ERROR: $*" 1>&2
     _failures=$((_failures + 1))
+}
+
+cleanup_job_dir() {
+    # The EXIT trap removes the per-job directory. A background shell inherits
+    # that trap, so each job clears the trap before it returns.
+    [[ -n $_jobDir && -d $_jobDir ]] && rm -rf "$_jobDir"
+}
+
+wait_jobs() {
+    # bash 3.2 has no wait -n. Wait for the pids started in this shell.
+    local _pid
+    for _pid in "$@"; do
+        wait "$_pid" || true
+    done
 }
 
 field_has() {
@@ -565,16 +596,23 @@ hello_retryable() {
     return 0
 }
 
-collect_hello() {
+run_hello_probe() {
+    # $1 is host:port. Prints the shell output. The caller stores it per node.
+    local _target=$1 _uri _probeUri
+    [[ -n $_helloEval ]] || build_hello_eval
+    _uri=$(mongo_uri "$_target" "$_uriOpts")
+    _probeUri="${_uri}&compressors=${_compressors}&zlibCompressionLevel=${_zlibLevel}"
+    NDIAG_AUTH_USER="$_authUser" NDIAG_SHELL="${_shell##*/}" NDIAG_SCRIPT="${0##*/}" \
+        "$_shell" "$_probeUri" "${_shellOpts[@]}" --eval "$_helloEval" 2>&1 || true
+}
+
+parse_hello_output() {
     # The hello command reply has no compression field. The handshake hello on
     # the connection description does: hello.compression is the server's answer,
     # and description.compressor is the one name it picked. description.compressors
     # is only the list this client offered. Script lines are prefixed NDIAG_ so a
     # shell stack trace that contains KEY=value cannot overwrite them.
-    local _probeUri _row _key _val
-
-    [[ -n $_helloEval ]] || build_hello_eval
-    _probeUri="${_uri}&compressors=${_compressors}&zlibCompressionLevel=${_zlibLevel}"
+    local _row _key _val
     _identity=
     _mongos=
     _rsHosts=
@@ -589,9 +627,6 @@ collect_hello() {
     _maxWireVersion=
     _ok=
     _err=
-    _helloOut=
-    _helloOut=$(NDIAG_AUTH_USER="$_authUser" NDIAG_SHELL="${_shell##*/}" NDIAG_SCRIPT="${0##*/}" \
-        "$_shell" "$_probeUri" "${_shellOpts[@]}" --eval "$_helloEval" 2>&1)
     while IFS= read -r _row; do
         [[ $_row == NDIAG_*=* ]] || continue
         _key=${_row%%=*}
@@ -614,6 +649,12 @@ collect_hello() {
             UNSUPPORTED) _unsupportedComp=$_val ;;
         esac
     done <<< "$_helloOut"
+}
+
+hello_probe_job() {
+    # $1 is the target index. This shell must not run the work-directory trap.
+    trap - EXIT
+    run_hello_probe "${_targets[$1]}" >"${_jobDir}/hello.${1}"
 }
 
 read_tls_brief() {
@@ -679,40 +720,43 @@ merge_colon() {
     printf '%s' "$_base"
 }
 
-build_cipher_lists() {
-    # The local cipher list does not depend on the target. Build it once per run.
-    # OpenSSL 4 has no TLS 1.4. TLS 1.3 is wire version 0x0304. Add tls1_4 only if this binary has the flag.
-    # TLS 1.0 and 1.1 have no ciphers at the default security level, so those probes lower it and let the server refuse.
-    local _suite _raw _policyFor _ccm _has14=false
-    for _suite in "${_cipherSuites[@]}"; do
-        [[ $_suite == tls1_4 ]] && _has14=true
-    done
-    if ! $_has14 && "$_openssl" s_client -help 2>&1 | grep -q -- '-tls1_4'; then
-        _cipherSuites+=('tls1_4')
+cipher_list_one() {
+    # $1 is an index in _cipherSuites. The offer is written for the parent to read back.
+    # TLS 1.0 and 1.1 have no ciphers at the default security level, so the list query lowers it.
+    # This shell must not run the work-directory trap.
+    trap - EXIT
+    local _i=$1 _suite=${_cipherSuites[$1]} _raw _policyFor _ccm _p1 _p2
+    _policyFor=$_policy
+    [[ $_suite == tls1 || $_suite == tls1_1 ]] && _policyFor="${_policy}:@SECLEVEL=0"
+    if [[ $_suite == tls1_3 || $_suite == tls1_4 ]]; then
+        "$_openssl" ciphers -s "-$_suite" >"${_jobDir}/craw.${_i}" 2>/dev/null &
+        _p1=$!
+        "$_openssl" ciphers -s "-$_suite" -ciphersuites 'TLS_AES_128_CCM_SHA256:TLS_AES_128_CCM_8_SHA256' >"${_jobDir}/cccm.${_i}" 2>/dev/null &
+        _p2=$!
+        wait "$_p1" || true
+        wait "$_p2" || true
+        _raw=$(<"${_jobDir}/craw.${_i}")
+        _ccm=$(<"${_jobDir}/cccm.${_i}")
+        _raw=$(merge_colon "$_raw" "$_ccm")
+    else
+        _raw=$("$_openssl" ciphers -s "-$_suite" "$_policyFor" 2>/dev/null || true)
     fi
-    # _cipherLists[i] is the offer for _cipherSuites[i].
-    _cipherLists=()
-    for _suite in "${_cipherSuites[@]}"; do
-        _policyFor=$_policy
-        [[ $_suite == tls1 || $_suite == tls1_1 ]] && _policyFor="${_policy}:@SECLEVEL=0"
-        if [[ $_suite == tls1_3 || $_suite == tls1_4 ]]; then
-            _raw=$("$_openssl" ciphers -s "-$_suite" 2>/dev/null || true)
-            _ccm=$("$_openssl" ciphers -s "-$_suite" -ciphersuites 'TLS_AES_128_CCM_SHA256:TLS_AES_128_CCM_8_SHA256' 2>/dev/null || true)
-            _raw=$(merge_colon "$_raw" "$_ccm")
-        else
-            _raw=$("$_openssl" ciphers -s "-$_suite" "$_policyFor" 2>/dev/null || true)
-        fi
-        _cipherLists+=("$_raw")
-    done
+    printf '%s' "$_raw" >"${_jobDir}/clist.${_i}"
+}
+
+group_list_job() {
+    # This shell must not run the work-directory trap.
+    trap - EXIT
+    "$_openssl" list -tls-groups >"${_jobDir}/groups-raw" 2>/dev/null || true
 }
 
 build_group_candidates() {
+    # $1 is the output of "openssl list -tls-groups".
     # ECC key exchange is a TLS group, not a TLS 1.3 ciphersuite name.
     # Keep the NIST curves, X25519/X448, and the hybrid groups this OpenSSL can offer.
-    local _all _g
+    local _all=$1 _g
     local IFS=:
     _groupCandidates=()
-    _all=$("$_openssl" list -tls-groups 2>/dev/null || true)
     _all=${_all//$'\n'/}
     for _g in $_all; do
         case $_g in
@@ -721,6 +765,38 @@ build_group_candidates() {
                 ;;
         esac
     done
+}
+
+build_tls_inventory() {
+    # The local cipher list does not depend on the target. Build it once per run.
+    # OpenSSL 4 has no TLS 1.4. TLS 1.3 is wire version 0x0304. Add tls1_4 only if this binary has the flag.
+    # Each suite offer is an independent local query, and so is the group list.
+    local _suite _has14=false _i
+    local -a _pids
+    for _suite in "${_cipherSuites[@]}"; do
+        [[ $_suite == tls1_4 ]] && _has14=true
+    done
+    if ! $_has14 && "$_openssl" s_client -help 2>&1 | grep -q -- '-tls1_4'; then
+        _cipherSuites+=('tls1_4')
+    fi
+    # _cipherLists[i] is the offer for _cipherSuites[i].
+    _cipherLists=()
+    _pids=()
+    _i=0
+    for _suite in "${_cipherSuites[@]}"; do
+        cipher_list_one "$_i" &
+        _pids+=("$!")
+        _i=$((_i + 1))
+    done
+    group_list_job &
+    _pids+=("$!")
+    wait_jobs "${_pids[@]}"
+    _i=0
+    for _suite in "${_cipherSuites[@]}"; do
+        _cipherLists+=("$(<"${_jobDir}/clist.${_i}")")
+        _i=$((_i + 1))
+    done
+    build_group_candidates "$(<"${_jobDir}/groups-raw")"
 }
 
 cipher_offer() {
@@ -882,42 +958,127 @@ select_transport() {
     echo -e "\nTransport: ${_transportChosen}"
 }
 
+tcp_probe_job() {
+    # $1 is the target index. nc takes the host and port separately.
+    # The trailing dot keeps that lookup absolute.
+    # This shell must not run the work-directory trap.
+    trap - EXIT
+    local _i=$1 _target=${_targets[$1]}
+    "$_networkCmd" -zv "$_ncTimeoutFlag" "$_connectTimeout" "${_target%%:*}." "${_target##*:}" >"${_jobDir}/tcp.${_i}" 2>&1 || true
+}
+
+tls_probe_job() {
+    # $1 is the target index. This shell must not run the work-directory trap.
+    trap - EXIT
+    local _i=$1 _target=${_targets[$1]}
+    tls_endpoint "$_target"
+    s_client_invoke -connect "$_connectTo" -servername "$_serverName" >"${_jobDir}/tls.${_i}" || true
+}
+
+plain_probe_job() {
+    # $1 is the target index. This shell must not run the work-directory trap.
+    trap - EXIT
+    local _i=$1
+    probe_plaintext "${_targets[$1]}"
+    printf '%s\n' "$_plaintext" >"${_jobDir}/plain.${_i}"
+}
+
+cipher_probe_job() {
+    # $1 is the target index. One handshake chain for this node: the next suite
+    # starts after this suite finishes, and the group probes stay in that chain.
+    # Other nodes run their own chain at the same time.
+    # This shell must not run the work-directory trap.
+    trap - EXIT
+    local _i=$1 _target=${_targets[$1]} _suite
+    : >"${_jobDir}/suites.${_i}"
+    for _suite in "${_cipherSuites[@]}"; do
+        if $_cipherScan; then
+            scan_each_local_cipher "$_target" "$_suite"
+        else
+            scan_negotiated_ciphers "$_target" "$_suite"
+        fi
+        printf '%s\t%s\t%s\n' suite "$_suite" "$_negotiatedList" >>"${_jobDir}/suites.${_i}"
+        if [[ $_suite == tls1_3 || $_suite == tls1_4 ]] && [[ -n $_negotiatedList ]]; then
+            probe_ecc_groups "$_target"
+            printf '%s\t%s\n' groups "$_negotiatedGroups" >>"${_jobDir}/suites.${_i}"
+        fi
+    done
+}
+
+classify_tcp() {
+    # $1 is nc's output. Sets _reachable to succeeded, open, or empty.
+    local _flat=${1//$'\n'/ }
+    local _openRe='(^|[^[:alnum:]])open([^[:alnum:]]|$)'
+    _reachable=
+    if [[ $_flat =~ succeeded ]]; then
+        _reachable=succeeded
+    elif [[ $_flat =~ $_openRe ]]; then
+        _reachable=open
+    fi
+}
+
 test_host_connectivity() {
     # detect open socket, plaintext, and TLS
-    local _target _tlsState _flat= _openRe=
+    local _target _tlsState _i _n _reachable _isTLSenabled
+    local -a _pids _tcpReach
 
     _tcpUp=0
     _tlsUp=0
     _plainUp=0
     _tcpOpen=()
     echo -e "\nHost connectivity tests on: ${_targets[@]}"
-    # Serial on purpose. Hello and TLS results are globals shared across nodes.
-    for _target in "${_targets[@]}"; do
-        _reachable=
+    # Every node's TCP connect starts together. Open nodes then start the TLS
+    # probe and, on-prem, the plaintext ping together. The report is printed
+    # in SRV order after those commands finish. A dead node does not stop the rest.
+    _n=${#_targets[@]}
+    _pids=()
+    _i=0
+    while [[ $_i -lt $_n ]]; do
+        tcp_probe_job "$_i" &
+        _pids+=("$!")
+        _i=$((_i + 1))
+    done
+    wait_jobs "${_pids[@]}"
+
+    _pids=()
+    _tcpReach=()
+    _i=0
+    while [[ $_i -lt $_n ]]; do
+        classify_tcp "$(<"${_jobDir}/tcp.${_i}")"
+        _tcpReach+=("$_reachable")
+        if tcp_open "$_reachable"; then
+            _tcpOpen+=("1")
+            tls_probe_job "$_i" &
+            _pids+=("$!")
+            if ! $_expectTls; then
+                plain_probe_job "$_i" &
+                _pids+=("$!")
+            fi
+        else
+            _tcpOpen+=("0")
+        fi
+        _i=$((_i + 1))
+    done
+    wait_jobs "${_pids[@]}"
+
+    _i=0
+    while [[ $_i -lt $_n ]]; do
+        _target=${_targets[_i]}
+        _reachable=${_tcpReach[_i]}
         _tlsEnabled=
         _tlsProtocol=
         _tlsCipher=
         _tlsGroup=
         _plaintext=
-        tls_endpoint "$_target"
-        # nc takes the host and port separately. The trailing dot keeps that lookup absolute.
-        _isReachable=$("$_networkCmd" -zv "$_ncTimeoutFlag" "$_connectTimeout" "${_target%%:*}." "${_target##*:}" 2>&1)
-        _flat=${_isReachable//$'\n'/ }
-        _openRe='(^|[^[:alnum:]])open([^[:alnum:]]|$)'
-        if [[ $_flat =~ succeeded ]]; then
-            _reachable=succeeded
-        elif [[ $_flat =~ $_openRe ]]; then
-            _reachable=open
-        fi
         if tcp_open "$_reachable"; then
-            _isTLSenabled=$(s_client_invoke -connect "$_connectTo" -servername "$_serverName") || true
+            _isTLSenabled=$(<"${_jobDir}/tls.${_i}")
             tls_session_ok "$_isTLSenabled" && _tlsEnabled=ESTABLISHED
             read_tls_brief "$_isTLSenabled"
             if $_expectTls; then
                 # Atlas and Atlas Gov require TLS. The profile already decides plaintext.
                 _plaintext=disabled
             else
-                probe_plaintext "$_target"
+                _plaintext=$(<"${_jobDir}/plain.${_i}")
             fi
             _tcpUp=$((_tcpUp + 1))
             [[ $_tlsEnabled == ESTABLISHED ]] && _tlsUp=$((_tlsUp + 1))
@@ -927,11 +1088,6 @@ test_host_connectivity() {
         else
             _plaintext=skipped
             _tlsState=skipped
-        fi
-        if tcp_open "$_reachable"; then
-            _tcpOpen+=("1")
-        else
-            _tcpOpen+=("0")
         fi
         echo -e "\n\tnode:\t\t\t${_target}\n\tTCP connectivity:\t${_reachable}\n\tplaintext:\t\t${_plaintext}\n\tTLS:\t\t\t${_tlsState}"
         if [[ $_tlsEnabled == ESTABLISHED ]]; then
@@ -947,6 +1103,7 @@ test_host_connectivity() {
         elif tcp_open "$_reachable" && [[ -z $_transport && $_tlsEnabled != ESTABLISHED && $_plaintext != enabled ]]; then
             note_failure "neither plaintext nor TLS is enabled for ${_target}"
         fi
+        _i=$((_i + 1))
     done
     select_transport
 }
@@ -964,20 +1121,54 @@ load_hello_record() {
 }
 
 evaluate_connection_properties() {
-    local _target _suite _i=0
+    local _target _suite _i _n _kind _name _list
+    local -a _helloPids _retryPids _cipherPids
 
     _helloSep=$'\x1f'
     _helloRec=()
     if $_cipherScan; then
         echo -e "\nEnumerating local TLS ciphers (--ciphers). This probes every suite on every node."
     fi
-    build_cipher_lists
-    build_group_candidates
+    build_tls_inventory
+    build_hello_eval
     echo -e "\nEvaluating connection properties to individual nodes: ${_targets[@]}"
-    # Serial on purpose. _ok and the negotiated-cipher list are globals shared across nodes.
-    # A closed port skips hello and the cipher peel. One empty record keeps the
-    # replica-set index aligned with _targets.
-    for _target in "${_targets[@]}"; do
+    # Open nodes run hello and the cipher chain together. Each chain writes its
+    # own file, so the report stays in SRV order. A closed port skips both and
+    # stores one empty hello record. A blank hello is retried once after the
+    # first wave. A dead node does not stop the rest.
+    _n=${#_targets[@]}
+    _helloPids=()
+    _cipherPids=()
+    _i=0
+    while [[ $_i -lt $_n ]]; do
+        if [[ ${_tcpOpen[_i]} == 1 ]]; then
+            hello_probe_job "$_i" &
+            _helloPids+=("$!")
+            cipher_probe_job "$_i" &
+            _cipherPids+=("$!")
+        fi
+        _i=$((_i + 1))
+    done
+    wait_jobs "${_helloPids[@]}"
+
+    _retryPids=()
+    _i=0
+    while [[ $_i -lt $_n ]]; do
+        if [[ ${_tcpOpen[_i]} == 1 ]]; then
+            _helloOut=$(<"${_jobDir}/hello.${_i}")
+            if hello_retryable; then
+                hello_probe_job "$_i" &
+                _retryPids+=("$!")
+            fi
+        fi
+        _i=$((_i + 1))
+    done
+    wait_jobs "${_retryPids[@]}"
+    wait_jobs "${_cipherPids[@]}"
+
+    _i=0
+    while [[ $_i -lt $_n ]]; do
+        _target=${_targets[_i]}
         if [[ ${_tcpOpen[_i]} != 1 ]]; then
             save_hello_record "0" "" "" "" "" ""
             echo -e "\n\tnode:\t\t\t$_target"
@@ -989,9 +1180,8 @@ evaluate_connection_properties() {
             _i=$((_i + 1))
             continue
         fi
-        _uri=$(mongo_uri "$_target" "$_uriOpts")
-        collect_hello
-        hello_retryable && collect_hello
+        _helloOut=$(<"${_jobDir}/hello.${_i}")
+        parse_hello_output
         if $_lb; then
             _identity="unsupported_when_load_balanced"
         fi
@@ -1020,18 +1210,14 @@ evaluate_connection_properties() {
             note_failure "hello failed for ${_target}${_err:+: ${_err}}"
         fi
         echo -e "\tTLS cipher scanning:"
-        for _suite in "${_cipherSuites[@]}"; do
-            if $_cipherScan; then
-                scan_each_local_cipher "$_target" "$_suite"
-            else
-                scan_negotiated_ciphers "$_target" "$_suite"
+        while IFS=$'\t' read -r _kind _name _list; do
+            [[ -n $_kind ]] || continue
+            if [[ $_kind == suite ]]; then
+                echo -e "\t\t${_name}: ${_list:-None}"
+            elif [[ $_kind == groups ]]; then
+                echo -e "\t\tgroups: ${_name:-None}"
             fi
-            echo -e "\t\t$_suite: ${_negotiatedList:-None}"
-            if [[ $_suite == tls1_3 || $_suite == tls1_4 ]] && [[ -n $_negotiatedList ]]; then
-                probe_ecc_groups "$_target"
-                echo -e "\t\tgroups: ${_negotiatedGroups:-None}"
-            fi
-        done
+        done <"${_jobDir}/suites.${_i}"
         _i=$((_i + 1))
     done
 
@@ -1044,7 +1230,7 @@ test_replset_consistency() {
 
     echo -e "\nReplica set consistency tests:"
     [[ -n $_txtReplicaSet ]] && echo -e "\tTXT replicaSet:\t${_txtReplicaSet}"
-    # Serial on purpose. The hello record is read one target at a time.
+    # The hello records are already collected. This walk only reads them.
     for _target in "${_targets[@]}"; do
         _proc=
         load_hello_record "$_i"
@@ -1098,6 +1284,11 @@ test_replset_consistency() {
 }
 
 main() {
+    _jobDir=$(mktemp -d "${TMPDIR:-/tmp}/srvatlas.XXXXXX") || {
+        echo -e "ERROR: cannot create a work directory" 1>&2
+        exit 1
+    }
+    trap cleanup_job_dir EXIT
     normalize_cluster_name
     check_openssl
     check_shells
