@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.14.1"
+ *  Version: "0.14.2"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -114,7 +114,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.14.1" };
+   const __script = { "name": "dbstats.js", "version": "0.14.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -439,7 +439,7 @@
    }
 
    async function fetchCollectionStats(dbName, collName) {
-      const collRaw = await Promise.resolve($collStats(dbName, collName) || { "name": collName });
+      const collRaw = await $collStats(dbName, collName) || { "name": collName };
       let collection = new MetaStats(collRaw);
       if (!collection.name) collection.name = collName;
       if (collRaw.statsError) collection.statsError = collRaw.statsError;
