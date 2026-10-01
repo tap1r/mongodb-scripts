@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.11.0"
+ *  Version: "0.11.1"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.11.0" };
+   const __script = { "name": "fuzzer.js", "version": "0.11.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -204,6 +204,12 @@
        */
       // Do not Mongo.setReadPref(): mongosh reconnects and the next
       // DB call (exists/drop/create) hangs or rejects on a local RS.
+      const plan = collectionPlan();
+      if (plan.length > 0) {
+         plan.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
+         return;
+      }
+
       console.log(`\nSynthesising ${totalDocs} ${plural(totalDocs, 'document', 'documents')}`);
 
       // sampling synthetic documents and estimating batch size
@@ -230,11 +236,6 @@
       console.log(`Estimated optimal capacity of ${batchSize} ${plural(batchSize, 'document', 'documents')} per batch`);
 
       // (re)create the namespace
-      const plan = collectionPlan();
-      if (plan.length > 0) {
-         plan.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
-         return;
-      }
       dropNS();
       if (!createNS())
          return;
