@@ -456,7 +456,7 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `mdblib.js`
 
-**Live: v0.17.0.** **Archive: v0.15.10** — pair archived scripts with 0.15.10, not live mdblib. Do not “fix” `fCV()` → `serverVer()` on M0/Flex. MiniHud + `mapPool` replace the stub `ProgressTracker`.
+**Live: v0.17.0.** **Archive: v0.15.10** — pair archived scripts with 0.15.10, not live mdblib. Do not “fix” `fCV()` → `serverVer()` on M0/Flex. MiniHud + `mapPool` replace the stub `ProgressTracker`. `$collStats` is **async** (await `toArray` when it is a Promise; do not await the aggregate cursor — thenable drains). Callers must `await` it (user-defined async is not rewriter-awaited): dbstats P1 pool, oplogchurn, onlineDefrag.
 
 - Namespaced helpers / `for(db)` — **after** the library strategy change, not before.
 - **Legacy `mongo` shims** — stripped (`mdblib.js` v0.15.11+). Do not restore `slaveOk` / dual `Timestamp` / `_getEnv` loaders. Integer `serverVer` / `fCV` / `shellVer` are in place; do not couple further cleanup to `for(db)`.
