@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.9.1"
+ *  Version: "0.9.2"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.9.1" };
+   const __script = { "name": "fuzzer.js", "version": "0.9.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -243,7 +243,8 @@
       else if (reshard.action === 'warn')
          console.log(reshard.message);
 
-      return console.log('\n [green]Fuzzing completed![/]\n');
+      console.log('\n [green]Fuzzing completed![/]\n');
+      return;
    }
 
    function genDocument({
@@ -548,7 +549,8 @@
       else
          msg = `\nPreserving existing namespace "${dbName}.${collName}"`;
 
-      return console.log(msg);
+      console.log(msg);
+      return;
    }
 
    function parseCompressor(compressor = '', msg = '') {
@@ -920,7 +922,8 @@
          console.log(`\t[Batch ${1 + i}/${batches}] bulk inserted ${bInserted} ${plural(bInserted, 'document', 'documents')}`);
       }
 
-      return console.log('Generation completed.');
+      console.log('Generation completed.');
+      return;
    }
 
    try {
