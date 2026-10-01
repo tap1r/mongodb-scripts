@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.8.1"
+ *  Version: "0.9.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,7 +16,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.8.1" };
+   const __script = { "name": "fuzzer.js", "version": "0.9.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -229,15 +229,11 @@
       }
 
       // redistribute chunks if required
-      if (isSharded() && (shardedOptions.reShard) && (!shardedOptions.unique) && fCV(5.0)) {
-         await reshardNamespace();
-      }
-      else if (isSharded() && (shardedOptions.unique) && fCV(5.0)) {
-         console.log('[red][WARN] [yellow]reshardCollection() [red]with a uniqueness constraint is not supported[/]');
-      }
-      else if (isSharded() && (shardedOptions.reShard) && !fCV(5.0)) {
-         console.log('[red][WARN] [yellow]reshardCollection() [red]requires v5.0+[/]');
-      }
+      const reshard = reshardDecision();
+      if (reshard.action === 'call')
+         await reshardNamespace(reshard.sameKey);
+      else if (reshard.action === 'warn')
+         console.log(reshard.message);
 
       return console.log('\n [green]Fuzzing completed![/]\n');
    }
@@ -582,6 +578,8 @@
          * db.getSiblingDB('config').getCollection('shards').countDocuments({});
    }
 
+   let shardedThisRun = false;
+
    function shardNewNamespace() {
       if (!(sharding && isSharded() && namespace.exists()))
          return;
@@ -601,6 +599,7 @@
                // "timeseries": {}
             }
          );
+         shardedThisRun = true;
          // console.log(`enable balancing`);
          sh.enableBalancing(`${dbName}.${collName}`);
          (!serverVer(6.0)) && (sh.enableAutoSplit());
@@ -614,7 +613,52 @@
    // cater for $currentOp sharding schema change in v7
    const reshardServiceDesc = /^Resharding\w+(Donor|Recipient)Service ([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})$/;
 
-   async function reshardNamespace() {
+   function shardKeysMatch(current, requested) {
+      const currentFields = Object.keys(current);
+      const requestedFields = Object.keys(requested);
+      if (currentFields.length !== requestedFields.length)
+         return false;
+      return currentFields.every((field, i) =>
+         field === requestedFields[i] && current[field] === requested[field]
+      );
+   }
+
+   function isSameShardKey() {
+      const ns = `${dbName}.${collName}`;
+      try {
+         const doc = db.getSiblingDB('config').getCollection('collections').findOne({ _id: ns });
+         if (doc && doc.key)
+            return shardKeysMatch(doc.key, shardedOptions.key);
+      } catch(e) {
+         // Catalog unreadable. Fall through to this run's shard attempt.
+      }
+      return shardedThisRun;
+   }
+
+   function reshardDecision() {
+      if (!isSharded() || !shardedOptions.reShard)
+         return { action: 'off' };
+      if (!fCV(5.0))
+         return {
+            action: 'warn',
+            message: '[red][WARN] [yellow]reshardCollection() [red]requires v5.0+[/]'
+         };
+      if (shardedOptions.unique)
+         return {
+            action: 'warn',
+            message: '[red][WARN] [yellow]reshardCollection() [red]with a uniqueness constraint is not supported[/]'
+         };
+      const sameKey = isSameShardKey();
+      if (sameKey && !fCV(8.0))
+         return {
+            action: 'warn',
+            message: '[red][WARN] [yellow]reshardCollection() [red]with the same shard key requires v8.0+[/]'
+         };
+      return { action: 'call', sameKey };
+   }
+
+   async function reshardNamespace(sameKey) {
+      let reshardOk = false;
       const resharding = async() => {
          const numInitialChunks = initialChunkCount();
          const cmd = () => db.adminCommand({
@@ -632,10 +676,11 @@
             //          "zone": null // <string> | null
             //       }
             // ],
-            ...(fCV(8.0) && { "forceRedistribution": true })
+            ...(sameKey && fCV(8.0) && { "forceRedistribution": true })
          });
          try {
             await cmd();
+            reshardOk = true;
          } catch(e) {
             console.log('Resharding attempt:', errText(e));
          }
@@ -714,7 +759,8 @@
          sleep(pollIntervalMS);
       }
       await reshardPromise;
-      console.log(`\nResharding complete.`);
+      if (reshardOk)
+         console.log(`\nResharding complete.`);
    }
 
    function shardKeyHasMetaField() {
