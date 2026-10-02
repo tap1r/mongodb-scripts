@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.18.3"
+ *  Version: "0.19.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -8,13 +8,13 @@
  *  Roadmap: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/ROADMAP.md (required context)
  *
  *  Dual-shell snapshot: legacy/mongo-shell (tag legacy-mongo-shell, v0.15.10).
- *  This file is mongosh-only. Further work (for(db), MetaStats) still TBA.
+ *  This file is mongosh-only. Further work (for(db), HostNode / TopologySnapshot) still TBA.
  */
 
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.18.3"
+      "version": "0.19.0"
 });
 
 /*  Notes:
@@ -27,6 +27,9 @@ if (typeof __lib === 'undefined') (
  *    Drain via driver _cursor.toArray() (native Promise) so mapPool overlaps.
  *  - statsIncomplete compares returned $collStats shards to owning shards
  *    (config.chunks / db primary), not cluster-wide listShards.
+ *  - parseDbStats / parseCollStats / parseIndexStats turn normalised $stats /
+ *    $collStats output into DTOs. CollectionStats / DatabaseStats / DbPathStats
+ *    construct from those DTOs. MetaStats is a thin façade over them.
  */
 
 function isMongosh() {
@@ -249,49 +252,249 @@ class AutoFactor {
    }
 }
 
-class MetaStats {
+function toStatsNumber(value, fallback = 0) {
+   if (value == null || value === '') return fallback;
+   if (typeof value === 'object' && typeof value.toNumber === 'function') value = value.toNumber();
+   const n = +value;
+   return Number.isFinite(n) ? n : fallback;
+}
+
+function toNullableBytes(value) {
+   if (value == null || value === '') return null;
+   if (typeof value === 'object' && typeof value.toNumber === 'function') value = value.toNumber();
+   const n = +value;
+   return Number.isFinite(n) ? n : null;
+}
+
+function isNumericCount(value) {
+   if (typeof value === 'number') return Number.isFinite(value);
+   if (typeof value === 'object' && value !== null && typeof value.toNumber === 'function') {
+      return Number.isFinite(value.toNumber());
+   }
+   return false;
+}
+
+function isShardCountArray(value) {
    /*
-    *  Storage statistics metadata class
+    *  Per-shard numeric counts. Empty [] stays an array — never coerce via
+    *  == 0 ([] == 0 is true in JS and used to collapse sharded empty to a scalar).
+    */
+   return Array.isArray(value) && value.every(v => v == null || isNumericCount(v));
+}
+
+function parseCount(value, fallback = 0) {
+   if (isShardCountArray(value)) return value.map(v => toStatsNumber(v, 0));
+   if (isNumericCount(value)) return toStatsNumber(value, fallback);
+   return fallback;
+}
+
+function parseNamespaceCount(primary, secondary, fallback = 0) {
+   if (primary !== -1 && (isShardCountArray(primary) || isNumericCount(primary))) {
+      return parseCount(primary, fallback);
+   }
+   if (secondary !== -1 && (isShardCountArray(secondary) || isNumericCount(secondary))) {
+      return parseCount(secondary, fallback);
+   }
+   return fallback;
+}
+
+function parseIndexStats(raw = {}) {
+   /*
+    *  $collStats merged index row → IndexStatsDTO.
+    */
+   const src = raw || {};
+   return {
+      "name": src.name != null ? String(src.name) : '',
+      "storageSize": toStatsNumber(src.storageSize, 0),
+      "freeStorageSize": toNullableBytes(src.freeStorageSize),
+      "freeStorageComplete": src.freeStorageComplete !== false
+   };
+}
+
+function parseCollStats(raw = {}) {
+   /*
+    *  Normalised $collStats document → CollStatsDTO.
+    *  indexes is always IndexStatsDTO[]; nindexes is the counter (shard sum).
+    */
+   const src = raw || {};
+   const indexes = Array.isArray(src.indexes) ? src.indexes.filter(Boolean).map(parseIndexStats) : [];
+   const nindexes = (src.nindexes !== undefined && src.nindexes !== -1)
+      ? toStatsNumber(src.nindexes, indexes.length)
+      : indexes.length;
+   const internalPageSize = src.internalPageSize;
+   return {
+      "name": src.name != null ? String(src.name) : '',
+      "dataSize": toStatsNumber(src.dataSize, 0),
+      "storageSize": toStatsNumber(src.storageSize, 0),
+      "freeStorageSize": toNullableBytes(src.freeStorageSize),
+      "objects": toStatsNumber(src.objects, 0),
+      "orphans": toStatsNumber(src.orphans, 0),
+      "compressor": src.compressor != null ? src.compressor : 'none',
+      "internalPageSize": internalPageSize,
+      "allocUnit": (typeof internalPageSize === 'number' && internalPageSize > 0)
+                 ? internalPageSize
+                 : WIREDTIGER_MIN_ALLOC_SIZE,
+      "indexes": indexes,
+      "nindexes": nindexes,
+      "totalIndexSize": toStatsNumber(src.totalIndexSize, 0),
+      "totalIndexBytesReusable": toNullableBytes(src.totalIndexBytesReusable),
+      "freeStorageComplete": src.freeStorageComplete !== false,
+      "totalIndexBytesReusableComplete": src.totalIndexBytesReusableComplete !== false,
+      "statsIncomplete": src.statsIncomplete === true,
+      "statsError": src.statsError || null
+   };
+}
+
+function parseDbStats(raw = {}) {
+   /*
+    *  Normalised $stats document → DbStatsDTO.
+    *  ncollections / nviews / nindexes / namespaces are counts (scalar or
+    *  per-shard array). Catalog lists start empty on the entity.
+    */
+   const src = raw || {};
+   const nindexes = parseNamespaceCount(
+      (src.nindexes !== undefined && src.nindexes !== -1) ? src.nindexes : undefined,
+      src.indexes,
+      0
+   );
+   return {
+      "name": src.name != null ? String(src.name) : '',
+      "dataSize": toStatsNumber(src.dataSize, 0),
+      "storageSize": toStatsNumber(src.storageSize, 0),
+      "freeStorageSize": toNullableBytes(src.freeStorageSize),
+      "objects": toStatsNumber(src.objects, 0),
+      "orphans": toStatsNumber(src.orphans, 0),
+      "ncollections": parseNamespaceCount(src.collections, src.ncollections, 0),
+      "nviews": parseNamespaceCount(src.views, src.nviews, 0),
+      "namespaces": parseNamespaceCount(src.namespaces, undefined, 0),
+      "nindexes": nindexes,
+      "indexes": nindexes,
+      "totalIndexSize": toStatsNumber(src.indexSize, toStatsNumber(src.totalIndexSize, 0)),
+      "totalIndexBytesReusable": toNullableBytes(
+         src.totalIndexBytesReusable != null ? src.totalIndexBytesReusable : src.indexFreeStorageSize
+      ),
+      "statsError": src.statsError || null,
+      "unauthorized": src.unauthorized === true
+   };
+}
+
+function parseViewRef(raw = {}) {
+   const src = raw || {};
+   return {
+      "name": src.name != null ? String(src.name) : '',
+      "type": src.type != null ? src.type : 'view'
+   };
+}
+
+class StorageMetrics {
+   /*
+    *  Shared storage fields and compression ratio.
+    *  freeStorageSize null = unknown; 0 = empty free list; storageSize 0 is measured.
     */
    constructor({
-         name = '', dataSize = 0, storageSize = 0, freeStorageSize = null,
-         objects = 0, orphans = 0, compressor = 'none', indexes = [], nindexes = -1,
-         indexSize = 0, totalIndexSize = 0, totalIndexBytesReusable = null,
-         collections = [], ncollections = 0, namespaces = 0, nviews = 0,
-         views = [], databases = [], internalPageSize
+         dataSize = 0, storageSize = 0, freeStorageSize = null,
+         objects = 0, orphans = 0,
+         totalIndexSize = 0, totalIndexBytesReusable = null
       } = {}) {
-      /*
-       *  https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
-       */
-      // this.instance = (async() => { return await hello().me })();
-      // this.hostname = (async() => { return hostInfo().system.hostname })();
-      // this.proc = (async() => { return serverStatus().process })();
-      // this.dbPath = (async() => { return (serverStatus().process === 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath : null })();
-      // this.shards = (async() => { return (serverStatus().process === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards : null })();
-      this.name = name;
       this.dataSize = dataSize;
-      this.storageSize = storageSize; // 0 is measured empty / unmeasured stub — do not invent WT min alloc
-      this.freeStorageSize = freeStorageSize; // null = unknown, 0 = empty free list
+      this.storageSize = storageSize;
+      this.freeStorageSize = freeStorageSize;
       this.objects = objects;
       this.orphans = orphans;
-      this.compressor = compressor;
-      this.databases = databases;
-      this.collections = collections; // usurp dbStats counter for collections list
-      this.views = views;
-      this.ncollections = (collections == 0) ? ncollections : collections; // merge collStats and dbStats n/collections counters
-      this.nviews = nviews;
-      this.namespaces = namespaces;
-      this.indexes = indexes; // usurp dbStats counter for indexes list
-      this.nindexes = (nindexes === -1) ? +indexes : nindexes; // merge collStats and dbStats n/indexes counters
+      this.totalIndexSize = totalIndexSize;
       this.totalIndexBytesReusable = totalIndexBytesReusable;
-      this.totalIndexSize = (indexSize === 0) ? totalIndexSize : indexSize; // merge collStats and dbStats index size counters
-      this.allocUnit = (typeof internalPageSize === 'number' && internalPageSize > 0)
-                     ? internalPageSize
-                     : WIREDTIGER_MIN_ALLOC_SIZE;
-      this.internalPageSize = internalPageSize;
-      this.overhead = 1024; // unused
    }
-   init() { // https://www.mongodb.com/docs/mongodb-shell/write-scripts/limitations/
+   get compression() {
+      if (this.freeStorageSize == null || Number.isNaN(+this.freeStorageSize)) return NaN;
+      const denom = +this.storageSize - +this.freeStorageSize;
+      if (!(denom > 0)) return NaN;
+      return this.dataSize / denom;
+   }
+}
+
+class IndexStats {
+   constructor(dto = {}) {
+      const src = parseIndexStats(dto);
+      this.name = src.name;
+      this.storageSize = src.storageSize;
+      this.freeStorageSize = src.freeStorageSize;
+      this.freeStorageComplete = src.freeStorageComplete;
+   }
+}
+
+class ViewRef {
+   constructor(dto = {}) {
+      const src = parseViewRef(dto);
+      this.name = src.name;
+      this.type = src.type;
+   }
+}
+
+class CollectionStats extends StorageMetrics {
+   constructor(dto = {}) {
+      super(dto);
+      this.name = dto.name || '';
+      this.compressor = dto.compressor != null ? dto.compressor : 'none';
+      this.internalPageSize = dto.internalPageSize;
+      this.allocUnit = (typeof dto.allocUnit === 'number' && dto.allocUnit > 0)
+                     ? dto.allocUnit
+                     : ((typeof dto.internalPageSize === 'number' && dto.internalPageSize > 0)
+                        ? dto.internalPageSize
+                        : WIREDTIGER_MIN_ALLOC_SIZE);
+      this.indexes = Array.isArray(dto.indexes)
+         ? dto.indexes.map(idx => (idx instanceof IndexStats) ? idx : new IndexStats(idx))
+         : [];
+      this.nindexes = dto.nindexes != null ? dto.nindexes : this.indexes.length;
+      this.freeStorageComplete = dto.freeStorageComplete !== false;
+      this.totalIndexBytesReusableComplete = dto.totalIndexBytesReusableComplete !== false;
+      this.statsIncomplete = dto.statsIncomplete === true;
+      this.statsError = dto.statsError || null;
+   }
+   static from(raw, nameFallback = '') {
+      const dto = parseCollStats(raw || {});
+      if (nameFallback && !dto.name) dto.name = nameFallback;
+      return new CollectionStats(dto);
+   }
+}
+
+class DatabaseStats extends StorageMetrics {
+   constructor(dto = {}) {
+      super(dto);
+      this.name = dto.name || '';
+      this.collections = Array.isArray(dto.collections) ? dto.collections : [];
+      this.views = Array.isArray(dto.views) ? dto.views : [];
+      this.ncollections = dto.ncollections != null ? dto.ncollections : 0;
+      this.nviews = dto.nviews != null ? dto.nviews : 0;
+      this.namespaces = dto.namespaces != null ? dto.namespaces : 0;
+      this.nindexes = dto.nindexes != null ? dto.nindexes : 0;
+      this.indexes = dto.indexes != null ? dto.indexes : this.nindexes;
+      this.shards = Array.isArray(dto.shards) ? dto.shards : [];
+      this.statsError = dto.statsError || null;
+      this.unauthorized = dto.unauthorized === true;
+   }
+   static from(raw, extra = {}) {
+      const database = new DatabaseStats(parseDbStats(raw || {}));
+      if (Array.isArray(extra.shards)) database.shards = extra.shards;
+      return database;
+   }
+}
+
+class DbPathStats extends StorageMetrics {
+   constructor(dto = {}) {
+      super(dto);
+      this.databases = Array.isArray(dto.databases) ? dto.databases : [];
+      this.ncollections = dto.ncollections != null ? dto.ncollections : 0;
+      this.nviews = dto.nviews != null ? dto.nviews : 0;
+      this.namespaces = dto.namespaces != null ? dto.namespaces : 0;
+      this.nindexes = dto.nindexes != null ? dto.nindexes : 0;
+      this.indexes = dto.indexes != null ? dto.indexes : this.nindexes;
+      this.instance = dto.instance;
+      this.hostname = dto.hostname;
+      this.proc = dto.proc;
+      this.dbPath = dto.dbPath;
+      this.shards = Array.isArray(dto.shards) ? dto.shards : [];
+   }
+   init() {
       this.instance = (isAtlasPlatform('serverless')) ? 'serverless'
                     : (isSharded()) ? 'sharded'
                     : hello().me;
@@ -306,16 +509,30 @@ class MetaStats {
                   : (this.proc === 'mongos') ? 'sharded'
                   : 'unknown';
       this.shards = (this.proc === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards.map(({ _id }) => _id) : [];
+      return this;
    }
-   get compression() {
-      // Unknown free-space is not 0. Empty/unmeasured storage is not a 4 KiB file.
-      if (this.freeStorageSize == null || Number.isNaN(+this.freeStorageSize)) return NaN;
-      const denom = +this.storageSize - +this.freeStorageSize;
-      if (!(denom > 0)) return NaN;
-      return this.dataSize / denom;
-   }
-   get totalStorageSize() { // unused
-      return this.storageSize + (this.totalIndexSize + this.overhead) * this.nindexes;
+}
+
+function looksLikeCollStats(raw = {}) {
+   if (raw == null || typeof raw !== 'object') return false;
+   if (typeof raw.compressor === 'string') return true;
+   if (Array.isArray(raw.indexes) && raw.indexes.some(idx =>
+      idx && typeof idx === 'object' && !Array.isArray(idx) && (idx.name != null || idx.storageSize != null)
+   )) return true;
+   return false;
+}
+
+class MetaStats {
+   /*
+    *  Deprecated façade over CollectionStats / DatabaseStats / DbPathStats.
+    *  new MetaStats() → DbPathStats; $collStats-shaped → CollectionStats;
+    *  $stats-shaped → DatabaseStats.
+    */
+   constructor(raw) {
+      if (arguments.length === 0) return new DbPathStats();
+      if (looksLikeCollStats(raw)) return CollectionStats.from(raw);
+      if (raw && Array.isArray(raw.databases)) return new DbPathStats(raw);
+      return DatabaseStats.from(raw || {});
    }
 }
 
@@ -2065,7 +2282,7 @@ async function $collStats(dbName = db.getName(), collName = '') {
 
    function collStatsStub(tag, e) {
       /*
-       *  Keep collName so printers are not blank when MetaStats gets defaults.
+       *  Keep collName so printers are not blank when CollectionStats gets defaults.
        *  (unauthorized) = authz; (unavailable) = any other collStats failure.
        */
       return {

@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.14.10"
+ *  Version: "0.15.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -118,7 +118,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.14.10" };
+   const __script = { "name": "dbstats.js", "version": "0.15.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -350,14 +350,8 @@
       let { 'db': dbFilter, 'collection': collFilter, 'system': systemOpt = true } = filterOptions;
       collFilter = new RegExp(collFilter);
       const acceptCollName = systemCollectionFilter(systemOpt);
-      let dbPath = new MetaStats();
+      const dbPath = new DbPathStats();
       dbPath.init();
-      delete dbPath.name;
-      delete dbPath.collections;
-      delete dbPath.views;
-      // delete dbPath.indexes;
-      // delete dbPath.nindexes;
-      delete dbPath.compressor;
 
       const dbNames = stableSort(getDBNames(dbFilter), compareBy(v => v, 1));
       const jsonCli = outputOptions.format === 'json';
@@ -461,7 +455,7 @@
          );
          views = await Promise.resolve(views);
          database.views = stableSort(
-            (views || []).filter(acceptCollName),
+            (views || []).filter(acceptCollName).map(v => new ViewRef(v)),
             sortBy('view')
          );
       } catch(e) {
@@ -472,41 +466,16 @@
 
    async function fetchCollectionStats(dbName, collName) {
       const collRaw = await $collStats(dbName, collName) || { "name": collName };
-      let collection = new MetaStats(collRaw);
-      if (!collection.name) collection.name = collName;
-      if (collRaw.statsError) collection.statsError = collRaw.statsError;
-      if (collRaw.statsIncomplete) collection.statsIncomplete = true;
-      if (collRaw.freeStorageComplete === false) collection.freeStorageComplete = false;
-      if (collRaw.totalIndexBytesReusableComplete === false) collection.totalIndexBytesReusableComplete = false;
-      delete collection.databases;
-      delete collection.collections;
-      delete collection.views;
-      delete collection.ncollections;
-      delete collection.nviews;
-      delete collection.namespaces;
-      delete collection.instance;
-      delete collection.hostname;
-      delete collection.proc;
-      delete collection.dbPath;
+      const collection = CollectionStats.from(collRaw, collName);
       collection.indexes = stableSort(collection.indexes || [], sortBy('index'));
       return collection;
    }
 
    function buildDatabaseMeta(dbName, shards = []) {
       /*
-       *  Pure-ish: $stats → MetaStats for one DB (no cluster rollup mutation)
+       *  $stats → DatabaseStats for one DB (no cluster rollup mutation)
        */
-      const dbRaw = $stats(dbName);
-      let database = new MetaStats(dbRaw);
-      if (dbRaw.statsError) database.statsError = dbRaw.statsError;
-      if (dbRaw.unauthorized) database.unauthorized = true;
-      delete database.databases;
-      delete database.instance;
-      delete database.hostname;
-      delete database.proc;
-      delete database.dbPath;
-      database.shards = shards;
-      return database;
+      return DatabaseStats.from($stats(dbName), { shards });
    }
 
    function sumNullable(values) {
@@ -807,7 +776,7 @@
    function rollupDbPath(dbPath, databases = []) {
       /*
        *  Aggregate database metas into dbPath totals (sharded arrays or scalars).
-       *  Empty catalog: sharded → zero-filled per-shard arrays; unsharded → leave MetaStats defaults.
+       *  Empty catalog: sharded → zero-filled per-shard arrays; unsharded → leave DbPathStats defaults.
        *  freeStorageSize / totalIndexBytesReusable here follow $stats; rollupDbPathFree
        *  revises them after per-DB $collStats (M0/Flex free; collection-sum only when $stats failed).
        */
@@ -1141,7 +1110,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.14.10',
+         "version": '0.15.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1344,7 +1313,7 @@
 
    function formatRatio(metric) {
       /*
-       *  Pretty format compression ratio. Non-finite (÷0 from MetaStats.compression) → n/a.
+       *  Pretty format compression ratio. Non-finite (÷0 from StorageMetrics.compression) → n/a.
        */
       const value = +metric;
       if (!Number.isFinite(value)) return 'n/a ';
