@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.17"
+    *  Version: "0.3.0"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -364,6 +364,8 @@
       const exec = ss.queues?.execution ?? {};
       const writeQ = exec.write ?? {};
       const readQ = exec.read ?? {};
+      const readQLen = execQueueLength(readQ);
+      const writeQLen = execQueueLength(writeQ);
       const readLpQ = execQueueLength(readQ, 'lowPriority');
       const writeLpQ = execQueueLength(writeQ, 'lowPriority');
       const deprioGate = !!executionControlDeprioritizationGate;
@@ -433,8 +435,10 @@
          "wtWriteTicketsStatus": (wtWriteTicketsUtil < 20) ? 'low'
             : (wtWriteTicketsUtil >= 75) ? 'high'
             : 'medium',
-         "execReadQueueLength": execQueueLength(readQ),
-         "execWriteQueueLength": execQueueLength(writeQ),
+         "execReadQueueLength": readQLen,
+         "execWriteQueueLength": writeQLen,
+         "execReadQueueStatus": execQueueStatus(readQLen),
+         "execWriteQueueStatus": execQueueStatus(writeQLen),
          "execReadLowPriorityQueueLength": readLpQ,
          "execWriteLowPriorityQueueLength": writeLpQ,
          "execReadLowPriorityStatus": execQueueStatus(readLpQ),
@@ -513,6 +517,7 @@
       "cacheStatus", "dirtyStatus", "dirtyUpdatesStatus", "dirtyIntlStatus",
       "dirtyLeafStatus", "cacheHitStatus", "cacheMissStatus",
       "memoryFragmentationStatus", "wtReadTicketsStatus", "wtWriteTicketsStatus",
+      "execReadQueueStatus", "execWriteQueueStatus",
       "execReadLowPriorityStatus", "execWriteLowPriorityStatus",
       "executionControlDeprioritizationStatus",
       "checkpointStatus", "replLagStatus"
@@ -1042,6 +1047,8 @@
          // }
          { "name": "readTicketsUtil", "metric": "wtReadTicketsUtil", "status": "wtReadTicketsStatus", "unit": "%" },
          { "name": "writeTicketsUtil", "metric": "wtWriteTicketsUtil", "status": "wtWriteTicketsStatus", "unit": "%" },
+         { "name": "readQueue", "metric": "execReadQueueLength", "status": "execReadQueueStatus" },
+         { "name": "writeQueue", "metric": "execWriteQueueLength", "status": "execWriteQueueStatus" },
          { "name": "cacheFill", "metric": "cacheUtil", "status": "cacheStatus", "scale": "evictionTrigger", "unit": "%" },
          { "name": "dirtyFill", "metric": "dirtyUtil", "status": "dirtyStatus", "scale": "evictionDirtyTrigger", "unit": "%" },
          { "name": "dirtyUpdatesFill", "metric": "dirtyUpdatesUtil", "status": "dirtyUpdatesStatus", "scale": "evictionUpdatesTrigger", "unit": "%" },
