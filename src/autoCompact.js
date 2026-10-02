@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "1.0.0"
+    *  Version: "1.0.1"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -41,7 +41,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "1.0.0" };
+   const __script = { "name": "autoCompact.js", "version": "1.0.1" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (from mdblib.js)
    const ansiTags = [
@@ -961,7 +961,7 @@
       // mongod rejects autoCompact:true while WT still has background compact enabled.
       const replace = enable && getBackgroundCompact(true).running === true;
       if (enable) {
-         console.log(`[yellow][NOTE][/] [blue]autoCompact[/] is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact excludes the '[yellow]local.oplog.rs[/]' collection.\n`);
+         console.log(`[yellow][NOTE][/] [blue]autoCompact[/] is per mongod instance only, cluster and replSet compaction requires targeted command execution. In addition, autoCompact excludes the '[yellow]local.oplog.rs[/]' collection.`);
       }
       const runCmd = cmdDoc => {
          console.log(`[yellow]Executing shell command:[/]\n[blue]db.adminCommand(${EJSON.stringify(cmdDoc, null, 3)});[/]\n`);
@@ -1007,7 +1007,9 @@
          const denied = nsResolver.denied();
          if (denied > 0) {
             const noun = denied === 1 ? 'namespace lacks' : 'namespaces lack';
-            console.log(`[yellow][NOTE][/] ${denied} ${noun} listIndexes and collStats; those lines stay collection-*.wt / index-*.wt`);
+            console.log(`[yellow][NOTE][/] ${denied} ${noun} listIndexes and collStats; those lines stay collection-*.wt / index-*.wt\n`);
+         } else {
+            console.log('');
          }
       }
       const ts = enable ? serverLocalTime() : null; // WTCMPCT watermark; exclusive start in getLogs
