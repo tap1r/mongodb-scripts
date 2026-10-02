@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.14"
+    *  Version: "0.2.15"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -10,9 +10,10 @@
     *
     *  Legacy archive line: v0.2.13 is the snapshot for this script. mongosh-only
     *  (incompatible with legacy mongo); still the demarked version for the
-    *  whole-tree freeze. Known `.finally(process.stdout.write(…))` is wontfix
-    *  on this line. Further feature work (sharding, v8 execution control)
-    *  targets mongosh; see ROADMAP.md → Legacy mongo shell retirement.
+    *  whole-tree freeze. Archive `.finally(process.stdout.write(…))` is wontfix
+    *  on that line. Live wraps `.finally(() => process.stdout.write(…))`.
+    *  Further feature work (sharding) targets mongosh; see ROADMAP.md →
+    *  Legacy mongo shell retirement.
     *
     *  TODOs:
     *  - Add sharding support (per-shard WT fold)
@@ -571,7 +572,7 @@
       Promise.allSettled( // do not await to background thread
          // begin rendering EQ bars
          metrics.map(({ eq }) => eq.draw())
-      ).finally(process.stdout.write('\x1b[?1049l;25h]')); // disable alternate buffer and re-enable the console cursor
+      ).finally(() => process.stdout.write('\x1b[?1049l;25h]')); // disable alternate buffer and re-enable the console cursor
 
       while (true) { // refresh stats
          vitals = await congestionMonitor();
