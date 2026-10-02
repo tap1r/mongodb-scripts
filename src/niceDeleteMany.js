@@ -1820,8 +1820,7 @@
        *  Unhinted $match+$sort. If the winner is index-ordered, no hint.
        *  Else hint the first ranked rejectedPlan that stays IXSCAN-without-SORT
        *  on a window-safe btree. One prefix explain, then one full pipeline
-       *  (with that hint when picked). Do not call tryWindow — that would
-       *  re-explain $match+$sort.
+       *  (with that hint when picked).
        */
       const prefix = [{ "$match": filter }, { "$sort": candidateSort }];
       const fullLet = { "allowDiskUse": false, "let": { "bucketSizeLimit": 100 } };
