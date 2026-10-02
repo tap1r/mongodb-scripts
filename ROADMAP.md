@@ -434,7 +434,7 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `congestionMonitor.js`
 
-**Legacy archive line: v0.2.13** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Known `.finally(process.stdout.write(…))` (write runs immediately) is **wontfix on this line**. Post-freeze feature work proceeds on the mongosh line only.
+**Live: v0.2.17.** **Legacy archive line: v0.2.13** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Known `.finally(process.stdout.write(…))` (write runs immediately) is **wontfix on this line**. Post-freeze feature work proceeds on the mongosh line only.
 
 Remaining mongosh-line work (do not block the archive):
 
