@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.13"
+    *  Version: "0.2.14"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -15,15 +15,12 @@
     *  targets mongosh; see ROADMAP.md → Legacy mongo shell retirement.
     *
     *  TODOs:
-    *  - Add sharding support
-    *  - Add v8.0 Execution Control metrics
-    *  - Add support for bytes_dirty_intl & bytes_dirty_leaf when they become available
+    *  - Add sharding support (per-shard WT fold)
     */
 
    // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>congestionMonitor.js
 
    let vitals = {};
-   let vitalsView = null; // singleton congestion snapshot (getters created once)
    const pollingIntervalMS = 100;
    // TTL caches: serverStatus is hot-path; hostInfo is near-static; rsStatus is low/medium volatility.
    const SERVER_STATUS_CACHE_TTL_MS = pollingIntervalMS;
@@ -115,6 +112,7 @@
       "mem": true,
       "metrics": true,
       "queues": true,
+      "shardingStatistics": true,
       "storageEngine": true,
       "tenantMigrations": true,
       "tcmalloc": true,
@@ -194,9 +192,231 @@
       return slowms;
    }
 
+   function evictionConfigFromWterc(wterc = '') {
+      // WT eviction defaults (https://kb.corp.mongodb.com/article/000019073)
+      // evictionDirtyTarget:    overall targets but only apply to dirty data in cache
+      // evictionDirtyTrigger:   application threads throttle at eviction_dirty_trigger
+      // evictionTarget:         overall cache usage target
+      // evictionTrigger:        application threads start eviction
+      // evictionUpdatesTarget:  worker eviction when cache holds this many update bytes
+      // evictionUpdatesTrigger: application threads evict when updates reach this many bytes
+      const cfg = String(wterc || '');
+      const num = (re, d) => {
+         const m = cfg.match(re);
+         return m ? +m[1] : d;
+      };
+      return {
+         "evictionThreadsMin": num(/eviction=\(.*threads_min=(\d+).*\)/, 4),
+         "evictionThreadsMax": num(/eviction=\(.*threads_max=(\d+).*\)/, 4),
+         "evictionCheckpointTarget": num(/eviction_checkpoint_target=(\d+)/, 1),
+         "evictionDirtyTarget": num(/eviction_dirty_target=(\d+)/, 5),
+         "evictionDirtyTrigger": num(/eviction_dirty_trigger=(\d+)/, 20),
+         "evictionTarget": num(/eviction_target=(\d+)/, 80),
+         "evictionTrigger": num(/eviction_trigger=(\d+)/, 95),
+         "evictionUpdatesTarget": num(/eviction_updates_target=(\d+)/, 2.5),
+         "evictionUpdatesTrigger": num(/eviction_updates_trigger=(\d+)/, 10),
+         "checkpointIntervalMS": 1000 * num(/checkpoint=\(.*wait=(\d+).*\)/, 60)
+      };
+   }
+
+   function ticketPool(ss, kind) {
+      return ss.wiredTiger?.concurrentTransactions?.[kind]
+         ?? ss.queues?.execution?.[kind]
+         ?? {};
+   }
+
+   function ticketUtil(pool) {
+      const total = +(pool.totalTickets ?? 0);
+      if (!(total > 0)) return 0;
+      return Number.parseFloat(((+(pool.out ?? 0) / total) * 100).toFixed(2));
+   }
+
+   function ticketAvail(pool) {
+      const total = +(pool.totalTickets ?? 0);
+      if (!(total > 0)) return 0;
+      return Number.parseFloat(((+(pool.available ?? 0) / total) * 100).toFixed(2));
+   }
+
+   function cachePct(num, den) {
+      if (!(den > 0) || num == null || Number.isNaN(+num)) return 0;
+      return Number.parseFloat(((+num / den) * 100).toFixed(2));
+   }
+
+   function replLagSeconds(rsSt = {}) {
+      const members = rsSt?.members;
+      if (!Array.isArray(members) || members.length === 0) return 0;
+      const opTimers = members.map(({
+         stateStr,
+         health,
+         optimeDate
+      } = {}) => {
+         return {
+            "stateStr": stateStr,
+            "health": health,
+            "optimeDate": optimeDate
+         };
+      }).filter(({ health, stateStr }) => {
+         return (health && (stateStr === 'PRIMARY' || stateStr === 'SECONDARY'));
+      }).map(({ optimeDate }) => optimeDate).filter(optimeDate => optimeDate != null);
+      if (opTimers.length === 0) return 0;
+      return +((Math.max(...opTimers) - Math.min(...opTimers)) / 1000).toFixed(0);
+   }
+
+   function vitalsFromServerStatus({
+      ss = {},
+      rsSt = {},
+      host = {},
+      wterc = '',
+      slowms = null,
+      storageEngineConcurrentReadTransactions = null,
+      storageEngineConcurrentWriteTransactions = null,
+      lowPriorityAdmissionBypassThreshold = null
+   } = {}) {
+      /*
+       *  Plain congestion snapshot each poll. EQ bars read these fields as
+       *  data properties. Missing WT / queues / shardingStatistics stay 0/false.
+       */
+      const cache = ss.wiredTiger?.cache ?? {};
+      const eviction = evictionConfigFromWterc(wterc);
+      const cacheSizeBytes = +(cache['maximum bytes configured'] ?? NaN);
+      const dirtyBytes = +(cache['tracked dirty bytes in the cache'] ?? 0);
+      const cachedBytes = +(cache['bytes currently in the cache'] ?? 0);
+      const updatesDirtyBytes = +(cache['bytes allocated for updates'] ?? 0);
+      const dirtyIntlBytes = +(cache['tracked dirty internal page bytes in the cache'] ?? 0);
+      const dirtyLeafBytes = +(cache['tracked dirty leaf page bytes in the cache'] ?? 0);
+      const cacheUtil = cachePct(cachedBytes, cacheSizeBytes);
+      const dirtyUtil = cachePct(dirtyBytes, cacheSizeBytes);
+      const dirtyUpdatesUtil = cachePct(updatesDirtyBytes, cacheSizeBytes);
+      const dirtyIntlUtil = cachePct(dirtyIntlBytes, cacheSizeBytes);
+      const dirtyLeafUtil = cachePct(dirtyLeafBytes, cacheSizeBytes);
+      const readTickets = ticketPool(ss, 'read');
+      const writeTickets = ticketPool(ss, 'write');
+      const wtReadTicketsUtil = ticketUtil(readTickets);
+      const wtWriteTicketsUtil = ticketUtil(writeTickets);
+      const checkpointMs = +(ss.wiredTiger?.transaction?.['transaction checkpoint most recent time (msecs)']
+         ?? ss.wiredTiger?.checkpoint?.['most recent time (msecs)']
+         ?? 0);
+      const checkpointRuntimeRatio = Number.parseFloat(
+         ((checkpointMs / eviction.checkpointIntervalMS) * 100).toFixed(2)
+      );
+      const hitBytes = +(cache['pages requested from the cache'] ?? 0);
+      const missBytes = +(cache['pages read into cache'] ?? 0);
+      const cacheHitRatio = hitBytes > 0
+         ? Number.parseFloat((100 * (hitBytes - missBytes) / hitBytes).toFixed(2))
+         : 0;
+      const cacheMissRatio = hitBytes > 0
+         ? Number.parseFloat((100 * (1 - (hitBytes - missBytes) / hitBytes)).toFixed(2))
+         : 0;
+      const memSizeBytes = (host?.system?.memLimitMB ?? 1024) * 1024 * 1024;
+      const currentAllocatedBytes = +(ss.tcmalloc?.generic?.current_allocated_bytes ?? 0);
+      const heapSize = +(ss.tcmalloc?.generic?.heap_size ?? (memSizeBytes / 64));
+      const pageheapFreeBytes = +(ss.tcmalloc?.tcmalloc?.pageheap_free_bytes ?? 0);
+      const totalFreeBytes = +(ss.tcmalloc?.tcmalloc?.total_free_bytes ?? 0);
+      const memoryFragmentationRatio = Number.parseFloat(((pageheapFreeBytes / memSizeBytes) * 100).toFixed(2));
+      const heartbeatIntervalMillis = rsSt?.heartbeatIntervalMillis ?? 2000;
+      const activeReplLag = replLagSeconds(rsSt);
+      const exec = ss.queues?.execution ?? {};
+      const writeQ = exec.write ?? {};
+      const readQ = exec.read ?? {};
+      const tm = ss.tenantMigrations ?? {};
+      return {
+         ...eviction,
+         "cacheSizeBytes": cacheSizeBytes,
+         "dirtyBytes": dirtyBytes,
+         "cachedBytes": cachedBytes,
+         "updatesDirtyBytes": updatesDirtyBytes,
+         "dirtyIntlBytes": dirtyIntlBytes,
+         "dirtyLeafBytes": dirtyLeafBytes,
+         "cacheUtil": cacheUtil,
+         "dirtyUtil": dirtyUtil,
+         "dirtyUpdatesUtil": dirtyUpdatesUtil,
+         "dirtyIntlUtil": dirtyIntlUtil,
+         "dirtyLeafUtil": dirtyLeafUtil,
+         "cacheStatus": (cacheUtil < eviction.evictionTarget) ? 'low'
+            : (cacheUtil >= eviction.evictionTrigger) ? 'high'
+            : 'medium',
+         "dirtyStatus": (dirtyUtil < eviction.evictionDirtyTarget) ? 'low'
+            : (dirtyUtil >= eviction.evictionDirtyTrigger) ? 'high'
+            : 'medium',
+         "dirtyUpdatesStatus": (dirtyUpdatesUtil < eviction.evictionUpdatesTarget) ? 'low'
+            : (dirtyUpdatesUtil >= eviction.evictionUpdatesTrigger) ? 'high'
+            : 'medium',
+         "dirtyIntlStatus": (dirtyIntlUtil < eviction.evictionDirtyTarget) ? 'low'
+            : (dirtyIntlUtil >= eviction.evictionDirtyTrigger) ? 'high'
+            : 'medium',
+         "dirtyLeafStatus": (dirtyLeafUtil < eviction.evictionDirtyTarget) ? 'low'
+            : (dirtyLeafUtil >= eviction.evictionDirtyTrigger) ? 'high'
+            : 'medium',
+         "cacheEvictions": (cacheUtil > eviction.evictionTrigger),
+         "dirtyCacheEvictions": (dirtyUtil >= eviction.evictionDirtyTrigger),
+         "dirtyUpdatesCacheEvictions": (dirtyUpdatesUtil >= eviction.evictionUpdatesTrigger),
+         "evictionsTriggered": (cacheUtil > eviction.evictionTrigger)
+            || (dirtyUtil >= eviction.evictionDirtyTrigger)
+            || (dirtyUpdatesUtil >= eviction.evictionUpdatesTrigger),
+         "cacheHitRatio": cacheHitRatio,
+         "cacheHitStatus": (cacheHitRatio < 20) ? 'high'
+            : (cacheHitRatio >= 75) ? 'low'
+            : 'medium',
+         "cacheMissRatio": cacheMissRatio,
+         "cacheMissStatus": (cacheMissRatio < 20) ? 'low'
+            : (cacheMissRatio >= 75) ? 'high'
+            : 'medium',
+         "memSizeBytes": memSizeBytes,
+         "numCores": host?.system?.numCores ?? 4,
+         "memResidentBytes": (ss.mem?.resident ?? 0) * 1024 * 1024,
+         "currentAllocatedBytes": currentAllocatedBytes,
+         "heapSize": heapSize,
+         "heapUtil": Number.parseFloat((100 * (currentAllocatedBytes / heapSize)).toFixed(2)),
+         "pageheapFreeBytes": pageheapFreeBytes,
+         "totalFreeBytes": totalFreeBytes,
+         "memoryFragmentationRatio": memoryFragmentationRatio,
+         "memoryFragmentationStatus": (memoryFragmentationRatio < 10) ? 'low'
+            : (memoryFragmentationRatio >= 30) ? 'high'
+            : 'medium',
+         "backupCursorOpen": !!ss.storageEngine?.backupCursorOpen,
+         "wtReadTicketsUtil": wtReadTicketsUtil,
+         "wtReadTicketsAvail": ticketAvail(readTickets),
+         "wtWriteTicketsUtil": wtWriteTicketsUtil,
+         "wtWriteTicketsAvail": ticketAvail(writeTickets),
+         "wtReadTicketsStatus": (wtReadTicketsUtil < 20) ? 'low'
+            : (wtReadTicketsUtil >= 75) ? 'high'
+            : 'medium',
+         "wtWriteTicketsStatus": (wtWriteTicketsUtil < 20) ? 'low'
+            : (wtWriteTicketsUtil >= 75) ? 'high'
+            : 'medium',
+         "execReadQueueLength": +(readQ.queueLength ?? readQ.normalPriority?.queueLength ?? 0),
+         "execWriteQueueLength": +(writeQ.queueLength ?? writeQ.normalPriority?.queueLength ?? 0),
+         "usesThroughputProbing": !!exec.usesThroughputProbing,
+         "activeShardMigrations": (tm.currentMigrationsDonating > 0 || tm.currentMigrationsReceiving > 0),
+         "activeFlowControl": ss.flowControl?.isLagged === true && ss.flowControl?.enabled === true,
+         "activeIndexBuilds": (ss.indexBuilds?.total ?? 0) > (ss.indexBuilds?.phases?.commit ?? 0)
+            || (ss.activeIndexBuilds?.total ?? 0) > 0,
+         "activeRangeDeleter": +(ss.shardingStatistics?.rangeDeleterTasks ?? 0) > 0,
+         "rangeDeleterTasks": +(ss.shardingStatistics?.rangeDeleterTasks ?? 0),
+         "activeCheckpoint": !!(ss.wiredTiger?.transaction?.['transaction checkpoint currently running']
+            || ss.wiredTiger?.checkpoint?.['progress state']),
+         "slowRecentCheckpoint": checkpointMs > 60000,
+         "checkpointRuntimeRatio": checkpointRuntimeRatio,
+         "checkpointStatus": (checkpointRuntimeRatio < 50) ? 'low'
+            : (checkpointRuntimeRatio >= 100) ? 'high'
+            : 'medium',
+         "activeReplLag": activeReplLag,
+         "replLagStatus": (activeReplLag < heartbeatIntervalMillis / 1000) ? 'low'
+            : (activeReplLag > 90) ? 'high'
+            : 'medium',
+         "replLagScale": 30,
+         "heartbeatIntervalMillis": heartbeatIntervalMillis,
+         "slowms": slowms,
+         "storageEngineConcurrentReadTransactions": storageEngineConcurrentReadTransactions,
+         "storageEngineConcurrentWriteTransactions": storageEngineConcurrentWriteTransactions,
+         "lowPriorityAdmissionBypassThreshold": lowPriorityAdmissionBypassThreshold
+      };
+   }
+
    async function congestionMonitor() {
       /*
-       *  congestionMonitor() function
+       *  Mongod congestion snapshot: cached hostInfo / rs.status / wterc /
+       *  opt-in serverStatus, projected through vitalsFromServerStatus.
        */
       async function serverStatus(serverStatusOptions = {}) {
          /*
@@ -231,280 +451,17 @@
          }
       }
 
-      // Refresh dynamic/near-static data fields; create getter-bearing view once.
-      const data = {
-         "hostInfo": hostInfo(),
-         "rsStatus": rsStatus(),
-         "wiredTigerEngineRuntimeConfig": getParameter('wiredTigerEngineRuntimeConfig', ''),
+      const ss = await serverStatus(SERVER_STATUS_OPT_IN);
+      return vitalsFromServerStatus({
+         "ss": ss,
+         "rsSt": rsStatus(),
+         "host": hostInfo(),
+         "wterc": getParameter('wiredTigerEngineRuntimeConfig', '') || '',
+         "slowms": slowms(),
          "storageEngineConcurrentReadTransactions": getParameter('wiredTigerConcurrentReadTransactions', null),
-         // "storageEngineConcurrentReadTransactions": getParameter('storageEngineConcurrentReadTransactions', null),
          "storageEngineConcurrentWriteTransactions": getParameter('wiredTigerConcurrentWriteTransactions', null),
-         "lowPriorityAdmissionBypassThreshold": getParameter('lowPriorityAdmissionBypassThreshold', null),
-         // https://www.mongodb.com/docs/manual/reference/command/serverStatus/#mongodb-serverstatus-serverstatus.wiredTiger.concurrentTransactions
-         "serverStatus": await serverStatus(SERVER_STATUS_OPT_IN),
-         "slowms": slowms()
-      };
-      if (vitalsView !== null) {
-         Object.assign(vitalsView, data);
-         return vitalsView;
-      }
-      // WT eviction defaults (https://kb.corp.mongodb.com/article/000019073)
-      // evictionThreadsMin,
-      // evictionThreadsMax,
-      // evictionCheckpointTarget,
-      // evictionDirtyTarget,    // operate in a similar way to the overall targets but only apply to dirty data in cache
-      // evictionDirtyTrigger,   // application threads will be throttled if the percentage of dirty data reaches the eviction_dirty_trigger
-      // evictionTarget,         // the level at which WiredTiger attempts to keep the overall cache usage
-      // evictionTrigger,        // the level at which application threads start to perform the eviction
-      // evictionUpdatesTarget,  // eviction in worker threads when the cache contains at least this many bytes of updates
-      // evictionUpdatesTrigger, // application threads to perform eviction when the cache contains at least this many bytes of updates
-      vitalsView = {
-         ...data,
-         wterc(regex) {
-            // { "wiredTigerEngineRuntimeConfig": "eviction=(threads_min=8,threads_max=8),eviction_dirty_target=2,eviction_updates_trigger=8,checkpoint=(wait=60,log_size=2GB)" }
-            return this.wiredTigerEngineRuntimeConfig.match(regex)?.[1] ?? null;
-         },
-         get evictionThreadsMin() {
-            return +(this.wterc(/eviction=\(.*threads_min=(\d+).*\)/) ?? 4);
-         },
-         get evictionThreadsMax() {
-            return +(this.wterc(/eviction=\(.*threads_max=(\d+).*\)/) ?? 4);
-         },
-         get evictionCheckpointTarget() {
-            return +(this.wterc(/eviction_checkpoint_target=(\d+)/) ?? 1);
-         },
-         get evictionDirtyTarget() {
-            return +(this.wterc(/eviction_dirty_target=(\d+)/) ?? 5);
-         },
-         get evictionDirtyTrigger() {
-            return +(this.wterc(/eviction_dirty_trigger=(\d+)/) ?? 20);
-         },
-         get evictionTarget() {
-            return +(this.wterc(/eviction_target=(\d+)/) ?? 80);
-         },
-         get evictionTrigger() {
-            return +(this.wterc(/eviction_trigger=(\d+)/) ?? 95);
-         },
-         get evictionUpdatesTarget() {
-            return +(this.wterc(/eviction_updates_target=(\d+)/) ?? 2.5);
-         },
-         get evictionUpdatesTrigger() {
-            return +(this.wterc(/eviction_updates_trigger=(\d+)/) ?? 10);
-         },
-         get checkpointIntervalMS() { // checkpoint=(wait=60
-            return 1000 * (this.wterc(/checkpoint=\(.*wait=(\d+).*\)/) ?? 60);
-         },
-         get updatesDirtyBytes() {
-            return this.serverStatus.wiredTiger.cache['bytes allocated for updates'];
-         },
-         get dirtyBytes() {
-            return +this.serverStatus.wiredTiger.cache['tracked dirty bytes in the cache'];
-         },
-         get cacheSizeBytes() {
-            return +this.serverStatus.wiredTiger.cache['maximum bytes configured'];
-         },
-         get cachedBytes() {
-            return this.serverStatus.wiredTiger.cache['bytes currently in the cache'];
-         },
-         get cacheUtil() {
-            return Number.parseFloat(((this.cachedBytes / this.cacheSizeBytes) * 100).toFixed(2));
-         },
-         get cacheStatus() {
-            return (this.cacheUtil < this.evictionTarget) ? 'low'
-                 : (this.cacheUtil >= this.evictionTrigger) ? 'high'
-                 : 'medium';
-         },
-         get dirtyUtil() {
-            return Number.parseFloat(((this.dirtyBytes / this.cacheSizeBytes) * 100).toFixed(2));
-         },
-         get dirtyStatus() {
-            return (this.dirtyUtil < this.evictionDirtyTarget) ? 'low'
-                 : (this.dirtyUtil >= this.evictionDirtyTrigger) ? 'high'
-                 : 'medium';
-         },
-         get dirtyUpdatesUtil() {
-            return Number.parseFloat(((this.updatesDirtyBytes / this.cacheSizeBytes) * 100).toFixed(2));
-         },
-         get dirtyUpdatesStatus() {
-            return (this.dirtyUpdatesUtil < this.evictionUpdatesTarget) ? 'low'
-                 : (this.dirtyUpdatesUtil >= this.evictionUpdatesTrigger) ? 'high'
-                 : 'medium';
-         },
-         get cacheEvictions() {
-            return (this.cacheUtil > this.evictionTrigger);
-         },
-         get dirtyCacheEvictions() {
-            return (this.dirtyUtil >= this.evictionDirtyTrigger);
-         },
-         get dirtyUpdatesCacheEvictions() {
-            return (this.dirtyUpdatesUtil >= this.evictionUpdatesTrigger);
-         },
-         get evictionsTriggered() {
-            return (this.cacheEvictions || this.dirtyCacheEvictions || this.dirtyUpdatesCacheEvictions);
-         },
-         get cacheHitRatio() {
-            const hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
-            const missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
-            return Number.parseFloat((100 * (hitBytes - missBytes) / hitBytes).toFixed(2));
-         },
-         get cacheHitStatus() {
-            return (this.cacheHitRatio < 20) ? 'high'
-                 : (this.cacheHitRatio >= 75) ? 'low'
-                 : 'medium';
-         },
-         get cacheMissRatio() {
-            const hitBytes = this.serverStatus.wiredTiger.cache['pages requested from the cache'];
-            const missBytes = this.serverStatus.wiredTiger.cache['pages read into cache'];
-            return Number.parseFloat((100 * (1 - (hitBytes - missBytes) / hitBytes)).toFixed(2));
-         },
-         get cacheMissStatus() {
-            return (this.cacheMissRatio < 20) ? 'low'
-                 : (this.cacheMissRatio >= 75) ? 'high'
-                 : 'medium';
-         },
-         get memSizeBytes() {
-            // return (this?.hostInfo?.system?.memSizeMB ?? 1024) * 1024 * 1024;
-            return (this?.hostInfo?.system?.memLimitMB ?? 1024) * 1024 * 1024;
-         },
-         get numCores() {
-            // else max 4 is probably a good default aligning with concurrency limits
-            return this?.hostInfo?.system?.numCores ?? 4;
-         },
-         get memResidentBytes() {
-            return (this.serverStatus.mem?.resident ?? 0) * 1024 * 1024;
-         },
-         get currentAllocatedBytes() {
-            return +(this.serverStatus?.tcmalloc?.generic?.current_allocated_bytes ?? 0);
-         },
-         get heapSize() {
-            return +(this.serverStatus?.tcmalloc?.generic?.heap_size ?? (this.memSizeBytes / 64));
-         },
-         get heapUtil() {
-            return Number.parseFloat((100 * (this.currentAllocatedBytes / this.heapSize)).toFixed(2));
-         },
-         get pageheapFreeBytes() {
-            // assume zero fragmentation if we cannot measure pageheap_free_bytes
-            return +(this.serverStatus?.tcmalloc?.tcmalloc?.pageheap_free_bytes ?? 0);
-         },
-         get totalFreeBytes() {
-            return +(this.serverStatus?.tcmalloc?.tcmalloc?.total_free_bytes ?? 0);
-         },
-         get memoryFragmentationRatio() {
-            return Number.parseFloat(((this.pageheapFreeBytes / this.memSizeBytes) * 100).toFixed(2));
-         },
-         get memoryFragmentationStatus() {
-            // mimicing the (bad) t2 derived metric for now
-            return (this.memoryFragmentationRatio < 10) ? 'low'  // 25 is more realistic
-                 : (this.memoryFragmentationRatio >= 30) ? 'high' // 50 is more realistic
-                 : 'medium';
-         },
-         get backupCursorOpen() {
-            return this.serverStatus.storageEngine.backupCursorOpen;
-         },
-         // WT tickets available
-         // v6.0 (and older)
-         // {
-         //    write: { out: 0, available: 128, totalTickets: 128 },
-         //    read: { out: 0, available: 128, totalTickets: 128 }
-         //  }
-         // v7.0+
-         //    write: {
-         //      out: 0,
-         //      available: 13,
-         //      totalTickets: 13,
-         //      queueLength: Long('0'),
-         //      processing: Long('0')
-         //    },
-         //    read: {
-         //      out: 0,
-         //      available: 13,
-         //      totalTickets: 13,
-         //      queueLength: Long('0'),
-         //      processing: Long('0')
-         //    }
-         // v8.0 see db.serverStats().queues.execution
-         get wtReadTicketsUtil() {
-            const { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
-            return Number.parseFloat(((out / totalTickets) * 100).toFixed(2));
-         },
-         get wtReadTicketsAvail() {
-            const { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.read ?? this.serverStatus?.queues?.execution?.read;
-            return Number.parseFloat(((available / totalTickets) * 100).toFixed(2));
-         },
-         get wtWriteTicketsUtil() {
-            const { out, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
-            return Number.parseFloat(((out / totalTickets) * 100).toFixed(2));
-         },
-         get wtWriteTicketsAvail() {
-            const { available, totalTickets } = this.serverStatus.wiredTiger?.concurrentTransactions?.write ?? this.serverStatus?.queues?.execution?.write;
-            return Number.parseFloat(((available / totalTickets) * 100).toFixed(2));
-         },
-         get wtReadTicketsStatus() {
-            return (this.wtReadTicketsUtil < 20) ? 'low'
-                 : (this.wtReadTicketsUtil >= 75) ? 'high'
-                 : 'medium';
-         },
-         get wtWriteTicketsStatus() {
-            return (this.wtWriteTicketsUtil < 20) ? 'low'
-                 : (this.wtWriteTicketsUtil >= 75) ? 'high'
-                 : 'medium';
-         },
-         get activeShardMigrations() {
-            const { currentMigrationsDonating, currentMigrationsReceiving } = this.serverStatus.tenantMigrations;
-            return (currentMigrationsDonating > 0 || currentMigrationsReceiving > 0);
-         },
-         get activeFlowControl() {
-            return (this.serverStatus.flowControl.isLagged === true && this.serverStatus.flowControl.enabled === true);
-         },
-         get activeIndexBuilds() {
-            return (this.serverStatus?.indexBuilds?.total ?? 0) > (this.serverStatus?.indexBuilds?.phases?.commit ?? 0) || (this.serverStatus?.activeIndexBuilds?.total ?? 0) > 0;
-         },
-         get activeCheckpoint() {
-            return !!(this.serverStatus.wiredTiger.transaction?.['transaction checkpoint currently running'] || this.serverStatus.wiredTiger?.checkpoint?.['progress state']);
-         },
-         get slowRecentCheckpoint() {
-            return (this.serverStatus.wiredTiger.transaction['transaction checkpoint most recent time (msecs)'] > 60000);
-         },
-         get checkpointRuntimeRatio() {
-            return Number.parseFloat((((this.serverStatus.wiredTiger.transaction?.['transaction checkpoint most recent time (msecs)'] ?? this.serverStatus.wiredTiger.checkpoint?.['most recent time (msecs)']) / this.checkpointIntervalMS) * 100).toFixed(2));
-         },
-         get checkpointStatus() {
-            return (this.checkpointRuntimeRatio < 50) ? 'low'
-                 : (this.checkpointRuntimeRatio >= 100) ? 'high'
-                 : 'medium';
-         },
-         get activeReplLag() { // calculate the highest repl-lag from healthy members
-            const members = this.rsStatus?.members;
-            if (!Array.isArray(members) || members.length === 0) return 0;
-            const opTimers = members.map(({
-               stateStr,
-               health,
-               optimeDate
-            } = {}) => {
-               return {
-                  "stateStr": stateStr,
-                  "health": health,
-                  "optimeDate": optimeDate
-               };
-            }).filter(({ health, stateStr }) => {
-               return (health && (stateStr === 'PRIMARY' || stateStr === 'SECONDARY'));
-            }).map(({ optimeDate }) => optimeDate).filter(optimeDate => optimeDate != null);
-            if (opTimers.length === 0) return 0;
-            return +((Math.max(...opTimers) - Math.min(...opTimers)) / 1000).toFixed(0);
-         },
-         get replLagStatus() {
-            return (this.activeReplLag < this.heartbeatIntervalMillis / 1000) ? 'low'
-                 : (this.activeReplLag > 90) ? 'high' // maxStalenessSeconds
-                 : 'medium';
-         },
-         get replLagScale() {
-            return 30;
-         },
-         get heartbeatIntervalMillis() {
-            return this.rsStatus?.heartbeatIntervalMillis ?? 2000;
-         }
-      };
-      return vitalsView;
+         "lowPriorityAdmissionBypassThreshold": getParameter('lowPriorityAdmissionBypassThreshold', null)
+      });
    }
 
    class EQ {
@@ -548,7 +505,7 @@
          let cursor = 0;
          while (true) {
             // take current stats values from the parent monitoring thread
-            const { [this.metric]: metric = 0, [this.status]: status = '', [this.scale]: scale = 100 } = vitals;
+            const { [this.metric]: metric = 0, [this.status]: status = 'low', [this.scale]: scale = 100 } = vitals;
             cursor = Math.floor(metric * (this.width / scale));
             // always re-render the empty bar background
             readline.cursorTo(process.stdout, this.column, this.row);
@@ -589,10 +546,10 @@
          { "name": "cacheFill", "metric": "cacheUtil", "status": "cacheStatus", "scale": "evictionTrigger", "unit": "%" },
          { "name": "dirtyFill", "metric": "dirtyUtil", "status": "dirtyStatus", "scale": "evictionDirtyTrigger", "unit": "%" },
          { "name": "dirtyUpdatesFill", "metric": "dirtyUpdatesUtil", "status": "dirtyUpdatesStatus", "scale": "evictionUpdatesTrigger", "unit": "%" },
+         { "name": "dirtyIntlFill", "metric": "dirtyIntlUtil", "status": "dirtyIntlStatus", "scale": "evictionDirtyTrigger", "unit": "%" },
+         { "name": "dirtyLeafFill", "metric": "dirtyLeafUtil", "status": "dirtyLeafStatus", "scale": "evictionDirtyTrigger", "unit": "%" },
          { "name": "checkpointStress", "metric": "checkpointRuntimeRatio", "status": "checkpointStatus", "unit": "%", "interval": 250 },
          { "name": "activeReplLag", "metric": "activeReplLag", "status": "replLagStatus", "scale": "replLagScale", "unit": "s", "interval": 500 }
-         // bytes_dirty_intl
-         // bytes_dirty_leaf
       ];
       // instantiate EQ objects
       metrics.forEach((metric, _idx) => {
