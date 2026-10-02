@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.13.9"
+    *  Version: "0.14.0"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -20,6 +20,7 @@
     *    dbName/collName/filter in this file.
     *  - Window mode: index-ordered $match+$sort + $setWindowFields (semi-blocking bucket estimates)
     *  - Scan mode: hinted {_id:1} find with readOnce, residual FETCH, in-process buckets (no $setWindowFields)
+    *  - Policy A is POLICY_A_STEPS (C1 cannotSpill scan, C2–C3 user hint, C4/C7 unhinted, C6 _id scan)
     *  - User hint is kept only when the hinted explain is IXSCAN without a blocking SORT; otherwise WARN and _id scan
     *  - Policy B: compound equality prefix → trailing index sort when the first filter field is not index-ordered
     *  - Unhinted window: if winningPlan is not IXSCAN-without-SORT, hint the first ranked rejectedPlan that is (planner order)
@@ -69,7 +70,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.13.9" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.14.0" };
    let vitals = {};
    let vitalsSampling = false;
    let startupLogDone = false; // after writeConsole of the startup banner; attach WARN is banner-only until then
@@ -1854,51 +1855,81 @@
       return null;
    }
 
+   // Policy A probe order. First non-null result wins. C4 is tryWindowFromPlanner
+   // (winner or first ranked rejectedPlan). C8 catch-292 is in getIds.
+   const POLICY_A_STEPS = [
+      {
+         "id": "C1",
+         "when": (ctx) => ctx.cannotSpill,
+         "run": (ctx) => idScan(
+            ctx.namespace, ctx.filter, ctx.explainOpts,
+            '\n[red][WARN][/] [yellow]Curation forcing hinted _id find() walk — this host cannot spill a leftover $setWindowFields SORT (Atlas M0/Flex / no WT vitals)[/]'
+         )
+      },
+      {
+         "id": "C2",
+         "when": (ctx) => ctx.hinted,
+         "run": (ctx) => tryWindow(ctx.namespace, ctx.filter, ctx.explainOpts, ctx.sortBy, ctx.userHint)
+      },
+      {
+         "id": "C3",
+         "when": (ctx) => ctx.hinted,
+         "run": (ctx) => tryPolicyB(ctx.namespace, ctx.filter, ctx.explainOpts, ctx.sortBy, ctx.userHint, ctx.indexes)
+      },
+      {
+         "id": "C3scan",
+         "when": (ctx) => ctx.hinted,
+         "run": (ctx) => {
+            emit('\n[red][WARN][/] [yellow]curation plan may use COLLSCAN/blocking SORT despite user hint[/]; sortBy:', JSON.stringify(ctx.sortBy));
+            return idScan(ctx.namespace, ctx.filter, ctx.explainOpts);
+         }
+      },
+      {
+         "id": "C4",
+         "when": (ctx) => !ctx.hinted,
+         "run": (ctx) => tryWindowFromPlanner(ctx.namespace, ctx.filter, ctx.explainOpts, ctx.sortBy, ctx.indexes)
+      },
+      {
+         "id": "C7",
+         "when": (ctx) => !ctx.hinted,
+         "run": (ctx) => tryPolicyB(ctx.namespace, ctx.filter, ctx.explainOpts, ctx.sortBy, {}, ctx.indexes)
+      },
+      {
+         "id": "C6",
+         "run": (ctx) => idScan(ctx.namespace, ctx.filter, ctx.explainOpts)
+      }
+   ];
+
    async function resolveCurationOrder(namespace, filter = {}, userHint = {}, readPreference = null) {
       /*
-       *  Curation order (Policy A):
-       *  - Derive sortBy from the filter ({} / non-field predicates → _id).
-       *  - Explain $match+$sort (queryPlanner), with the candidate hint when one
-       *    is in play. Then explain the full v3 window pipeline (both SWF stages).
-       *    Index-ordered (IXSCAN, no COLLSCAN / blocking SORT) may use the
-       *    $setWindowFields pipeline — except on hosts that cannot spill.
-       *  - Atlas M0/Flex (paceReason 'no-wt') skip window even when those explains
-       *    look index-ordered: leftover SWF SORT cannot spill (32MiB).
-       *  - Otherwise mode 'scan': find() hinted {_id:1} walk, residual filter,
-       *    bucket in-process. idScan explains that find() (same hint/sort/projection).
-       *  - User hint is honored only when that hinted explain is index-ordered;
-       *    otherwise WARN and take the _id scan.
-       *  - Policy B: when the first filter field is not index-ordered, probe
-       *    compound equality prefixes and trailing btree keys (ESR / Howto Example D).
-       *  - Unhinted: if winningPlan is not IXSCAN-without-SORT, hint the first
-       *    ranked rejectedPlan that is (queryPlanner order, window-safe btree).
-       *    Empty viable set → _id find() scan. Catch-292 still covers live SORT.
+       *  Walk POLICY_A_STEPS. sortBy from the filter ({} / non-field → _id).
+       *  C1 cannotSpill skips window (M0/Flex leftover SWF SORT cannot spill).
+       *  C11 mongos pace leaves cannotSpill false so window stays eligible.
+       *  C10 collation is applyUserCollation on explainOpts.
        */
       const sortField = sortKeyFromFilter(filter);
       const sortBy = { [sortField]: 1 };
       const explainOpts = {};
       applyUserCollation(explainOpts);
       if (readPreference?.mode) explainOpts.readPreference = commandReadPreference(readPreference);
-
-      if (curationCannotSpill()) {
-         return await idScan(namespace, filter, explainOpts, '\n[red][WARN][/] [yellow]Curation forcing hinted _id find() walk — this host cannot spill a leftover $setWindowFields SORT (Atlas M0/Flex / no WT vitals)[/]');
+      const cannotSpill = curationCannotSpill();
+      const hinted = hasNonEmptyDoc(userHint);
+      const indexes = cannotSpill ? [] : await listCurationIndexes(namespace);
+      const ctx = {
+         "namespace": namespace,
+         "filter": filter,
+         "explainOpts": explainOpts,
+         "sortBy": sortBy,
+         "userHint": userHint,
+         "indexes": indexes,
+         "cannotSpill": cannotSpill,
+         "hinted": hinted
+      };
+      for (const step of POLICY_A_STEPS) {
+         if (typeof step.when === 'function' && !step.when(ctx)) continue;
+         const result = await step.run(ctx);
+         if (result) return result;
       }
-
-      const indexes = await listCurationIndexes(namespace);
-
-      if (hasNonEmptyDoc(userHint)) {
-         const win = await tryWindow(namespace, filter, explainOpts, sortBy, userHint);
-         if (win) return win;
-         const b = await tryPolicyB(namespace, filter, explainOpts, sortBy, userHint, indexes);
-         if (b) return b;
-         emit('\n[red][WARN][/] [yellow]curation plan may use COLLSCAN/blocking SORT despite user hint[/]; sortBy:', JSON.stringify(sortBy));
-         return await idScan(namespace, filter, explainOpts);
-      }
-
-      const trusted = await tryWindowFromPlanner(namespace, filter, explainOpts, sortBy, indexes);
-      if (trusted) return trusted;
-      const b = await tryPolicyB(namespace, filter, explainOpts, sortBy, {}, indexes);
-      if (b) return b;
       return await idScan(namespace, filter, explainOpts);
    }
 
