@@ -90,8 +90,8 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `schema-sampler.js` | 0.2.16 | **0.2.17** |
 | `sleepy.js` | 0.2.6 | **0.2.7** |
 | `docSizes.js` | 0.1.34 | **0.1.35** |
-| `niceDeleteMany.js` | 0.4.11 | **0.13.8** |
-| `congestionMonitor.js` | 0.2.13 | **0.3.1** |
+| `niceDeleteMany.js` | 0.4.11 | **0.13.9** |
+| `congestionMonitor.js` | 0.2.13 | **0.3.2** |
 | `onlineDefrag.js` | 0.1.4 | **1.6.2** |
 | `compact.js` | 0.2.15 | **removed** (archive only) |
 | `batchUpdater.js` | 0.1.6 | **removed** (archive only) |
@@ -435,18 +435,18 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `congestionMonitor.js`
 
-**Live: v0.3.1.** **Legacy archive line: v0.2.13** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Known `.finally(process.stdout.write(…))` (write runs immediately) is **wontfix on this line**. Live wraps `.finally(() => process.stdout.write(…))`. Post-freeze feature work proceeds on the mongosh line only.
+**Live: v0.3.2.** **Legacy archive line: v0.2.13** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Known `.finally(process.stdout.write(…))` (write runs immediately) is **wontfix on this line**. Live wraps `.finally(() => process.stdout.write(…))`. Post-freeze feature work proceeds on the mongosh line only.
 
 Remaining mongosh-line work (do not block the archive):
 
 - Sharding (per-shard WT vitals; same need as niceDeleteMany). Live mongosh line folds collection-owning (or all) shard primaries; archive freeze stays v0.2.13.
-- MongoDB 8 execution-control: live snapshot + EQ for `executionControlDeprioritizationGate`, normal and low-priority `queues.execution.{read,write}.queueLength`, and interval wait from `totalTimeQueuedMicros` (per-shard `_queuedPrev`, MAX wait-ms / RANK wait status on fold). Monitor-only — niceDeleteMany AIMD does not trip on these. `lowPriorityAdmissionBypassThreshold` is dropped (fairness knob, not a pressure signal).
+- MongoDB 8 execution-control: live snapshot + EQ for `executionControlDeprioritizationGate`, `usesThroughputProbing`, normal and low-priority `queues.execution.{read,write}.queueLength`, and interval wait from `totalTimeQueuedMicros` (per-shard `_queuedPrev`, MAX wait-ms / RANK wait status on fold). Monitor-only — niceDeleteMany AIMD does not trip on these. `lowPriorityAdmissionBypassThreshold` is dropped (fairness knob, not a pressure signal).
 - `bytes_dirty_intl` / `bytes_dirty_leaf` when the server exposes them. Live mongosh line already maps `tracked dirty internal/leaf page bytes in the cache`.
 - Pause / closed signal for auto-trim: backup cursor, repl-lag settle, WT dirty/updates (already has `backupCursorOpen`). Auto-trim is a consumer of these vitals, not a second monitor implementation if inlining is still required.
 
 ### `niceDeleteMany.js`
 
-**Live: v0.13.8.** **Archive: v0.4.11.** `--eval` must use `var`. Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`. Header tags this file as requiring this roadmap. Shared AIMD (`maxInFlight` MD/AI) for WT and paceMaker; WT FSM vs pace delay stay separate gates. `hasUserHint` / `hasUserCollation` collapsed to `hasNonEmptyDoc`.
+**Live: v0.13.9.** **Archive: v0.4.11.** `--eval` must use `var`. Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`. Header tags this file as requiring this roadmap. Shared AIMD (`maxInFlight` MD/AI) for WT and paceMaker; WT FSM vs pace delay stay separate gates. `hasUserHint` / `hasUserCollation` collapsed to `hasNonEmptyDoc`.
 
 **Apply (shell):** `deleteManyTask` uses `(await namespace.deleteMany(...)).deletedCount`. See the scripting guide (result fields). Do not re-add the Promise-field unwrap as new work.
 
