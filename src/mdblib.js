@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.21.1"
+ *  Version: "0.21.2"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.21.1"
+      "version": "0.21.2"
 });
 
 /*  Notes:
@@ -1276,14 +1276,26 @@ const SERVER_STATUS_OPTIONS_DEFAULTS = { // multiversion compatible
    "writeBacksQueued": false
 };
 
-function serverStatus(serverStatusOptions = {}, readPref = 'primaryPreferred') {
+function serverStatus(serverStatusOptions = {}, statusReadPref) {
    /*
-    *  opt-in version of db.serverStatus()
+    *  opt-in version of db.serverStatus().
+    *  An explicit statusReadPref wins. Omitted: hello().secondary is true
+    *  only on a secondary, and the sample stays on that node
+    *  (secondaryPreferred). Otherwise primaryPreferred.
+    *  Not the stats global readPref ($collStats / getDBNames).
     */
+   let readPreference = statusReadPref;
+   if (typeof readPreference === 'undefined') {
+      let onSecondary = false;
+      try {
+         onSecondary = !!(hello().secondary);
+      } catch (_) {
+         onSecondary = false;
+      }
+      readPreference = onSecondary ? 'secondaryPreferred' : 'primaryPreferred';
+   }
    const options = {
-      "readPreference": (typeof readPref !== 'undefined') ? readPref
-                      : (hello().secondary) ? 'secondaryPreferred'
-                      : 'primaryPreferred'
+      "readPreference": readPreference
    };
 
    let serverStatusResults = {};
