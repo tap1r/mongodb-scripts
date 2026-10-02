@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.22.1"
+ *  Version: "0.22.2"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.22.1"
+      "version": "0.22.2"
 });
 
 /*  Notes:
@@ -52,10 +52,14 @@ if (typeof __lib === 'undefined') (
  *  - statsIncomplete compares returned $collStats shards to owning shards
  *    (config.chunks / db primary), not cluster-wide listShards.
  *  - parseDbStats / parseCollStats / parseIndexStats turn normalised $stats /
- *    $collStats output into DTOs. CollectionStats / DatabaseStats / DbPathStats
- *    construct from those DTOs. HostNode owns host identity; DbPathStats
- *    composes it. There is no MetaStats façade. TopologySnapshot waits on
- *    discovery.
+ *    $collStats output into DTOs. parseDbStats stores the index count as
+ *    nindexes only (db.stats() names that field indexes). Collection
+ *    indexes stay IndexStats[]. DatabaseStats / DbPathStats do not alias
+ *    indexes to nindexes.
+ *  - UUID/Binary.base64() is a method (this.toString('base64')).
+ *  - CollectionStats / DatabaseStats / DbPathStats construct from those
+ *    DTOs. HostNode owns host identity; DbPathStats composes it. There is
+ *    no MetaStats façade. TopologySnapshot waits on discovery.
  *  - Catalog identity first, stats on demand: collection.fetchStats(),
  *    database.fetchAllStats({ concurrency }), dbPath.materialize({ concurrency }).
  *    Cache _statsPromise per collection. Callers materialise then serialise.
@@ -426,7 +430,9 @@ function parseDbStats(raw = {}) {
    /*
     *  Normalised $stats document → DbStatsDTO.
     *  ncollections / nviews / nindexes / namespaces are counts (scalar or
-    *  per-shard array). Catalog lists start empty on the entity.
+    *  per-shard array). db.stats() names the index count indexes; that
+    *  feeds nindexes only. Catalog lists start empty on the entity
+    *  (collections / views); collection.indexes is IndexStats[].
     */
    const src = raw || {};
    const nindexes = parseNamespaceCount(
@@ -445,7 +451,6 @@ function parseDbStats(raw = {}) {
       "nviews": parseNamespaceCount(src.views, src.nviews, 0),
       "namespaces": parseNamespaceCount(src.namespaces, undefined, 0),
       "nindexes": nindexes,
-      "indexes": nindexes,
       "totalIndexSize": toStatsNumber(src.indexSize, toStatsNumber(src.totalIndexSize, 0)),
       "totalIndexBytesReusable": toNullableBytes(
          src.totalIndexBytesReusable != null ? src.totalIndexBytesReusable : src.indexFreeStorageSize
@@ -616,7 +621,6 @@ class DatabaseStats extends StorageMetrics {
       this.nviews = dto.nviews != null ? dto.nviews : 0;
       this.namespaces = dto.namespaces != null ? dto.namespaces : 0;
       this.nindexes = dto.nindexes != null ? dto.nindexes : 0;
-      this.indexes = dto.indexes != null ? dto.indexes : this.nindexes;
       this.shards = Array.isArray(dto.shards) ? dto.shards : [];
       this.statsError = dto.statsError || null;
       this.unauthorized = dto.unauthorized === true;
@@ -704,7 +708,6 @@ class DbPathStats extends StorageMetrics {
       this.nviews = dto.nviews != null ? dto.nviews : 0;
       this.namespaces = dto.namespaces != null ? dto.namespaces : 0;
       this.nindexes = dto.nindexes != null ? dto.nindexes : 0;
-      this.indexes = dto.indexes != null ? dto.indexes : this.nindexes;
       this.host = (dto.host instanceof HostNode)
          ? dto.host
          : new HostNode(dto.host || {
@@ -1402,7 +1405,10 @@ if (typeof bsonsize === 'undefined') {
 }
 
 if (typeof Object.getPrototypeOf(UUID()).base64 === 'undefined') {
-   Object.getPrototypeOf(UUID()).base64 = () => this.toString('base64');
+   // Old-shell BinData.base64(); method so this is the Binary.
+   Object.getPrototypeOf(UUID()).base64 = function() {
+      return this.toString('base64');
+   };
 }
 
 if (typeof hex_md5 === 'undefined') {
@@ -2140,6 +2146,7 @@ function $stats(dbName = db.getName()) {
          "name": dbName,
          "collections": 0,
          "indexes": 0,
+         "nindexes": 0,
          "views": 0,
          "nviews": 0,
          "namespaces": 0,
@@ -2188,6 +2195,7 @@ function $stats(dbName = db.getName()) {
    } else { // detect unsharded db.stats()
       stats.collections = +stats.collections;
       stats.indexes = +stats.indexes;
+      stats.nindexes = stats.indexes;
       stats.views = +stats.views;
       stats.nviews = stats.views;
       stats.namespaces = stats.collections + stats.views;
