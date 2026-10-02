@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.22.0"
+ *  Version: "0.22.1"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.22.0"
+      "version": "0.22.1"
 });
 
 /*  Notes:
@@ -32,6 +32,10 @@ if (typeof __lib === 'undefined') (
  *    A proc of unknown is not cached (the next read retries). An M0/Flex
  *    getParameter denial still caches once proc is known. load() does not
  *    fill the snapshot. hello().me stays live (onlineDefrag can move).
+ *  - compactionHelper(type, storageSize, freeStorageSize) has no numeric
+ *    defaults. Omitted storage is not the 4 KiB display floor. Omitted or
+ *    null free is unknown, not an empty free list, and returns false.
+ *    Thresholds stay 20% collection / 50% index / 50% dbPath.
  *  - fCV() → serverVer() on Atlas M0/Flex is by design (getParameter FCV is
  *    restricted; Atlas is not left on a lagging FCV)
  *  - serverStatus none:true is portable on 8.0 and Atlas M0 (no throw;
@@ -1428,8 +1432,11 @@ const WIREDTIGER_MIN_ALLOC_SIZE = 4096;             // 4 KiB: WT allocation_size
 const WIREDTIGER_MIN_RECLAIM_SIZE_V8 = 1048576;     // 1 MiB: WT skips compact when recoverable bytes are smaller (v8+)
 const WIREDTIGER_MIN_RECLAIM_SIZE_LEGACY = 2097152; // 2 MiB: same floor on pre-v8
 
-function compactionHelper(type = 'collection', storageSize = 4096, freeStorageSize = 0) {
-   // Unknown/hidden free-space (Atlas M0/Flex) is not an empty free list.
+function compactionHelper(type = 'collection', storageSize, freeStorageSize) {
+   /*
+    *  Worth compacting? No numeric defaults: omitted storage is not the
+    *  4 KiB display floor, and omitted free is unknown, not an empty list.
+    */
    if (freeStorageSize == null || Number.isNaN(+freeStorageSize) || !(+storageSize > 0)) return false;
    const compactCollectionThreshold = 0.2; // 20% reusable collection bytes
    const compactIndexThreshold = 0.5;      // 50% reusable index bytes
