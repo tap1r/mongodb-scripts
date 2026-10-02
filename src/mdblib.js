@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.21.2"
+ *  Version: "0.21.3"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.21.2"
+      "version": "0.21.3"
 });
 
 /*  Notes:
@@ -24,8 +24,13 @@ if (typeof __lib === 'undefined') (
  *  - bsonMax, maxWriteBatchSize, pid, and nonce are first-read globals.
  *    load() does not call hello, serverStatus, or features for them.
  *    One hello() fills both BSON limits. fuzzer reads bsonMax.
+ *  - Session snapshot (first read): atlas platform, fCV, and isSharded share
+ *    one hello / hostInfo / serverStatus / listShards / getParameter.
+ *    load() does not fill it. hello().me stays live (onlineDefrag can move).
  *  - fCV() → serverVer() on Atlas M0/Flex is by design (getParameter FCV is
  *    restricted; Atlas is not left on a lagging FCV)
+ *  - serverStatus none:true is portable on 8.0 and Atlas M0 (no throw;
+ *    process/pid remain). Keep SERVER_STATUS_OPTIONS_DEFAULTS.
  *  - $collStats is async; callers must await it (user-defined async is not
  *    rewriter-awaited). Do not await the aggregate cursor (thenable drains).
  *    Drain via drainAggCursor / driver _cursor.toArray() (native Promise) so
@@ -657,20 +662,24 @@ class HostNode {
       this.shards = Array.isArray(shards) ? shards : [];
    }
    init() {
-      this.instance = (isAtlasPlatform('serverless')) ? 'serverless'
-                    : (isSharded()) ? 'sharded'
+      const snap = sessionSnapshot();
+      this.instance = (snap.atlasPlatform === 'serverless') ? 'serverless'
+                    : (snap.sharded) ? 'sharded'
                     : hello().me;
-      this.hostname = hostInfo().system.hostname;
-      this.proc = (serverStatus().ok) ? serverStatus().process
-                : (hello().msg === 'isdbgrid') ? 'mongos'
-                : (typeof hello().setName !== 'undefined') ? 'mongod'
-                : 'unknown';
-      this.dbPath = (isAtlasPlatform('serverless')) ? 'serverless'
-                  : (isAtlasPlatform('sharedTier')) ? 'sharedTier'
+      this.hostname = snap.hostname;
+      this.proc = snap.proc;
+      this.dbPath = (snap.atlasPlatform === 'serverless') ? 'serverless'
+                  : (snap.atlasPlatform === 'sharedTier') ? 'sharedTier'
                   : (this.proc === 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
                   : (this.proc === 'mongos') ? 'sharded'
                   : 'unknown';
-      this.shards = (this.proc === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards.map(({ _id }) => _id) : [];
+      if (this.proc === 'mongos') {
+         this.shards = Array.isArray(snap.shardIds)
+            ? snap.shardIds
+            : db.adminCommand({ "listShards": 1 }).shards.map(({ _id }) => _id);
+      } else {
+         this.shards = [];
+      }
       return this;
    }
    static discover() {
@@ -866,30 +875,18 @@ function isSharded() {
    /*
     *  Determine if the current host is a mongos
     */
-   let sharded;
-   try {
-      sharded = db.adminCommand({ "listShards": 1 }).shards;
-   } catch(_) {
-      sharded = false;
-   }
-
-   const proc = (serverStatus().ok) ? serverStatus().process
-              : (sharded) ? 'mongos'
-              : 'unknown';
-
-   return proc === 'mongos';
+   return sessionSnapshot().sharded === true;
 }
 
 function getDBNames(dbFilter = /^.+/) {
    /*
     *  getDBNames substitute for Mongo.getDBNames()
     */
+   const atlasHide = hidesDbStatsFreeStorage();
    let command = {
       "listDatabases": 1,
       "nameOnly": true,
-      "authorizedDatabases": (!(isAtlasPlatform('serverless') || isAtlasPlatform('sharedTier')))
-                           ? true
-                           : false
+      "authorizedDatabases": !atlasHide
    };
    const options = {
       "readPreference": (typeof readPref !== 'undefined') ? readPref
@@ -899,11 +896,9 @@ function getDBNames(dbFilter = /^.+/) {
    const filterOptions = 'i';
    const filterRegex = new RegExp(dbFilter, filterOptions);
    const filter = { "name": filterRegex };
-   const restrictedNamespaces = (isAtlasPlatform('serverless')) ? ['admin', 'config', 'local']
-                              : (isAtlasPlatform('sharedTier')) ? ['admin', 'config', 'local']
-                              : [];
+   const restrictedNamespaces = atlasHide ? ['admin', 'config', 'local'] : [];
    const comment = `list databases with ${__lib.name} v${__lib.version}`;
-   if (!(isAtlasPlatform('serverless') || isAtlasPlatform('sharedTier'))) {
+   if (!atlasHide) {
       // Atlas shared/serverless reject listDatabases.filter; client-side regex still applies.
       command.filter = filter;
    }
@@ -1056,16 +1051,7 @@ function fCV(ver = false) { // Atlas M0/Flex: getParameter FCV restricted
     *  Prefer that document on mongos (do not require process == mongod).
     *  Fall back to binary version when FCV is unavailable (M0/Flex by design).
     */
-   let cmd = {};
-   try {
-      cmd = db.adminCommand({ "getParameter": 1, "featureCompatibilityVersion": 1 });
-   } catch(_) {
-      cmd.ok = 0;
-   }
-
-   const raw = cmd.featureCompatibilityVersion;
-   const versionStr = (typeof raw === 'string') ? raw : raw && raw.version;
-   const parsed = parseVer(versionStr) || parseVer(db.version());
+   const parsed = sessionSnapshot().fcvParsed;
    if (ver === false) return parsed ? verNumber(parsed) : 0;
    return verAtLeast(parsed, ver);
 }
@@ -1167,32 +1153,110 @@ function serverCmdLineOpts() {
    return serverCmdLineOpts;
 }
 
+function sessionSnapshot() {
+   /*
+    *  First-read session facts: atlas platform, fCV, isSharded.
+    *  Shares hello / hostInfo / serverStatus / listShards / getParameter.
+    *  load() does not fill this. hello().me is not stored (onlineDefrag can move).
+    */
+   if (sessionSnapshot.cached) return sessionSnapshot.cached;
+
+   let helloDoc = {};
+   try {
+      helloDoc = hello() || {};
+   } catch (_) {
+      helloDoc = {};
+   }
+   const helloMsg = helloDoc.msg || false;
+   const isMongos = helloMsg == 'isdbgrid';
+
+   let hostInfoDoc = {};
+   let hostInfoError = null;
+   try {
+      hostInfoDoc = db.hostInfo() || {};
+   } catch (e) {
+      hostInfoError = e;
+      hostInfoDoc = {};
+   }
+
+   const ss = serverStatus();
+   let hostname = (hostInfoDoc.system && hostInfoDoc.system.hostname)
+      ? String(hostInfoDoc.system.hostname)
+      : '';
+   if (!hostname) {
+      try {
+         hostname = hostNameFromHostPort(ss.host);
+      } catch (_) { /* fall through */ }
+   }
+   if (!hostname) {
+      hostname = hostNameFromHostPort(helloDoc.me);
+      if (!hostname && helloDoc.msg !== 'isdbgrid' && typeof helloDoc.me === 'undefined') {
+         hostname = 'serverless';
+      }
+   }
+   if (!hostname) hostname = 'unknown';
+
+   let isSharedTier = false;
+   if (hostInfoError) {
+      isSharedTier = (hostInfoError.codeName == 'AtlasError');
+   } else {
+      isSharedTier = (hostInfoDoc.ok != 1);
+   }
+
+   const atlasVersion = ss.atlasVersion || false;
+   const isAtlas = !!(atlasVersion || (typeof hostname === 'string' && hostname.endsWith('.mongodb.net')));
+   let atlasPlatform = false;
+   if (isMongos && isAtlas && hostname != 'serverless') atlasPlatform = 'dedicatedShardedCluster';
+   else if (!isMongos && isAtlas && isSharedTier) atlasPlatform = 'sharedTier';
+   else if (!isMongos && isAtlas) atlasPlatform = 'dedicatedReplicaSet';
+   else if (hostname == 'serverless') atlasPlatform = 'serverless';
+
+   let fcvCmd = {};
+   try {
+      fcvCmd = db.adminCommand({ "getParameter": 1, "featureCompatibilityVersion": 1 });
+   } catch (_) {
+      fcvCmd.ok = 0;
+   }
+   const raw = fcvCmd.featureCompatibilityVersion;
+   const versionStr = (typeof raw === 'string') ? raw : raw && raw.version;
+   const fcvParsed = parseVer(versionStr) || parseVer(db.version());
+
+   let shardDocs = false;
+   try {
+      shardDocs = db.adminCommand({ "listShards": 1 }).shards;
+   } catch (_) {
+      shardDocs = false;
+   }
+   const shardedProc = (ss.ok) ? ss.process
+                     : (shardDocs) ? 'mongos'
+                     : 'unknown';
+   const sharded = shardedProc === 'mongos';
+   const proc = (ss.ok) ? ss.process
+              : (helloMsg == 'isdbgrid') ? 'mongos'
+              : (typeof helloDoc.setName !== 'undefined') ? 'mongod'
+              : 'unknown';
+   const shardIds = Array.isArray(shardDocs)
+      ? shardDocs.map(({ _id }) => _id)
+      : null;
+
+   sessionSnapshot.cached = {
+      atlasPlatform,
+      fcvParsed,
+      sharded,
+      hostname,
+      proc,
+      shardIds
+   };
+   return sessionSnapshot.cached;
+}
+
 function isAtlasPlatform(type = null) {
    /*
     *  Evaluate the Atlas deployment platform type
     */
-   const { 'msg': helloMsg = false } = hello();
-   const isMongos = (helloMsg == 'isdbgrid') ? true : false;
-   const { hostname = false } = hostInfo().system;
-   const { atlasVersion = false } = serverStatus();
-   let isSharedTier = false;
-   try {
-      isSharedTier = (db.hostInfo().ok != 1);
-   } catch(e) {
-      isSharedTier = (e.codeName == 'AtlasError') ? true : false;
-   }
-
-   const isAtlas = (atlasVersion || (typeof hostname === 'string' && hostname.endsWith('.mongodb.net'))) ? true : false;
-
-   return (type === null && isMongos && isAtlas && hostname != 'serverless') ? 'dedicatedShardedCluster'
-        : (type == 'dedicatedShardedCluster' && isMongos && isAtlas && hostname != 'serverless') ? true
-        : (type === null && !isMongos && isAtlas && isSharedTier) ? 'sharedTier'
-        : (type == 'sharedTier' && !isMongos && isAtlas && isSharedTier) ? true
-        : (type === null && !isMongos && isAtlas) ? 'dedicatedReplicaSet'
-        : (type == 'dedicatedReplicaSet' && !isMongos && isAtlas) ? true
-        : (type === null && hostname == 'serverless') ? 'serverless'
-        : (type == 'serverless' && hostname == 'serverless') ? true
-        : false;
+   const platform = sessionSnapshot().atlasPlatform;
+   if (type == null) return platform;
+   return platform == type;
 }
 
 function hidesDbStatsFreeStorage() {
@@ -1201,12 +1265,13 @@ function hidesDbStatsFreeStorage() {
     *  A 0 from that command is not an empty free list. Collection $collStats may
     *  still expose WT block-manager reuse; dbstats rolls those up as a lower bound.
     */
-   return isAtlasPlatform('sharedTier') || isAtlasPlatform('serverless');
+   const platform = sessionSnapshot().atlasPlatform;
+   return platform === 'sharedTier' || platform === 'serverless';
 }
 
 // Hoisted once — avoid rebuilding ~70-key maps on every serverStatus() call.
 const SERVER_STATUS_OPTIONS_DEFAULTS = { // multiversion compatible
-   "none": true, // 8.3 feature: exclude all optional fields, then opt-in
+   "none": true, // 8.0+ slim; 8.0/M0 keep process/pid (no throw). Opt-in sections after.
    "activeIndexBuilds": false,
    "asserts": false,
    "batchedDeletes": false,
