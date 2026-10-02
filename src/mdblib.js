@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.21.4"
+ *  Version: "0.22.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.21.4"
+      "version": "0.22.0"
 });
 
 /*  Notes:
@@ -27,8 +27,11 @@ if (typeof __lib === 'undefined') (
  *  - Session snapshot (first read): atlas platform, fCV, and isSharded share
  *    one hello / hostInfo / serverStatus / listShards / getParameter.
  *    That serverStatus call gets the read preference from the hello already
- *    taken, so it does not hello again. load() does not fill the snapshot.
- *    hello().me stays live (onlineDefrag can move).
+ *    taken, so it does not hello again. hello msg isdbgrid still means
+ *    sharded when serverStatus is {ok:0} and listShards did not return shards.
+ *    A proc of unknown is not cached (the next read retries). An M0/Flex
+ *    getParameter denial still caches once proc is known. load() does not
+ *    fill the snapshot. hello().me stays live (onlineDefrag can move).
  *  - fCV() → serverVer() on Atlas M0/Flex is by design (getParameter FCV is
  *    restricted; Atlas is not left on a lagging FCV)
  *  - serverStatus none:true is portable on 8.0 and Atlas M0 (no throw;
@@ -1161,6 +1164,8 @@ function sessionSnapshot() {
     *  One hello, then hostInfo / serverStatus / listShards / getParameter.
     *  serverStatus gets the read preference from that hello, so it does not
     *  hello again. A thrown hello falls through to primaryPreferred.
+    *  hello msg isdbgrid still means sharded when serverStatus is {ok:0} and
+    *  listShards did not return shards. proc unknown is not cached.
     *  load() does not fill this. hello().me is not stored (onlineDefrag can move).
     */
    if (sessionSnapshot.cached) return sessionSnapshot.cached;
@@ -1234,6 +1239,7 @@ function sessionSnapshot() {
    }
    const shardedProc = (ss.ok) ? ss.process
                      : (shardDocs) ? 'mongos'
+                     : (helloMsg == 'isdbgrid') ? 'mongos'
                      : 'unknown';
    const sharded = shardedProc === 'mongos';
    const proc = (ss.ok) ? ss.process
@@ -1244,7 +1250,7 @@ function sessionSnapshot() {
       ? shardDocs.map(({ _id }) => _id)
       : null;
 
-   sessionSnapshot.cached = {
+   const snap = {
       atlasPlatform,
       fcvParsed,
       sharded,
@@ -1252,7 +1258,10 @@ function sessionSnapshot() {
       proc,
       shardIds
    };
-   return sessionSnapshot.cached;
+   // A missed probe must not stick for the session. M0/Flex still caches:
+   // proc is known and fCV falls back to the binary version.
+   if (proc !== 'unknown') sessionSnapshot.cached = snap;
+   return snap;
 }
 
 function isAtlasPlatform(type = null) {
