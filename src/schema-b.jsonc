@@ -1,8 +1,10 @@
 // Sample schema B, time series.
 // A string that starts with "=" is an expression. Other strings, numbers, and null are literals.
 // Expressions may use the preamble names oid, date, ts, idioma, and totalDocs.
-// Collection tsOptions still expect timeField "timestamp" and metaField "data".
-// This sample stores the Date at "timeField" and the series name at "metaField".
+// tsOptions.timeField is "timestamp" and tsOptions.metaField is "data".
+// This sample stores the Date at "timestamp" and the series name at "data".
+// A time series run can select this file. Schema A stores a Timestamp at
+// "timestamp", and schema C has no Date there, so a mix of the three stops.
 {
    "_id": "=oid",
    "schema": {
@@ -13,9 +15,9 @@
    "language": "=idioma",
    // hashed shard key
    "string": "=$genRandStr($getRandIntInc(6, 24))",
-   "timeField": "=date",
+   "timestamp": "=date",
    // ['Series 1', 'Series 2', 'Series 3'][$getRandRatioInt([70, 20, 10])]
-   "metaField": "=['Series 1', 'Series 2', 'Series 3'][$getRandRatioInt([70, 20, 10])]",
+   "data": "=['Series 1', 'Series 2', 'Series 3'][$getRandRatioInt([70, 20, 10])]",
    "granularity": "hours",
    "unit": "=+$getRandNum(0, Math.pow(10, 6)).toFixed(2)",
    "qty": "=$getRandIntInc(0, Math.pow(10, 4))",

@@ -51,6 +51,9 @@
       // "commitQuorum": "majority"
    },
    "timeSeries": false,
+   // Each selected schema must store a Date at timeField.
+   // Schema B does. Schema A stores a Timestamp at "timestamp", and schema C has no Date there.
+   // On a mongos the shard key must include metaField. The default key is { "string": "hashed" }.
    "tsOptions": {
       "timeField": "timestamp",
       "metaField": "data",
