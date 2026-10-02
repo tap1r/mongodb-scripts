@@ -29,14 +29,14 @@
       "oid": "=oid",
       "str": "=$genRandAlpha($getRandIntInc(8, 16))",
       "num": "=+$getRandNum(-Math.pow(2, 12), Math.pow(2, 12)).toFixed(4)",
-      "nestedArray": ["=$genArrayElements($getRandIntInc(0, 10))"]
+      "nestedArray": "=$genArrayElements($getRandIntInc(0, 10))"
    },
    "array": "=$genArrayElements($getRandIntInc(0, 10))",
    // "objectArray": [
-   //    { "nestedArray": "$genArrayElements($getRandIntInc(0, 10))" }
+   //    { "nestedArray": "=$genArrayElements($getRandIntInc(0, 10))" }
    // ],
    // "1dArray": [
-   //    { "2dArray": "$genArrayElements($getRandIntInc(1, 10))" }
+   //    { "2dArray": "=$genArrayElements($getRandIntInc(1, 10))" }
    // ],
    "boolean": "=$bool()",
    // "code": "Code('() => {}')",

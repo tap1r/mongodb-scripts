@@ -1,8 +1,8 @@
 // Sample schema C, GeoJSON.
 // A string that starts with "=" is an expression. Other strings, numbers, and null are literals.
 // Expressions may use the preamble names oid, date, ts, idioma, and totalDocs.
-// Point, line, and the single-ring polygons draw coordinates.
-// The multi* geometries and the geometry collection use fixed positions.
+// The point, the line, both polygon fields, and the geometry collection draw coordinates.
+// multiPoint, multiLineString, and multiPolygon use fixed positions.
 {
    "_id": "=oid",
    "schema": {
@@ -42,31 +42,31 @@
          ]
       ]
    },
-   // polygon with a single ring
+   // polygon with a single ring. East and north offsets stay positive, so the ring is counterclockwise.
    "polygon": {
       "type": "Polygon",
       "coordinates": [[
          [0, 0],
-         ["=$getRandIntInc(0, 10)", "=$getRandIntInc(0, 10)"],
-         ["=$getRandIntInc(0, 10)", "=$getRandIntInc(0, 10)"],
+         ["=+$getRandNum(0.1, 1).toFixed(4)", 0],
+         [0, "=+$getRandNum(0.1, 1).toFixed(4)"],
          [0, 0]
       ]]
    },
-   // polygons with multiple rings
+   // shell offsets are at least 1, so the clockwise hole stays inside the triangle
    "polygonMulti": {
       "type": "Polygon",
       "coordinates": [
          [
             [0, 0],
-            ["=$getRandIntInc(0, 10)", "=$getRandIntInc(0, 10)"],
-            ["=$getRandIntInc(0, 10)", "=$getRandIntInc(0, 10)"],
+            ["=+$getRandNum(1, 2).toFixed(4)", 0],
+            [0, "=+$getRandNum(1, 2).toFixed(4)"],
             [0, 0]
          ],
          [
-            [4, 4],
-            ["=$getRandIntInc(0, 10)", "=$getRandIntInc(0, 10)"],
-            ["=$getRandIntInc(0, 10)", "=$getRandIntInc(0, 10)"],
-            [4, 4]
+            [0.2, 0.2],
+            [0.2, 0.35],
+            [0.35, 0.2],
+            [0.2, 0.2]
          ]
       ]
    },
@@ -108,16 +108,17 @@
       "coordinates": [
          [[
             [-73.958, 40.8003],
-            [-73.9498, 40.7968],
-            [-73.9737, 40.7648],
             [-73.9814, 40.7681],
+            [-73.9737, 40.7648],
+            [-73.9498, 40.7968],
             [-73.958, 40.8003]
          ]],
          [[
-            [-73.958, 40.8003],
-            [-73.9498, 40.7968],
-            [-73.9737, 40.7648],
-            [-73.958, 40.8003]
+            [-73.930, 40.790],
+            [-73.920, 40.790],
+            [-73.920, 40.800],
+            [-73.930, 40.800],
+            [-73.930, 40.790]
          ]]
       ]
    },
@@ -126,34 +127,33 @@
       "type": "GeometryCollection",
       "geometries": [
          {
-            "type": "MultiPoint",
+            "type": "Point",
             "coordinates": [
-               [-73.9580, 40.8003],
-               [-73.9498, 40.7968],
-               [-73.9737, 40.7648],
-               [-73.9814, 40.7681]
+               "=+$getRandNum(-180, 180).toFixed(4)",
+               "=+$getRandNum(-90, 90).toFixed(4)"
             ]
          },
          {
-            "type": "MultiLineString",
+            "type": "LineString",
             "coordinates": [
                [
-                  [-73.9694, 40.7851],
-                  [-73.9608, 40.7809]
+                  "=+$getRandNum(-180, 180).toFixed(4)",
+                  "=+$getRandNum(-90, 90).toFixed(4)"
                ],
                [
-                  [-73.9641, 40.7922],
-                  [-73.9554, 40.7885]
-               ],
-               [
-                  [-73.9716, 40.7820],
-                  [-73.9637, 40.7771]
-               ],
-               [
-                  [-73.9788, 40.7724],
-                  [-73.9703, 40.7681]
+                  "=+$getRandNum(-180, 180).toFixed(4)",
+                  "=+$getRandNum(-90, 90).toFixed(4)"
                ]
             ]
+         },
+         {
+            "type": "Polygon",
+            "coordinates": [[
+               [0, 0],
+               ["=+$getRandNum(0.1, 1).toFixed(4)", 0],
+               [0, "=+$getRandNum(0.1, 1).toFixed(4)"],
+               [0, 0]
+            ]]
          }
       ]
    }

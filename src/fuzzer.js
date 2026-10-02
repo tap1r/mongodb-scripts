@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.16.0"
+ *  Version: "0.17.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,7 +19,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.16.0" };
+   const __script = { "name": "fuzzer.js", "version": "0.17.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
