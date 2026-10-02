@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.15.0"
+ *  Version: "0.15.1"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -118,7 +118,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.15.0" };
+   const __script = { "name": "dbstats.js", "version": "0.15.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -127,7 +127,7 @@
       __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
       __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
       load(__lib.path);
-      // Fix: Namespace the library. Instead of global.$stats = ..., use global.mdblib = { $stats: ..., MetaStats: ... } and access via mdblib.$stats
+      // Fix: Namespace the library. Instead of global.$stats = ..., use global.mdblib = { $stats: ..., CollectionStats: ... } and access via mdblib.$stats
    }
    let __comment = `#### Running script ${__script.name} v${__script.version}`;
    __comment += ` with ${__lib.name} v${__lib.version}`;
@@ -1110,7 +1110,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.15.0',
+         "version": '0.15.1',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,

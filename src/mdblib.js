@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.19.0"
+ *  Version: "0.19.1"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.19.0"
+      "version": "0.19.1"
 });
 
 /*  Notes:
@@ -29,7 +29,7 @@ if (typeof __lib === 'undefined') (
  *    (config.chunks / db primary), not cluster-wide listShards.
  *  - parseDbStats / parseCollStats / parseIndexStats turn normalised $stats /
  *    $collStats output into DTOs. CollectionStats / DatabaseStats / DbPathStats
- *    construct from those DTOs. MetaStats is a thin façade over them.
+ *    construct from those DTOs. There is no MetaStats façade.
  */
 
 function isMongosh() {
@@ -510,29 +510,6 @@ class DbPathStats extends StorageMetrics {
                   : 'unknown';
       this.shards = (this.proc === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards.map(({ _id }) => _id) : [];
       return this;
-   }
-}
-
-function looksLikeCollStats(raw = {}) {
-   if (raw == null || typeof raw !== 'object') return false;
-   if (typeof raw.compressor === 'string') return true;
-   if (Array.isArray(raw.indexes) && raw.indexes.some(idx =>
-      idx && typeof idx === 'object' && !Array.isArray(idx) && (idx.name != null || idx.storageSize != null)
-   )) return true;
-   return false;
-}
-
-class MetaStats {
-   /*
-    *  Deprecated façade over CollectionStats / DatabaseStats / DbPathStats.
-    *  new MetaStats() → DbPathStats; $collStats-shaped → CollectionStats;
-    *  $stats-shaped → DatabaseStats.
-    */
-   constructor(raw) {
-      if (arguments.length === 0) return new DbPathStats();
-      if (looksLikeCollStats(raw)) return CollectionStats.from(raw);
-      if (raw && Array.isArray(raw.databases)) return new DbPathStats(raw);
-      return DatabaseStats.from(raw || {});
    }
 }
 
