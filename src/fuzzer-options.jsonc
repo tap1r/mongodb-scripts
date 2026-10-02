@@ -1,0 +1,167 @@
+// fuzzer.js options overlay (JSONC).
+// Omitted keys keep the defaults in fuzzer.js.
+// Search order: the working directory, beside fuzzer.js, $MDBLIB, ~/.mongodb.
+// Schema paths are relative to this file's directory first.
+//
+// totalDocs stays $getRandExp(totalDocsExp) unless totalDocs is set.
+// writeConcern.w stays "majority" on a replica set or mongos, otherwise 1, unless set.
+// indexPrefs.commitQuorum follows that w unless set.
+// indexOptions.collation follows collation unless set.
+// indexes2dOptions.default_language and textIndexOptions.default_language follow idioma unless set.
+// When indexes omits both "object.$**" and "object.oid", the script appends
+// { "object.$**": 1 } on fCV 4.2+, otherwise { "object.oid": 1 }.
+// storageEngine is applied by the script when idxCompressor is not "default".
+// Sample schemas are pluggable files. genDocument still builds shapes A, B, and C.
+{
+   "dbName": "database",
+   "collName": "collection",
+   "totalDocsExp": 3.5,
+   // "totalDocs": 1000,
+   "dropNamespace": false,
+   "dropIndexes": false,
+   "compressor": "best",
+   // collection block compressor ["none"|"snappy"|"zlib"|"zstd"|"default"|"best"]
+   "idxCompressor": "default",
+   // index prefix compressor ["none"|"snappy"|"zlib"|"zstd"|"default"|"best"]
+   // "compressionOptions": -1, // [-1|0|1|2|3|4|5|6|7|8]
+   "idioma": "en",
+   // ["en"|"es"|"de"|"fr"|"zh"]
+   "collation": {
+      "locale": "simple"
+      // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
+      // "caseLevel": false,
+      // "caseFirst": "off",
+      // "strength": 3,
+      // "numericOrdering": false,
+      // "alternate": "non-ignorable",
+      // "maxVariable": "punct",
+      // "backwards": false
+   },
+   "writeConcern": {
+      // "w": "majority",
+      "j": false
+   },
+   "indexPrefs": {
+      "build": true,
+      "order": "post"
+      // ["pre"|"post"] collection population
+      // "commitQuorum": "majority"
+   },
+   "timeSeries": false,
+   "tsOptions": {
+      "timeField": "timestamp",
+      "metaField": "data",
+      "granularity": "hours"
+   },
+   "capped": false,
+   "cappedOptions": {
+      // size is 2^27 bytes; max is 2^15 documents
+      "size": 134217728,
+      "max": 32768
+   },
+   "expireAfterSeconds": 0,
+   "fuzzer": {
+      "id": "ts",
+      // ["ts"|"oid"]
+      "range": 365.2422,
+      "offset": -300,
+      "interval": 7,
+      "distribution": "uniform",
+      // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
+      // bimodal, pareto, and exponential still draw uniform
+      // "polymorphic": {
+      //    "enabled": false,
+      //    "varyTypes": false,
+      //    "nests": 0,
+      //    "entropy": 100,
+      //    "cardinality": 1,
+      //    "sparsity": 0,
+      //    "weighting": 50
+      // },
+      "schemas": [
+         "schema-a.jsonc",
+         "schema-b.jsonc",
+         "schema-c.jsonc"
+      ],
+      // an empty schemas array skips the sample files
+      "ratios": [7, 2, 1]
+   },
+   "sharding": true,
+   "shardedOptions": {
+      "key": {
+         "string": "hashed"
+         // "date": 1
+      },
+      "unique": false,
+      // resharding a collection that has a uniqueness constraint is not supported
+      "numInitialChunksPerShard": 2,
+      // "collation": { "locale": "simple" },
+      // "timeseries": { "timeField": "timestamp", "metaField": "data", "granularity": "hours" },
+      "reShard": true
+   },
+   "indexes": [
+      { "date": -1 },
+      { "language": 1, "schema": 1 },
+      { "random": 1 },
+      { "array": 1 },
+      { "timestamp": -1 },
+      { "location": "2dsphere" }
+      // { "lineString": "2dsphere" },
+      // { "polygon": "2dsphere" },
+      // { "polygonMulti": "2dsphere" },
+      // { "multiPoint": "2dsphere" },
+      // { "multiLineString": "2dsphere" },
+      // { "multiPolygon": "2dsphere" },
+      // { "geoCollection": "2dsphere" }
+   ],
+   "indexOptions": {
+      // "background": true,
+      // "unique": false,
+      // "partialFilterExpression": { "$exists": true },
+      // "sparse": true,
+      // "expireAfterSeconds": 0,
+      // "hidden": false
+      // "collation" follows collation unless set here
+   },
+   "hashedIndexes": [
+      { "string": "hashed" }
+   ],
+   "hashedIndexOptions": {
+      // hashed accepts simple collation only
+      // "background": true,
+      // "unique": false,
+      // "partialFilterExpression": { "$exists": true },
+      // "sparse": true,
+      // "expireAfterSeconds": 0,
+      // "hidden": false,
+      "collation": { "locale": "simple" }
+   },
+   "indexes2d": [
+      { "location.coordinates": "2d" }
+   ],
+   "indexes2dOptions": {
+      // 2d rejects a collation field.
+      // "default_language" follows idioma unless set here.
+      // Kept so a re-run matches the 2d index built when one options
+      // document was copied onto every special key.
+      // "background": true,
+      // "unique": false,
+      // "partialFilterExpression": { "$exists": true },
+      // "sparse": true,
+      // "expireAfterSeconds": 0,
+      // "hidden": false
+   },
+   "textIndexes": [
+      { "quote.txt": "text" }
+   ],
+   "textIndexOptions": {
+      // text rejects a collation field.
+      // "default_language" follows idioma unless set here.
+      // "background": true,
+      // "unique": false,
+      // "partialFilterExpression": { "$exists": true },
+      // "sparse": true,
+      // "expireAfterSeconds": 0,
+      // "hidden": false
+   }
+}

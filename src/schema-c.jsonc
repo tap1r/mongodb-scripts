@@ -1,0 +1,160 @@
+// Sample schema C, GeoJSON.
+// Plug-in listed from fuzzer.schemas. Generator expressions are strings.
+// genDocument still builds this shape in the script.
+// Point, line, and the single-ring polygons draw coordinates.
+// The multi* geometries and the geometry collection use fixed positions.
+{
+   "_id": "oid",
+   "schema": {
+      "type": "C",
+      "version": 1.0,
+      "comment": "GeoJSON schema"
+   },
+   "language": "idioma",
+   // hashed shard key
+   "string": "$genRandStr($getRandIntInc(6, 24))",
+   "temperature": [
+      "+$genNormal(15, 10).toFixed(1)",
+      "['K', '°F', '°C'][$getRandIntInc(0, 2)]"
+   ],
+   "dB": "+$genNormal(20, 10).toFixed(3)",
+   "status": "['Active', 'Inactive', null][$getRandRatioInt([80, 20, 1])]",
+   "locality": "$getRandCountry()['alpha-3 code']",
+   // GeoJSON Point
+   "location": {
+      "type": "Point",
+      "coordinates": [
+         "+$getRandNum(-180, 180).toFixed(4)",
+         "+$getRandNum(-90, 90).toFixed(4)"
+      ]
+   },
+   // GeoJSON LineString
+   "lineString": {
+      "type": "LineString",
+      "coordinates": [
+         [
+            "+$getRandNum(-180, 180).toFixed(4)",
+            "+$getRandNum(-90, 90).toFixed(4)"
+         ],
+         [
+            "+$getRandNum(-180, 180).toFixed(4)",
+            "+$getRandNum(-90, 90).toFixed(4)"
+         ]
+      ]
+   },
+   // polygon with a single ring
+   "polygon": {
+      "type": "Polygon",
+      "coordinates": [[
+         [0, 0],
+         ["$getRandIntInc(0, 10)", "$getRandIntInc(0, 10)"],
+         ["$getRandIntInc(0, 10)", "$getRandIntInc(0, 10)"],
+         [0, 0]
+      ]]
+   },
+   // polygons with multiple rings
+   "polygonMulti": {
+      "type": "Polygon",
+      "coordinates": [
+         [
+            [0, 0],
+            ["$getRandIntInc(0, 10)", "$getRandIntInc(0, 10)"],
+            ["$getRandIntInc(0, 10)", "$getRandIntInc(0, 10)"],
+            [0, 0]
+         ],
+         [
+            [4, 4],
+            ["$getRandIntInc(0, 10)", "$getRandIntInc(0, 10)"],
+            ["$getRandIntInc(0, 10)", "$getRandIntInc(0, 10)"],
+            [4, 4]
+         ]
+      ]
+   },
+   // GeoJSON MultiPoint
+   "multiPoint": {
+      "type": "MultiPoint",
+      "coordinates": [
+         [-73.9580, 40.8003],
+         [-73.9498, 40.7968],
+         [-73.9737, 40.7648],
+         [-73.9814, 40.7681]
+      ]
+   },
+   // GeoJSON MultiLineString
+   "multiLineString": {
+      "type": "MultiLineString",
+      "coordinates": [
+         [
+            [-73.96943, 40.78519],
+            [-73.96082, 40.78095]
+         ],
+         [
+            [-73.96415, 40.79229],
+            [-73.95544, 40.78854]
+         ],
+         [
+            [-73.97162, 40.78205],
+            [-73.96374, 40.77715]
+         ],
+         [
+            [-73.97880, 40.77247],
+            [-73.97036, 40.76811]
+         ]
+      ]
+   },
+   // GeoJSON MultiPolygon
+   "multiPolygon": {
+      "type": "MultiPolygon",
+      "coordinates": [
+         [[
+            [-73.958, 40.8003],
+            [-73.9498, 40.7968],
+            [-73.9737, 40.7648],
+            [-73.9814, 40.7681],
+            [-73.958, 40.8003]
+         ]],
+         [[
+            [-73.958, 40.8003],
+            [-73.9498, 40.7968],
+            [-73.9737, 40.7648],
+            [-73.958, 40.8003]
+         ]]
+      ]
+   },
+   // GeoJSON GeometryCollection
+   "geoCollection": {
+      "type": "GeometryCollection",
+      "geometries": [
+         {
+            "type": "MultiPoint",
+            "coordinates": [
+               [-73.9580, 40.8003],
+               [-73.9498, 40.7968],
+               [-73.9737, 40.7648],
+               [-73.9814, 40.7681]
+            ]
+         },
+         {
+            "type": "MultiLineString",
+            "coordinates": [
+               [
+                  [-73.9694, 40.7851],
+                  [-73.9608, 40.7809]
+               ],
+               [
+                  [-73.9641, 40.7922],
+                  [-73.9554, 40.7885]
+               ],
+               [
+                  [-73.9716, 40.7820],
+                  [-73.9637, 40.7771]
+               ],
+               [
+                  [-73.9788, 40.7724],
+                  [-73.9703, 40.7681]
+               ]
+            ]
+         }
+      ]
+   }
+}

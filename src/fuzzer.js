@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.14.3"
+ *  Version: "0.15.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,6 +9,8 @@
  */
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>fuzzer.js
+// Overlay: fuzzer-options.jsonc in the working directory, beside this script, under $MDBLIB, or ~/.mongodb
+// Sample schemas: schema-a.jsonc, schema-b.jsonc, schema-c.jsonc
 
 /*
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
@@ -16,7 +18,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.14.3" };
+   const __script = { "name": "fuzzer.js", "version": "0.15.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -34,20 +36,232 @@
 
 (async() => {
    /*
-    *  User defined parameters
+    *  Config files. fuzzer-options.jsonc overlays the defaults below.
+    *  Search order for a relative path: the options file's directory,
+    *  the working directory, this script's directory, $MDBLIB, ~/.mongodb.
     */
 
-   const dbName = 'database',       // database name
-      collName = 'collection',      // collection name
-      totalDocs = $getRandExp(3.5), // number of documents to generate per namespace
-      dropNamespace = false,        // drop collection prior to generating data
-      dropIndexes = false,          // recreate indexes to update creation options
-      compressor = 'best',          // collection block compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
-      idxCompressor = 'default',    // index prefix compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
-      // compressionOptions = -1,   // [-1|0|1|2|3|4|5|6|7|8] compression level
-      idioma = 'en',                // ['en'|'es'|'de'|'fr'|'zh']
-      collation = { /* collation options */
-         "locale": "simple",        // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
+   const OPTIONS_FILE = 'fuzzer-options.jsonc';
+
+   function isPlainObject(value) {
+      return !!value && typeof value === 'object' && !Array.isArray(value);
+   }
+
+   function hasOwn(obj, key) {
+      return !!obj && Object.prototype.hasOwnProperty.call(obj, key);
+   }
+
+   function dirOf(file) {
+      const slash = String(file).lastIndexOf('/');
+      if (slash < 0)
+         return '.';
+      if (slash === 0)
+         return '/';
+      return file.slice(0, slash);
+   }
+
+   function configDirs(anchorDir) {
+      const dirs = [];
+      const add = (dir) => {
+         if (typeof dir === 'string' && dir.length > 0 && !dirs.includes(dir))
+            dirs.push(dir);
+      };
+      add(anchorDir);
+      add('.');
+      if (typeof __dirname === 'string')
+         add(__dirname);
+      add(process.env.MDBLIB);
+      if (process.env.HOME)
+         add(`${process.env.HOME}/.mongodb`);
+      return dirs;
+   }
+
+   function resolveConfigFile(name, anchorDir) {
+      if (typeof name !== 'string' || name.length === 0)
+         return null;
+      if (name.startsWith('/') || /^[A-Za-z]:[\\/]/.test(name))
+         return fs.existsSync(name) ? name : null;
+      let found = null;
+      configDirs(anchorDir).some(dir => {
+         const full = `${dir.replace(/\/$/, '')}/${name}`;
+         if (!fs.existsSync(full))
+            return false;
+         found = full;
+         return true;
+      });
+      return found;
+   }
+
+   function parseJsonc(text) {
+      const source = String(text).replace(/^\uFEFF/, '');
+      let stripped = '';
+      let i = 0;
+      const n = source.length;
+      while (i < n) {
+         const c = source[i];
+         if (c === '"') {
+            stripped += c;
+            i++;
+            while (i < n) {
+               const s = source[i];
+               stripped += s;
+               i++;
+               if (s === '\\') {
+                  if (i < n) {
+                     stripped += source[i];
+                     i++;
+                  }
+                  continue;
+               }
+               if (s === '"')
+                  break;
+            }
+            continue;
+         }
+         if (c === '/' && source[i + 1] === '/') {
+            i += 2;
+            while (i < n && source[i] !== '\n')
+               i++;
+            continue;
+         }
+         if (c === '/' && source[i + 1] === '*') {
+            i += 2;
+            while (i < n && !(source[i] === '*' && source[i + 1] === '/'))
+               i++;
+            i = Math.min(n, i + 2);
+            continue;
+         }
+         stripped += c;
+         i++;
+      }
+      let json = '';
+      i = 0;
+      const m = stripped.length;
+      while (i < m) {
+         const c = stripped[i];
+         if (c === '"') {
+            json += c;
+            i++;
+            while (i < m) {
+               const s = stripped[i];
+               json += s;
+               i++;
+               if (s === '\\') {
+                  if (i < m) {
+                     json += stripped[i];
+                     i++;
+                  }
+                  continue;
+               }
+               if (s === '"')
+                  break;
+            }
+            continue;
+         }
+         if (c === ',') {
+            let j = i + 1;
+            while (j < m && (stripped[j] === ' ' || stripped[j] === '\t' || stripped[j] === '\n' || stripped[j] === '\r'))
+               j++;
+            if (stripped[j] === '}' || stripped[j] === ']') {
+               i++;
+               continue;
+            }
+         }
+         json += c;
+         i++;
+      }
+      return JSON.parse(json);
+   }
+
+   function readJsonc(file) {
+      return parseJsonc(fs.readFileSync(file, 'utf8'));
+   }
+
+   function mergeOptions(base, over) {
+      if (!isPlainObject(over))
+         return base;
+      const out = isPlainObject(base) ? { ...base } : {};
+      Object.keys(over).forEach(key => {
+         if (isPlainObject(over[key]) && isPlainObject(out[key]))
+            out[key] = mergeOptions(out[key], over[key]);
+         else
+            out[key] = over[key];
+      });
+      return out;
+   }
+
+   function loadOptionsFile() {
+      const filePath = resolveConfigFile(OPTIONS_FILE, null);
+      if (!filePath)
+         return { "path": null, "value": null, "error": null };
+      try {
+         const value = readJsonc(filePath);
+         if (!isPlainObject(value))
+            return { "path": filePath, "value": null, "error": 'must contain an object' };
+         return { "path": filePath, "value": value, "error": null };
+      } catch(e) {
+         return { "path": filePath, "value": null, "error": errText(e) };
+      }
+   }
+
+   function withObjectIndex(list) {
+      const specs = Array.isArray(list) ? list.slice() : [];
+      const present = specs.some(spec =>
+         isPlainObject(spec)
+         && (hasOwn(spec, 'object.$**') || hasOwn(spec, 'object.oid')));
+      if (!present)
+         specs.push(fCV(4.2) ? { "object.$**": 1 } : { "object.oid": 1 });
+      return specs;
+   }
+
+   function loadSchemaSamples(names, anchorDir) {
+      if (names == null)
+         return { "samples": [], "errors": [] };
+      if (!Array.isArray(names))
+         return { "samples": [], "errors": ['fuzzer.schemas must be an array of file names'] };
+      const samples = [];
+      const errors = [];
+      names.forEach(name => {
+         if (typeof name !== 'string' || name.length === 0) {
+            errors.push(`schema entry ${tojson(name)} is not a file name`);
+            return;
+         }
+         const filePath = resolveConfigFile(name, anchorDir);
+         if (!filePath) {
+            errors.push(`schema file "${name}" was not found (beside the options file, then the working directory, this script, $MDBLIB, or ~/.mongodb)`);
+            return;
+         }
+         try {
+            const spec = readJsonc(filePath);
+            if (!isPlainObject(spec))
+               errors.push(`schema file "${filePath}" must contain an object`);
+            else
+               samples.push({ "file": name, "path": filePath, "spec": spec });
+         } catch(e) {
+            errors.push(`schema file "${filePath}": ${errText(e)}`);
+         }
+      });
+      return { "samples": samples, "errors": errors };
+   }
+
+   /*
+    *  User defined parameters.
+    *  fuzzer-options.jsonc overlays these defaults.
+    *  fuzzer.schemas points at the sample plug-ins.
+    */
+
+   const optionDefaults = {
+      "dbName": 'database',             // database name
+      "collName": 'collection',         // collection name
+      "totalDocsExp": 3.5,              // totalDocs = $getRandExp(totalDocsExp) unless the overlay sets totalDocs
+      "dropNamespace": false,           // drop collection prior to generating data
+      "dropIndexes": false,             // recreate indexes to update creation options
+      "compressor": 'best',             // collection block compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
+      "idxCompressor": 'default',       // index prefix compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
+      // "compressionOptions": -1,      // [-1|0|1|2|3|4|5|6|7|8] compression level
+      "idioma": 'en',                   // ['en'|'es'|'de'|'fr'|'zh']
+      "collation": { /* collation options */
+         "locale": "simple",            // ["simple"|"en"|"es"|"de"|"fr"|"zh"]
          // caseLevel: <boolean>,
          // caseFirst: <string>,
          // strength: <int>,
@@ -56,87 +270,89 @@
          // maxVariable: <string>,
          // backwards: <boolean>
       },
-      writeConcern = {
-         "w": (isReplSet() || isSharded()) ? "majority" : 1,
+      "writeConcern": {
          "j": false
-      };
-   const indexPrefs = { /* build index preferences */
-         "build": true,   // [true|false]
-         "order": "post", // ["pre"|"post"] collection population
-         "commitQuorum": (writeConcern.w == 0) ? 1 : writeConcern.w
       },
-      timeSeries = false, // build timeseries collection type
-      tsOptions = {
+      "indexPrefs": { /* build index preferences */
+         "build": true,                 // [true|false]
+         "order": "post"                // ["pre"|"post"] collection population
+      },
+      "timeSeries": false,              // build timeseries collection type
+      "tsOptions": {
          "timeField": "timestamp",
          "metaField": "data",
          "granularity": "hours"
       },
-      capped = false, // build capped collection type
-      cappedOptions = {
+      "capped": false,                  // build capped collection type
+      "cappedOptions": {
          "size": Math.pow(2, 27),
          "max": Math.pow(2, 27) / Math.pow(2, 12)
       },
-      expireAfterSeconds = 0,        // TTL and time series options
-      fuzzer = { /* preferences */
-         "id": "ts",                // ["ts"|"oid"] - timeseries OID | client generated OID
-         "range": 365.2422,         // date range in days
-         "offset": -300,            // date offset in days from now() (negative = past, positive = future)
-         "interval": 7,             // date interval in days
-         "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
+      "expireAfterSeconds": 0,          // TTL and time series options
+      "fuzzer": { /* preferences */
+         "id": "ts",                    // ["ts"|"oid"] - timeseries OID | client generated OID
+         "range": 365.2422,             // date range in days
+         "offset": -300,                // date offset in days from now() (negative = past, positive = future)
+         "interval": 7,                 // date interval in days
+         "distribution": "uniform",     // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
          // "polymorphic": { /* experimental */
             // "enabled": false,
-            // "varyTypes": false,    // fuzz BSON types
-            // "nests": 0,            // nested subdocs
-            // "entropy": 100,        // 0-100%
-            // "cardinality": 1,      // ratio:1
-            // "sparsity": 0,         // 0-100%
-            // "weighting": 50        // 0-100%
+            // "varyTypes": false,       // fuzz BSON types
+            // "nests": 0,               // nested subdocs
+            // "entropy": 100,           // 0-100%
+            // "cardinality": 1,         // ratio:1
+            // "sparsity": 0,            // 0-100%
+            // "weighting": 50           // 0-100%
          // },
-         "schemas": [],
+         "schemas": [
+            "schema-a.jsonc",
+            "schema-b.jsonc",
+            "schema-c.jsonc"
+         ],
          "ratios": [7, 2, 1]
-      };
-   const sharding = true,
-      shardedOptions = {
+      },
+      "sharding": true,
+      "shardedOptions": {
          "key": {
             "string": "hashed"
             // "date": 1
          },
-         "unique": false, // resharding a collection that has a uniqueness constraint is not supported
+         "unique": false,               // resharding a collection that has a uniqueness constraint is not supported
          "numInitialChunksPerShard": 2,
-         // "collation": collation,  // inherit from collection options
-         // "timeseries": tsOptions, // not required after initial collection creation
+         // "collation": collation,     // inherit from collection options
+         // "timeseries": tsOptions,    // not required after initial collection creation
          "reShard": true
-      };
-   const indexes = [ /* index definitions */
+      },
+      "indexes": [ /* index definitions */
          { "date": -1 },
          { "language": 1, "schema": 1 },
          { "random": 1 },
          { "array": 1 },
          { "timestamp": -1 },
-         { "location": "2dsphere" },
+         { "location": "2dsphere" }
          // { "lineString": "2dsphere" },
          // { "polygon": "2dsphere" },
          // { "polygonMulti": "2dsphere" },
          // { "multiPoint": "2dsphere" },
          // { "multiLineString": "2dsphere" },
          // { "multiPolygon": "2dsphere" },
-         // { "geoCollection": "2dsphere" },
-         fCV(4.2) ? { "object.$**": 1 } : { "object.oid": 1 }
+         // { "geoCollection": "2dsphere" }
+         // object.$** (fCV 4.2+) or object.oid is appended when neither key is listed
       ],
-      indexOptions = { /* createIndexes options */
+      "indexOptions": { /* createIndexes options */
          // "background": fCV(4.0) ? true : false,
          // "background": true,
          // "unique": false,
          // "partialFilterExpression": { "$exists": true },
          // "sparse": true,
          // "expireAfterSeconds": expireAfterSeconds,
-         // "hidden": hidden,
-         "collation": collation
+         // "hidden": hidden
+         // collation follows the collection collation unless the overlay sets it
       },
-      hashedIndexes = [
+      "hashedIndexes": [
          { "string": "hashed" }
       ],
-      hashedIndexOptions = { /* hashed accepts simple collation only */
+      "hashedIndexOptions": { /* hashed accepts simple collation only */
          // "background": fCV(4.0) ? true : false,
          // "background": true,
          // "unique": false,
@@ -146,41 +362,100 @@
          // "hidden": hidden,
          "collation": { "locale": "simple" }
       },
-      indexes2d = [
+      "indexes2d": [
          { "location.coordinates": "2d" }
       ],
-      indexes2dOptions = { /* 2d rejects a collation field */
+      "indexes2dOptions": { /* 2d rejects a collation field */
          // "background": fCV(4.0) ? true : false,
          // "background": true,
          // "unique": false,
          // "partialFilterExpression": { "$exists": true },
          // "sparse": true,
          // "expireAfterSeconds": expireAfterSeconds,
-         // "hidden": hidden,
+         // "hidden": hidden
+         // default_language follows idioma unless the overlay sets it.
          // Kept so a re-run matches the 2d index built when one options
          // document was copied onto every special key.
-         "default_language": idioma
       },
-      textIndexes = [
+      "textIndexes": [
          { "quote.txt": "text" }
       ],
-      textIndexOptions = { /* text rejects a collation field */
+      "textIndexOptions": { /* text rejects a collation field */
          // "background": fCV(4.0) ? true : false,
          // "background": true,
          // "unique": false,
          // "partialFilterExpression": { "$exists": true },
          // "sparse": true,
          // "expireAfterSeconds": expireAfterSeconds,
-         // "hidden": hidden,
-         "default_language": idioma
-      };
+         // "hidden": hidden
+         // default_language follows idioma unless the overlay sets it
+      }
+   };
+
+   const optionsFile = loadOptionsFile();
+   const loaded = optionsFile.value;
+   const opt = mergeOptions(optionDefaults, loaded);
+   const dbName = opt.dbName,
+      collName = opt.collName,
+      totalDocs = hasOwn(loaded, 'totalDocs') ? loaded.totalDocs : $getRandExp(opt.totalDocsExp),
+      dropNamespace = opt.dropNamespace,
+      dropIndexes = opt.dropIndexes,
+      compressor = opt.compressor,
+      idxCompressor = opt.idxCompressor,
+      idioma = opt.idioma,
+      collation = opt.collation,
+      writeConcern = {
+         "w": (hasOwn(loaded, 'writeConcern') && hasOwn(loaded.writeConcern, 'w'))
+            ? loaded.writeConcern.w
+            : ((isReplSet() || isSharded()) ? "majority" : 1),
+         "j": hasOwn(opt.writeConcern, 'j') ? opt.writeConcern.j : false
+      },
+      indexPrefs = opt.indexPrefs,
+      timeSeries = opt.timeSeries,
+      tsOptions = opt.tsOptions,
+      capped = opt.capped,
+      cappedOptions = opt.cappedOptions,
+      expireAfterSeconds = opt.expireAfterSeconds,
+      fuzzer = opt.fuzzer,
+      sharding = opt.sharding,
+      shardedOptions = opt.shardedOptions,
+      indexes = withObjectIndex(opt.indexes),
+      indexOptions = opt.indexOptions,
+      hashedIndexes = opt.hashedIndexes,
+      hashedIndexOptions = opt.hashedIndexOptions,
+      indexes2d = opt.indexes2d,
+      indexes2dOptions = opt.indexes2dOptions,
+      textIndexes = opt.textIndexes,
+      textIndexOptions = opt.textIndexOptions;
+   if (isPlainObject(indexPrefs)
+      && !(hasOwn(loaded, 'indexPrefs') && hasOwn(loaded.indexPrefs, 'commitQuorum')))
+      indexPrefs.commitQuorum = (writeConcern.w == 0) ? 1 : writeConcern.w;
+   if (isPlainObject(indexOptions)
+      && !(hasOwn(loaded, 'indexOptions') && hasOwn(loaded.indexOptions, 'collation')))
+      indexOptions.collation = collation;
+   if (isPlainObject(indexes2dOptions)
+      && !(hasOwn(loaded, 'indexes2dOptions') && hasOwn(loaded.indexes2dOptions, 'default_language')))
+      indexes2dOptions.default_language = idioma;
+   if (isPlainObject(textIndexOptions)
+      && !(hasOwn(loaded, 'textIndexOptions') && hasOwn(loaded.textIndexOptions, 'default_language')))
+      textIndexOptions.default_language = idioma;
    if (idxCompressor != 'default') {
       const configString = `block_compressor=${parseCompressor(idxCompressor)[0]}`;
-      indexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
-      hashedIndexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
-      indexes2dOptions.storageEngine = { "wiredTiger": { "configString": configString } };
-      textIndexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
+      if (isPlainObject(indexOptions))
+         indexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
+      if (isPlainObject(hashedIndexOptions))
+         hashedIndexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
+      if (isPlainObject(indexes2dOptions))
+         indexes2dOptions.storageEngine = { "wiredTiger": { "configString": configString } };
+      if (isPlainObject(textIndexOptions))
+         textIndexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
    }
+   const schemaAnchor = optionsFile.path ? dirOf(optionsFile.path) : null;
+   const schemaLoad = optionsFile.error
+      ? { "samples": [], "errors": [] }
+      : loadSchemaSamples(isPlainObject(fuzzer) ? fuzzer.schemas : null, schemaAnchor);
+   const schemaSamples = schemaLoad.samples;
+   const schemaFileErrors = schemaLoad.errors;
 
    /*
     *  Global defaults
@@ -207,6 +482,23 @@
        */
       // Do not Mongo.setReadPref(): mongosh reconnects and the next
       // DB call (exists/drop/create) hangs or rejects on a local RS.
+      if (optionsFile.error) {
+         console.log(`\n[red][ERROR][/] Options file "${optionsFile.path}": ${optionsFile.error}`);
+         return;
+      }
+      if (optionsFile.path)
+         console.log(`\nOptions file "${optionsFile.path}"`);
+      if (schemaFileErrors.length > 0) {
+         schemaFileErrors.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
+         return;
+      }
+      schemaSamples.forEach(sample => {
+         const meta = isPlainObject(sample.spec.schema) ? sample.spec.schema : {};
+         const detail = [meta.type, meta.comment].filter(Boolean).join(': ');
+         console.log(detail
+            ? `Schema sample ${sample.file} (${detail})`
+            : `Schema sample ${sample.file}`);
+      });
       const plan = collectionPlan();
       if (plan.length > 0) {
          plan.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
@@ -371,6 +663,7 @@
       }
       const date = new Date(now + secondsOffset * 1000);
       const ts = new Timestamp({ "t": timestamp + secondsOffset, "i": 0 });
+      // fuzzer.schemas files are loaded above. This still builds A, B, and C.
       let schemas = new Array();
       schemas.push({
          "_id": oid,

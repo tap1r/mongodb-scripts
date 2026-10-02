@@ -1,0 +1,26 @@
+// Sample schema B, time series.
+// Plug-in listed from fuzzer.schemas. Generator expressions are strings.
+// genDocument still builds this shape in the script.
+// Collection tsOptions still expect timeField "timestamp" and metaField "data".
+// This sample stores the Date at "timeField" and the series name at "metaField".
+{
+   "_id": "oid",
+   "schema": {
+      "type": "B",
+      "version": 1.0,
+      "comment": "Time series schema"
+   },
+   "language": "idioma",
+   // hashed shard key
+   "string": "$genRandStr($getRandIntInc(6, 24))",
+   "timeField": "date",
+   // ['Series 1', 'Series 2', 'Series 3'][$getRandRatioInt([70, 20, 10])]
+   "metaField": "['Series 1', 'Series 2', 'Series 3'][$getRandRatioInt([70, 20, 10])]",
+   "granularity": "hours",
+   "unit": "+$getRandNum(0, Math.pow(10, 6)).toFixed(2)",
+   "qty": "$getRandIntInc(0, Math.pow(10, 4))",
+   "price": [
+      "+$getRandNum(0, Math.pow(10, 4)).toFixed(2)",
+      "$genRandCurrency()"
+   ]
+}
