@@ -1,10 +1,11 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.37"
+    *  Version: "0.4.38"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+    *  Roadmap: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/ROADMAP.md" (required context)
     *
     *  Dual-shell snapshot: legacy/mongo-shell (v0.4.36). This file is mongosh-only.
     *
@@ -15,6 +16,7 @@
     *  - per mongod only (not replicated); excludes local.oplog.rs
     *  - { autoCompact: true } (default) enables; { autoCompact: false } disables and exits (no log tail)
     *  - freeSpaceTargetMB passthrough (server default 20); runOnce defaults to true (opposite of the server)
+    *  - ident map finishes before autoCompact. Collectionless $listCatalog hides local/config/system.* from non-internal users (8.0+); those namespaces are read one collection at a time. Idents created during the pass refresh in the background
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "autoCompact": true };'] [-f|--file] </path/to/>autoCompact.js
@@ -39,7 +41,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.37" };
+   const __script = { "name": "autoCompact.js", "version": "0.4.38" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (from mdblib.js)
    const ansiTags = [
@@ -492,10 +494,10 @@
    };
    const IDENT_REFRESH_MS = 5000;
    const IDENT_BATCH = 64;
-   const IDENT_FIRST_MS = 5000; // first batch or this timeout; do not block enable if $listCatalog stalls
    const startNsResolver = () => {
-      // ident → { kind, ns, idx? }; internals first; background $listCatalog fills the rest
-      // stop() from the enable finally so the pump is cancelled on every exit
+      // ident → { kind, ns, idx? }; internals first. The first $listCatalog pass settles
+      // before autoCompact so idents that already exist resolve. Later misses refresh
+      // in the background. stop() from the enable finally cancels the pump.
       const map = new Map([
          ['sizeStorer', { "kind": "internal", "ns": "(sizeStorer)" }],
          ['WiredTigerHS', { "kind": "internal", "ns": "(history store)" }],
@@ -505,15 +507,14 @@
       let cancelled = false;
       let catalogOk = false;
       let lastRefreshAt = 0;
-      let firstSeen = false;
+      let initialSettled = false;
       let cursor;
-      let firstResolve;
-      const ready = new Promise(resolve => { firstResolve = resolve; });
-      const signalReady = () => {
-         if (!firstSeen) {
-            firstSeen = true;
-            firstResolve();
-         }
+      let settleInitial;
+      const initialDone = new Promise(resolve => { settleInitial = resolve; });
+      const markInitialSettled = () => {
+         if (initialSettled) return;
+         initialSettled = true;
+         settleInitial();
       };
       const closeCursor = () => {
          if (!cursor) return;
@@ -529,39 +530,132 @@
             }
          }
       };
-      const pump = async() => {
-         if (pumping || cancelled) return;
-         pumping = true;
+      // 8.0+ injects a server-owned $match on collectionless $listCatalog for any caller
+      // without the internal action: drop local.*, config.*, and system.* except system.js
+      // and system.buckets.*. Targeted $listCatalog still returns those entries when the
+      // user has listIndexes on that namespace; collStats is the narrower fallback.
+      const isRedactedCatalogNs = (dbName, collName) => {
+         if (dbName === 'local' || dbName === 'config') return true;
+         if (collName === 'system.js' || collName.startsWith('system.buckets.')) return false;
+         return collName.startsWith('system.');
+      };
+      const ingestStats = (ns, st) => {
+         const collUri = st?.wiredTiger?.uri;
+         if (typeof collUri === 'string') {
+            const ident = identKey(collUri);
+            if (ident) map.set(ident, { "kind": "collection", "ns": ns });
+         }
+         const details = st?.indexDetails;
+         if (!details || typeof details !== 'object') return;
+         for (const [idx, info] of Object.entries(details)) {
+            const uri = info?.uri;
+            if (typeof uri !== 'string') continue;
+            const ident = identKey(uri);
+            if (ident) map.set(ident, { "kind": "index", "ns": ns, "idx": idx });
+         }
+      };
+      const readRedacted = async(dbName, collName) => {
          try {
-            cursor = db.getSiblingDB('admin').aggregate([
-               { "$listCatalog": {} },
-               { "$project": {
-                  "ns": 1,
-                  "db": 1,
-                  "name": 1,
-                  "ident": 1,
-                  "idxIdent": 1
-               } }
+            cursor = db.getSiblingDB(dbName).getCollection(collName).aggregate([
+               { "$listCatalog": {} }
             ], {
-               "cursor": { "batchSize": IDENT_BATCH },
+               "cursor": { "batchSize": 1 },
                "comment": `Executed by ${__script.name} v${__script.version} ident map`
             });
+            let saw = false;
             for await (const doc of cursor) {
                if (cancelled) break;
                ingest(doc);
-               signalReady();
+               saw = true;
             }
-            if (!cancelled) catalogOk = true;
-         } catch(e) {
-            if (!cancelled) {
-               catalogOk = false;
-               console.log('[red][WARN] $listCatalog() unavailable, WTCMPCT lines will show WT filenames:[/]', e);
+            return saw;
+         } catch(_) {
+            // listIndexes denied, or the stage rejected this namespace
+         } finally {
+            closeCursor();
+         }
+         if (cancelled) return false;
+         try {
+            const st = db.getSiblingDB(dbName).runCommand({ "collStats": collName, "scale": 1 });
+            if (st?.ok && (typeof st.wiredTiger?.uri === 'string' || st.indexDetails)) {
+               ingestStats(`${dbName}.${collName}`, st);
+               return true;
             }
+         } catch(_) { /* collStats denied; WT filename stays */ }
+         return false;
+      };
+      const ingestRedacted = async() => {
+         let databases;
+         try {
+            ({ "databases": databases = [] } = db.adminCommand({ "listDatabases": 1, "nameOnly": true }));
+         } catch(_) {
+            return;
+         }
+         let denied = 0;
+         for (const entry of databases) {
+            if (cancelled) return;
+            const dbName = entry?.name;
+            if (typeof dbName !== 'string') continue;
+            // local/config are redacted wholesale; elsewhere only system.* is hidden
+            const filter = (dbName === 'local' || dbName === 'config')
+               ? { "type": "collection" }
+               : { "type": "collection", "name": { "$regex": "^system\\." } };
+            let infos;
+            try {
+               infos = db.getSiblingDB(dbName).getCollectionInfos(filter);
+            } catch(_) {
+               continue;
+            }
+            for (const info of infos) {
+               if (cancelled) return;
+               const collName = info?.name;
+               if (typeof collName !== 'string' || !isRedactedCatalogNs(dbName, collName)) continue;
+               if (!await readRedacted(dbName, collName)) denied++;
+            }
+         }
+         if (!cancelled && denied > 0) {
+            const noun = denied === 1 ? 'namespace is' : 'namespaces are';
+            console.log(`[yellow][NOTE][/] ${denied} ${noun} not visible to this user; those WT filenames stay unresolved`);
+         }
+      };
+      const pump = async() => {
+         if (pumping || cancelled) return;
+         pumping = true;
+         const firstPass = !initialSettled; // refresh stays collectionless; redacted misses would re-scan every 5s
+         try {
+            try {
+               cursor = db.getSiblingDB('admin').aggregate([
+                  { "$listCatalog": {} },
+                  { "$project": {
+                     "ns": 1,
+                     "db": 1,
+                     "name": 1,
+                     "ident": 1,
+                     "idxIdent": 1
+                  } }
+               ], {
+                  "cursor": { "batchSize": IDENT_BATCH },
+                  "comment": `Executed by ${__script.name} v${__script.version} ident map`
+               });
+               for await (const doc of cursor) {
+                  if (cancelled) break;
+                  ingest(doc);
+               }
+               if (!cancelled) catalogOk = true;
+            } catch(e) {
+               if (!cancelled) {
+                  catalogOk = false;
+                  console.log('[red][WARN] $listCatalog() unavailable, WTCMPCT lines will show WT filenames:[/]', e);
+               }
+            } finally {
+               closeCursor();
+            }
+            if (firstPass && !cancelled) await ingestRedacted();
          } finally {
             closeCursor();
             pumping = false;
             lastRefreshAt = Date.now();
-            signalReady();
+            markInitialSettled(); // first pass only; later refreshes no-op
          }
       };
       pump();
@@ -574,10 +668,10 @@
       const stop = () => {
          cancelled = true;
          closeCursor();
-         signalReady();
+         markInitialSettled();
       };
       return {
-         ready,
+         initialDone,
          resolve: resolveNs,
          stop,
          size: () => map.size,
@@ -858,7 +952,7 @@
          }
          console.log('══════ [yellow]serverStatus: background compact running is false; retrying with updated options[/] ══════\n');
       }
-      if (nsResolver) await Promise.race([nsResolver.ready, delay(IDENT_FIRST_MS)]);
+      if (nsResolver) await nsResolver.initialDone; // full initial $listCatalog before enable
       const ts = enable ? serverLocalTime() : null; // WTCMPCT watermark; exclusive start in getLogs
       if (!runCmd(cmd)) return;
       if (!enable) {
