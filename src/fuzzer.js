@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.17.0"
+ *  Version: "1.0.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,7 +19,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.17.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.0.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -491,6 +491,11 @@
       return e.errmsg || e.message || String(e);
    }
 
+   // setImmediate reaches the poll phase, so an in-flight driver call can finish
+   // during generation. sleep() blocks the thread. A bare Promise.resolve() does not poll.
+   const yieldNow = () => new Promise(resolve => setImmediate(resolve));
+   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
    async function main() {
       /*
        *  main
@@ -542,13 +547,30 @@
       if (distributionName !== 'uniform' && distributionName !== 'normal')
          console.log(`\nUnsupported distribution type: ${fuzzer.distribution}\nDefaulting to "uniform"`);
 
+      // Drop finishes before create. createNS runs while the size sample is drawn.
+      async function beginCreateNS() {
+         return createNS();
+      }
+      dropNS();
+      let createFailed = null;
+      const creating = beginCreateNS().catch(err => {
+         createFailed = err;
+         return false;
+      });
+
       // sampling synthetic documents and estimating batch size
       let docSize = 0, maxSize = 0;
-      for (let i = 0; i < sampleSize; i++) {
-         const size = bsonsize(genDocument(fuzzer, timestamp));
-         docSize += size;
-         if (size > maxSize)
-            maxSize = size;
+      try {
+         for (let i = 0; i < sampleSize; i++) {
+            const size = bsonsize(genDocument(fuzzer, timestamp));
+            docSize += size;
+            if (size > maxSize)
+               maxSize = size;
+            await yieldNow();
+         }
+      } catch(e) {
+         await creating;
+         throw e;
       }
 
       const avgSize = $floor(docSize / sampleSize);
@@ -565,9 +587,9 @@
       const batchSize = Math.min(batchCap, sampledSize);
       console.log(`Estimated optimal capacity of ${batchSize} ${plural(batchSize, 'document', 'documents')} per batch`);
 
-      // (re)create the namespace
-      dropNS();
-      if (!createNS())
+      if (createFailed)
+         throw createFailed;
+      if (!(await creating))
          return;
 
       dropExistingIndexes();
@@ -578,18 +600,18 @@
          case 'pre':
             console.log('Building indexing metadata first');
             buildIndexes();
-            if (genBulk(batchSize) === false)
+            if ((await genBulk(batchSize)) === false)
                return;
             break;
          case 'post':
             console.log('Populating collection first');
-            if (genBulk(batchSize) === false)
+            if ((await genBulk(batchSize)) === false)
                return;
             buildIndexes();
             break;
          default:
             console.log(`Unsupported index build preference "${indexPrefs.order}": defaulting to "post"`);
-            if (genBulk(batchSize) === false)
+            if ((await genBulk(batchSize)) === false)
                return;
             buildIndexes();
       }
@@ -1069,8 +1091,13 @@
       let done = false;
       // Hold the issuing command Promise so mongosh does not exit (and abort resharding) early.
       // User-defined async functions are not auto-awaited by the mongosh rewriter.
+      // sleep() would block the thread and stall this response. Race the timer with the command.
       const reshardPromise = resharding().finally(() => { done = true; });
-      sleep(3 * pollIntervalMS); // allow $currentOp to publish the initial donor/recipient ops
+      const pause = ms => Promise.race([
+         delay(ms),
+         reshardPromise.catch(() => {})
+      ]);
+      await pause(3 * pollIntervalMS); // allow $currentOp to publish the initial donor/recipient ops
       let monitorFailed = false;
       while (!done) {
          try {
@@ -1086,7 +1113,8 @@
                console.log('Resharding monitor:', errText(e));
             monitorFailed = true;
          }
-         sleep(pollIntervalMS);
+         if (!done)
+            await pause(pollIntervalMS);
       }
       try {
          await reshardPromise;
@@ -1309,7 +1337,27 @@
       return 0;
    }
 
-   function genBulk(batchSize) {
+   // User async: the rewriter does not await this at the call, so the next batch
+   // can be built while this insert is in flight. A short batch is awaited first.
+   async function insertBatch(docs) {
+      // mongosh Bulk.execute ignores its writeConcern argument.
+      return namespace.insertMany(docs, {
+         "ordered": false,
+         "writeConcern": writeConcern
+      });
+   }
+
+   async function takeBatch(n, overlap) {
+      const docs = [];
+      for (let i = 0; i < n; i++) {
+         docs.push(genDocument(fuzzer, timestamp));
+         if (overlap)
+            await yieldNow();
+      }
+      return docs;
+   }
+
+   async function genBulk(batchSize) {
       if (!(batchSize >= 1)) {
          console.log(`\n[Warning] Batch size ${batchSize} is below 1. Skipping bulk insert.`);
          return true;
@@ -1318,27 +1366,37 @@
       console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} ${plural(totalDocs, 'document', 'documents')} in ${batches} ${plural(batches, 'batch', 'batches')}:`);
       let inserted = 0;
       let remaining = totalDocs;
-      for (let i = 0; remaining > 0; i++) {
+      let batchNo = 0;
+      const nextBatch = async overlap => {
+         if (!(remaining > 0))
+            return null;
          const n = Math.min(batchSize, remaining);
          remaining -= n;
-         const docs = [];
-         for (let batch = 0; batch < n; batch++)
-            docs.push(genDocument(fuzzer, timestamp));
-         // mongosh Bulk.execute ignores its writeConcern argument.
-         let bInserted = 0;
+         return { n, docs: await takeBatch(n, overlap) };
+      };
+
+      let prepared = await nextBatch(false);
+      while (prepared) {
+         // Catch immediately so a rejection during the next batch is not unhandled.
          let writeError = null;
+         const inflight = insertBatch(prepared.docs).catch(err => {
+            writeError = err;
+            return null;
+         });
+         const n = prepared.n;
+         batchNo++;
          try {
-            const result = namespace.insertMany(docs, {
-               "ordered": false,
-               "writeConcern": writeConcern
-            });
-            bInserted = Object.keys(result.insertedIds || {}).length;
+            prepared = await nextBatch(true);
          } catch(e) {
-            bInserted = insertedFromWrite(e);
-            writeError = e;
+            await inflight;
+            throw e;
          }
+         const result = await inflight;
+         const bInserted = writeError
+            ? insertedFromWrite(writeError)
+            : Object.keys((result && result.insertedIds) || {}).length;
          inserted += bInserted;
-         console.log(`\t[Batch ${1 + i}/${batches}] bulk inserted ${bInserted} ${plural(bInserted, 'document', 'documents')}`);
+         console.log(`\t[Batch ${batchNo}/${batches}] bulk inserted ${bInserted} ${plural(bInserted, 'document', 'documents')}`);
          if (writeError || bInserted < n) {
             const shortfall = totalDocs - inserted;
             console.log(`\n[red][ERROR][/] Bulk insert stopped after ${inserted} of ${totalDocs} documents (${shortfall} short)`);
