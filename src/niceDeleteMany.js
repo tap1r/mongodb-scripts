@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.13.2"
+    *  Version: "0.13.3"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -69,7 +69,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.13.2" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.13.3" };
    let vitals = {};
    let vitalsSampling = false;
    let startupLogDone = false; // after writeConsole of the startup banner; attach WARN is banner-only until then
@@ -1819,7 +1819,9 @@
       /*
        *  Unhinted $match+$sort. If the winner is index-ordered, no hint.
        *  Else hint the first ranked rejectedPlan that stays IXSCAN-without-SORT
-       *  on a window-safe btree. Confirm the full window pipeline.
+       *  on a window-safe btree. One prefix explain, then one full pipeline
+       *  (with that hint when picked). Do not call tryWindow — that would
+       *  re-explain $match+$sort.
        */
       const prefix = [{ "$match": filter }, { "$sort": candidateSort }];
       const fullLet = { "allowDiskUse": false, "let": { "bucketSizeLimit": 100 } };
@@ -1832,10 +1834,16 @@
          }
          const pick = firstViableWindowHint(prefixExpl, indexes);
          if (!pick || pick.fromWinner || !hasUserHint(pick.hint)) return null;
-         const hinted = await tryWindow(namespace, filter, explainOpts, candidateSort, pick.hint);
-         if (!hinted) return null;
-         emit(`\n[blue][INFO][/] Curation planner hint [yellow]${JSON.stringify(hinted.hint)}[/] for sortBy [yellow]${JSON.stringify(candidateSort)}[/]`);
-         return hinted;
+         const hintedOpts = { ...explainOpts };
+         applyHint(hintedOpts, pick.hint);
+         const fullExpl = await explainCurationAggregate(
+            namespace,
+            windowBucketPipeline(filter, candidateSort),
+            { ...hintedOpts, ...fullLet }
+         );
+         if (!planIsIndexOrdered(fullExpl)) return null;
+         emit(`\n[blue][INFO][/] Curation planner hint [yellow]${JSON.stringify(pick.hint)}[/] for sortBy [yellow]${JSON.stringify(candidateSort)}[/]`);
+         return { "sortBy": candidateSort, "hint": pick.hint, "mode": "window" };
       } catch(e) {
          emit('\n[red][WARN][/] [yellow]Curation window explain failed[/]:', e?.message ?? e);
          return null;
