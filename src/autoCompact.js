@@ -16,7 +16,7 @@
     *  - per mongod only (not replicated); excludes local.oplog.rs
     *  - { autoCompact: true } (default) enables; { autoCompact: false } disables and exits (no log tail)
     *  - freeSpaceTargetMB passthrough (server default 20); runOnce defaults to true (opposite of the server)
-    *  - ident map finishes before autoCompact. Collectionless $listCatalog hides local/config/system.* from non-internal users (8.0+); those namespaces are read one collection at a time. Idents created during the pass refresh in the background
+    *  - ident map finishes before autoCompact. Naming a file needs the internal action (collectionless $listCatalog) or, on that namespace, listIndexes (targeted $listCatalog) or collStats (wiredTiger.uri, indexDetails.*.uri). With that, the line prints as ns or ns.index; without it, the line stays collection-*.wt / index-*.wt. Built-in roles have neither listIndexes nor collStats on local.replset.* or on system.views, system.rollback.id, system.keys, system.preimages, and system.indexBuilds. Idents created during the pass refresh in the background
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "autoCompact": true };'] [-f|--file] </path/to/>autoCompact.js
@@ -614,8 +614,8 @@
             }
          }
          if (!cancelled && denied > 0) {
-            const noun = denied === 1 ? 'namespace is' : 'namespaces are';
-            console.log(`[yellow][NOTE][/] ${denied} ${noun} not visible to this user; those WT filenames stay unresolved`);
+            const noun = denied === 1 ? 'namespace lacks' : 'namespaces lack';
+            console.log(`[yellow][NOTE][/] ${denied} ${noun} listIndexes and collStats; those lines stay collection-*.wt / index-*.wt`);
          }
       };
       const pump = async() => {
