@@ -308,6 +308,7 @@ Executor auto-trim will call. Keep the file standalone. **Live: v0.4.38.** **Arc
 - FCV 8.0+ via `serverStatus.featureCompatibilityVersion` (same round trip as `storageEngine`). Binary 8.x with FCV 7.0 fails. If FCV is not in the document, effective FCV equals the binary version (already ≥ 8).
 - Opted-in `storageEngine.name` required and must be `wiredTiger` (missing name fails fast).
 - `$listCatalog` pump `stop()` in a `finally` on every enable exit (cancels cursor; no re-pump after stop).
+- Ident map finishes before enable. Collectionless `$listCatalog` on 8.0+ hides `local.*`, `config.*`, and `system.*` (except `system.js` and `system.buckets.*`) from non-internal users, so the initial pass reads those namespaces one collection at a time (targeted `$listCatalog`, then `collStats` `wiredTiger.uri` / `indexDetails.*.uri` when that stage is unauthorized). Namespaces the user cannot `listIndexes` or `collStats` stay WT filenames. Background refresh stays collectionless.
 - Log watermark: `serverStatus.localTime` after the ident wait, immediately before enable. Client `ISODate()` only if `localTime` is missing.
 - First-pass latch (not ramlog, not `$currentOp` — the WT thread never reports there):
   - `visits` = success + skipped* + timeout + interrupted + failed, snapshotted at enable.
@@ -324,7 +325,7 @@ Executor auto-trim will call. Keep the file standalone. **Live: v0.4.38.** **Arc
 
 Replace or sit beside the WTCMPCT line dump with a `ProgressTracker`-style bar for the catalog walk (output only; latches stay as shipped):
 
-- **Total** = catalog ident count from the `$listCatalog` map (`nsResolver.size()` once `catalogReady`) — collections + indexes + known internals. Until the catalog is ready, hold or show an unknown total; do not block enable (`IDENT_FIRST_MS` already exists).
+- **Total** = catalog ident count from the ident map (`nsResolver.size()` once `catalogReady`) — collections + indexes + known internals. The initial pass finishes before enable, so the total is known when the walk starts.
 - **Current** = cumulative this-pass WT file-visit **delta** from `serverStatus` (`visits` = success + skipped* + timeout + interrupted + failed), not recovered bytes and not log-line count (ramlog can drop WTCMPCT).
 - TTY: `\r` bar, `current/total`, optional last ident/ns from WTCMPCT. Piped / module: no `\r`; honour [Shared emit / logging](#shared-emit--logging) (strip ANSI, suppress live redraws).
 - `runOnce: false` still latches first pass the same way; the bar completes on first-pass latch, not on the ~24h thread.
