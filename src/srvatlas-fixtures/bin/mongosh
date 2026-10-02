@@ -1,0 +1,56 @@
+#!/bin/bash
+# Prints a hello record, or the saved TLS alert when that case is selected.
+D=${SRVATLAS_FIXTURE_DIR:?}
+echo "mongosh $*" >>"${SRVATLAS_LOG:?}"
+plain=0
+for a in "$@"; do
+    [[ $a == *PLAINTEXT=* ]] && plain=1
+done
+if [[ $plain == 1 ]]; then
+    echo "PLAINTEXT=enabled"
+    exit 0
+fi
+case ${SRVATLAS_CASE:-} in
+    alert50) cat "$D/tls-alert-50.txt"; exit 0 ;;
+    alert80) cat "$D/tls-alert-80.txt"; exit 0 ;;
+esac
+uri=
+for a in "$@"; do
+    [[ $a == mongodb://* ]] && uri=$a
+done
+rest=${uri#mongodb://}
+hp=${rest%%/*}
+host=${hp%%:*}
+port=${hp##*:}
+while [[ $host == *. ]]; do host=${host%.}; done
+if [[ ${SRVATLAS_CASE:-} == load-balanced ]]; then
+    printf '%s\n' \
+        "NDIAG_OK=1" \
+        "NDIAG_ME=other.example.com:${port}" \
+        "NDIAG_MSG=isdbgrid" \
+        "NDIAG_SET=" \
+        "NDIAG_WIRE=25" \
+        "NDIAG_HOSTS=" \
+        "NDIAG_TAGS=" \
+        "NDIAG_SASL=" \
+        "NDIAG_SASL_FIELD=missing" \
+        "NDIAG_COMP_READ=ok" \
+        "NDIAG_SERVER_COMP=" \
+        "NDIAG_CHOSEN=" \
+        "NDIAG_UNSUPPORTED="
+    exit 0
+fi
+printf '%s\n' \
+    "NDIAG_OK=1" \
+    "NDIAG_ME=${host}:${port}" \
+    "NDIAG_MSG=" \
+    "NDIAG_SET=example-rs" \
+    "NDIAG_WIRE=25" \
+    "NDIAG_HOSTS=${host}:${port}" \
+    "NDIAG_TAGS=" \
+    "NDIAG_SASL=" \
+    "NDIAG_SASL_FIELD=missing" \
+    "NDIAG_COMP_READ=ok" \
+    "NDIAG_SERVER_COMP=" \
+    "NDIAG_CHOSEN=" \
+    "NDIAG_UNSUPPORTED="

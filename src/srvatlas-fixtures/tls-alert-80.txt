@@ -1,0 +1,4 @@
+tlsv1 alert internal error
+SSL alert number 80
+CONNECTED(00000005)
+New, (NONE), Cipher is (NONE)

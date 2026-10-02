@@ -1,0 +1,48 @@
+#!/bin/bash
+# Serves the saved handshake transcript, or a short local cipher list.
+D=${SRVATLAS_FIXTURE_DIR:?}
+cmd=$1
+shift
+case $cmd in
+    version)
+        if [[ ${SRVATLAS_CASE:-} == libressl ]]; then
+            echo "LibreSSL 3.3.6"
+        else
+            echo "OpenSSL 3.0.0"
+        fi
+        exit 0
+        ;;
+    list)
+        echo "secp256r1"
+        exit 0
+        ;;
+    ciphers)
+        ccm=0
+        for a in "$@"; do
+            [[ $a == *TLS_AES_128_CCM* ]] && ccm=1
+        done
+        if [[ $ccm == 1 ]]; then
+            echo "TLS_AES_128_CCM_SHA256"
+        elif [[ $* == *-tls1_3* || $* == *-tls1_4* ]]; then
+            echo "TLS_AES_128_GCM_SHA256"
+        else
+            echo "ECDHE-RSA-AES128-SHA"
+        fi
+        exit 0
+        ;;
+    s_client)
+        if [[ $1 == -help ]]; then
+            echo "usage: s_client -connect -servername -cipher -ciphersuites -groups"
+            exit 0
+        fi
+        echo "s_client $*" >>"${SRVATLAS_LOG:?}"
+        case ${SRVATLAS_CASE:-} in
+            alert50) cat "$D/tls-alert-50.txt" ;;
+            alert80) cat "$D/tls-alert-80.txt" ;;
+            *) cat "$D/libressl-s_client.txt" ;;
+        esac
+        exit 0
+        ;;
+esac
+echo "unexpected openssl $cmd" >>"${SRVATLAS_LOG:?}"
+exit 1

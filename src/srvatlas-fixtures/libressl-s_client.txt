@@ -1,0 +1,30 @@
+CONNECTED(00000005)
+depth=0 CN = n0.cluster.example.mongodb.net
+verify return:1
+---
+Certificate chain
+ 0 s:CN = n0.cluster.example.mongodb.net
+   i:CN = Example CA
+---
+Server certificate
+-----BEGIN CERTIFICATE-----
+MIIB-example
+-----END CERTIFICATE-----
+subject=CN = n0.cluster.example.mongodb.net
+issuer=CN = Example CA
+---
+No client certificate CA names sent
+Peer signing digest: SHA256
+Server Temp Key: ECDH, P-256, 256 bits
+---
+SSL handshake has read 1200 bytes and written 400 bytes
+---
+New, TLSv1.3, Cipher is TLS_AES_128_GCM_SHA256
+Protocol  : TLSv1.3
+Cipher    : TLS_AES_128_GCM_SHA256
+Server public key is 2048 bit
+Secure Renegotiation IS NOT supported
+Compression: NONE
+Expansion: NONE
+No ALPN negotiated
+---

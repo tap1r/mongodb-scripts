@@ -1,0 +1,36 @@
+#!/bin/bash
+# Prints one saved dig answer. The query type is the last argument.
+D=${SRVATLAS_FIXTURE_DIR:?}
+args=("$@")
+n=${#args[@]}
+type=${args[$((n - 1))]}
+name=${args[$((n - 2))]}
+echo "dig $type $name" >>"${SRVATLAS_LOG:?}"
+case $type in
+    TXT)
+        if [[ ${SRVATLAS_CASE:-} == load-balanced ]]; then
+            cat "$D/txt-load-balanced.txt"
+        else
+            cat "$D/txt-replicaset.txt"
+        fi
+        ;;
+    SRV)
+        if [[ ${SRVATLAS_CASE:-} == empty-srv ]]; then
+            cat "$D/srv-empty.txt"
+        else
+            cat "$D/srv-one.txt"
+        fi
+        ;;
+    A)
+        bare=$name
+        while [[ $bare == *. ]]; do bare=${bare%.}; done
+        if [[ $bare == cluster.example.mongodb.net || $name == _mongodb._tcp.* ]]; then
+            cat "$D/a-none.txt"
+        else
+            cat "$D/a-host.txt"
+        fi
+        ;;
+    *)
+        cat "$D/a-none.txt"
+        ;;
+esac

@@ -1,0 +1,2 @@
+cluster.example.mongodb.net. 60 IN TXT "authSource=admin&replicaSet=example-rs"
+;; Query time: 1 msec

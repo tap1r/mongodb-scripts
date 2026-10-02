@@ -1,0 +1,2 @@
+n0.cluster.example.mongodb.net. 60 IN A 203.0.113.10
+;; Query time: 1 msec

@@ -1,0 +1,9 @@
+#!/bin/bash
+# GNU nc: no -G, and a connect line that says "open".
+D=${SRVATLAS_FIXTURE_DIR:?}
+if [[ $1 == -h ]]; then
+    echo "usage: nc [-w timeout]"
+    exit 0
+fi
+echo "nc $*" >>"${SRVATLAS_LOG:?}"
+cat "$D/nc-open.txt"
