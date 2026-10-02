@@ -5,6 +5,7 @@
     *  Description: "kill aged sessions (and associated operations) by user"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+    *  Roadmap: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/ROADMAP.md" (required context)
     *
     *  Legacy archive line: v0.2.2 is the snapshot for this script. mongosh-only
     *  (incompatible with legacy mongo); still the demarked version for the
