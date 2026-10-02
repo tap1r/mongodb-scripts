@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.14.9"
+ *  Version: "0.14.10"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -118,7 +118,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.14.9" };
+   const __script = { "name": "dbstats.js", "version": "0.14.10" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -446,8 +446,10 @@
             (collections || []).filter(acceptCollName),
             compareBy('name', 1)
          );
+         database.listedCollectionCount = countListedCollections(database.collections);
       } catch(e) {
          database.collections = [];
+         database.listedCollectionCount = 0;
          database.catalogError = commandErrorMessage(e);
       }
       try {
@@ -578,17 +580,31 @@
       return mode === 'exclude' || mode === 'only';
    }
 
+   function countListedCollections(infos = []) {
+      /*
+       *  $stats.collections counts type:collection (including system.buckets).
+       *  listCollections of collection|timeseries also returns the timeseries
+       *  name — exclude those from the coverage count.
+       */
+      return infos.reduce((n, c) => n + ((c && c.type) === 'timeseries' ? 0 : 1), 0);
+   }
+
    function catalogCoverageComplete(database) {
       /*
        *  Fetched collections cover the database the table is claiming to subtotal.
        *  Sharded ncollections is a per-shard array (not unique NS) — skip the count check.
+       *  Compare $stats.collections to listed type:collection, not to
+       *  collections.length (timeseries names are extra list entries).
        */
       if (database.catalogError) return false;
       if (catalogFilterRestricts()) return false;
       const collections = database.collections || [];
       if (collections.some(c => isUnauthorizedCollection(c) || isUnavailableCollection(c))) return false;
       const ncoll = database.ncollections;
-      if (typeof ncoll === 'number' && Number.isFinite(ncoll) && collections.length !== ncoll) return false;
+      const listed = Number.isFinite(+database.listedCollectionCount)
+         ? +database.listedCollectionCount
+         : collections.length;
+      if (typeof ncoll === 'number' && Number.isFinite(ncoll) && listed !== ncoll) return false;
       return true;
    }
 
@@ -1125,7 +1141,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.14.9',
+         "version": '0.14.10',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
