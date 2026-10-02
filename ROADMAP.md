@@ -438,11 +438,11 @@ Remaining mongosh-line work (do not block the archive):
 
 Remaining mongosh-line work (do not block the archive):
 
-- Sharding (per-shard WT vitals; same need as niceDeleteMany).
-- MongoDB 8 execution-control metrics.
-- `bytes_dirty_intl` / `bytes_dirty_leaf` when the server exposes them.
+- Sharding (per-shard WT vitals; same need as niceDeleteMany). Live mongosh line folds collection-owning (or all) shard primaries; archive freeze stays v0.2.13.
+- MongoDB 8 execution-control: live snapshot + EQ for `executionControlDeprioritizationGate`, `queues.execution.{read,write}.lowPriority.queueLength`, and interval wait from `totalTimeQueuedMicros`. Monitor-only — niceDeleteMany AIMD does not trip on these. `lowPriorityAdmissionBypassThreshold` is dropped (fairness knob, not a pressure signal).
+- `bytes_dirty_intl` / `bytes_dirty_leaf` when the server exposes them. Live mongosh line already maps `tracked dirty internal/leaf page bytes in the cache`.
 - Pause / closed signal for auto-trim: backup cursor, repl-lag settle, WT dirty/updates (already has `backupCursorOpen`). Auto-trim is a consumer of these vitals, not a second monitor implementation if inlining is still required.
-- `.finally(() => process.stdout.write(…))` so the alt-buffer teardown actually waits. The file still passes `process.stdout.write(…)` directly, so the write runs when the chain is built. See the scripting guide (`finally` takes a function). Header tags this file as requiring this roadmap.
+- `.finally(() => process.stdout.write(…))` so the alt-buffer teardown actually waits. Live mongosh line wraps the write in a function; archive freeze `.finally(process.stdout.write(…))` is wontfix. See the scripting guide (`finally` takes a function).
 
 ### `niceDeleteMany.js`
 
