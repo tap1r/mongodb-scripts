@@ -4,6 +4,7 @@
  *  Description: "Generates a text-based histogram of aggregation stage execution timers"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+ *  Roadmap: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/ROADMAP.md" (required context)
  *
  *  Legacy archive line: v0.1.4 is the snapshot for this script. mongosh-only
  *  (incompatible with legacy mongo: no require). Still the demarked version
