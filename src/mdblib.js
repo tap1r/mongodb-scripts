@@ -5,6 +5,7 @@
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *  Guide: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/mongosh-scripting-guide.md
+ *  Roadmap: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/ROADMAP.md (required context)
  *
  *  Dual-shell snapshot: legacy/mongo-shell (tag legacy-mongo-shell, v0.15.10).
  *  This file is mongosh-only. Further work (for(db), MetaStats) still TBA.
