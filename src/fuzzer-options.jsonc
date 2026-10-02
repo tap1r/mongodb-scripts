@@ -5,6 +5,7 @@
 //
 // totalDocs stays $getRandExp(totalDocsExp) unless totalDocs is set.
 // writeConcern.w stays "majority" on a replica set or mongos, otherwise 1, unless set.
+// writeConcern.wtimeout is 10000 ms when w waits past the primary, unless set. 0 waits with no limit.
 // indexPrefs.commitQuorum follows that w unless set.
 // indexOptions.collation follows collation unless set.
 // indexes2dOptions.default_language and textIndexOptions.default_language follow idioma unless set.
@@ -40,6 +41,7 @@
    },
    "writeConcern": {
       // "w": "majority",
+      // "wtimeout": 10000,
       "j": false
    },
    "indexPrefs": {
@@ -85,6 +87,7 @@
          "schema-c.jsonc"
       ],
       // an empty schemas array skips the sample files
+      // weights may be fractional; a non-array is treated as [1]; weight 0 omits that schema
       "ratios": [7, 2, 1]
    },
    "sharding": true,

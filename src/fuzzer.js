@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.15.1"
+ *  Version: "0.15.2"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,7 +19,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.15.1" };
+   const __script = { "name": "fuzzer.js", "version": "0.15.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -273,6 +273,9 @@
       },
       "writeConcern": {
          "j": false
+         // w is majority on a replica set or mongos, otherwise 1, unless the overlay sets it.
+         // wtimeout is 10000 ms when w waits past the primary, unless the overlay sets it.
+         // wtimeout 0 waits without a limit.
       },
       "indexPrefs": { /* build index preferences */
          "build": true,                 // [true|false]
@@ -310,6 +313,8 @@
             "schema-b.jsonc",
             "schema-c.jsonc"
          ],
+         // Weights may be fractional. A non-array is treated as [1].
+         // Weight 0 omits that schema.
          "ratios": [7, 2, 1]
       },
       "sharding": true,
@@ -428,6 +433,15 @@
       indexes2dOptions = opt.indexes2dOptions,
       textIndexes = opt.textIndexes,
       textIndexOptions = opt.textIndexOptions;
+   const WRITE_CONCERN_WTIMEOUT_MS = 10000;
+   if (!(hasOwn(loaded, 'writeConcern') && hasOwn(loaded.writeConcern, 'wtimeout'))) {
+      const wtimeout = defaultWriteConcernTimeout(writeConcern.w);
+      if (wtimeout != null)
+         writeConcern.wtimeout = wtimeout;
+   } else
+      writeConcern.wtimeout = loaded.writeConcern.wtimeout;
+   if (isPlainObject(fuzzer) && !Array.isArray(fuzzer.ratios))
+      fuzzer.ratios = [1];
    if (isPlainObject(indexPrefs)
       && !(hasOwn(loaded, 'indexPrefs') && hasOwn(loaded.indexPrefs, 'commitQuorum')))
       indexPrefs.commitQuorum = (writeConcern.w == 0) ? 1 : writeConcern.w;
@@ -466,8 +480,6 @@
    const namespace = database.getCollection(collName);
    const now = new Date().getTime();
    const timestamp = $floor(now / 1000);
-   const ratioSum = fuzzer.ratios.reduce((n, ratio) => n + parseInt(ratio), 0);
-   const sampleSize = (8 + ratioSum) ** 2;
 
    function plural(n, one, many) {
       return (n === 1) ? one : many;
@@ -509,6 +521,8 @@
          console.log(`\n[red][ERROR][/] ${ratioProblem}`);
          return;
       }
+      const ratioSum = ratioTotal(fuzzer.ratios);
+      const sampleSize = $floor((8 + ratioSum) ** 2);
       const plan = collectionPlan();
       if (plan.length > 0) {
          plan.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
@@ -629,13 +643,58 @@
       return reasons;
    }
 
+   function defaultWriteConcernTimeout(w) {
+      // w <= 1 returns from the primary. wtimeout applies once more members must ack.
+      if (typeof w === 'number')
+         return w > 1 ? WRITE_CONCERN_WTIMEOUT_MS : null;
+      if (typeof w === 'string' && w !== '0' && w !== '1')
+         return WRITE_CONCERN_WTIMEOUT_MS;
+      return null;
+   }
+
+   function ratioWeight(value) {
+      const n = +value;
+      return (n > 0 && Number.isFinite(n)) ? n : 0;
+   }
+
+   function ratioTotal(ratios) {
+      const weights = Array.isArray(ratios) ? ratios : [1];
+      let total = 0;
+      for (let i = 0; i < weights.length; i++)
+         total += ratioWeight(weights[i]);
+      return total;
+   }
+
+   function ratioIndex(ratios) {
+      const weights = Array.isArray(ratios) ? ratios : [1];
+      const total = ratioTotal(weights);
+      if (!(total > 0))
+         return undefined;
+      let draw = $rand() * total;
+      let last = 0;
+      for (let i = 0; i < weights.length; i++) {
+         const weight = ratioWeight(weights[i]);
+         if (!(weight > 0))
+            continue;
+         last = i;
+         draw -= weight;
+         if (draw < 0)
+            return i;
+      }
+      return last;
+   }
+
    function schemaRatioProblem(ratios, count) {
-      if (!Array.isArray(ratios) || ratios.length === 0)
+      const weights = Array.isArray(ratios) ? ratios : [1];
+      if (weights.length === 0)
          return 'fuzzer.ratios must list a weight for each schema';
       let slots = 0;
-      for (let idx = 0; idx < ratios.length; idx++) {
-         if (!(ratios[idx] > 0))
+      for (let idx = 0; idx < weights.length; idx++) {
+         const n = +weights[idx];
+         if (!(n > 0))
             continue;
+         if (!Number.isFinite(n))
+            return `fuzzer.ratios weight at ${idx} is not finite`;
          slots++;
          if (idx >= count)
             return `fuzzer.ratios can select schema ${idx} but only ${count} ${plural(count, 'schema file is', 'schema files are')} loaded`;
@@ -680,7 +739,7 @@
        *  Pick one loaded schema, then build only that document.
        *  A string that starts with "=" is an expression.
        */
-      const index = $getRandRatioInt(ratios);
+      const index = ratioIndex(ratios);
       const sample = schemaSamples[index];
       if (!sample)
          throw new Error(`schema ratio index ${index} but only ${schemaSamples.length} ${plural(schemaSamples.length, 'schema file is', 'schema files are')} loaded`);
