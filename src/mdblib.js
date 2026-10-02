@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.19.1"
+ *  Version: "0.19.2"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -8,18 +8,19 @@
  *  Roadmap: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/ROADMAP.md (required context)
  *
  *  Dual-shell snapshot: legacy/mongo-shell (tag legacy-mongo-shell, v0.15.10).
- *  This file is mongosh-only. Further work (for(db), HostNode / TopologySnapshot) still TBA.
+ *  This file is mongosh-only. Further work (for(db), TopologySnapshot) still TBA.
  */
 
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.19.1"
+      "version": "0.19.2"
 });
 
 /*  Notes:
  *  - mongosh only (floor 1.10 / 2.10+)
- *  - floor mongod to v4.4
+ *  - floor mongod to v4.4. The check sets __mdblibShellIncompatible /
+ *    __mdblibServerUnsupported and does not print or read a caller's options.
  *  - fCV() → serverVer() on Atlas M0/Flex is by design (getParameter FCV is
  *    restricted; Atlas is not left on a lagging FCV)
  *  - $collStats is async; callers must await it (user-defined async is not
@@ -29,7 +30,9 @@ if (typeof __lib === 'undefined') (
  *    (config.chunks / db primary), not cluster-wide listShards.
  *  - parseDbStats / parseCollStats / parseIndexStats turn normalised $stats /
  *    $collStats output into DTOs. CollectionStats / DatabaseStats / DbPathStats
- *    construct from those DTOs. There is no MetaStats façade.
+ *    construct from those DTOs. HostNode owns host identity; DbPathStats
+ *    composes it. There is no MetaStats façade. TopologySnapshot waits on
+ *    discovery.
  */
 
 function isMongosh() {
@@ -160,18 +163,15 @@ function formatLogArgs(args, isTTY) {
 (() => {
    /*
     *  Runtime floors (see Notes). Integer major.minor — 2.10 is not 2.1.
-    *  json output (dbstats options.output.format) must stay a single JSON document.
+    *  Flags only. Callers print (dbstats CLI) or fold them into warnings[].
     */
-   const jsonCli = (typeof options !== 'undefined' && options && options.output && options.output.format === 'json');
    const [, maj, min] = String(version()).match(/^(\d+)\.(\d+)/) || [0, 0, 0];
    const major = +maj, minor = +min;
    if (!((major === 1 && minor >= 10) || (major === 2 && minor >= 10) || major >= 3)) {
       __mdblibShellIncompatible = version();
-      if (!jsonCli) console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${version()}[/]`);
    }
    if (!serverVer(4.4)) {
       __mdblibServerUnsupported = db.version();
-      if (!jsonCli) console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${db.version()}[/]`);
    }
 })();
 
@@ -479,20 +479,18 @@ class DatabaseStats extends StorageMetrics {
    }
 }
 
-class DbPathStats extends StorageMetrics {
-   constructor(dto = {}) {
-      super(dto);
-      this.databases = Array.isArray(dto.databases) ? dto.databases : [];
-      this.ncollections = dto.ncollections != null ? dto.ncollections : 0;
-      this.nviews = dto.nviews != null ? dto.nviews : 0;
-      this.namespaces = dto.namespaces != null ? dto.namespaces : 0;
-      this.nindexes = dto.nindexes != null ? dto.nindexes : 0;
-      this.indexes = dto.indexes != null ? dto.indexes : this.nindexes;
-      this.instance = dto.instance;
-      this.hostname = dto.hostname;
-      this.proc = dto.proc;
-      this.dbPath = dto.dbPath;
-      this.shards = Array.isArray(dto.shards) ? dto.shards : [];
+class HostNode {
+   /*
+    *  Connecting-host identity. TopologySnapshot (discovery fan-out) waits.
+    */
+   constructor({
+         instance, hostname, proc, dbPath, shards = []
+      } = {}) {
+      this.instance = instance;
+      this.hostname = hostname;
+      this.proc = proc;
+      this.dbPath = dbPath;
+      this.shards = Array.isArray(shards) ? shards : [];
    }
    init() {
       this.instance = (isAtlasPlatform('serverless')) ? 'serverless'
@@ -511,6 +509,40 @@ class DbPathStats extends StorageMetrics {
       this.shards = (this.proc === 'mongos') ? db.adminCommand({ "listShards": 1 }).shards.map(({ _id }) => _id) : [];
       return this;
    }
+   static discover() {
+      return new HostNode().init();
+   }
+}
+
+class DbPathStats extends StorageMetrics {
+   constructor(dto = {}) {
+      super(dto);
+      this.databases = Array.isArray(dto.databases) ? dto.databases : [];
+      this.ncollections = dto.ncollections != null ? dto.ncollections : 0;
+      this.nviews = dto.nviews != null ? dto.nviews : 0;
+      this.namespaces = dto.namespaces != null ? dto.namespaces : 0;
+      this.nindexes = dto.nindexes != null ? dto.nindexes : 0;
+      this.indexes = dto.indexes != null ? dto.indexes : this.nindexes;
+      this.host = (dto.host instanceof HostNode)
+         ? dto.host
+         : new HostNode(dto.host || {
+            "instance": dto.instance,
+            "hostname": dto.hostname,
+            "proc": dto.proc,
+            "dbPath": dto.dbPath,
+            "shards": dto.shards
+         });
+   }
+   init() {
+      if (!(this.host instanceof HostNode)) this.host = new HostNode();
+      this.host.init();
+      return this;
+   }
+   get instance() { return this.host && this.host.instance; }
+   get hostname() { return this.host && this.host.hostname; }
+   get proc() { return this.host && this.host.proc; }
+   get dbPath() { return this.host && this.host.dbPath; }
+   get shards() { return (this.host && this.host.shards) || []; }
 }
 
 function formatHudTime(s) {
