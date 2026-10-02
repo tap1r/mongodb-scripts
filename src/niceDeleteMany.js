@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.13.3"
+    *  Version: "0.13.4"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -69,7 +69,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.13.3" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.13.4" };
    let vitals = {};
    let vitalsSampling = false;
    let startupLogDone = false; // after writeConsole of the startup banner; attach WARN is banner-only until then
@@ -1599,10 +1599,6 @@
       return keyPattern;
    }
 
-   function collectQueryPlanners(explainResult) {
-      return collectExplainTree(explainResult).planners;
-   }
-
    function firstViableWindowHint(explainResult, indexes) {
       /*
        *  Planner order: winningPlan, then rejectedPlans. Viable = IXSCAN without
@@ -1610,7 +1606,7 @@
        *  Winner already viable → no hint. Else first ranked viable keyPattern as hint.
        */
       const allowed = new Set((indexes || []).map(idx => JSON.stringify(idx.key)));
-      const planners = collectQueryPlanners(explainResult);
+      const planners = collectExplainTree(explainResult).planners;
       if (!planners.length || !allowed.size) return null;
       let allWinnersViable = true;
       const viableKeys = [];
