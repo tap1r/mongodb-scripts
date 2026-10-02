@@ -1,6 +1,6 @@
 # mongosh scripting guide
 
-Practical quirks and patterns for writing scripts that run under [`mongosh`](https://www.mongodb.com/docs/mongodb-shell/) against replica sets, Atlas, and sharded clusters. This is not a full mongosh manual. It captures behaviours that repeatedly bite long-running or topology-aware scripts in this repository (for example `src/niceDeleteMany.js`, `src/congestionMonitor.js`, `src/discovery.js`, `src/mdblib.js`, `src/fuzzer.js`, `src/autoCompact.js`).
+Practical quirks and patterns for writing scripts that run under [`mongosh`](https://www.mongodb.com/docs/mongodb-shell/) against replica sets, Atlas, and sharded clusters. This is not a full mongosh manual. It captures behaviours that repeatedly bite long-running or topology-aware scripts in this repository (for example `src/niceDeleteMany.js`, `src/congestionMonitor.js`, `src/discovery.js`, `src/mdblib.js`, `src/fuzzer.js`, `src/autoCompact.js`, `src/dbstats.js`).
 
 Where a point is specific to one workflow, the surrounding prose names that workflow instead of using opaque project jargon.
 
@@ -68,6 +68,14 @@ So even when connection RP is useful for find/aggregate helpers, **do not flip `
 ### `adminCommand` always targets the primary
 
 Commands issued through [`db.adminCommand()`](https://www.mongodb.com/docs/manual/reference/method/db.admincommand/) are admin-scoped and, in mongosh usage for things like `serverStatus` / `getParameter`, effectively always hit a **writable primary**. Do not use `adminCommand` when you need to discover or verify which secondary a secondaryPreferred read would select. Use `db.runCommand(..., { readPreference })` on a user database (or an equivalent non-admin path) instead.
+
+### `hello` is one-shot
+
+`db.hello()` and `db.adminCommand({ hello: 1 })` are a one-shot topology probe. Do **not** pass `topologyVersion` or `maxAwaitTimeMS`. That is [awaitable hello](https://www.mongodb.com/docs/manual/reference/command/hello/#awaitable-hello): the command blocks until the topology changes or `heartbeatFrequencyMS` (often 10 seconds) on a quiet node. `mdblib.js` `hello()` never sends those fields.
+
+Send `hello`. Do not wrap `isMaster`. The replies differ (`isWritablePrimary` vs `ismaster`) — [SERVER-49989](https://jira.mongodb.org/browse/SERVER-49989). `hello` exists on mongod 4.2+ and this repo’s server floor is 4.4, so there is no `isMaster` fallback. `ctxDemo.js` still falls back; do not copy that.
+
+The parent session string is `db.getMongo().getURI()`. `mongo._uri` is private and can lag the session. Shard child URIs are rebuilt from `getURI()` — see [Child `mongodb://` URIs](#child-mongodb-uris-to-shard-primaries).
 
 ### Sessions vs connection vs command
 
@@ -199,6 +207,60 @@ Many shell helpers such as `db.adminCommand()` are **synchronous** in mongosh. W
 inflight = Promise.resolve().then(() => db.adminCommand({ serverStatus: 1, /* … */ }));
 ```
 
+### Read the field after the call resolves
+
+The rewriter inserts `await` around the **shell call**. A property on that same expression is read on the Promise, and the field is `undefined`:
+
+```javascript
+// WRONG — deletedCount is always undefined
+const n = await coll.deleteMany(filter, opts).deletedCount;
+
+// RIGHT — resolve the write result, then read the field
+const n = (await coll.deleteMany(filter, opts)).deletedCount;
+```
+
+Same shape for `insertMany`, `updateMany`, `bulkWrite`, and any other shell helper that returns a result document. Assign the result, then read the field. `niceDeleteMany.js` `deleteManyTask` still uses the unparenthesized form.
+
+Without your own `await`, a rewriter-unwrapped call already is the result, so `const result = coll.insertMany(docs, opts); result.insertedIds` is fine. The trap is `await helper(...).field`.
+
+### Shell `toArray()` is not a Promise you can overlap
+
+On a mongosh cursor, `cursor.toArray()` is rewriter-unwrapped to an **array**. It looks synchronous and it **serialises** a pool: each call runs to completion before the next worker continues. `Promise.all` of shell `toArray()` does not overlap getMores.
+
+The Node driver cursor’s `cursor._cursor.toArray()` is a **native Promise**. That is what `mdblib.js` `$collStats` awaits so `mapPool` can overlap one-document drains. Unwrap a bare `Promise<cursor>` first (no `.close`), then call the driver method:
+
+```javascript
+let cursor = namespace.aggregate(pipeline, opts);
+if (cursor && typeof cursor.then === 'function' && typeof cursor.close !== 'function') {
+  cursor = await cursor;
+}
+const driverToArray = cursor && cursor._cursor && cursor._cursor.toArray;
+let docs = (typeof driverToArray === 'function')
+  ? driverToArray.call(cursor._cursor)
+  : cursor.toArray();
+if (docs && typeof docs.then === 'function') docs = await docs;
+```
+
+A single sequential `aggregate(...).toArray()[0]` (`onlineDefrag.js` packed-temp WT) is fine. A thread pool (`indexCacheUtil.js`, when it lands) must use the driver Promise.
+
+### Sync shell calls do not overlap by themselves
+
+`db.adminCommand()`, `db.stats()`, and most helpers run to completion on the current turn. `Promise.all` of those calls still runs them one after another. `mapPool` in `mdblib.js` `await Promise.resolve()` before and after each item so other workers start and a HUD can paint **between** sync commands. Overlap of real I/O still requires a native Promise (driver `toArray`, or `Promise.resolve().then(() => adminCommand(...))` only coalesces — it does not make one `adminCommand` async).
+
+### `finally` takes a function
+
+`Promise.prototype.finally` **calls** whatever you pass when you build the chain. A shell or stdout call in that slot runs immediately:
+
+```javascript
+// WRONG — write() runs now; finally receives its return value
+p.finally(process.stdout.write('\x1b[?1049l'));
+
+// RIGHT
+p.finally(() => { process.stdout.write('\x1b[?1049l'); });
+```
+
+`congestionMonitor.js` still passes `process.stdout.write(...)` directly. That teardown does not wait for the monitor.
+
 ### Thenable cursors: do not `await` a live cursor
 
 mongosh [`FindCursor`](https://www.mongodb.com/docs/manual/reference/method/js-cursor/) **and** aggregation cursors are **thenable** so the REPL can treat `await db.coll.find()` / `await db.coll.aggregate(…)` as “give me the documents.” `Cursor.prototype.then` consumes the cursor (typically via [`toArray()`](https://www.mongodb.com/docs/manual/reference/method/cursor.toArray/)). That is **not** “wait until the cursor object exists.”
@@ -253,12 +315,47 @@ Scripts that take a user document (`autoCompactOptions`, `options`) must **not**
 const userOptions = typeof autoCompactOptions === 'undefined' ? {} : autoCompactOptions;
 ```
 
+An async IIFE **parameter** of the same name is also a shadow. `(async (options) => { … })()` binds `options` to `undefined` and hides the `--eval` global. Probe the global inside an IIFE that takes no parameters (`killAgedSessions.js`, `onlineDefrag.js`). `dbstats.js` leaves `(async (db, options) => …)` commented for this reason.
+
+`--eval` examples must use `var`. On mongosh 2.10, `let` / `const` in `--eval` also leak into `--file`, and a second run then redeclares. `killAgedSessions.js` examples still show `let`.
+
+### JSONC options file
+
+`fuzzer.js` (v0.15.0) overlays in-file defaults from `fuzzer-options.jsonc`. That file is the reference until a shared resolver exists. Do not paste the parser into every script.
+
+- Search a relative name in this order: the options file’s own directory, the working directory, `__dirname` (set for `--file`), `$MDBLIB`, `~/.mongodb`. An absolute path is used as given. A missing file is not an error.
+- Strip JSONC in-process (BOM, `//` and `/* */` outside strings, trailing commas) and `JSON.parse`. Do not `require('jsonc-require')` for options. That module is a separate resolve (`explainHisto.js` still needs it for an operator `pipeline.jsonc`).
+- Deep-merge plain objects. Arrays and scalars replace.
+- JSON has no RegExp. Defaults that are regexes (`dbstats.js` `filter.db` / `filter.collection`) need an explicit string revive. A regex literal does not belong in the file.
+- `--eval` stays a thin `var` override and must still not be declared in the file. Fuzzer’s `--eval` overlay is unwired; the JSONC file is the overlay.
+
+### Version strings
+
+`version()` and `db.version()` are strings. `Number("2.10")` and `+"2.10"` are `2.1`. Compare integer `major.minor.patch`. `mdblib.js` `shellVer` / `serverVer` do that (`2.10` ≠ `2.1`). A major-only `parseInt` (`autoCompact.js` binary ≥ 8) is a different check and is fine for that gate.
+
+### Process status
+
+`mongosh --file` does not reliably surface `quit(n)` or the process status byte. Signal a hard failure by **throwing** (`killAgedSessions.js`). Cron and wrappers should read the exception, not depend on the exit code.
+
 ---
 
 ## Connection lifecycle and “libraries”
 
 - Driver apps call `MongoClient.close()`. In mongosh the **shell owns** the connection; there is no reliable script-level `db.close()` that means “tear down this script’s client and leave the shell.” Tear down **cursors**, **sessions**, and your own background loops/flags instead.
 - Sharing code with `load('helper.js')` reuses the same **`db` global**. That makes a shared “congestion library” attractive but multi-context awkward (which `db`? which read preference?). Until a clearer module story exists, duplication or carefully namespaced helpers is often safer than a hidden global singleton.
+- `require()` / `module.exports` initialise in a **different** context. The shell `db` global is not there. `mdblib.js` leaves `module.exports` commented. Helpers that touch `db` use `load()`. `require` of a pure parser (`jsonc-require`, a pipeline file) does not need `db`.
+
+### `--file` vs `load()`
+
+`process.argv` lists the script passed as `-f` / `--file` / a positional `*.js`. `load('other.js')` does not change that list. `dbstats.js` treats “argv names `dbstats.js`” as the interactive CLI. Any other entry (`load()`, or another `--file` that loads it) is module mode: no banner, and the async IIFE returns the JSON contract.
+
+```javascript
+const report = await load('dbstats.js');
+```
+
+`await` the `load()`. The file’s async IIFE is user code; the rewriter does not await it for the caller. The IIFE’s return value is the contract (`return dbStats` at the bottom of `dbstats.js`).
+
+Loader IIFEs in `autoCompact.js`, `onlineDefrag.js`, `fuzzer.js`, and `oplogchurn.js` still print a banner when the file is `load()`ed. Gate them with the same argv test before a fan-out `load()`s them. `onlineDefrag.js` does not `load()` dbstats; a snapshot belongs on `await load('dbstats.js')`, not a scraped table.
 
 ---
 
@@ -267,6 +364,19 @@ const userOptions = typeof autoCompactOptions === 'undefined' ? {} : autoCompact
 - Detect an interactive terminal with `process.stdout.isTTY` (allow `--eval` overrides for forced interactive / log mode).
 - Piped or CI runs: strip CSI colour sequences (e.g. `\x1b[…m`), avoid `console.clear()`, prefer append-only status lines. `mdblib.js` overloads `console.log` to expand markup tags on TTY and strip escapes otherwise.
 - In JavaScript source strings, `\xNN` is a **single Latin-1** code unit (0–255). Unicode block elements (`░`, `▓`) need a literal character or `\uXXXX` / `\u{…}`. A UTF-8 byte sequence written as `\xe2\x96\x91` is **three** characters, not one `░`.
+- A one-line progress HUD is `process.stdout.write('\r' + line + '\x1b[K')`. `console.log` always advances a line, and `mdblib.js`’s `console.log` overload also rewrites markup. `MiniHud` (`mdblib.js`) writes that `\r` line, no-ops when stdout is not a TTY or the mode is json/html, and `clear()`s before the report. `autoCompact.js`’s planned catalog bar should use `MiniHud`, not a second painter.
+
+---
+
+## Write results and index builds
+
+`collection.createIndexes(keys, options)` resolves to the **index names** (an array). A failure **throws**. It does not return `{ ok: 1 }`. `fuzzer.js` prints those names.
+
+`Bulk.execute(writeConcern)` **ignores** that argument. Put `writeConcern` on `insertMany(docs, { ordered: false, writeConcern })`. Do not bring `Bulk.execute(writeConcern)` back.
+
+`insertMany`’s `insertedIds` is an **object** (index → id), not a count and not an array. A thrown bulk error may still carry a partial `insertedIds`, sometimes nested on `.result`. Count with `Object.keys`. `schema-import.js` will hit both of these when the create path is implemented.
+
+`db.stats(scale)` as a bare number misses `freeStorage` on some shells. mongosh 1.2+ together with mongod 5.0.6+ want a document `{ freeStorage: 1, scale: 1 }` ([MONGOSH-1108](https://jira.mongodb.org/browse/MONGOSH-1108), [SERVER-62277](https://jira.mongodb.org/browse/SERVER-62277); scale `1` keeps byte precision, [SERVER-69036](https://jira.mongodb.org/browse/SERVER-69036)). `$stats` in `mdblib.js` passes the document only when `serverVer('5.0.6') && shellVer(1.2)`.
 
 ---
 
@@ -320,7 +430,7 @@ Used by bucketed delete scripts that sample collection-owning shard primaries fo
 To sample a shard primary from a router session:
 
 1. Resolve owners (`collStats.shards`, else `config.chunks`, else the database primary). Map ids through `listShards` — `host` is `setName/h1:27017,h2:27017` or a standalone `host:port`.
-2. Rebuild a **legacy `mongodb://` child URI**. Parse the parent with `URL` after rewriting `mongodb+srv:` → `mongodb:` so the constructor accepts it. Hosts come from topology discovery, not a second SRV lookup.
+2. Rebuild a **legacy `mongodb://` child URI**. Take the parent from `db.getMongo().getURI()` (`niceDeleteMany.js`, `discovery.js`). Parse it with `URL` after rewriting `mongodb+srv:` → `mongodb:` so the constructor accepts it. Hosts come from topology discovery, not a second SRV lookup. Do not read `mongo._uri`.
 3. Copy parent username/password and query params (`authSource`, `tlsCAFile`, …). Drop `srvMaxHosts` / `srvServiceName`. If the parent was SRV and `tls`/`ssl` are absent, set `tls=true`.
 4. Replica-set shards: `replicaSet=<setName>`, `directConnection=false`, `readPreference=primary`. Standalone shards: `directConnection=true`, `readPreference=primary`. Short `serverSelectionTimeoutMS` so Atlas-unreachable fails fast.
 5. Open with `new Mongo(uri)` (or `connect(uri)`), run allowlisted commands on that handle, close the child in `finally`. Do **not** `Mongo.setReadPref` (reconnects the client).
@@ -370,6 +480,22 @@ child.close();
 | Rebuild child `mongodb://` from parent auth/TLS + `listShards` host | Re-expand `mongodb+srv` DNS for shard members |
 | `replSetGetStatus` on the shard `Mongo()` handle | `rs.status()` on mongos (that is CSRS) |
 | Gate coloured HUDs on TTY; strip ANSI in logs | Assume `console.clear` + colour is CI-safe |
+| `(await coll.deleteMany(…)).deletedCount` | `await coll.deleteMany(…).deletedCount` (field on the Promise) |
+| Overlap drains with `cursor._cursor.toArray()` | `Promise.all` of shell `cursor.toArray()` (rewriter returns an array; the pool serialises) |
+| `await Promise.resolve()` between sync `adminCommand`s in a pool | Assume `Promise.all` of sync helpers overlaps I/O |
+| `p.finally(() => process.stdout.write(…))` | `p.finally(process.stdout.write(…))` (the write runs immediately) |
+| `db.adminCommand({ hello: 1 })` with no `maxAwaitTimeMS` | Awaitable hello (`topologyVersion` / `maxAwaitTimeMS`) on a quiet node |
+| `db.getMongo().getURI()` for the parent string | `mongo._uri` (private; can lag) |
+| Probe `--eval` globals inside an IIFE with **no** parameter of that name | `(async (options) => {})()` (parameter hides the global) |
+| Overlay defaults from a JSONC file (fuzzer search path, deep-merge objects) | `require('jsonc-require')` for options, or a regex literal inside JSON |
+| `await load('dbstats.js')` when argv does not name that file | Scrape the interactive report, or expect `load()` to be rewriter-awaited |
+| `load()` for helpers that use `db` | `module.exports` (different context; `db` is missing) |
+| Throw on hard failure | `quit(1)` and trust `mongosh --file` to surface the status |
+| Integer `major.minor` compares (`2.10` ≠ `2.1`) | `Number(version())` / unary `+` on `"2.10"` |
+| `createIndexes` → names, or catch the throw | Treat the return value as `{ ok: 1 }` |
+| `insertMany(docs, { writeConcern })`; count `Object.keys(insertedIds)` | `Bulk.execute(writeConcern)` (argument ignored) |
+| `process.stdout.write('\r' + line)` via `MiniHud` | `console.log` for a progress bar |
+| `{ freeStorage: 1, scale: 1 }` on `db.stats` when the shell and server are new enough | `db.stats(1)` when you need `freeStorage` |
 
 ---
 
