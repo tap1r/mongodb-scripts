@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.18.2"
+ *  Version: "0.18.3"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.18.2"
+      "version": "0.18.3"
 });
 
 /*  Notes:
@@ -25,6 +25,8 @@ if (typeof __lib === 'undefined') (
  *  - $collStats is async; callers must await it (user-defined async is not
  *    rewriter-awaited). Do not await the aggregate cursor (thenable drains).
  *    Drain via driver _cursor.toArray() (native Promise) so mapPool overlaps.
+ *  - statsIncomplete compares returned $collStats shards to owning shards
+ *    (config.chunks / db primary), not cluster-wide listShards.
  */
 
 function isMongosh() {
@@ -1681,37 +1683,87 @@ function $stats(dbName = db.getName()) {
    return stats;
 }
 
-let __collStatsShardCount;
+let __collStatsOnMongos;
+const __collOwningShards = new Map();
 
-function expectedCollStatsShards() {
-   if (__collStatsShardCount != null) return __collStatsShardCount;
-   if (!isSharded()) {
-      __collStatsShardCount = 1;
-      return __collStatsShardCount;
+async function awaitPlain(value) {
+   if (value && typeof value.then === 'function' && typeof value.close !== 'function') {
+      return await value;
    }
-   try {
-      const list = db.adminCommand({ "listShards": 1 }).shards;
-      __collStatsShardCount = (Array.isArray(list) && list.length) ? list.length : 1;
-   } catch(_) {
-      __collStatsShardCount = 1;
-   }
-   return __collStatsShardCount;
+   return value;
 }
 
-function markPartialShardStats(doc) {
+async function collStatsOnMongos() {
+   if (__collStatsOnMongos != null) return __collStatsOnMongos;
+   __collStatsOnMongos = !!(await awaitPlain(isSharded()));
+   return __collStatsOnMongos;
+}
+
+async function configFindOne(collName, filter) {
+   return awaitPlain(db.getSiblingDB('config').getCollection(collName).findOne(filter));
+}
+
+async function configDistinct(collName, field, filter) {
+   return awaitPlain(db.getSiblingDB('config').getCollection(collName).distinct(field, filter));
+}
+
+async function shardsFromConfigNs(ns) {
+   const collDoc = await configFindOne('collections', {
+      "$or": [{ "_id": ns }, { "ns": ns }],
+      "dropped": { "$ne": true }
+   });
+   if (!collDoc) return [];
+   const chunkFilter = collDoc.uuid ? { "uuid": collDoc.uuid } : { "ns": ns };
+   const shards = await configDistinct('chunks', 'shard', chunkFilter);
+   return Array.isArray(shards) ? shards.filter(s => typeof s === 'string' && s.length) : [];
+}
+
+async function collectionOwningShardIds(dbName, collName) {
    /*
-    *  $group only sees shards that returned. Keep that known-shard sum.
-    *  Multiple shard ids with listShards larger than the set → lower bound.
-    *  A single shard id is unsharded-on-mongos (or a one-shard NS).
+    *  Shards that own this NS: config.chunks (uuid/ns), timeseries buckets,
+    *  then the database primary. Cached per ns. null = unknown (skip mark).
+    */
+   const ns = `${dbName}.${collName}`;
+   if (__collOwningShards.has(ns)) return __collOwningShards.get(ns);
+   let ids = null;
+   try {
+      ids = await shardsFromConfigNs(ns);
+      if (!ids.length && collName && !String(collName).startsWith('system.buckets.')) {
+         ids = await shardsFromConfigNs(`${dbName}.system.buckets.${collName}`);
+      }
+      if (!ids.length) {
+         const dbDoc = await configFindOne('databases', { "_id": dbName });
+         if (dbDoc && typeof dbDoc.primary === 'string' && dbDoc.primary) ids = [dbDoc.primary];
+      }
+      if (!ids.length) ids = null;
+   } catch(_) {
+      ids = null;
+   }
+   __collOwningShards.set(ns, ids);
+   return ids;
+}
+
+async function markPartialShardStats(doc, dbName, collName) {
+   /*
+    *  $group only sees shards that returned. Compare that set to the
+    *  collection's owning shards, not cluster-wide listShards — a NS on a
+    *  subset of shards is complete when every owner returned. Unknown
+    *  placement skips this mark.
     */
    if (!doc || doc.statsError) return doc;
    const ids = Array.isArray(doc.shards)
       ? [...new Set(doc.shards.filter(s => typeof s === 'string' && s.length))]
       : [];
-   if (ids.length > 1 && expectedCollStatsShards() > ids.length) {
-      doc.freeStorageComplete = false;
-      doc.totalIndexBytesReusableComplete = false;
-      doc.statsIncomplete = true;
+   if (ids.length && await collStatsOnMongos()) {
+      const owning = await collectionOwningShardIds(dbName, collName);
+      if (Array.isArray(owning) && owning.length) {
+         const got = new Set(ids);
+         if (owning.some(id => !got.has(id))) {
+            doc.freeStorageComplete = false;
+            doc.totalIndexBytesReusableComplete = false;
+            doc.statsIncomplete = true;
+         }
+      }
    }
    if (doc.totalIndexBytesReusableComplete === false && Array.isArray(doc.indexes)) {
       doc.indexes.forEach(idx => {
@@ -2052,7 +2104,7 @@ async function $collStats(dbName = db.getName(), collName = '') {
             : cursor;
       if (docs && typeof docs.then === 'function') docs = await docs;
       results = Array.isArray(docs) ? docs[0] : docs;
-      results = markPartialShardStats(results);
+      results = await markPartialShardStats(results, dbName, collName);
    } catch(e) {
       results = collStatsStub(isUnauthorizedError(e) ? 'unauthorized' : 'unavailable', e);
    }
