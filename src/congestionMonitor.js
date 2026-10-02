@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.3.0"
+    *  Version: "0.3.1"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -260,13 +260,15 @@
       return (n < 1) ? 'low' : (n >= 8) ? 'high' : 'medium';
    }
 
-   let _queuedPrev = null;
-   function stampQueuedWait(snap = {}) {
+   const _queuedPrev = Object.create(null);
+   function stampQueuedWait(snap = {}, key = 'local') {
       // Interval wait from lifetime totalTimeQueuedMicros (ms of wait this poll).
+      // Keyed by shard id (or 'local' on mongod) so a worst-shard fold cannot
+      // mix lifetime counters from different primaries. First sample is 0.
       const now = Date.now();
       const read = +(snap.execReadTotalTimeQueuedMicros ?? 0);
       const write = +(snap.execWriteTotalTimeQueuedMicros ?? 0);
-      const prev = _queuedPrev;
+      const prev = _queuedPrev[key];
       let readWait = 0;
       let writeWait = 0;
       if (prev && now > prev.at) {
@@ -279,7 +281,7 @@
       snap.executionControlDeprioritizationScale = 1;
       snap.execReadQueuedWaitStatus = (readWait < 10) ? 'low' : (readWait >= 100) ? 'high' : 'medium';
       snap.execWriteQueuedWaitStatus = (writeWait < 10) ? 'low' : (writeWait >= 100) ? 'high' : 'medium';
-      _queuedPrev = { "at": now, "read": read, "write": write };
+      _queuedPrev[key] = { "at": now, "read": read, "write": write };
       return snap;
    }
 
@@ -488,6 +490,7 @@
       "execReadLowPriorityQueueLength", "execWriteLowPriorityQueueLength",
       "execReadTotalTimeQueuedMicros", "execWriteTotalTimeQueuedMicros",
       "execReadLowPriorityQueuedMicros", "execWriteLowPriorityQueuedMicros",
+      "execReadQueuedWaitMs", "execWriteQueuedWaitMs",
       "rangeDeleterTasks", "checkpointRuntimeRatio", "activeReplLag",
       "replLagScale", "heartbeatIntervalMillis"
    ];
@@ -519,6 +522,7 @@
       "memoryFragmentationStatus", "wtReadTicketsStatus", "wtWriteTicketsStatus",
       "execReadQueueStatus", "execWriteQueueStatus",
       "execReadLowPriorityStatus", "execWriteLowPriorityStatus",
+      "execReadQueuedWaitStatus", "execWriteQueuedWaitStatus",
       "executionControlDeprioritizationStatus",
       "checkpointStatus", "replLagStatus"
    ];
@@ -763,7 +767,7 @@
          return { "ok": true };
       }
 
-      function sampleShardPrimary(admin) {
+      function sampleShardPrimary(admin, key) {
          const cmdOpts = { "readPreference": { "mode": "primary" } };
          const ss = admin.runCommand({
             "serverStatus": true,
@@ -802,7 +806,7 @@
          if (!hasWiredTigerVitals(snap)) {
             throw new Error('WiredTiger cache vitals unavailable');
          }
-         return snap;
+         return stampQueuedWait(snap, key);
       }
 
       function foldWorstShardVitals(namedSamples = []) {
@@ -843,6 +847,8 @@
          }
          folded["worstShard"] = worst?.id;
          folded["owningShards"] = namedSamples.map(s => s.id);
+         folded["execQueuedWaitScale"] = 1000;
+         folded["executionControlDeprioritizationScale"] = 1;
          return folded;
       }
 
@@ -857,7 +863,7 @@
          const settled = await Promise.allSettled(
             clients.map(c => Promise.resolve().then(() => ({
                "id": c.id,
-               ...sampleShardPrimary(c.admin)
+               ...sampleShardPrimary(c.admin, c.id)
             })))
          );
          const ok = [];
@@ -877,6 +883,10 @@
                   failed.join('; ') || 'incomplete sample'
                })`
             };
+         }
+         const keep = new Set(ok.map(s => s.id));
+         for (const k of Object.keys(_queuedPrev)) {
+            if (!keep.has(k)) delete _queuedPrev[k];
          }
          return { "ok": true, "vitals": foldWorstShardVitals(ok) };
       }
@@ -946,7 +956,7 @@
       }
 
       const ss = await serverStatus(SERVER_STATUS_OPT_IN);
-      return vitalsFromServerStatus({
+      return stampQueuedWait(vitalsFromServerStatus({
          "ss": ss,
          "rsSt": rsStatus(),
          "host": hostInfo(),
@@ -955,7 +965,7 @@
          "storageEngineConcurrentReadTransactions": getParameter('wiredTigerConcurrentReadTransactions', null),
          "storageEngineConcurrentWriteTransactions": getParameter('wiredTigerConcurrentWriteTransactions', null),
          "executionControlDeprioritizationGate": getParameter('executionControlDeprioritizationGate', false)
-      });
+      }), 'local');
    }
 
    class EQ {
@@ -1033,7 +1043,7 @@
             console.log(attached.detail || 'mongos: shard WT attach failed');
             return;
          }
-         vitals = stampQueuedWait(attached.vitals);
+         vitals = attached.vitals;
       }
 
       const metrics = [
@@ -1093,9 +1103,9 @@
       while (true) { // refresh stats
          if (shardVitals.enabled) {
             const next = await shardVitals.sample();
-            if (next.ok) vitals = stampQueuedWait(next.vitals);
+            if (next.ok) vitals = next.vitals;
          } else {
-            vitals = stampQueuedWait(await congestionMonitor());
+            vitals = await congestionMonitor();
          }
          sleep(shardVitals.enabled ? SHARD_VITALS_SAMPLE_INTERVAL_MS : pollingIntervalMS);
       }
