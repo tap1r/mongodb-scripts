@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.16.1"
+ *  Version: "0.17.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -125,7 +125,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.16.1" };
+   const __script = { "name": "dbstats.js", "version": "0.17.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -406,29 +406,30 @@
          const collStarted = Date.now();
          let collDone = 0;
 
-         for (const database of dbPath.databases) {
-            const names = (database.collections || []).map(c => c.name);
-            if (!names.length) {
-               rollupDatabase(database);
-               continue;
-            }
-            const fetched = await mapPool(names, concurrency, async collName => {
-               return fetchCollectionStats(database.name, collName);
-            }, p => {
-               const done = collDone + p.done;
+         await dbPath.materialize({
+            concurrency,
+            "onProgress": ({ database, done, inFlight, queued }) => {
+               const finished = collDone + done;
                const elapsed = (Date.now() - collStarted) / 1000;
-               const frac = collTotal ? done / collTotal : 1;
-               const eta = (done > 0 && done < collTotal) ? formatHudTime((elapsed / done) * (collTotal - done)) : '--';
+               const frac = collTotal ? finished / collTotal : 1;
+               const eta = (finished > 0 && finished < collTotal)
+                  ? formatHudTime((elapsed / finished) * (collTotal - finished))
+                  : '--';
                const pct = collTotal ? (frac * 100).toFixed(0) : '100';
                hud.render(
-                  `[cyan]collStats[/] ${hud.bar(frac)} ${done}/${collTotal} ${pct}%  db=${database.name}  run=${p.inFlight} q=${p.queued}  ETA ${eta}`,
-                  { "force": p.done === 0 || done === collTotal }
+                  `[cyan]collStats[/] ${hud.bar(frac)} ${finished}/${collTotal} ${pct}%  db=${database.name}  run=${inFlight} q=${queued}  ETA ${eta}`,
+                  { "force": done === 0 || finished === collTotal }
                );
-            });
-            collDone += fetched.length;
-            database.collections = stableSort(fetched, sortBy('collection'));
-            rollupDatabase(database);
-         }
+            },
+            "onDatabase": database => {
+               collDone += (database.collections || []).length;
+               database.collections = stableSort(database.collections || [], sortBy('collection'));
+               for (const collection of database.collections) {
+                  collection.indexes = stableSort(collection.indexes || [], sortBy('index'));
+               }
+               rollupDatabase(database);
+            }
+         });
 
          hud.render(
             `[cyan]collStats[/] ${hud.bar(1)} ${collTotal}/${collTotal} 100%`,
@@ -472,13 +473,21 @@
       return false;
    }
 
+   function catalogCollectionShell(database, info = {}) {
+      return CollectionStats.catalogEntry({
+         "name": info.name,
+         "type": info.type,
+         "dbName": database.name
+      });
+   }
+
    function applyCatalogSlice(database, slice, collFilter, acceptCollName, builder) {
       const rows = (slice || []).filter(
          e => e && e.name && collFilter.test(e.name) && acceptCollName(e)
       );
       const collections = rows
          .filter(e => e.type === 'collection' || e.type === 'timeseries')
-         .map(e => ({ "name": e.name, "type": e.type }));
+         .map(e => catalogCollectionShell(database, e));
       const views = rows.filter(e => e.type === 'view');
       database.collections = stableSort(collections, compareBy('name', 1));
       database.listedCollectionCount = countListedCollections(database.collections);
@@ -506,7 +515,7 @@
          );
          const byName = new Map((database.collections || []).map(c => [c.name, c]));
          for (const c of extra) {
-            if (!byName.has(c.name)) byName.set(c.name, { "name": c.name, "type": c.type });
+            if (!byName.has(c.name)) byName.set(c.name, catalogCollectionShell(database, c));
          }
          database.collections = stableSort([...byName.values()], compareBy('name', 1));
          database.listedCollectionCount = countListedCollections(database.collections);
@@ -540,7 +549,7 @@
          );
          collections = await Promise.resolve(collections);
          database.collections = stableSort(
-            (collections || []).filter(acceptCollName),
+            (collections || []).filter(acceptCollName).map(c => catalogCollectionShell(database, c)),
             compareBy('name', 1)
          );
          database.listedCollectionCount = countListedCollections(database.collections);
@@ -583,13 +592,6 @@
       }
 
       await listDatabaseCatalogLegacy(database, collFilter, acceptCollName);
-   }
-
-   async function fetchCollectionStats(dbName, collName) {
-      const collRaw = await $collStats(dbName, collName) || { "name": collName };
-      const collection = CollectionStats.from(collRaw, collName);
-      collection.indexes = stableSort(collection.indexes || [], sortBy('index'));
-      return collection;
    }
 
    function buildDatabaseMeta(dbName, shards = []) {
@@ -1239,7 +1241,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.16.1',
+         "version": '0.17.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
