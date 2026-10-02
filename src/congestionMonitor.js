@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.3.1"
+    *  Version: "0.3.2"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -279,6 +279,7 @@
       snap.execWriteQueuedWaitMs = Number.parseFloat(writeWait.toFixed(0));
       snap.execQueuedWaitScale = 1000;
       snap.executionControlDeprioritizationScale = 1;
+      snap.usesThroughputProbingScale = 1;
       snap.execReadQueuedWaitStatus = (readWait < 10) ? 'low' : (readWait >= 100) ? 'high' : 'medium';
       snap.execWriteQueuedWaitStatus = (writeWait < 10) ? 'low' : (writeWait >= 100) ? 'high' : 'medium';
       _queuedPrev[key] = { "at": now, "read": read, "write": write };
@@ -453,6 +454,8 @@
          "executionControlDeprioritizationStatus": deprioGate ? 'high' : 'low',
          "execQueuedWaitScale": 1000,
          "usesThroughputProbing": !!exec.usesThroughputProbing,
+         "usesThroughputProbingStatus": !!exec.usesThroughputProbing ? 'high' : 'low',
+         "usesThroughputProbingScale": 1,
          "activeShardMigrations": (tm.currentMigrationsDonating > 0 || tm.currentMigrationsReceiving > 0),
          "activeFlowControl": ss.flowControl?.isLagged === true && ss.flowControl?.enabled === true,
          "activeIndexBuilds": (ss.indexBuilds?.total ?? 0) > (ss.indexBuilds?.phases?.commit ?? 0)
@@ -524,6 +527,7 @@
       "execReadLowPriorityStatus", "execWriteLowPriorityStatus",
       "execReadQueuedWaitStatus", "execWriteQueuedWaitStatus",
       "executionControlDeprioritizationStatus",
+      "usesThroughputProbingStatus",
       "checkpointStatus", "replLagStatus"
    ];
 
@@ -849,6 +853,7 @@
          folded["owningShards"] = namedSamples.map(s => s.id);
          folded["execQueuedWaitScale"] = 1000;
          folded["executionControlDeprioritizationScale"] = 1;
+         folded["usesThroughputProbingScale"] = 1;
          return folded;
       }
 
@@ -1057,6 +1062,7 @@
          // }
          { "name": "readTicketsUtil", "metric": "wtReadTicketsUtil", "status": "wtReadTicketsStatus", "unit": "%" },
          { "name": "writeTicketsUtil", "metric": "wtWriteTicketsUtil", "status": "wtWriteTicketsStatus", "unit": "%" },
+         { "name": "throughputProbe", "metric": "usesThroughputProbing", "status": "usesThroughputProbingStatus", "scale": "usesThroughputProbingScale" },
          { "name": "readQueue", "metric": "execReadQueueLength", "status": "execReadQueueStatus" },
          { "name": "writeQueue", "metric": "execWriteQueueLength", "status": "execWriteQueueStatus" },
          { "name": "cacheFill", "metric": "cacheUtil", "status": "cacheStatus", "scale": "evictionTrigger", "unit": "%" },
