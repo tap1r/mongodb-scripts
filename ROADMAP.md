@@ -9,7 +9,8 @@ Status is implied by section: **planned** unless marked later / hardening.
 ## General
 
 - **Library / `load()` / multi-tenant `db`.** `mdblib.js` today is a global `load()` with a free `db`. `ctxDemo.js` sketches `mdblib.for(db)`. That story will change; do not refactor other scripts to depend on a new module layout until it exists.
-- **mongosh scripting guide.** Living notes for `--file` rewriter, async IIFEs, `sleep()` vs `await` delays, `--eval` `var` options. Extend when a script hits a new shell quirk. Document the consumption modes below when they land.
+- **mongosh scripting guide.** Living notes for the `--file` rewriter, async IIFEs, result-field parentheses, shell vs driver `toArray()`, `sleep()` vs `await` delays, `--eval` `var` options, JSONC overlays, and CLI vs `load()`. Extend when a script hits a new shell quirk.
+- **Required context.** A script header `Roadmap: … (required context)` means this file is an input to edits of that script. Open the matching [By script](#by-script) section before changing it. The tag is not a version pin.
 - **`MiniHud` / `mapPool`.** Shipped in `mdblib.js` **v0.17.0** (`process.stdout.write('\\r')`, never `console.log`). **dbstats P1** (v0.14.3) is the first consumer: catalog-first `N`, then a per-DB bounded `$collStats` pool drives a TTY mini-HUD (`done/total`, in-flight/queued, optional ETA). Shared emit rules: TTY progress only; silent in json / html / redirected mode — never `\\r` bars in piped logs. Finite walks (dbstats) may show % / ETA; long-running AIMD tools (niceDeleteMany) stay congestion-only. Clear the HUD before the tabular report.
 - **Topology fan-out.** Per-mongod tools (`autoCompact`, WT vitals, dbstats snapshots) eventually ride `discovery.js`. Until then, operators target members with a direct connection.
 - **Legacy mongo shell retirement.** Dual-shell tree archived **2026-09-01** at [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/) (tag `legacy-mongo-shell` on `c78904f`). Live `src/` is **mongosh-only** after the [strip pass](#3-after-the-cut--strip-and-streamline-next-general-architecture). Current library: **`mdblib.js` v0.18.2**.
@@ -82,15 +83,15 @@ No further dual-shell feature work on the archived line. Operators who still hav
 |--------|----------------|-------------|
 | `mdblib.js` | 0.15.10 | **0.18.2** |
 | `dbstats.js` | 0.12.19 | **0.14.8** |
-| `autoCompact.js` | 0.4.36 | **0.4.37** |
-| `fuzzer.js` | 0.6.43 | **0.6.44** |
-| `oplogchurn.js` | 0.5.22 | **0.5.23** |
+| `autoCompact.js` | 0.4.36 | **0.4.38** |
+| `fuzzer.js` | 0.6.43 | **0.15.0** |
+| `oplogchurn.js` | 0.5.22 | **0.5.24** |
 | `latency.js` | 0.4.9 | **0.4.10** |
 | `schema-sampler.js` | 0.2.16 | **0.2.17** |
 | `sleepy.js` | 0.2.6 | **0.2.7** |
 | `docSizes.js` | 0.1.34 | **0.1.35** |
-| `niceDeleteMany.js` | 0.4.11 | **0.11.5** |
-| `onlineDefrag.js` | 0.1.4 | **1.6.1** |
+| `niceDeleteMany.js` | 0.4.11 | **0.13.1** |
+| `onlineDefrag.js` | 0.1.4 | **1.6.2** |
 | `compact.js` | 0.2.15 | **removed** (archive only) |
 | `batchUpdater.js` | 0.1.6 | **removed** (archive only) |
 
@@ -160,6 +161,10 @@ module mode:      gather → return contract   (emit only if caller asks)
 
 Do **not** block feature work on a full `mdblib.for(db)` redesign; a convention (`options.output.mode: 'interactive' | 'module'`, or `collect*()` vs `main()`) can land first inside each script, then homogenise emit helpers when the library path settles.
 
+**Shipped:** `dbstats.js` detects CLI `--file` from `process.argv` (`isDbstatsCliFile`). `await load('dbstats.js')` is quiet and the async IIFE returns the JSON contract. `load()` is not rewriter-awaited.
+
+**Apply:** loader IIFEs in `autoCompact.js`, `onlineDefrag.js`, `fuzzer.js`, and `oplogchurn.js` still print a banner when the file is `load()`ed. Gate them with the same argv test before discovery `load()`s them. `onlineDefrag.js` v1.6.2 does not `load()` dbstats; a snapshot is the awaited contract, not a scraped table and not three interactive loads.
+
 ### User options UX (streamline past `--eval` globals)
 
 Passing knobs today is janky and inconsistent, mostly because of **mongosh** — not because a document of options is wrong:
@@ -211,7 +216,7 @@ defaults  →  config file (JSON/EJSON)  →  env (few keys)  →  CLI flags  �
 - Requiring Node/`import` modules before the library story settles — file + `load()`-friendly helpers first.
 - Blocking script features on wrappers; wrappers are sugar over the same resolver.
 
-Pin in the scripting guide when the resolver lands: one canonical example (file, flags, `--eval`, module) and a short “don’t declare `options` in the file” checklist. Roll out with **dbstats** / **autoCompact** first (highest option surface and consumer demand), then align others opportunistically.
+The scripting guide documents **fuzzer.js v0.15.0** as the in-file reference (search path, in-shell JSONC strip, deep-merge of objects, arrays replace, a missing file is not an error, `--eval` stays unwired on fuzzer). A shared `resolveOptions` is still TBA — do not paste `parseJsonc` into each script. When it lands, pin one canonical example (file, flags, `--eval`, module) in the guide. Roll out with **dbstats** / **autoCompact** first. dbstats regex filters (`filter.db`, `filter.collection`) need a string revive; JSON has no RegExp. **explainHisto.js** can drop `jsonc-require` for `pipeline.jsonc` once that stripper is a helper. autoCompact keeps the `autoCompactOptions` eval name until the alias transition.
 
 ---
 
@@ -294,7 +299,7 @@ Pin down in the implementation:
 
 ### `autoCompact.js`
 
-Executor auto-trim will call. Keep the file standalone. **Live: v0.4.37.** **Archive: v0.4.36.** Direct-to-member targeting belongs in `discovery.js`; cron/JSON/wait caps belong in `autoTrim.js`. Further feature work (progress bar, auto-trim coupling) is mongosh-line only.
+Executor auto-trim will call. Keep the file standalone. **Live: v0.4.38.** **Archive: v0.4.36.** Direct-to-member targeting belongs in `discovery.js`; cron/JSON/wait caps belong in `autoTrim.js`. Further feature work (progress bar, auto-trim coupling) is mongosh-line only.
 
 **Shipped**
 
@@ -324,6 +329,8 @@ Replace or sit beside the WTCMPCT line dump with a `ProgressTracker`-style bar f
 - TTY: `\r` bar, `current/total`, optional last ident/ns from WTCMPCT. Piped / module: no `\r`; honour [Shared emit / logging](#shared-emit--logging) (strip ANSI, suppress live redraws).
 - `runOnce: false` still latches first pass the same way; the bar completes on first-pass latch, not on the ~24h thread.
 - Keep sizeStorer / visits-quiet / running-bit stops; the bar must not become a stop condition.
+- Paint with `MiniHud` (`process.stdout.write('\\r')` in mdblib). Not a second painter, and not `console.log`.
+- The loader IIFE always prints. Gate that banner with the dbstats `process.argv` test before anything `load()`s this file. Header tags this file as requiring this roadmap.
 
 ### `dbstats.js`
 
@@ -334,6 +341,8 @@ Shipped recently: views listed once on the nameOnly pass; collection `$collStats
 **Live: v0.14.8** (mdblib v0.18.2). **Archive: v0.12.19.** JSON contract is shipped. **P1:** catalog-first then DB-grouped `$collStats` pools (`output.concurrency`, default 8/4) with TTY mini-HUD; json/html quiet. `$collStats` drains via driver `_cursor.toArray()` so the pool overlaps (shell `toArray()` is rewriter-unwrapped). `load()` without `format: 'json'` gathers quietly and returns the contract (`await load('dbstats.js')`); `--file` still prints the interactive report. `sort.reuse` / `sort.idxReuse` are free/storage ratios; `sort.compaction` ranks compact/rebuild/resync/wait (n/a last). Dedicated `$stats` sizes win even when the collection list is incomplete (`catalogCoverageComplete` false, warning `catalogIncomplete`); collection-sum fallback (`filteredNamespaceRollup`) only when `$stats` itself failed. M0/Flex still rolls free from collection WT (`collStatsRollup`; `freeStorageComplete` false when listing holes). Incomplete collStats free is a lower bound, not G() mass. `$collStats` `$group` keeps known-shard reuse as a lower bound (`freeStorageComplete` / `totalIndexBytesReusableComplete`; `statsIncomplete` when shard documents are missing). Dual `$listCatalog`, MetaStats split, hot summary/HTML remain. Measured `storageSize` 0 stays 0 (including stubs); tabular collection/index rows may display the WT 4 KiB allocation floor.
 
 **TABLED:** awaitable aggregation cursor shell-API — a helper that makes mongosh `aggregate` a Promise-of-cursor so `await coll.aggregate(…)` waits for the **cursor object** and does not `toArray`/drain. Useful for streaming `for-await` / `yield*` call sites. Does not change `$collStats` (one-document helper; drain stays driver `_cursor.toArray()`), `mapPool`, or the JSON contract. Next slice is P2 MetaStats. Remaining gather nits: conservative missing-shard `*` (collection on a subset of shards) and mongos omitting mongod-local namespaces.
+
+**Apply (shell):** an options file follows fuzzer’s JSONC overlay once `resolveOptions` is shared. Revive `filter.db` / `filter.collection` from strings; do not inline a second parser. CLI vs `load()` via `process.argv` is the pattern other scripts copy. Header tags this file as requiring this roadmap.
 
 #### System namespace filter
 
@@ -393,14 +402,14 @@ Per-namespace `compact` and update-based defrag. Not auto-trim. Auto-trim’s **
 
 **`compact.js`:** not in live `src/` (archive **v0.2.15** only). Do not restore it without a mongosh-line rewrite. Do not restore `const … reportLog`. Entropy-loop compact is not auto-trim.
 
-**`onlineDefrag.js` live: v1.6.1** (mdblib). **Archive: v0.1.4.** `--eval var` for `dbName` / `collName` / `defragOptions`. Do not top-level-await.
+**`onlineDefrag.js` live: v1.6.2** (mdblib). **Archive: v0.1.4.** `--eval var` for `dbName` / `collName` / `defragOptions`. Do not top-level-await. Header tags this file as requiring this roadmap.
 
 Remaining mongosh-line work (do not block the archive):
 
-- Stop re-`load()`ing interactive `dbstats.js` three times; consume dbstats in **module/JSON** mode (and overlay `options.filter` if the full report stays in-process).
+- Consume dbstats in **module/JSON** mode when a ranked snapshot is needed (`await load('dbstats.js')`). v1.6.2 does not load dbstats; do not bring back three interactive loads, and do not scrape the tabular report.
 - Later: point compact/rebuild at a single dbstats “compact” / “rebuild” row when autoCompact’s file walk is the wrong tool (one collection, dryRun estimate, `_id` rebuild).
 - `compact` is also [unsupported on Atlas M0/Flex](https://www.mongodb.com/docs/atlas/unsupported-commands/); same bounce as autoCompact. Pre-v8 `compact` has no `freeSpaceTargetMB` — no oplog trim path.
-- **onlineDefrag:** `dbstats.js` `main()` currently `return;`s so `dbStats = await main()` is `undefined` — `storageStats()` still reads `dbStats.databases[0].collections[0]`. Needs the JSON contract. WT checkpoint helpers are v8+ (`wiredTiger.checkpoint`); v7 path is commented. `session.withTransaction` may need `await`. No mdblib.
+- **onlineDefrag (v1.6.2):** loads mdblib. No `storageStats()` and no `withTransaction`. Packed-temp WT is one shell `aggregate().toArray()[0]` (fine for a single document). `$collStats` is awaited. The loader IIFE still prints on `load()`; gate it with the dbstats argv test before discovery loads this file. Do not read `mongo._uri`.
 - **onlineDefrag page fill:** autotune `pageFillRatio` / `pageFillTarget` from settled `$collStats` (compression, `avgObjSize`, leaf page size, reusable) instead of a fixed 0.9. Next discussion; wave count and dirty-byte budget already exist.
 - **onlineDefrag control loop:** AIMD on `dirtyBudgetRatio` from **settled** (post-checkpoint) density and reusable. Stop when reusable is ~10–20% or density plateaus. Do not treat packing-induced reusable **up** in a **fixed** `storageSize` as failure (that is compact-ready); treat `storageSize` **up** as failure (file extend).
 - **onlineDefrag `doubleParked`:** rewrite the same `_id` batch twice with a checkpoint settle between, so the second rewrite can consume the free list instead of appending again. File trim is **organic**: WT shortens the file when the **boundary page** is relocated (compact only *targets* the geometric tail, ~last 10%, and shuffles **blocks**; it does not raise intra-page fill). On M0/Flex `compact` is unavailable — EOF rewrite is the trim path.
@@ -408,7 +417,9 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `discovery.js`
 
-**Legacy archive line: v0.2.1** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Do not strip named capture groups for legacy mongo. Post-freeze feature work proceeds on the mongosh line only.
+**Legacy archive line: v0.2.1** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Do not strip named capture groups for legacy mongo. Post-freeze feature work proceeds on the mongosh line only. Header tags this file as requiring this roadmap.
+
+**Apply (shell):** parent URIs stay `db.getMongo().getURI()` (already; do not switch to `mongo._uri`). Do not send awaitable `hello` (`maxAwaitTimeMS` / `topologyVersion`). A per-host job is `await load()` of a script whose argv test says it is not the CLI file (`dbstats.js` is the pattern), not a scraped banner.
 
 - Plugable command profiles (auto-trim / autoCompact as a per-member job; **dbstats in module mode** as a measurement profile — JSON contract per host, no interactive table on the wire).
 - Prefer invoking support scripts in **non-interactive / module mode** so fan-out results are structured (`ok`, host, payload, warnings), not ANSI logs to stitch together.
@@ -428,13 +439,15 @@ Remaining mongosh-line work (do not block the archive):
 - MongoDB 8 execution-control metrics.
 - `bytes_dirty_intl` / `bytes_dirty_leaf` when the server exposes them.
 - Pause / closed signal for auto-trim: backup cursor, repl-lag settle, WT dirty/updates (already has `backupCursorOpen`). Auto-trim is a consumer of these vitals, not a second monitor implementation if inlining is still required.
-- `.finally(() => process.stdout.write(…))` so the alt-buffer teardown actually waits.
+- `.finally(() => process.stdout.write(…))` so the alt-buffer teardown actually waits. The file still passes `process.stdout.write(…)` directly, so the write runs when the chain is built. See the scripting guide (`finally` takes a function). Header tags this file as requiring this roadmap.
 
 ### `niceDeleteMany.js`
 
-**Live: v0.11.5.** **Archive: v0.4.11.** `--eval` must use `var`. Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`.
+**Live: v0.13.1.** **Archive: v0.4.11.** `--eval` must use `var`. Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`. Header tags this file as requiring this roadmap.
 
-Remaining: balancer-aware throttle from `shardingStatistics.rangeDeleterTasks` (tabled). `(await namespace.deleteMany(…)).deletedCount` still needed (`await deleteMany().deletedCount` is always `undefined`). Uncommitted working-tree edits may already touch this file — do not bump past 0.11.5 until those land.
+**Apply (shell):** `deleteManyTask` still returns `await namespace.deleteMany(...).deletedCount`. That count is always `undefined`. Use `(await namespace.deleteMany(...)).deletedCount`. See the scripting guide (result fields).
+
+Range-deleter throttle is in the file at v0.13.1 (`shardingStatistics.rangeDeleterTasks` on collection-owning shard primaries → THROTTLE, not CLOSED). Do not re-add it as new work. Parent shard URIs already use `db.getMongo().getURI()`.
 
 ### `connStats.js`
 
@@ -452,7 +465,7 @@ Remaining mongosh-line work (do not block the archive):
 
 Remaining mongosh-line work (do not block the archive):
 
-- Thread pool, sharding, cluster-wide report.
+- Thread pool, sharding, cluster-wide report. Drains in that pool use driver `cursor._cursor.toArray()` (shell `toArray()` is rewriter-unwrapped and serialises). Yield with `await Promise.resolve()` around sync `adminCommand`. Progress is `MiniHud`, not `console.log`. See the scripting guide. Header tags this file as requiring this roadmap.
 - `runCommand` instead of `adminCommand` for directed execution (discovery).
 - System-namespace cache scope; progress while accumulating.
 
@@ -461,6 +474,7 @@ Remaining mongosh-line work (do not block the archive):
 **Live: v0.18.2.** **Archive: v0.15.10** — pair archived scripts with 0.15.10, not live mdblib. Do not “fix” `fCV()` → `serverVer()` on M0/Flex. MiniHud + `mapPool` replace the stub `ProgressTracker`. `$collStats` is **async** (await the call; do not await the aggregate cursor — thenable drains). Drain via driver `_cursor.toArray()` (native Promise) so the dbstats `mapPool` overlaps; shell `toArray()` is rewriter-unwrapped to an array and serialises. Callers must `await` it (user-defined async is not rewriter-awaited): dbstats P1 pool, oplogchurn, onlineDefrag. `$collStats` `$group` sums known-shard reuse as a lower bound (`freeStorageKnownCount` / `indexReuseKnownCount`, `freeStorageComplete` / `totalIndexBytesReusableComplete`); missing shard documents set `statsIncomplete`.
 
 - **TABLED:** awaitable aggregation cursor helper — Promise-of-cursor so `await coll.aggregate(…)` yields the cursor object (does not drain). Streaming `for-await` / `yield*` only. `$collStats` stays a one-document helper with driver `_cursor.toArray()` drain. See [Thenable cursors](mongosh-scripting-guide.md#thenable-cursors-do-not-await-a-live-cursor).
+- **Do not uncomment `module.exports`.** `require` / `exports` run where the shell `db` global is missing. Callers `load()` this file. See the scripting guide. Header tags this file as requiring this roadmap.
 - Namespaced helpers / `for(db)` — **after** the library strategy change, not before.
 - **Legacy `mongo` shims** — stripped (`mdblib.js` v0.15.11+). Do not restore `slaveOk` / dual `Timestamp` / `_getEnv` loaders. Integer `serverVer` / `fCV` / `shellVer` are in place; do not couple further cleanup to `for(db)`.
 - **Shared emit helpers** (see [Script consumption](#script-consumption-unify-standalone-vs-modular)): finish the story beyond today’s `console.log` TTY overload — one path for markup→ANSI, non-TTY strip, progress suppress, and module-quiet. Bring `print` / raw-escape call sites onto it over time.
@@ -555,29 +569,32 @@ Aggregation `explain('executionStats')` stage-timer histogram. **Legacy archive 
 
 Remaining mongosh-line work (do not block the archive):
 
-- **`pipeline.jsonc` is operator-supplied and not in the tree.** `jsonc-require` must be resolvable on mongosh’s require path. A stub file is optional; do not inline a pipeline just to make `--nodb` load.
+- **`pipeline.jsonc` is operator-supplied and not in the tree.** `jsonc-require` must be resolvable on mongosh’s require path until the fuzzer JSONC stripper is a shared helper. After that, drop the require. A stub file is optional; do not inline a pipeline just to make `--nodb` load. Header tags this file as requiring this roadmap.
 - Always prepends `$sample`; reported times are of the **sampled** pipeline, not the production one.
 - `explainOutput.stages` (fallback `executionStats.stages`) misses some sharded / newer explain shapes. Later: walk shard-local stages / `$cursor` (see [mongosh scripting guide](mongosh-scripting-guide.md) — do not treat the echoed command pipeline as an explain stage).
 - No `--eval` overlay for `dbName` / `collName` / `sampleSize` (in-file consts). Same `var` + `typeof … === 'undefined'` pattern as other scripts if that lands.
 
 ### `fuzzer.js`
 
-**Live: v0.6.44.** **Archive: v0.6.43.** Mongosh-only. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()`. Compact is archive-only; fuzzer’s `dbName`/`collName` stay in-file.
+**Live: v0.15.0.** **Archive: v0.6.43.** Mongosh-only. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()`. Compact is archive-only. Header tags this file as requiring this roadmap.
+
+Options overlay is **`fuzzer-options.jsonc`** (search path, in-shell JSONC strip, deep-merge). That is the reference for [User options UX](#user-options-ux-streamline-past---eval-globals). Do not paste the parser into other scripts. `--eval` stays unwired; do not add a second options channel, and do not declare `const dbName` if an eval overlay is ever added. In-file defaults stay the defaults.
+
+**Apply (shell):** do not restore `Bulk.execute(writeConcern)` — the argument is ignored. `insertMany(..., { writeConcern })` is the path. `createIndexes` returns names and throws. `insertedIds` is an object (count keys, including on a partial bulk error). The loader IIFE prints even on `load()`; gate it with the dbstats argv test if a caller loads this file.
 
 Remaining mongosh-line work (do not block the archive):
 
-- `--eval` overlay for namespace / `totalDocs` (`var` + `typeof … === 'undefined'`; do not declare `const dbName` if `--eval` is the path).
 - Reshard wait already holds the user Promise so mongosh does not exit early.
 - `w: "majority"` with no `wtimeout` can stall `createCollection` / bulk on PSA or a lagging secondary.
 - `$genRandWord` / `$benford` stay later. Shared-tier `fCV()` → `serverVer()` is by design (see mdblib).
 
 ### `oplogchurn.js`
 
-**Live: v0.5.23.** **Archive: v0.5.22.** Mongosh-only. Do not restore `slaveOk(readPref)`. Per-command `options.readPreference = { mode: readPref }`. Keep `--eval var intervalHrs`. `Timestamp({ t, i })` only.
+**Live: v0.5.24.** **Archive: v0.5.22.** Mongosh-only. Do not restore `slaveOk(readPref)`. Per-command `options.readPreference = { mode: readPref }`. Keep `--eval var intervalHrs`. `Timestamp({ t, i })` only. Header tags this file as requiring this roadmap.
 
 Remaining mongosh-line work (do not block the archive):
 
-- TTY-guard or drop `console.clear()` in the loader (piped/CI).
+- TTY-guard or drop `console.clear()` in the loader (piped/CI). The loader banner also prints on `load()`; gate it with the dbstats argv test if discovery loads this file.
 - Atlas M0/Flex: `local.oplog.rs` / `hostInfo` / free-space may be hidden or denied — same n/a story as dbstats.
 - `$collStats` / `hostInfo` / `serverCmdLineOpts` stay on the connected member (not covered by the aggregate RP).
 
@@ -607,13 +624,15 @@ Remaining mongosh-line work (do not block the archive):
 
 Remaining mongosh-line work (do not block the archive):
 
-- Implement parse-and-create for DBs, collections + sampled docs, indexes, views.
+- Implement parse-and-create for DBs, collections + sampled docs, indexes, views. `createIndexes` returns names and throws (not `{ ok: 1 }`). `insertMany` `insertedIds` is an object; count keys, including a partial bulk error. Parenthesize `(await write(...)).field`. See the scripting guide. Header tags this file as requiring this roadmap.
 - `listDBs()` logs names but never fills `dbNames`.
 - `--eval var` overlay requires dropping the in-file `const userOptions`.
 
 ### `killAgedSessions.js`
 
-**Legacy archive line: v0.2.2** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. `--eval` examples on this line use `let` (not `var`). Post-freeze feature work proceeds on the mongosh line only.
+**Legacy archive line: v0.2.2** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Post-freeze feature work proceeds on the mongosh line only.
+
+**Apply (shell):** usage examples still pass `let` in `--eval`. Switch those examples to `var`. Do not add IIFE parameters named `filter` / `age` / `batchSize` / `sortByAge` (a parameter hides the global). Keep the failure **throw**; `quit()` is not a reliable `mongosh --file` status. See the scripting guide. Header tags this file as requiring this roadmap.
 
 ### `rtt.js`
 
@@ -638,6 +657,8 @@ Remaining mongosh-line work (do not block the archive):
 ### `ctxDemo.js`
 
 **Legacy archive line: v0.1.0** (mongosh-only). `mdblib.for(db)` sketch; stand-in library, no `load('mdblib.js')`. Freeze as-is.
+
+**Apply (shell):** the stand-in `hello` falls back to `isMaster()`. Leave that on this frozen line. If the sketch is revived, call `hello()` only (SERVER-49989; replies differ). Do not copy the fallback into new scripts. See the scripting guide. Header tags this file as requiring this roadmap.
 
 ### `modifiedCountDocumentsByKey.js`
 
