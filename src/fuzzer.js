@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.15.2"
+ *  Version: "0.15.3"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,7 +19,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.15.2" };
+   const __script = { "name": "fuzzer.js", "version": "0.15.3" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -1107,7 +1107,8 @@
       const reasons = [];
       if (capped && timeSeries)
          reasons.push('capped and time series cannot be combined');
-      if (capped && sharding)
+      // Sharding is skipped unless this process will call shardCollection.
+      if (capped && sharding && mongos)
          reasons.push('capped and sharding cannot be combined');
       if (timeSeries && sharding && !shardKeyHasMetaField())
          reasons.push(`time series shard key must include metaField "${tsOptions.metaField}"`);
