@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.19.2"
+ *  Version: "0.20.1"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,18 +14,27 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.19.2"
+      "version": "0.20.1"
 });
 
 /*  Notes:
  *  - mongosh only (floor 1.10 / 2.10+)
  *  - floor mongod to v4.4. The check sets __mdblibShellIncompatible /
  *    __mdblibServerUnsupported and does not print or read a caller's options.
+ *  - bsonMax, maxWriteBatchSize, pid, and nonce are first-read globals.
+ *    load() does not call hello, serverStatus, or features for them.
+ *    One hello() fills both BSON limits. fuzzer reads bsonMax.
  *  - fCV() → serverVer() on Atlas M0/Flex is by design (getParameter FCV is
  *    restricted; Atlas is not left on a lagging FCV)
  *  - $collStats is async; callers must await it (user-defined async is not
  *    rewriter-awaited). Do not await the aggregate cursor (thenable drains).
- *    Drain via driver _cursor.toArray() (native Promise) so mapPool overlaps.
+ *    Drain via drainAggCursor / driver _cursor.toArray() (native Promise) so
+ *    mapPool overlaps.
+ *  - $listCatalog (6.0+, collectionless admin) and $listClusterCatalog
+ *    (8.0.10+, admin = cluster) list namespaces as { db, name, type }.
+ *    listCatalogSnapshot selects auto|legacy|listCatalog|listClusterCatalog;
+ *    on authz/failure the caller falls back to getCollectionInfos.
+ *    $listClusterCatalog is an optional mongos fast path, never the only path.
  *  - statsIncomplete compares returned $collStats shards to owning shards
  *    (config.chunks / db primary), not cluster-wide listShards.
  *  - parseDbStats / parseCollStats / parseIndexStats turn normalised $stats /
@@ -185,24 +194,72 @@ function formatLogArgs(args, isTTY) {
  *  Global defaults
  */
 
-if (typeof bsonMax === 'undefined') (bsonMax = (hello().ok) ? hello().maxBsonObjectSize : 16 * Math.pow(1024, 2));
-if (typeof maxWriteBatchSize === 'undefined') (
-   maxWriteBatchSize = (typeof hello().maxWriteBatchSize === 'undefined')
-                     ? 100000
-                     : hello().maxWriteBatchSize
-);
+/*
+ *  First-read globals. load() does not call hello, serverStatus, or features.
+ *  One hello() fills both BSON limits. pid and nonce run only if something
+ *  reads them. A preset own-property (for example --eval var bsonMax) is kept.
+ */
+function bsonLimits() {
+   if (bsonLimits.cached) return bsonLimits.cached;
+   const doc = hello() || {};
+   bsonLimits.cached = {
+      "bsonMax": (doc.ok && typeof doc.maxBsonObjectSize === 'number')
+         ? doc.maxBsonObjectSize
+         : 16 * Math.pow(1024, 2),
+      "maxWriteBatchSize": (typeof doc.maxWriteBatchSize === 'undefined')
+         ? 100000
+         : doc.maxWriteBatchSize
+   };
+   return bsonLimits.cached;
+}
+
+function shellPid() {
+   const status = serverStatus();
+   const n = (status && status.ok) ? +status.pid : NaN;
+   return Number.isFinite(n) ? n : $getRandInt(0, 99999);
+}
+
+function shellNonce() {
+   /*
+    *  Same mix as before. A missing oidMachine or a denied features command
+    *  falls back to the pid so a read does not throw the shell.
+    */
+   let machine = '';
+   try {
+      const features = db.adminCommand({ "features": 1 });
+      if (features && features.oidMachine != null) machine = String(features.oidMachine);
+   } catch (_) {
+      machine = '';
+   }
+   return (+(machine + String(pid))).toString(16).substring(0, 10);
+}
+
+function installLazyGlobal(name, read) {
+   const holder = (typeof globalThis !== 'undefined') ? globalThis : this;
+   if (Object.prototype.hasOwnProperty.call(holder, name)) return;
+   let ready = false;
+   let cached;
+   Object.defineProperty(holder, name, {
+      configurable: true,
+      enumerable: true,
+      get() {
+         if (!ready) {
+            cached = read();
+            ready = true;
+         }
+         return cached;
+      }
+   });
+}
+
+installLazyGlobal('bsonMax', () => bsonLimits().bsonMax);
+installLazyGlobal('maxWriteBatchSize', () => bsonLimits().maxWriteBatchSize);
+installLazyGlobal('pid', shellPid);
+installLazyGlobal('nonce', shellNonce);
+
 if (typeof idiomas === 'undefined') (
    idiomas = ['none', 'da', 'nl', 'en', 'fi', 'fr', 'de', 'hu', 'it', 'nb', 'pt', 'ro', 'ru', 'es', 'sv', 'tr']
 );
-if (typeof pid === 'undefined') {
-   if (serverStatus().ok)
-      (pid = +serverStatus().pid);
-   else
-      (pid = $getRandInt(0, 99999));
-};
-if (typeof nonce === 'undefined') {
-   (nonce = (+((db.adminCommand({ "features": 1 }).oidMachine).toString() + pid.toString())).toString(16).substring(0, 10));
-};
 
 /*
  *  Helper classes
@@ -1999,12 +2056,226 @@ async function markPartialShardStats(doc, dbName, collName) {
    return doc;
 }
 
+async function drainAggCursor(cursor) {
+   /*
+    *  Drain an aggregation to an array. Do not await a live cursor (thenable
+    *  drains). Driver _cursor.toArray() is a native Promise so mapPool overlaps.
+    *  Shell toArray() is rewriter-unwrapped to an array.
+    */
+   if (cursor && typeof cursor.then === 'function' && typeof cursor.close !== 'function') {
+      cursor = await cursor;
+   }
+   if (!cursor) return [];
+   const driverToArray = cursor._cursor && cursor._cursor.toArray;
+   let docs = (typeof driverToArray === 'function')
+      ? driverToArray.call(cursor._cursor)
+      : (typeof cursor.toArray === 'function')
+         ? cursor.toArray()
+         : cursor;
+   if (docs && typeof docs.then === 'function') docs = await docs;
+   if (Array.isArray(docs)) return docs;
+   return docs == null ? [] : [docs];
+}
+
+function catalogAggOptions(comment) {
+   return {
+      "cursor": { "batchSize": 1000 },
+      "readConcern": { "level": "local" },
+      "readPreference": (typeof readPref !== 'undefined') ? readPref
+                      : (hello().secondary) ? 'secondaryPreferred'
+                      : 'primaryPreferred',
+      "comment": comment || `run by ${__lib.name} catalog listing`
+   };
+}
+
+function catalogEntryDb(doc = {}) {
+   if (doc.db != null && String(doc.db).length) return String(doc.db);
+   const ns = (doc.ns != null) ? String(doc.ns)
+            : (doc.md && doc.md.ns != null) ? String(doc.md.ns)
+            : '';
+   const dot = ns.indexOf('.');
+   return dot >= 0 ? ns.slice(0, dot) : '';
+}
+
+function catalogEntryName(doc = {}) {
+   if (doc.name != null && String(doc.name).length) return String(doc.name);
+   const ns = (doc.ns != null) ? String(doc.ns)
+            : (doc.md && doc.md.ns != null) ? String(doc.md.ns)
+            : '';
+   const dbName = catalogEntryDb(doc);
+   if (dbName && ns.startsWith(`${dbName}.`)) return ns.slice(dbName.length + 1);
+   const dot = ns.indexOf('.');
+   return dot >= 0 ? ns.slice(dot + 1) : ns;
+}
+
+function catalogEntryType(doc = {}) {
+   /*
+    *  listCollections / $listClusterCatalog: type collection|view|timeseries.
+    *  $listCatalog: type, or viewOn, or md.options.timeseries.
+    */
+   const options = (doc.options && typeof doc.options === 'object') ? doc.options
+                 : (doc.md && doc.md.options && typeof doc.md.options === 'object') ? doc.md.options
+                 : {};
+   if (options.timeseries) return 'timeseries';
+   if (doc.viewOn != null || (doc.md && doc.md.viewOn != null) || options.viewOn != null) {
+      return 'view';
+   }
+   const explicit = doc.type != null ? String(doc.type) : '';
+   if (explicit === 'view' || explicit === 'timeseries' || explicit === 'collection') return explicit;
+   return 'collection';
+}
+
+function normalizeCatalogEntry(doc = {}) {
+   const dbName = catalogEntryDb(doc);
+   const name = catalogEntryName(doc);
+   if (!dbName || !name) return null;
+   return {
+      "db": dbName,
+      "name": name,
+      "type": catalogEntryType(doc)
+   };
+}
+
+function dedupeCatalogEntries(entries = []) {
+   const seen = new Map();
+   for (const e of entries) {
+      if (!e || !e.db || !e.name) continue;
+      const k = `${e.db}\0${e.name}`;
+      if (!seen.has(k)) seen.set(k, e);
+   }
+   return [...seen.values()];
+}
+
+function indexCatalogByDb(entries = []) {
+   const byDb = Object.create(null);
+   for (const e of entries) {
+      if (!e || !e.db) continue;
+      if (!byDb[e.db]) byDb[e.db] = [];
+      byDb[e.db].push(e);
+   }
+   return byDb;
+}
+
+function normalizeCatalogMode(mode) {
+   const s = String(mode == null ? 'auto' : mode).toLowerCase().replace(/^\$/, '');
+   if (s === 'legacy' || s === 'listcollections' || s === 'getcollectioninfos') return 'legacy';
+   if (s === 'listcatalog') return 'listCatalog';
+   if (s === 'listclustercatalog') return 'listClusterCatalog';
+   return 'auto';
+}
+
+function catalogSnapshotResult(builder, entries = [], fallback = false, fallbackError = null) {
+   return {
+      "builder": builder,
+      "fallback": fallback === true,
+      "fallbackError": fallbackError || null,
+      "entries": entries,
+      "byDb": indexCatalogByDb(entries)
+   };
+}
+
+async function $listCatalog() {
+   /*
+    *  Collectionless $listCatalog on admin (6.0+). Best-effort; authz may deny.
+    *  Returns normalised { db, name, type } rows, deduped by db+name.
+    */
+   const pipeline = [
+      { "$listCatalog": {} },
+      { "$project": {
+         "db": 1,
+         "name": 1,
+         "type": 1,
+         "ns": 1,
+         "viewOn": 1,
+         "md.options.timeseries": 1,
+         "md.viewOn": 1,
+         "options.timeseries": 1,
+         "options.viewOn": 1
+      } }
+   ];
+   const docs = await drainAggCursor(
+      db.getSiblingDB('admin').aggregate(pipeline, catalogAggOptions(
+         `run by ${__lib.name} $listCatalog`
+      ))
+   );
+   return dedupeCatalogEntries(docs.map(normalizeCatalogEntry).filter(Boolean));
+}
+
+async function $listClusterCatalog() {
+   /*
+    *  $listClusterCatalog on admin (8.0.10+). Unsupported/unstable; optional
+    *  cluster-wide fast path. First stage; admin = all collections.
+    */
+   const pipeline = [
+      { "$listClusterCatalog": {} },
+      { "$project": {
+         "ns": 1,
+         "db": 1,
+         "type": 1,
+         "name": 1,
+         "viewOn": 1,
+         "options.timeseries": 1,
+         "options.viewOn": 1
+      } }
+   ];
+   const docs = await drainAggCursor(
+      db.getSiblingDB('admin').aggregate(pipeline, catalogAggOptions(
+         `run by ${__lib.name} $listClusterCatalog`
+      ))
+   );
+   return dedupeCatalogEntries(docs.map(normalizeCatalogEntry).filter(Boolean));
+}
+
+async function listCatalogSnapshot(mode = 'auto') {
+   /*
+    *  Whole-cluster namespace listing.
+    *  mode: auto | legacy | listCatalog | listClusterCatalog.
+    *  auto: mongos && 8.0.10+ → $listClusterCatalog; else 6.0+ → $listCatalog;
+    *  else legacy. On stage failure / authz, builder is legacy and entries empty
+    *  (caller lists per DB with getCollectionInfos).
+    */
+   const requested = normalizeCatalogMode(mode);
+   if (requested === 'legacy') {
+      return catalogSnapshotResult('legacy', [], false);
+   }
+
+   const tryCluster = requested === 'listClusterCatalog'
+      || (requested === 'auto' && isSharded() && serverVer('8.0.10'));
+   const tryList = requested === 'listCatalog' || requested === 'auto';
+
+   if (tryCluster) {
+      try {
+         if (!serverVer('8.0.10')) throw new Error('requires MongoDB 8.0.10+');
+         const entries = await $listClusterCatalog();
+         return catalogSnapshotResult('listClusterCatalog', entries, false);
+      } catch(e) {
+         if (requested === 'listClusterCatalog') {
+            return catalogSnapshotResult('legacy', [], true, commandErrorMessage(e));
+         }
+      }
+   }
+
+   if (tryList && serverVer(6.0)) {
+      try {
+         const entries = await $listCatalog();
+         return catalogSnapshotResult('listCatalog', entries, false);
+      } catch(e) {
+         return catalogSnapshotResult('legacy', [], true, commandErrorMessage(e));
+      }
+   }
+
+   if (requested === 'listCatalog') {
+      return catalogSnapshotResult('legacy', [], true, 'requires MongoDB 6.0+');
+   }
+
+   return catalogSnapshotResult('legacy', [], false);
+}
+
 async function $collStats(dbName = db.getName(), collName = '') {
    /*
     *  $collStats wrapper. Always a Promise — await the call.
     *  Live aggregate cursors are thenable; awaiting the cursor drains it.
-    *  Shell toArray() is rewriter-unwrapped to an array (no yield) and
-    *  serialises mapPool. Driver _cursor.toArray() is a native Promise.
+    *  Drain via drainAggCursor (driver _cursor.toArray()).
     */
    const namespace = db.getSiblingDB(dbName).getCollection(collName);
    const options = {
@@ -2318,18 +2589,8 @@ async function $collStats(dbName = db.getName(), collName = '') {
    }
 
    try {
-      let cursor = namespace.aggregate(pipeline, options);
-      if (cursor && typeof cursor.then === 'function' && typeof cursor.close !== 'function') {
-         cursor = await cursor;
-      }
-      const driverToArray = cursor && cursor._cursor && cursor._cursor.toArray;
-      let docs = (typeof driverToArray === 'function')
-         ? driverToArray.call(cursor._cursor)
-         : (cursor && typeof cursor.toArray === 'function')
-            ? cursor.toArray()
-            : cursor;
-      if (docs && typeof docs.then === 'function') docs = await docs;
-      results = Array.isArray(docs) ? docs[0] : docs;
+      const docs = await drainAggCursor(namespace.aggregate(pipeline, options));
+      results = docs[0];
       results = await markPartialShardStats(results, dbName, collName);
    } catch(e) {
       results = collStatsStub(isUnauthorizedError(e) ? 'unauthorized' : 'unavailable', e);

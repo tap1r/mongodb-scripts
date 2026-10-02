@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.15.2"
+ *  Version: "0.16.1"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -84,7 +84,8 @@
  *        discover: <true|false>,
  *        replica: <'summary'|'expanded'>,
  *        sharded: <'summary'|'expanded'>
- *     }
+ *     },
+ *     catalog: <'auto'|'legacy'|'listCatalog'|'listClusterCatalog'> // default auto
  *  }
  */
 
@@ -109,6 +110,12 @@
  *    mongosh --quiet --eval 'var options = { output: { format: "tabular" } };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { output: { format: "table" } };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { output: { format: "json" } };' -f dbstats.js
+ *
+ *  Examples of catalog listing:
+ *
+ *    mongosh --quiet --eval 'var options = { catalog: "auto" };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { catalog: "legacy" };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { catalog: "listCatalog" };' -f dbstats.js
  */
 
 /*
@@ -118,7 +125,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.15.2" };
+   const __script = { "name": "dbstats.js", "version": "0.16.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -293,7 +300,8 @@
          "discover": true, // [true|false]
          "replica": "summary", // ['summary'|'expanded']
          "sharded": "summary" // ['summary'|'expanded']
-      }
+      },
+      "catalog": "auto" // ['auto'|'legacy'|'listCatalog'|'listClusterCatalog']
    };
    // Partial user overrides must not wipe sibling defaults (shallow merge was wrong for sort.*).
    typeof options === 'undefined' && (options = {});
@@ -306,6 +314,7 @@
       };
    }
    const outputOptions = { ...optionsDefaults.output, ...(options.output || {}) };
+   const catalogMode = (options.catalog != null) ? options.catalog : optionsDefaults.catalog;
    // const limitOptions = { ...optionsDefaults.limit, ...(options.limit || {}) };
    // const topologyOptions = { ...optionsDefaults.topology, ...(options.topology || {}) };
 
@@ -378,11 +387,20 @@
          }
          rollupDbPath(dbPath, dbPath.databases);
 
+         hud.render(`[cyan]catalog[/]  listing`, { "force": true });
+         const catalogSnapshot = await listCatalogSnapshot(catalogMode);
          for (let i = 0; i < dbPath.databases.length; i++) {
             const database = dbPath.databases[i];
             hud.render(`[cyan]catalog[/]  ${i + 1}/${dbTotal}  ${database.name}`, { "force": i === 0 || i + 1 === dbTotal });
-            await listDatabaseCatalog(database, collFilter, acceptCollName);
+            await listDatabaseCatalog(database, collFilter, acceptCollName, catalogSnapshot);
          }
+         const usedStage = dbPath.databases.some(
+            d => d.catalogSource === 'listCatalog' || d.catalogSource === 'listClusterCatalog'
+         );
+         dbPath.catalogBuilder = usedStage ? catalogSnapshot.builder : 'legacy';
+         dbPath.catalogFallback = catalogSnapshot.fallback === true
+            || (catalogSnapshot.builder !== 'legacy' && !usedStage);
+         if (catalogSnapshot.fallbackError) dbPath.catalogFallbackError = catalogSnapshot.fallbackError;
 
          const collTotal = dbPath.databases.reduce((n, d) => n + (d.collections || []).length, 0);
          const collStarted = Date.now();
@@ -434,7 +452,85 @@
       return isSharded() ? 4 : 8;
    }
 
-   async function listDatabaseCatalog(database, collFilter, acceptCollName) {
+   function catalogSliceNeedsLegacy(database, slice) {
+      /*
+       *  Empty or collection-less slice while $stats reports collections/views:
+       *  $listCatalog missed the DB (8.0 redaction of local/config, authz, or
+       *  timeseries name without system.buckets). Fall back to listCollections.
+       */
+      const rows = Array.isArray(slice) ? slice : [];
+      const hasCollection = rows.some(e => e && e.type === 'collection');
+      const hasView = rows.some(e => e && e.type === 'view');
+      const ncoll = database.ncollections;
+      const nviews = database.nviews;
+      const expectsColl = (typeof ncoll === 'number' && ncoll > 0)
+         || (isShardCountArray(ncoll) && ncoll.some(n => +n > 0));
+      const expectsView = (typeof nviews === 'number' && nviews > 0)
+         || (isShardCountArray(nviews) && nviews.some(n => +n > 0));
+      if (expectsColl && !hasCollection) return true;
+      if (expectsView && !hasView && !hasCollection) return true;
+      return false;
+   }
+
+   function applyCatalogSlice(database, slice, collFilter, acceptCollName, builder) {
+      const rows = (slice || []).filter(
+         e => e && e.name && collFilter.test(e.name) && acceptCollName(e)
+      );
+      const collections = rows
+         .filter(e => e.type === 'collection' || e.type === 'timeseries')
+         .map(e => ({ "name": e.name, "type": e.type }));
+      const views = rows.filter(e => e.type === 'view');
+      database.collections = stableSort(collections, compareBy('name', 1));
+      database.listedCollectionCount = countListedCollections(database.collections);
+      database.views = stableSort(views.map(v => new ViewRef(v)), sortBy('view'));
+      database.catalogSource = builder;
+   }
+
+   async function mergeSystemCollectionInfos(database, collFilter, acceptCollName) {
+      /*
+       *  8.0+ collectionless $listCatalog hides system.* (except system.js /
+       *  system.buckets.*) from non-internal users. Merge those names from
+       *  listCollections so listedCollectionCount still matches $stats.
+       */
+      const systemName = /^(system\.|replset\.)/;
+      try {
+         let collections = db.getSiblingDB(database.name).getCollectionInfos({
+               "type": /^(collection|timeseries)$/,
+               "name": systemName
+            },
+            { "nameOnly": true, "authorizedCollections": true }
+         );
+         collections = await Promise.resolve(collections);
+         const extra = (collections || []).filter(
+            c => c && c.name && collFilter.test(c.name) && acceptCollName(c)
+         );
+         const byName = new Map((database.collections || []).map(c => [c.name, c]));
+         for (const c of extra) {
+            if (!byName.has(c.name)) byName.set(c.name, { "name": c.name, "type": c.type });
+         }
+         database.collections = stableSort([...byName.values()], compareBy('name', 1));
+         database.listedCollectionCount = countListedCollections(database.collections);
+      } catch(_) { /* keep snapshot collections */ }
+      try {
+         let views = db.getSiblingDB(database.name).getCollectionInfos({
+               "type": "view",
+               "name": systemName
+            },
+            { "nameOnly": true, "authorizedCollections": true }
+         );
+         views = await Promise.resolve(views);
+         const extra = (views || []).filter(
+            v => v && v.name && collFilter.test(v.name) && acceptCollName(v)
+         );
+         const byName = new Map((database.views || []).map(v => [v.name, v]));
+         for (const v of extra) {
+            if (!byName.has(v.name)) byName.set(v.name, new ViewRef(v));
+         }
+         database.views = stableSort([...byName.values()], sortBy('view'));
+      } catch(_) { /* keep snapshot views */ }
+   }
+
+   async function listDatabaseCatalogLegacy(database, collFilter, acceptCollName) {
       try {
          let collections = db.getSiblingDB(database.name).getCollectionInfos({
                "type": /^(collection|timeseries)$/,
@@ -469,6 +565,24 @@
          database.views = [];
          if (!database.catalogError) database.catalogError = commandErrorMessage(e);
       }
+      database.catalogSource = 'legacy';
+   }
+
+   async function listDatabaseCatalog(database, collFilter, acceptCollName, catalogSnapshot) {
+      const builder = (catalogSnapshot && catalogSnapshot.builder) || 'legacy';
+      const slice = (builder !== 'legacy' && catalogSnapshot && catalogSnapshot.byDb)
+         ? (catalogSnapshot.byDb[database.name] || [])
+         : null;
+
+      if (slice && !catalogSliceNeedsLegacy(database, slice)) {
+         applyCatalogSlice(database, slice, collFilter, acceptCollName, builder);
+         if (builder === 'listCatalog' && serverVer(8)) {
+            await mergeSystemCollectionInfos(database, collFilter, acceptCollName);
+         }
+         return;
+      }
+
+      await listDatabaseCatalogLegacy(database, collFilter, acceptCollName);
    }
 
    async function fetchCollectionStats(dbName, collName) {
@@ -1105,6 +1219,14 @@
             "message": 'Listed collections may omit filtered or unauthorized namespaces; database and dbPath totals are db.stats().'
          });
       }
+      if (dbStats.catalogFallback === true) {
+         let message = 'Catalog listing used listCollections after $listCatalog/$listClusterCatalog was unavailable or unauthorized.';
+         if (dbStats.catalogFallbackError) message += ` ${dbStats.catalogFallbackError}`;
+         warnings.push({
+            "code": 'catalogFallback',
+            "message": message
+         });
+      }
       return warnings;
    }
 
@@ -1117,7 +1239,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.15.2',
+         "version": '0.16.1',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1125,6 +1247,10 @@
          "mongod": db.version(),
          "dbPath": dbStats.dbPath || null,
          "shards": Array.isArray(dbStats.shards) ? dbStats.shards : [],
+         "catalog": {
+            "builder": dbStats.catalogBuilder || 'legacy',
+            "fallback": dbStats.catalogFallback === true
+         },
          "totals": jsonTotals(dbStats),
          databases,
          "namespaces": databases.flatMap(d => d.collections),
@@ -1550,6 +1676,9 @@
          console.log(`[bold][green]Shards:[/] ${JSON.stringify(shards)}`);
       }
       printFreeStorageFootnote(dbStats);
+      if (dbStats.catalogFallback === true) {
+         console.log('[yellow][NOTE] Catalog listing used listCollections; $listCatalog/$listClusterCatalog was unavailable or unauthorized.[/]');
+      }
       printRule('heavy');
       console.log('');
       return;
