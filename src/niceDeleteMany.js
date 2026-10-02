@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.13.8"
+    *  Version: "0.13.9"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -69,7 +69,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.13.8" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.13.9" };
    let vitals = {};
    let vitalsSampling = false;
    let startupLogDone = false; // after writeConsole of the startup banner; attach WARN is banner-only until then
@@ -2218,8 +2218,9 @@
 
    function vitalsFromServerStatus(ss = {}, rsSt = {}, wterc = '') {
       /*
-       *  Plain WT snapshot used by mongod congestionMonitor and shard
-       *  sampleShardPrimary. Admission and HUD read these fields only.
+       *  WT admission snapshot for this IIFE (local congestionMonitor() and
+       *  shard sampleShardPrimary). Admission and HUD read these fields only.
+       *  Execution-control metrics live on sibling congestionMonitor.js.
        */
       const cache = ss.wiredTiger?.cache;
       const cacheSizeBytes = +(cache?.['maximum bytes configured'] ?? NaN);
