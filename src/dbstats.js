@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.14.7"
+ *  Version: "0.14.8"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -117,7 +117,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.14.7" };
+   const __script = { "name": "dbstats.js", "version": "0.14.8" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -657,10 +657,18 @@
       return +collection.nindexes || 0;
    }
 
+   function dbStatsSizesTrusted(database) {
+      /*
+       *  $stats returned a real db.stats() document. Stubs (authz / command
+       *  failure) are not a size measurement — listed collections are.
+       */
+      return !database.statsError && database.unauthorized !== true;
+   }
+
    function rollupDatabaseFromCollections(database) {
       /*
-       *  Table subtotal = listed collections (filter / authz / catalog holes).
-       *  Lower bound; never G() mass. Dedicated $stats still measured the whole DB.
+       *  Fallback when $stats is unusable. Listed collections are a lower
+       *  bound; never G() mass.
        */
       const collections = database.collections || [];
       const views = database.views || [];
@@ -681,12 +689,28 @@
    }
 
    function rollupDatabase(database) {
-      if (!catalogCoverageComplete(database)) {
+      /*
+       *  Prefer $stats sizes whenever the command succeeded — including when
+       *  the collection list is incomplete (filter / authz / ncollections
+       *  mismatch). M0/Flex still rolls free from $collStats (lower bound if
+       *  listing holes). $stats stubs fall back to collection sums.
+       */
+      const coverage = catalogCoverageComplete(database);
+      database.catalogCoverageComplete = coverage;
+
+      if (!dbStatsSizesTrusted(database)) {
          rollupDatabaseFromCollections(database);
          return;
       }
-      if (hidesDbStatsFreeStorage()) rollupDatabaseFreeFromCollStats(database);
-      else tagDbStatsFree(database);
+      if (hidesDbStatsFreeStorage()) {
+         rollupDatabaseFreeFromCollStats(database);
+         if (!coverage) {
+            database.freeStorageComplete = false;
+            database.totalIndexBytesReusableComplete = false;
+         }
+         return;
+      }
+      tagDbStatsFree(database);
    }
 
    function rollupDatabaseFree(database) {
@@ -706,7 +730,10 @@
        *  collection WT $collStats as a lower bound (authz / filters may omit NS).
        */
       const databases = dbPath.databases || [];
-      if (!databases.length) return dbPath;
+      if (!databases.length) {
+         dbPath.catalogCoverageComplete = true;
+         return dbPath;
+      }
 
       const dbFrees = databases.map(d => d.freeStorageSize);
       const allDbStatsFree = databases.every(d => d.freeStorageSizeSource === 'dbStats');
@@ -743,6 +770,7 @@
          dbPath.totalIndexBytesReusableSource = 'unknown';
          dbPath.totalIndexBytesReusableComplete = false;
       }
+      dbPath.catalogCoverageComplete = databases.every(d => d.catalogCoverageComplete !== false);
       return dbPath;
    }
 
@@ -764,7 +792,7 @@
        *  Aggregate database metas into dbPath totals (sharded arrays or scalars).
        *  Empty catalog: sharded → zero-filled per-shard arrays; unsharded → leave MetaStats defaults.
        *  freeStorageSize / totalIndexBytesReusable here follow $stats; rollupDbPathFree
-       *  revises them after per-DB $collStats (M0/Flex and filtered-catalog rollups).
+       *  revises them after per-DB $collStats (M0/Flex free; collection-sum only when $stats failed).
        */
       const nShards = dbPath.shards.length;
       if (!databases.length) {
@@ -983,6 +1011,7 @@
          "freeStorageComplete": database.freeStorageComplete === true,
          "totalIndexBytesReusableSource": database.totalIndexBytesReusableSource || 'unknown',
          "totalIndexBytesReusableComplete": database.totalIndexBytesReusableComplete === true,
+         "catalogCoverageComplete": database.catalogCoverageComplete !== false,
          "compaction": jsonCompaction('collection', storageSize, freeStorageSize, { "incomplete": freeIncomplete }),
          "idxCompaction": jsonCompaction('index', totalIndexSize, totalIndexBytesReusable, { "incomplete": idxIncomplete }),
          collections,
@@ -1013,6 +1042,7 @@
          "freeStorageComplete": dbStats.freeStorageComplete === true,
          "totalIndexBytesReusableSource": dbStats.totalIndexBytesReusableSource || 'unknown',
          "totalIndexBytesReusableComplete": dbStats.totalIndexBytesReusableComplete === true,
+         "catalogCoverageComplete": dbStats.catalogCoverageComplete !== false,
          "compaction": jsonCompaction('dbPath', storageSize, freeStorageSize, { "incomplete": freeIncomplete }),
          "idxCompaction": jsonCompaction('index', totalIndexSize, totalIndexBytesReusable, { "incomplete": idxIncomplete })
       };
@@ -1054,6 +1084,8 @@
                       || dbStats.totalIndexBytesReusableComplete === false;
       const unknown = !freeStorageKnown(dbStats.freeStorageSize)
                    || !freeStorageKnown(dbStats.totalIndexBytesReusable);
+      const listingIncomplete = dbStats.catalogCoverageComplete === false
+         || (dbStats.databases || []).some(d => d.catalogCoverageComplete === false);
       if (hide && rolled && incomplete) {
          warnings.push({
             "code": 'freeStorageIncomplete',
@@ -1074,6 +1106,11 @@
             "code": 'filteredNamespaceRollup',
             "message": 'Database and dbPath totals are a rollup of listed collections; they exclude filtered or unauthorized namespaces and are a lower bound.'
          });
+      } else if (listingIncomplete) {
+         warnings.push({
+            "code": 'catalogIncomplete',
+            "message": 'Listed collections may omit filtered or unauthorized namespaces; database and dbPath totals are db.stats().'
+         });
       }
       return warnings;
    }
@@ -1087,7 +1124,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.14.7',
+         "version": '0.14.8',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1464,13 +1501,16 @@
    function printFreeStorageFootnote({
          freeStorageSize, totalIndexBytesReusable,
          freeStorageSizeSource, totalIndexBytesReusableSource,
-         freeStorageComplete, totalIndexBytesReusableComplete
+         freeStorageComplete, totalIndexBytesReusableComplete,
+         catalogCoverageComplete, databases
       } = {}) {
       const hide = hidesDbStatsFreeStorage();
       const rolled = freeStorageSizeSource === 'collStatsRollup'
                   || totalIndexBytesReusableSource === 'collStatsRollup';
       const incomplete = freeStorageComplete === false || totalIndexBytesReusableComplete === false;
       const unknown = !freeStorageKnown(freeStorageSize) || !freeStorageKnown(totalIndexBytesReusable);
+      const listingIncomplete = catalogCoverageComplete === false
+         || (databases || []).some(d => d.catalogCoverageComplete === false);
 
       if (hide && rolled && incomplete) {
          console.log('[yellow][NOTE] * Free blocks rolled up from collection WiredTiger stats; db.stats() omits reusable bytes on this tier. Totals may exclude unauthorized or filtered namespaces and are a lower bound.[/]');
@@ -1486,6 +1526,10 @@
       }
       if (incomplete) {
          console.log('[yellow][NOTE] * Database and dbPath totals are a rollup of listed collections; they exclude filtered or unauthorized namespaces and are a lower bound.[/]');
+         return;
+      }
+      if (listingIncomplete) {
+         console.log('[yellow][NOTE] Listed collections may omit filtered or unauthorized namespaces; database and dbPath totals are db.stats().[/]');
       }
    }
 
