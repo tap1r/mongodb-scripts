@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.17.0"
+ *  Version: "0.17.1"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -125,7 +125,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.17.0" };
+   const __script = { "name": "dbstats.js", "version": "0.17.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -1241,7 +1241,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.17.0',
+         "version": '0.17.1',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,

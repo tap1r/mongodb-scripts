@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.21.0"
+ *  Version: "0.21.1"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.21.0"
+      "version": "0.21.1"
 });
 
 /*  Notes:
@@ -45,6 +45,9 @@ if (typeof __lib === 'undefined') (
  *  - Catalog identity first, stats on demand: collection.fetchStats(),
  *    database.fetchAllStats({ concurrency }), dbPath.materialize({ concurrency }).
  *    Cache _statsPromise per collection. Callers materialise then serialise.
+ *  - Owning-shard ids live on the Map for one materialize / fetchAllStats
+ *    gather. A lone $collStats does not keep them. __collStatsOnMongos
+ *    stays a session cache.
  */
 
 function isMongosh() {
@@ -567,8 +570,8 @@ class CollectionStats extends StorageMetrics {
       this.statsLoaded = true;
       return this;
    }
-   async fetchStats(dbName) {
-      if (this.statsLoaded) return this;
+   fetchStats(dbName, owningShardCache) {
+      if (this.statsLoaded) return Promise.resolve(this);
       if (this._statsPromise) return this._statsPromise;
       const collName = this.name;
       if (dbName) this.dbName = dbName;
@@ -578,7 +581,7 @@ class CollectionStats extends StorageMetrics {
             : '');
       this._statsPromise = (async () => {
          try {
-            const raw = await $collStats(nsDb, collName) || { "name": collName };
+            const raw = await $collStats(nsDb, collName, owningShardCache) || { "name": collName };
             this.applyCollStats(raw, collName);
          } catch (_) {
             this.applyCollStats({ "name": `${collName} (unavailable)` }, collName);
@@ -609,12 +612,15 @@ class DatabaseStats extends StorageMetrics {
       if (Array.isArray(extra.shards)) database.shards = extra.shards;
       return database;
    }
-   async fetchAllStats({ concurrency, onProgress } = {}) {
+   async fetchAllStats({ concurrency, onProgress, owningShardCache } = {}) {
       /*
        *  Bounded $collStats pool for this DB. Views stay nameOnly.
        *  Wraps plain {name,type} catalog rows as CollectionStats shells.
+       *  owningShardCache is the gather Map (materialize passes one for the
+       *  whole walk). A direct call gets a Map that dies with this call.
        */
       const dbName = this.name;
+      const shardCache = (owningShardCache instanceof Map) ? owningShardCache : new Map();
       this.collections = (this.collections || []).map(entry => {
          if (entry instanceof CollectionStats) {
             if (!entry.dbName) entry.dbName = dbName;
@@ -631,7 +637,7 @@ class DatabaseStats extends StorageMetrics {
          ? Math.floor(+concurrency)
          : 8;
       if (targets.length) {
-         await mapPool(targets, pool, coll => coll.fetchStats(dbName), onProgress);
+         await mapPool(targets, pool, coll => coll.fetchStats(dbName, shardCache), onProgress);
       }
       return this;
    }
@@ -710,11 +716,16 @@ class DbPathStats extends StorageMetrics {
       const pool = (Number.isFinite(+concurrency) && +concurrency > 0)
          ? Math.floor(+concurrency)
          : 8;
+      const owningShardCache = new Map();
       for (const database of (this.databases || [])) {
          const progress = (typeof onProgress === 'function')
             ? (p => onProgress({ "database": database, ...p }))
             : undefined;
-         await database.fetchAllStats({ "concurrency": pool, "onProgress": progress });
+         await database.fetchAllStats({
+            "concurrency": pool,
+            "onProgress": progress,
+            "owningShardCache": owningShardCache
+         });
          if (typeof onDatabase === 'function') onDatabase(database);
       }
       return this;
@@ -2109,7 +2120,6 @@ function $stats(dbName = db.getName()) {
 }
 
 let __collStatsOnMongos;
-const __collOwningShards = new Map();
 
 async function awaitPlain(value) {
    if (value && typeof value.then === 'function' && typeof value.close !== 'function') {
@@ -2143,13 +2153,16 @@ async function shardsFromConfigNs(ns) {
    return Array.isArray(shards) ? shards.filter(s => typeof s === 'string' && s.length) : [];
 }
 
-async function collectionOwningShardIds(dbName, collName) {
+async function collectionOwningShardIds(dbName, collName, cache) {
    /*
     *  Shards that own this NS: config.chunks (uuid/ns), timeseries buckets,
-    *  then the database primary. Cached per ns. null = unknown (skip mark).
+    *  then the database primary. cache is the gather Map (one materialize
+    *  or one fetchAllStats). No cache means no remembered owners.
+    *  null ids = unknown placement (skip the incomplete mark).
     */
    const ns = `${dbName}.${collName}`;
-   if (__collOwningShards.has(ns)) return __collOwningShards.get(ns);
+   const useCache = cache instanceof Map;
+   if (useCache && cache.has(ns)) return cache.get(ns);
    let ids = null;
    try {
       ids = await shardsFromConfigNs(ns);
@@ -2164,11 +2177,11 @@ async function collectionOwningShardIds(dbName, collName) {
    } catch(_) {
       ids = null;
    }
-   __collOwningShards.set(ns, ids);
+   if (useCache) cache.set(ns, ids);
    return ids;
 }
 
-async function markPartialShardStats(doc, dbName, collName) {
+async function markPartialShardStats(doc, dbName, collName, cache) {
    /*
     *  $group only sees shards that returned. Compare that set to the
     *  collection's owning shards, not cluster-wide listShards — a NS on a
@@ -2180,7 +2193,7 @@ async function markPartialShardStats(doc, dbName, collName) {
       ? [...new Set(doc.shards.filter(s => typeof s === 'string' && s.length))]
       : [];
    if (ids.length && await collStatsOnMongos()) {
-      const owning = await collectionOwningShardIds(dbName, collName);
+      const owning = await collectionOwningShardIds(dbName, collName, cache);
       if (Array.isArray(owning) && owning.length) {
          const got = new Set(ids);
          if (owning.some(id => !got.has(id))) {
@@ -2413,7 +2426,7 @@ async function listCatalogSnapshot(mode = 'auto') {
    return catalogSnapshotResult('legacy', [], false);
 }
 
-async function $collStats(dbName = db.getName(), collName = '') {
+async function $collStats(dbName = db.getName(), collName = '', owningShardCache = null) {
    /*
     *  $collStats wrapper. Always a Promise — await the call.
     *  Live aggregate cursors are thenable; awaiting the cursor drains it.
@@ -2733,7 +2746,7 @@ async function $collStats(dbName = db.getName(), collName = '') {
    try {
       const docs = await drainAggCursor(namespace.aggregate(pipeline, options));
       results = docs[0];
-      results = await markPartialShardStats(results, dbName, collName);
+      results = await markPartialShardStats(results, dbName, collName, owningShardCache);
    } catch(e) {
       results = collStatsStub(isUnauthorizedError(e) ? 'unauthorized' : 'unavailable', e);
    }
