@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.2.15"
+    *  Version: "0.2.16"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -12,14 +12,12 @@
     *  (incompatible with legacy mongo); still the demarked version for the
     *  whole-tree freeze. Archive `.finally(process.stdout.write(…))` is wontfix
     *  on that line. Live wraps `.finally(() => process.stdout.write(…))`.
-    *  Further feature work (sharding) targets mongosh; see ROADMAP.md →
-    *  Legacy mongo shell retirement.
-    *
-    *  TODOs:
-    *  - Add sharding support (per-shard WT fold)
+    *  Mongos: child mongodb:// to shard primaries (collection owners when
+    *  dbName/collName are set via --eval var, else all listShards); worst-shard
+    *  fold. URI construction matches niceDeleteMany.js. Do not load() that file.
     */
 
-   // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>congestionMonitor.js
+   // Usage: mongosh [connection options] [--quiet] [--eval 'var dbName="...", collName="..."'] [-f|--file] </path/to/>congestionMonitor.js
 
    let vitals = {};
    const pollingIntervalMS = 100;
@@ -414,6 +412,422 @@
       };
    }
 
+   const VITALS_FOLD_MAX = [
+      "cacheSizeBytes", "dirtyBytes", "cachedBytes", "updatesDirtyBytes",
+      "dirtyIntlBytes", "dirtyLeafBytes",
+      "cacheUtil", "dirtyUtil", "dirtyUpdatesUtil", "dirtyIntlUtil", "dirtyLeafUtil",
+      "cacheMissRatio", "memSizeBytes", "numCores", "memResidentBytes",
+      "currentAllocatedBytes", "heapSize", "heapUtil",
+      "pageheapFreeBytes", "totalFreeBytes", "memoryFragmentationRatio",
+      "wtReadTicketsUtil", "wtWriteTicketsUtil",
+      "execReadQueueLength", "execWriteQueueLength",
+      "rangeDeleterTasks", "checkpointRuntimeRatio", "activeReplLag",
+      "replLagScale", "heartbeatIntervalMillis"
+   ];
+   const VITALS_FOLD_MIN = [
+      ["evictionDirtyTarget", 5],
+      ["evictionDirtyTrigger", 20],
+      ["evictionTarget", 80],
+      ["evictionTrigger", 95],
+      ["evictionUpdatesTarget", 2.5],
+      ["evictionUpdatesTrigger", 10],
+      ["evictionCheckpointTarget", 1],
+      ["checkpointIntervalMS", 60000],
+      ["evictionThreadsMin", 4],
+      ["evictionThreadsMax", 4],
+      ["wtReadTicketsAvail", 0],
+      ["wtWriteTicketsAvail", 0],
+      ["cacheHitRatio", 0]
+   ];
+   const VITALS_FOLD_OR = [
+      "cacheEvictions", "dirtyCacheEvictions", "dirtyUpdatesCacheEvictions",
+      "evictionsTriggered", "backupCursorOpen", "usesThroughputProbing",
+      "activeShardMigrations", "activeFlowControl", "activeIndexBuilds",
+      "activeRangeDeleter", "activeCheckpoint", "slowRecentCheckpoint"
+   ];
+   const VITALS_FOLD_STATUS = [
+      "cacheStatus", "dirtyStatus", "dirtyUpdatesStatus", "dirtyIntlStatus",
+      "dirtyLeafStatus", "cacheHitStatus", "cacheMissStatus",
+      "memoryFragmentationStatus", "wtReadTicketsStatus", "wtWriteTicketsStatus",
+      "checkpointStatus", "replLagStatus"
+   ];
+
+   function hasWiredTigerVitals(sample = {}) {
+      const cacheSize = sample?.cacheSizeBytes;
+      return cacheSize != null && !Number.isNaN(+cacheSize) && +cacheSize > 0;
+   }
+
+   function redactMessage(value) {
+      return String(value ?? '').replace(/\/\/[^@/]+@/g, '//');
+   }
+
+   function namespaceVarsSet() {
+      return typeof dbName === 'string' && dbName.length > 0
+         && typeof collName === 'string' && collName.length > 0;
+   }
+
+   const SHARD_CONNECT_TIMEOUT_MS = 5000;
+   const SHARD_VITALS_SAMPLE_INTERVAL_MS = 2000;
+   const REPL_LAG_HARD_SEC = 30;
+
+   let _parentConnectionParts = null;
+   function parentConnectionParts() {
+      if (_parentConnectionParts) return _parentConnectionParts;
+      const rawUri = db.getMongo().getURI();
+      if (!rawUri || typeof rawUri !== 'string') throw new Error('missing parent URI');
+      const isSrv = /^mongodb\+srv:/i.test(rawUri);
+      const stripped = rawUri.replace(/^mongodb\+srv:/i, 'mongodb:');
+      const url = new URL(stripped);
+      const searchParams = new URLSearchParams(url.searchParams);
+      searchParams.delete('srvMaxHosts');
+      searchParams.delete('srvServiceName');
+      const authority = stripped.replace(/^mongodb:\/\//i, '').split(/[/?]/, 1)[0];
+      const at = authority.lastIndexOf('@');
+      const hosts = (at >= 0 ? authority.slice(at + 1) : authority) || url.host || '';
+      _parentConnectionParts = {
+         "isSrv": isSrv,
+         "username": url.username || '',
+         "password": url.password || '',
+         "pathname": url.pathname && url.pathname.length ? url.pathname : '/',
+         "searchParams": searchParams,
+         "hosts": hosts
+      };
+      return _parentConnectionParts;
+   }
+
+   function createShardVitals() {
+      /*
+       *  Child Mongo clients to shard primaries. Collection owners when
+       *  dbName/collName are set; else all listShards. Public: attach / sample /
+       *  close (closeClients) / enabled. Child URI construction matches
+       *  niceDeleteMany.js.
+       */
+      let clients = [];
+      let enabled = false;
+
+      function collectionOwningShardIds() {
+         const ids = new Set();
+         try {
+            const stats = db.getSiblingDB(dbName).runCommand({ "collStats": collName });
+            if (stats?.shards && typeof stats.shards === 'object') {
+               for (const id of Object.keys(stats.shards)) {
+                  if (id) ids.add(id);
+               }
+            }
+            if (typeof stats?.primary === 'string' && stats.primary) ids.add(stats.primary);
+         } catch(_) { /* missing ns / auth */ }
+
+         if (ids.size) return [...ids];
+
+         try {
+            const config = db.getSiblingDB('config');
+            const ns = `${dbName}.${collName}`;
+            const collDoc = config.getCollection('collections').findOne({
+               "$or": [{ "_id": ns }, { "ns": ns }]
+            });
+            if (collDoc && collDoc.dropped !== true) {
+               const chunkFilter = collDoc.uuid ? { "uuid": collDoc.uuid } : { "ns": ns };
+               const shards = config.getCollection('chunks').distinct('shard', chunkFilter);
+               if (Array.isArray(shards)) {
+                  for (const id of shards) {
+                     if (id) ids.add(id);
+                  }
+               }
+            }
+         } catch(_) { /* config auth */ }
+
+         if (ids.size) return [...ids];
+
+         try {
+            const dbDoc = db.getSiblingDB('config').getCollection('databases').findOne({ "_id": dbName });
+            if (typeof dbDoc?.primary === 'string' && dbDoc.primary) ids.add(dbDoc.primary);
+         } catch(_) { /* config auth */ }
+
+         return [...ids];
+      }
+
+      function shardPrimaryUri(shardHost) {
+         const parent = parentConnectionParts();
+         const params = new URLSearchParams(parent.searchParams);
+         params.delete('tags');
+         params.delete('readPreferenceTags');
+         params.delete('maxStalenessSeconds');
+         params.delete('minPoolSize');
+         params.delete('readPreference');
+         params.set('maxPoolSize', '2');
+         params.set('serverSelectionTimeoutMS', String(SHARD_CONNECT_TIMEOUT_MS));
+         params.set('connectTimeoutMS', String(SHARD_CONNECT_TIMEOUT_MS));
+         params.set('socketTimeoutMS', String(SHARD_CONNECT_TIMEOUT_MS));
+         if (parent.isSrv && !params.has('tls') && !params.has('ssl')) {
+            params.set('tls', 'true');
+         }
+         const host = String(shardHost || '');
+         const slash = host.indexOf('/');
+         let hosts;
+         if (slash > 0) {
+            params.set('replicaSet', host.slice(0, slash));
+            params.set('directConnection', 'false');
+            params.set('readPreference', 'primary');
+            hosts = host.slice(slash + 1);
+         } else {
+            params.delete('replicaSet');
+            params.set('directConnection', 'true');
+            params.set('readPreference', 'primary');
+            hosts = host;
+         }
+         if (!hosts) throw new Error('shard host is empty');
+         params.sort();
+         let auth = '';
+         if (parent.username) {
+            auth = parent.username;
+            if (parent.password !== '' && parent.password != null) auth += `:${parent.password}`;
+            auth += '@';
+         }
+         const path = parent.pathname || '/';
+         const q = params.toString();
+         return `mongodb://${auth}${hosts}${path}${q ? `?${q}` : ''}`;
+      }
+
+      function openShardPrimary(uri) {
+         if (typeof Mongo === 'function') return new Mongo(uri);
+         const handle = connect(uri);
+         return (handle && typeof handle.getMongo === 'function') ? handle.getMongo() : handle;
+      }
+
+      function shardAdmin(mongo) {
+         if (mongo && typeof mongo.getDB === 'function') return mongo.getDB('admin');
+         if (mongo && typeof mongo.getSiblingDB === 'function') return mongo.getSiblingDB('admin');
+         throw new Error('shard handle has no admin db');
+      }
+
+      function closeShardClient(c) {
+         try {
+            if (c?.mongo && typeof c.mongo.close === 'function') c.mongo.close();
+         } catch(_) { /* already closed */ }
+      }
+
+      function closeClients() {
+         for (const c of clients) closeShardClient(c);
+         clients = [];
+         enabled = false;
+      }
+
+      async function openShardClient(id, host) {
+         const mongo = openShardPrimary(shardPrimaryUri(host));
+         try {
+            return { "id": id, "mongo": mongo, "admin": shardAdmin(mongo) };
+         } catch(e) {
+            closeShardClient({ "mongo": mongo });
+            throw e;
+         }
+      }
+
+      function listShardMap() {
+         try {
+            const listed = db.adminCommand({ "listShards": 1 }).shards ?? [];
+            return { "ok": true, "byId": new Map(listed.map(s => [s._id, s])) };
+         } catch(e) {
+            return {
+               "ok": false,
+               "detail": `mongos: listShards failed (${redactMessage(e?.message ?? e)})`
+            };
+         }
+      }
+
+      function targetShardIds(mapped) {
+         if (namespaceVarsSet()) return collectionOwningShardIds();
+         return [...mapped.byId.keys()];
+      }
+
+      async function reconcileShardClients() {
+         const mapped = listShardMap();
+         if (!mapped.ok) return mapped;
+         const owning = targetShardIds(mapped);
+         if (!owning.length) {
+            return {
+               "ok": false,
+               "detail": namespaceVarsSet()
+                  ? 'mongos: no collection-owning shards found'
+                  : 'mongos: listShards returned no shards'
+            };
+         }
+         const missing = owning.filter(id => !mapped.byId.has(id) || !mapped.byId.get(id)?.host);
+         if (missing.length) {
+            return {
+               "ok": false,
+               "detail": `mongos: shard(s) ${missing.join(', ')} not in listShards`
+            };
+         }
+
+         const have = new Map(clients.map(c => [c.id, c]));
+         const desired = new Set(owning);
+         const toAdd = owning.filter(id => !have.has(id));
+         const toDrop = clients.filter(c => !desired.has(c.id));
+         const opened = [];
+         try {
+            if (toAdd.length) {
+               const settled = await Promise.allSettled(toAdd.map(id => Promise.resolve().then(() =>
+                  openShardClient(id, mapped.byId.get(id).host)
+               )));
+               for (let i = 0; i < settled.length; i++) {
+                  if (settled[i].status === 'fulfilled') {
+                     opened.push(settled[i].value);
+                  } else {
+                     throw new Error(`${toAdd[i]}: ${redactMessage(settled[i].reason?.message ?? settled[i].reason)}`);
+                  }
+               }
+            }
+         } catch(e) {
+            for (const c of opened) closeShardClient(c);
+            return {
+               "ok": false,
+               "detail": `mongos: shard primary unreachable (${redactMessage(e?.message ?? e)})`
+            };
+         }
+
+         for (const c of toDrop) closeShardClient(c);
+         const addedById = new Map(opened.map(c => [c.id, c]));
+         clients = owning.map(id => have.get(id) || addedById.get(id)).filter(Boolean);
+         enabled = clients.length > 0;
+         return { "ok": true };
+      }
+
+      function sampleShardPrimary(admin) {
+         const cmdOpts = { "readPreference": { "mode": "primary" } };
+         const ss = admin.runCommand({
+            "serverStatus": true,
+            ...SERVER_STATUS_OPTIONS_DEFAULTS,
+            ...SERVER_STATUS_OPT_IN
+         }, cmdOpts);
+         let wterc = '';
+         try {
+            wterc = admin.runCommand({
+               "getParameter": 1,
+               "wiredTigerEngineRuntimeConfig": 1
+            }, cmdOpts).wiredTigerEngineRuntimeConfig || '';
+         } catch(_) { /* restricted / missing */ }
+         let rsSt = {};
+         try {
+            rsSt = admin.runCommand({ "replSetGetStatus": 1 }, cmdOpts);
+         } catch(_) { /* standalone shard / auth */ }
+         let host = {};
+         try {
+            host = admin.runCommand({ "hostInfo": 1 }, cmdOpts);
+         } catch(_) { /* restricted */ }
+         const snap = vitalsFromServerStatus({
+            "ss": ss,
+            "rsSt": rsSt,
+            "host": host,
+            "wterc": wterc
+         });
+         if (!hasWiredTigerVitals(snap)) {
+            throw new Error('WiredTiger cache vitals unavailable');
+         }
+         return snap;
+      }
+
+      function foldWorstShardVitals(namedSamples = []) {
+         const nums = key => namedSamples.map(s => +s[key]).filter(n => !Number.isNaN(n));
+         const maxNum = (key, d = 0) => {
+            const xs = nums(key);
+            return xs.length ? Math.max(...xs) : d;
+         };
+         const minNum = (key, d) => {
+            const xs = nums(key);
+            return xs.length ? Math.min(...xs) : d;
+         };
+         const rank = { "low": 0, "medium": 1, "high": 2 };
+         let worst = namedSamples[0];
+         let worstScore = -1;
+         for (const s of namedSamples) {
+            const score = Math.max(
+               s.dirtyUtil || 0,
+               s.dirtyUpdatesUtil || 0,
+               s.cacheUtil || 0,
+               ((s.activeReplLag || 0) / REPL_LAG_HARD_SEC) * 100
+            );
+            if (score > worstScore) {
+               worstScore = score;
+               worst = s;
+            }
+         }
+         const folded = {};
+         for (const key of VITALS_FOLD_MAX) folded[key] = maxNum(key);
+         for (const key of VITALS_FOLD_OR) folded[key] = namedSamples.some(s => s[key]);
+         for (const [key, d] of VITALS_FOLD_MIN) folded[key] = minNum(key, d);
+         for (const key of VITALS_FOLD_STATUS) {
+            let status = 'low';
+            for (const s of namedSamples) {
+               if ((rank[s[key]] ?? 0) > rank[status]) status = s[key];
+            }
+            folded[key] = status;
+         }
+         folded["worstShard"] = worst?.id;
+         folded["owningShards"] = namedSamples.map(s => s.id);
+         return folded;
+      }
+
+      async function sample({ reconcile = true } = {}) {
+         if (reconcile) {
+            const rec = await reconcileShardClients();
+            if (!rec.ok) return rec;
+         }
+         if (!clients.length) {
+            return { "ok": false, "detail": 'mongos: no shard primary clients' };
+         }
+         const settled = await Promise.allSettled(
+            clients.map(c => Promise.resolve().then(() => ({
+               "id": c.id,
+               ...sampleShardPrimary(c.admin)
+            })))
+         );
+         const ok = [];
+         const failed = [];
+         for (let i = 0; i < settled.length; i++) {
+            const id = clients[i].id;
+            if (settled[i].status === 'fulfilled') {
+               ok.push(settled[i].value);
+            } else {
+               failed.push(`${id}: ${redactMessage(settled[i].reason?.message ?? settled[i].reason)}`);
+            }
+         }
+         if (failed.length || ok.length !== clients.length) {
+            return {
+               "ok": false,
+               "detail": `mongos: shard primary unreachable (${
+                  failed.join('; ') || 'incomplete sample'
+               })`
+            };
+         }
+         return { "ok": true, "vitals": foldWorstShardVitals(ok) };
+      }
+
+      async function attach() {
+         const rec = await reconcileShardClients();
+         if (!rec.ok) return rec;
+         const sampled = await sample({ "reconcile": false });
+         if (!sampled.ok) {
+            closeClients();
+            return sampled;
+         }
+         if (!hasWiredTigerVitals(sampled.vitals)) {
+            closeClients();
+            return {
+               "ok": false,
+               "detail": 'mongos: shard primaries reachable but WT cache vitals missing'
+            };
+         }
+         return sampled;
+      }
+
+      return {
+         attach,
+         sample,
+         close: closeClients,
+         get enabled() { return enabled; }
+      };
+   }
+
    async function congestionMonitor() {
       /*
        *  Mongod congestion snapshot: cached hostInfo / rs.status / wterc /
@@ -533,6 +947,16 @@
       /*
        *  main
        */
+      const shardVitals = createShardVitals();
+      if (isSharded()) {
+         const attached = await shardVitals.attach();
+         if (!attached.ok) {
+            console.log(attached.detail || 'mongos: shard WT attach failed');
+            return;
+         }
+         vitals = attached.vitals;
+      }
+
       const metrics = [
          // {  // EQ attributes
          //    "name": "<string>",   // EQ label
@@ -559,8 +983,14 @@
          metric.eq = new EQ(metric);
       });
       // setup the initial console state
-      const tableWidth = 54;
-      const tableTitle = 'Real-time congestion monitor';
+      let tableTitle = 'Real-time congestion monitor';
+      if (vitals.worstShard) {
+         tableTitle = `Congestion worst ${vitals.worstShard}`;
+         if (Array.isArray(vitals.owningShards) && vitals.owningShards.length) {
+            tableTitle += ` (${vitals.owningShards.length})`;
+         }
+      }
+      const tableWidth = Math.max(54, tableTitle.length + 6);
       const titleSpacing = (tableWidth - tableTitle.length) / 2;
       process.stdout.write('\x1b[?25l;1049h]'); // disable the console cursor and enable alternate buffer 
       console.clear();
@@ -575,8 +1005,13 @@
       ).finally(() => process.stdout.write('\x1b[?1049l;25h]')); // disable alternate buffer and re-enable the console cursor
 
       while (true) { // refresh stats
-         vitals = await congestionMonitor();
-         sleep(pollingIntervalMS);
+         if (shardVitals.enabled) {
+            const next = await shardVitals.sample();
+            if (next.ok) vitals = next.vitals;
+         } else {
+            vitals = await congestionMonitor();
+         }
+         sleep(shardVitals.enabled ? SHARD_VITALS_SAMPLE_INTERVAL_MS : pollingIntervalMS);
       }
    }
 
