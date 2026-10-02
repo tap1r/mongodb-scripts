@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.14.5"
+ *  Version: "0.14.6"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,12 +24,12 @@
  *           dataSize: <1|0|-1>,
  *           storageSize: <1|0|-1>,
  *           freeStorageSize: <1|0|-1>,
- *           idxStorageSize: <1|0|-1>, // TBA
- *           idxFreeStorageSize: <1|0|-1>, // TBA
- *           reuse: <1|0|-1>, // TBA
- *           idxReuse: <1|0|-1>, // TBA
- *           compaction: <1|0|-1>, // TBA
- *           compression: <1|0|-1>, // TBA
+ *           idxStorageSize: <1|0|-1>,
+ *           idxFreeStorageSize: <1|0|-1>,
+ *           reuse: <1|0|-1>,
+ *           idxReuse: <1|0|-1>,
+ *           compaction: <1|0|-1>,
+ *           compression: <1|0|-1>,
  *           objects: <1|0|-1>
  *        },
  *        collection: {
@@ -37,9 +37,9 @@
  *           dataSize: <1|0|-1>,
  *           storageSize: <1|0|-1>,
  *           freeStorageSize: <1|0|-1>,
- *           reuse: <1|0|-1>, // TBA
- *           compaction: <1|0|-1>, // TBA
- *           compression: <1|0|-1>, // TBA
+ *           reuse: <1|0|-1>,
+ *           compaction: <1|0|-1>,
+ *           compression: <1|0|-1>,
  *           objects: <1|0|-1>
  *        },
  *        view: {
@@ -57,11 +57,11 @@
  *        },
  *        index: {
  *           name: <1|0|-1>,
- *           idxDataSize: <1|0|-1>, // TBA (inferred from "storageSize - freeStorageSize")
+ *           idxDataSize: <1|0|-1>,
  *           idxStorageSize: <1|0|-1>,
  *           idxFreeStorageSize: <1|0|-1>,
- *           reuse: <1|0|-1>, // TBA
- *           compaction: <1|0|-1> // TBA
+ *           reuse: <1|0|-1>,
+ *           compaction: <1|0|-1>
  *        }
  *     },
  *     limit: { // TBA
@@ -100,6 +100,8 @@
  *
  *    mongosh --quiet --eval 'var options = { sort: { collection: { dataSize: -1 }, index: { idxStorageSize: -1 } } };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { sort: { collection: { freeStorageSize: -1 }, index: { idxFreeStorageSize: -1 } } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { sort: { collection: { reuse: -1 }, index: { reuse: -1 } } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { sort: { collection: { compaction: -1 }, index: { compaction: -1 } } };' -f dbstats.js
  *
  *  Examples of using formatting:
  *
@@ -115,7 +117,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.14.5" };
+   const __script = { "name": "dbstats.js", "version": "0.14.6" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -221,24 +223,24 @@
             "name": 0,
             "dataSize": 0,
             "storageSize": 0,
-            "idxStorageSize": 0, // TBA
+            "idxStorageSize": 0,
             "freeStorageSize": 0,
-            "idxFreeStorageSize": 0, // TBA
-            "reuse": 0, // TBA
-            "idxReuse": 0, // TBA
+            "idxFreeStorageSize": 0,
+            "reuse": 0,
+            "idxReuse": 0,
             "compression": 0,
             "objects": 0,
-            "compaction": 0 // TBA
+            "compaction": 0
          },
          "collection": {
             "name": 0,
             "dataSize": 0,
             "storageSize": 0,
             "freeStorageSize": 0,
-            "reuse": 0, // TBA
+            "reuse": 0,
             "compression": 0,
             "objects": 0,
-            "compaction": 0 // TBA
+            "compaction": 0
          },
          "view": {
             "name": 1
@@ -249,18 +251,18 @@
             "dataSize": 0,
             "storageSize": 0,
             "freeStorageSize": 0,
-            "reuse": 0, // TBA
-            "compression": 0, // TBA
+            "reuse": 0,
+            "compression": 0,
             "objects": 0,
-            "compaction": 0 // TBA
+            "compaction": 0
          },
          "index": {
             "name": 0,
-            "idxDataSize": 0, // TBA (inferred from "storageSize - freeStorageSize")
+            "idxDataSize": 0,
             "idxStorageSize": 0,
             "idxFreeStorageSize": 0,
-            "reuse": 0, // TBA
-            "compaction": 0 // TBA
+            "reuse": 0,
+            "compaction": 0
          }
       },
       "limit": { // TBA
@@ -1085,7 +1087,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.14.5',
+         "version": '0.14.6',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1154,23 +1156,32 @@
    function sortBy(type) {
       /*
        *  Resolve options.sort[type] → comparator (first non-zero key wins).
+       *  reuse / idxReuse are free/storage ratios. compaction is the
+       *  compact/rebuild/resync/wait rank (n/a last).
        */
       const sortByType = sortOptions[type] || {};
       const sortKey = Object.keys(sortByType).find(key => sortByType[key] !== 0) || 'name';
       const dir = sortByType[sortKey] === -1 ? -1 : 1;
+      const indexRow = type === 'index';
       const getters = {
          "name": o => o.name,
          "namespace": o => o.namespace,
          "dataSize": o => o.dataSize,
          "storageSize": o => o.storageSize,
          "freeStorageSize": o => o.freeStorageSize,
-         "idxDataSize": o => (o.freeStorageSize == null) ? null : (o.storageSize - o.freeStorageSize),
-         "idxStorageSize": o => o.storageSize,
-         "idxFreeStorageSize": o => o.freeStorageSize,
+         "idxDataSize": o => {
+            const free = indexRow ? o.freeStorageSize : o.totalIndexBytesReusable;
+            const storage = indexRow ? o.storageSize : o.totalIndexSize;
+            if (!freeStorageKnown(free)) return null;
+            return +storage - +free;
+         },
+         "idxStorageSize": o => indexRow ? o.storageSize : o.totalIndexSize,
+         "idxFreeStorageSize": o => indexRow ? o.freeStorageSize : o.totalIndexBytesReusable,
          "objects": o => o.objects,
-         "reuse": o => o.freeStorageSize, // TBA: reuse ratio
+         "reuse": o => jsonReuse(o.freeStorageSize, o.storageSize),
+         "idxReuse": o => jsonReuse(o.totalIndexBytesReusable, o.totalIndexSize),
          "compression": o => o.compression,
-         "compaction": o => o.name // TBA
+         "compaction": o => compactionSortKey(o, type)
       };
 
       return compareBy(getters[sortKey] || getters.name, dir);
@@ -1240,6 +1251,41 @@
          return incomplete ? 'n/a ' : '———— ';
       }
       return incomplete ? 'n/a ' : '———— ';
+   }
+
+   function rankCompactionLabel(label) {
+      /*
+       *  Higher = stronger recommendation. n/a and unknown sort last.
+       */
+      if (label === 'resync') return 4;
+      if (label === 'rebuild') return 3;
+      if (label === 'compact') return 2;
+      if (label === 'wait') return 1;
+      if (label === '———— ') return 0;
+      return null;
+   }
+
+   function compactionSortKey(o = {}, type = 'collection') {
+      if (type === 'db') {
+         const ns = rankCompactionLabel(formatCompaction('collection', o.storageSize, o.freeStorageSize, {
+            "incomplete": o.freeStorageComplete === false
+         }));
+         const idx = rankCompactionLabel(formatCompaction('index', o.totalIndexSize, o.totalIndexBytesReusable, {
+            "incomplete": o.totalIndexBytesReusableComplete === false
+         }));
+         if (ns == null && idx == null) return null;
+         return Math.max(ns == null ? 0 : ns, idx == null ? 0 : idx);
+      }
+      if (type === 'index') {
+         return rankCompactionLabel(formatCompaction('index', o.storageSize, o.freeStorageSize, {
+            "idIndex": o.name == '_id_',
+            "incomplete": o.freeStorageComplete === false
+         }));
+      }
+      return rankCompactionLabel(formatCompaction('collection', o.storageSize, o.freeStorageSize, {
+         "oplog": o.name == 'oplog.rs' || o.namespace == 'local.oplog.rs',
+         "incomplete": o.freeStorageComplete === false
+      }));
    }
 
    function formatRatio(metric) {
