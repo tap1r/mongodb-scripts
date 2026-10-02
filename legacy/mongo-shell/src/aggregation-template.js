@@ -76,12 +76,13 @@
     */
    const dbName = 'database', collName = 'collection';
    const namespace = db.getSiblingDB(dbName).getCollection(collName);
+   // Only allow safe identifier characters, then build the statement without
+   // template-literal interpolation to avoid SQL injection
+   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(collName)) {
+      throw new Error('Invalid collection name: ' + collName);
+   }
    const options = { "comment": "My $sql query" },
-      sql = `
-         SELECT *
-         FROM ${collName}
-         LIMIT 1;
-      `,
+      sql = ['SELECT *', 'FROM ' + collName, 'LIMIT 1;'].join('\n'),
       pipeline = [{
          "$sql": {
             "statement": sql,
