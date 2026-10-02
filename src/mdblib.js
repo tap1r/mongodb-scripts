@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.21.3"
+ *  Version: "0.21.4"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.21.3"
+      "version": "0.21.4"
 });
 
 /*  Notes:
@@ -26,7 +26,9 @@ if (typeof __lib === 'undefined') (
  *    One hello() fills both BSON limits. fuzzer reads bsonMax.
  *  - Session snapshot (first read): atlas platform, fCV, and isSharded share
  *    one hello / hostInfo / serverStatus / listShards / getParameter.
- *    load() does not fill it. hello().me stays live (onlineDefrag can move).
+ *    That serverStatus call gets the read preference from the hello already
+ *    taken, so it does not hello again. load() does not fill the snapshot.
+ *    hello().me stays live (onlineDefrag can move).
  *  - fCV() → serverVer() on Atlas M0/Flex is by design (getParameter FCV is
  *    restricted; Atlas is not left on a lagging FCV)
  *  - serverStatus none:true is portable on 8.0 and Atlas M0 (no throw;
@@ -1156,7 +1158,9 @@ function serverCmdLineOpts() {
 function sessionSnapshot() {
    /*
     *  First-read session facts: atlas platform, fCV, isSharded.
-    *  Shares hello / hostInfo / serverStatus / listShards / getParameter.
+    *  One hello, then hostInfo / serverStatus / listShards / getParameter.
+    *  serverStatus gets the read preference from that hello, so it does not
+    *  hello again. A thrown hello falls through to primaryPreferred.
     *  load() does not fill this. hello().me is not stored (onlineDefrag can move).
     */
    if (sessionSnapshot.cached) return sessionSnapshot.cached;
@@ -1169,6 +1173,7 @@ function sessionSnapshot() {
    }
    const helloMsg = helloDoc.msg || false;
    const isMongos = helloMsg == 'isdbgrid';
+   const statusReadPref = helloDoc.secondary ? 'secondaryPreferred' : 'primaryPreferred';
 
    let hostInfoDoc = {};
    let hostInfoError = null;
@@ -1179,7 +1184,7 @@ function sessionSnapshot() {
       hostInfoDoc = {};
    }
 
-   const ss = serverStatus();
+   const ss = serverStatus({}, statusReadPref);
    let hostname = (hostInfoDoc.system && hostInfoDoc.system.hostname)
       ? String(hostInfoDoc.system.hostname)
       : '';
