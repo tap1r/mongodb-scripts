@@ -84,13 +84,13 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `mdblib.js` | 0.15.10 | **0.22.2** |
 | `dbstats.js` | 0.12.19 | **0.18.2** |
 | `autoCompact.js` | 0.4.36 | **1.0.1** |
-| `fuzzer.js` | 0.6.43 | **0.15.0** |
+| `fuzzer.js` | 0.6.43 | **1.0.0** |
 | `oplogchurn.js` | 0.5.22 | **0.5.24** |
 | `latency.js` | 0.4.9 | **0.4.10** |
 | `schema-sampler.js` | 0.2.16 | **0.2.17** |
 | `sleepy.js` | 0.2.6 | **0.2.7** |
 | `docSizes.js` | 0.1.34 | **0.1.35** |
-| `niceDeleteMany.js` | 0.4.11 | **0.13.9** |
+| `niceDeleteMany.js` | 0.4.11 | **0.14.0** |
 | `congestionMonitor.js` | 0.2.13 | **0.3.2** |
 | `onlineDefrag.js` | 0.1.4 | **1.6.2** |
 | `compact.js` | 0.2.15 | **removed** (archive only) |
@@ -446,7 +446,7 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `niceDeleteMany.js`
 
-**Live: v0.13.9.** **Archive: v0.4.11.** `--eval` must use `var`. Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`. Header tags this file as requiring this roadmap. Shared AIMD (`maxInFlight` MD/AI) for WT and paceMaker; WT FSM vs pace delay stay separate gates. `hasUserHint` / `hasUserCollation` collapsed to `hasNonEmptyDoc`.
+**Live: v0.14.0.** **Archive: v0.4.11.** `--eval` must use `var`. Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`. Header tags this file as requiring this roadmap. Shared AIMD (`maxInFlight` MD/AI) for WT and paceMaker; WT FSM vs pace delay stay separate gates. `hasUserHint` / `hasUserCollation` collapsed to `hasNonEmptyDoc`. Policy A is `POLICY_A_STEPS` (C1 cannotSpill scan, C2–C3 user hint, C4/C7 unhinted planner then Policy B, C6 `_id` scan).
 
 **Apply (shell):** `deleteManyTask` uses `(await namespace.deleteMany(...)).deletedCount`. See the scripting guide (result fields). Do not re-add the Promise-field unwrap as new work.
 
@@ -579,7 +579,7 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `fuzzer.js`
 
-**Live: v0.15.0.** **Archive: v0.6.43.** Mongosh-only. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()`. Compact is archive-only. Header tags this file as requiring this roadmap.
+**Live: v1.0.0.** **Archive: v0.6.43.** Mongosh-only. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()`. Compact is archive-only. Header tags this file as requiring this roadmap.
 
 Options overlay is **`fuzzer-options.jsonc`** (search path, in-shell JSONC strip, deep-merge). That is the reference for [User options UX](#user-options-ux-streamline-past---eval-globals). Do not paste the parser into other scripts. `--eval` stays unwired; do not add a second options channel, and do not declare `const dbName` if an eval overlay is ever added. In-file defaults stay the defaults.
 
@@ -587,7 +587,7 @@ Options overlay is **`fuzzer-options.jsonc`** (search path, in-shell JSONC strip
 
 Remaining mongosh-line work (do not block the archive):
 
-- Reshard wait already holds the user Promise so mongosh does not exit early.
+- Reshard wait holds the user Promise so mongosh does not exit early. The poll races that promise with an awaited timer; `sleep()` would block the thread and stall the response.
 - `w: "majority"` with no `wtimeout` can stall `createCollection` / bulk on PSA or a lagging secondary.
 - `$genRandWord` / `$benford` stay later. Shared-tier `fCV()` → `serverVer()` is by design (see mdblib).
 
