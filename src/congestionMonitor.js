@@ -236,6 +236,53 @@
       return Number.parseFloat(((+(pool.available ?? 0) / total) * 100).toFixed(2));
    }
 
+   function execQueueLength(pool = {}, priority) {
+      // 8.0+ nests queueLength under normalPriority / lowPriority; 7.x / early 8.0
+      // keep it on the kind document.
+      if (priority) return +(pool[priority]?.queueLength ?? 0);
+      return +(pool.queueLength ?? pool.normalPriority?.queueLength ?? 0);
+   }
+
+   function execQueuedMicros(pool = {}, priority) {
+      // Lifetime counter. Kind-level totalTimeQueuedMicros if present, else the
+      // sum of nested buckets. priority picks one nested bucket only.
+      if (priority) return +(pool[priority]?.totalTimeQueuedMicros ?? 0);
+      if (pool.totalTimeQueuedMicros != null) return +(pool.totalTimeQueuedMicros);
+      let sum = 0;
+      for (const key of ['normalPriority', 'lowPriority', 'exempt', 'deprioritizable', 'nonDeprioritizable']) {
+         const v = pool[key]?.totalTimeQueuedMicros;
+         if (v != null) sum += +v;
+      }
+      return sum;
+   }
+
+   function execQueueStatus(n) {
+      return (n < 1) ? 'low' : (n >= 8) ? 'high' : 'medium';
+   }
+
+   let _queuedPrev = null;
+   function stampQueuedWait(snap = {}) {
+      // Interval wait from lifetime totalTimeQueuedMicros (ms of wait this poll).
+      const now = Date.now();
+      const read = +(snap.execReadTotalTimeQueuedMicros ?? 0);
+      const write = +(snap.execWriteTotalTimeQueuedMicros ?? 0);
+      const prev = _queuedPrev;
+      let readWait = 0;
+      let writeWait = 0;
+      if (prev && now > prev.at) {
+         readWait = Math.max(0, read - prev.read) / 1000;
+         writeWait = Math.max(0, write - prev.write) / 1000;
+      }
+      snap.execReadQueuedWaitMs = Number.parseFloat(readWait.toFixed(0));
+      snap.execWriteQueuedWaitMs = Number.parseFloat(writeWait.toFixed(0));
+      snap.execQueuedWaitScale = 1000;
+      snap.executionControlDeprioritizationScale = 1;
+      snap.execReadQueuedWaitStatus = (readWait < 10) ? 'low' : (readWait >= 100) ? 'high' : 'medium';
+      snap.execWriteQueuedWaitStatus = (writeWait < 10) ? 'low' : (writeWait >= 100) ? 'high' : 'medium';
+      _queuedPrev = { "at": now, "read": read, "write": write };
+      return snap;
+   }
+
    function cachePct(num, den) {
       if (!(den > 0) || num == null || Number.isNaN(+num)) return 0;
       return Number.parseFloat(((+num / den) * 100).toFixed(2));
@@ -269,7 +316,7 @@
       slowms = null,
       storageEngineConcurrentReadTransactions = null,
       storageEngineConcurrentWriteTransactions = null,
-      lowPriorityAdmissionBypassThreshold = null
+      executionControlDeprioritizationGate = false
    } = {}) {
       /*
        *  Plain congestion snapshot each poll. EQ bars read these fields as
@@ -317,6 +364,9 @@
       const exec = ss.queues?.execution ?? {};
       const writeQ = exec.write ?? {};
       const readQ = exec.read ?? {};
+      const readLpQ = execQueueLength(readQ, 'lowPriority');
+      const writeLpQ = execQueueLength(writeQ, 'lowPriority');
+      const deprioGate = !!executionControlDeprioritizationGate;
       const tm = ss.tenantMigrations ?? {};
       return {
          ...eviction,
@@ -383,8 +433,19 @@
          "wtWriteTicketsStatus": (wtWriteTicketsUtil < 20) ? 'low'
             : (wtWriteTicketsUtil >= 75) ? 'high'
             : 'medium',
-         "execReadQueueLength": +(readQ.queueLength ?? readQ.normalPriority?.queueLength ?? 0),
-         "execWriteQueueLength": +(writeQ.queueLength ?? writeQ.normalPriority?.queueLength ?? 0),
+         "execReadQueueLength": execQueueLength(readQ),
+         "execWriteQueueLength": execQueueLength(writeQ),
+         "execReadLowPriorityQueueLength": readLpQ,
+         "execWriteLowPriorityQueueLength": writeLpQ,
+         "execReadLowPriorityStatus": execQueueStatus(readLpQ),
+         "execWriteLowPriorityStatus": execQueueStatus(writeLpQ),
+         "execReadTotalTimeQueuedMicros": execQueuedMicros(readQ),
+         "execWriteTotalTimeQueuedMicros": execQueuedMicros(writeQ),
+         "execReadLowPriorityQueuedMicros": execQueuedMicros(readQ, 'lowPriority'),
+         "execWriteLowPriorityQueuedMicros": execQueuedMicros(writeQ, 'lowPriority'),
+         "executionControlDeprioritizationGate": deprioGate,
+         "executionControlDeprioritizationStatus": deprioGate ? 'high' : 'low',
+         "execQueuedWaitScale": 1000,
          "usesThroughputProbing": !!exec.usesThroughputProbing,
          "activeShardMigrations": (tm.currentMigrationsDonating > 0 || tm.currentMigrationsReceiving > 0),
          "activeFlowControl": ss.flowControl?.isLagged === true && ss.flowControl?.enabled === true,
@@ -407,8 +468,7 @@
          "heartbeatIntervalMillis": heartbeatIntervalMillis,
          "slowms": slowms,
          "storageEngineConcurrentReadTransactions": storageEngineConcurrentReadTransactions,
-         "storageEngineConcurrentWriteTransactions": storageEngineConcurrentWriteTransactions,
-         "lowPriorityAdmissionBypassThreshold": lowPriorityAdmissionBypassThreshold
+         "storageEngineConcurrentWriteTransactions": storageEngineConcurrentWriteTransactions
       };
    }
 
@@ -421,6 +481,9 @@
       "pageheapFreeBytes", "totalFreeBytes", "memoryFragmentationRatio",
       "wtReadTicketsUtil", "wtWriteTicketsUtil",
       "execReadQueueLength", "execWriteQueueLength",
+      "execReadLowPriorityQueueLength", "execWriteLowPriorityQueueLength",
+      "execReadTotalTimeQueuedMicros", "execWriteTotalTimeQueuedMicros",
+      "execReadLowPriorityQueuedMicros", "execWriteLowPriorityQueuedMicros",
       "rangeDeleterTasks", "checkpointRuntimeRatio", "activeReplLag",
       "replLagScale", "heartbeatIntervalMillis"
    ];
@@ -442,6 +505,7 @@
    const VITALS_FOLD_OR = [
       "cacheEvictions", "dirtyCacheEvictions", "dirtyUpdatesCacheEvictions",
       "evictionsTriggered", "backupCursorOpen", "usesThroughputProbing",
+      "executionControlDeprioritizationGate",
       "activeShardMigrations", "activeFlowControl", "activeIndexBuilds",
       "activeRangeDeleter", "activeCheckpoint", "slowRecentCheckpoint"
    ];
@@ -449,6 +513,8 @@
       "cacheStatus", "dirtyStatus", "dirtyUpdatesStatus", "dirtyIntlStatus",
       "dirtyLeafStatus", "cacheHitStatus", "cacheMissStatus",
       "memoryFragmentationStatus", "wtReadTicketsStatus", "wtWriteTicketsStatus",
+      "execReadLowPriorityStatus", "execWriteLowPriorityStatus",
+      "executionControlDeprioritizationStatus",
       "checkpointStatus", "replLagStatus"
    ];
 
@@ -714,11 +780,19 @@
          try {
             host = admin.runCommand({ "hostInfo": 1 }, cmdOpts);
          } catch(_) { /* restricted */ }
+         let executionControlDeprioritizationGate = false;
+         try {
+            executionControlDeprioritizationGate = !!admin.runCommand({
+               "getParameter": 1,
+               "executionControlDeprioritizationGate": 1
+            }, cmdOpts).executionControlDeprioritizationGate;
+         } catch(_) { /* 7.x / restricted / missing */ }
          const snap = vitalsFromServerStatus({
             "ss": ss,
             "rsSt": rsSt,
             "host": host,
-            "wterc": wterc
+            "wterc": wterc,
+            "executionControlDeprioritizationGate": executionControlDeprioritizationGate
          });
          if (!hasWiredTigerVitals(snap)) {
             throw new Error('WiredTiger cache vitals unavailable');
@@ -875,7 +949,7 @@
          "slowms": slowms(),
          "storageEngineConcurrentReadTransactions": getParameter('wiredTigerConcurrentReadTransactions', null),
          "storageEngineConcurrentWriteTransactions": getParameter('wiredTigerConcurrentWriteTransactions', null),
-         "lowPriorityAdmissionBypassThreshold": getParameter('lowPriorityAdmissionBypassThreshold', null)
+         "executionControlDeprioritizationGate": getParameter('executionControlDeprioritizationGate', false)
       });
    }
 
@@ -954,7 +1028,7 @@
             console.log(attached.detail || 'mongos: shard WT attach failed');
             return;
          }
-         vitals = attached.vitals;
+         vitals = stampQueuedWait(attached.vitals);
       }
 
       const metrics = [
@@ -974,7 +1048,12 @@
          { "name": "dirtyIntlFill", "metric": "dirtyIntlUtil", "status": "dirtyIntlStatus", "scale": "evictionDirtyTrigger", "unit": "%" },
          { "name": "dirtyLeafFill", "metric": "dirtyLeafUtil", "status": "dirtyLeafStatus", "scale": "evictionDirtyTrigger", "unit": "%" },
          { "name": "checkpointStress", "metric": "checkpointRuntimeRatio", "status": "checkpointStatus", "unit": "%", "interval": 250 },
-         { "name": "activeReplLag", "metric": "activeReplLag", "status": "replLagStatus", "scale": "replLagScale", "unit": "s", "interval": 500 }
+         { "name": "activeReplLag", "metric": "activeReplLag", "status": "replLagStatus", "scale": "replLagScale", "unit": "s", "interval": 500 },
+         { "name": "deprioritize", "metric": "executionControlDeprioritizationGate", "status": "executionControlDeprioritizationStatus", "scale": "executionControlDeprioritizationScale" },
+         { "name": "lowPriorityRead", "metric": "execReadLowPriorityQueueLength", "status": "execReadLowPriorityStatus" },
+         { "name": "lowPriorityWrite", "metric": "execWriteLowPriorityQueueLength", "status": "execWriteLowPriorityStatus" },
+         { "name": "readQueuedWait", "metric": "execReadQueuedWaitMs", "status": "execReadQueuedWaitStatus", "scale": "execQueuedWaitScale", "unit": "ms" },
+         { "name": "writeQueuedWait", "metric": "execWriteQueuedWaitMs", "status": "execWriteQueuedWaitStatus", "scale": "execQueuedWaitScale", "unit": "ms" }
       ];
       // instantiate EQ objects
       metrics.forEach((metric, _idx) => {
@@ -1007,9 +1086,9 @@
       while (true) { // refresh stats
          if (shardVitals.enabled) {
             const next = await shardVitals.sample();
-            if (next.ok) vitals = next.vitals;
+            if (next.ok) vitals = stampQueuedWait(next.vitals);
          } else {
-            vitals = await congestionMonitor();
+            vitals = stampQueuedWait(await congestionMonitor());
          }
          sleep(shardVitals.enabled ? SHARD_VITALS_SAMPLE_INTERVAL_MS : pollingIntervalMS);
       }
