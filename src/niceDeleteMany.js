@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.13.7"
+    *  Version: "0.13.8"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -69,7 +69,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.13.7" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.13.8" };
    let vitals = {};
    let vitalsSampling = false;
    let startupLogDone = false; // after writeConsole of the startup banner; attach WARN is banner-only until then
@@ -1447,7 +1447,7 @@
       const candidates = [];
       const add = (sortBy, hint) => {
          if (sortBy == null || typeof sortBy !== 'object' || !Object.keys(sortBy).length) return;
-         if (JSON.stringify(sortBy) === skipA && !hasUserHint(hint)) return;
+         if (JSON.stringify(sortBy) === skipA && !hasNonEmptyDoc(hint)) return;
          const sig = JSON.stringify(sortBy) + '\0' + JSON.stringify(hint ?? {});
          if (seen.has(sig)) return;
          seen.add(sig);
@@ -1623,17 +1623,13 @@
       return d != null && typeof d === 'object' && !Array.isArray(d) && Object.keys(d).length > 0;
    }
 
-   function hasUserHint(h) { return hasNonEmptyDoc(h); }
-
-   function hasUserCollation(c) { return hasNonEmptyDoc(c); }
-
    function applyUserCollation(opts) {
-      if (hasUserCollation(collation)) opts.collation = collation;
+      if (hasNonEmptyDoc(collation)) opts.collation = collation;
       return opts;
    }
 
    function applyHint(opts, h) {
-      if (hasUserHint(h)) opts.hint = h;
+      if (hasNonEmptyDoc(h)) opts.hint = h;
       return opts;
    }
 
@@ -1812,7 +1808,7 @@
             return { "sortBy": candidateSort, "hint": {}, "mode": "window" };
          }
          const pick = firstViableWindowHint(prefixExpl, indexes);
-         if (!pick || pick.fromWinner || !hasUserHint(pick.hint)) return null;
+         if (!pick || pick.fromWinner || !hasNonEmptyDoc(pick.hint)) return null;
          const hintedOpts = { ...explainOpts };
          applyHint(hintedOpts, pick.hint);
          const fullExpl = await explainCurationAggregate(
@@ -1836,7 +1832,7 @@
       let probes = 0;
       for (const cand of candidates) {
          if (probes >= POLICY_B_MAX_PROBES) break;
-         if (hasUserHint(forcedHint)) {
+         if (hasNonEmptyDoc(forcedHint)) {
             probes++;
             const win = await tryWindow(namespace, filter, explainOpts, cand.sortBy, forcedHint);
             if (win) {
@@ -1890,7 +1886,7 @@
 
       const indexes = await listCurationIndexes(namespace);
 
-      if (hasUserHint(userHint)) {
+      if (hasNonEmptyDoc(userHint)) {
          const win = await tryWindow(namespace, filter, explainOpts, sortBy, userHint);
          if (win) return win;
          const b = await tryPolicyB(namespace, filter, explainOpts, sortBy, userHint, indexes);
@@ -2323,12 +2319,13 @@
    // mongos / no-WT: paceMaker replaces fixed jitter (see createAdmissionController).
    const PACE_WARMUP_DELAY_MIN_MS = 20; // warm-up only until pace EWMA exists
    const PACE_WARMUP_DELAY_MAX_MS = 50;
-   // AIMD concurrency: MD on enter CLOSED; AI while sustained OPEN (hold in THROTTLE/COOLDOWN).
+   // Shared AIMD on maxInFlight: WT MD on enter CLOSED, AI while sustained OPEN
+   // (hold in THROTTLE/COOLDOWN); pace MD after drop strikes, slower AI interval.
    const AIMD_INCREASE_INTERVAL_MS = 500;
    // Hybrid repl-lag bands (seconds): soft → THROTTLE; hard → CLOSED. No EWMA (sticky rsStatus).
    const REPL_LAG_SOFT_SEC = 15;
    const REPL_LAG_HARD_SEC = 30;
-   // paceMaker (pace / no-WT only): EWMA clear-rate → AIMD maxInFlight + light delay.
+   // paceMaker (pace / no-WT only): EWMA clear-rate → shared AIMD + light delay.
    // Rate samples use wall-clock windows + actual deletedCount (not drain-time clustering).
    const PACE_EWMA_ALPHA = 0.2;
    const PACE_AIMD_INCREASE_INTERVAL_MS = 1000; // slower probes — prefer mild stalls over peak rate
@@ -2399,8 +2396,9 @@
       /*
        *  Owns WT/pace FSM lets, lastSample, and the WT EWMA series. asyncPool
        *  calls reset/decide; the delete consumer calls noteBatchOk; sampler/attach
-       *  call noteSample. HUD congestion and AIMDs read snapshot() (ewma + sample);
+       *  call noteSample. HUD congestion and AIMD read snapshot() (ewma + sample);
        *  banner/pool sizing keep IIFE vitals (owningShards, numCores).
+       *  Shared AIMD (maxInFlight MD/AI); WT FSM vs pace delay stay separate gates.
        *  Do not mutate these fields from the pool.
        */
       let admissionState = 'OPEN'; // OPEN | THROTTLE | CLOSED | COOLDOWN | PACE
@@ -2415,7 +2413,7 @@
          "dirtyUpdatesUtil": null,
          "wtWriteTicketsUtil": null
       };
-      let lastSample = {}; // latest noteSample snapshot; AIMDs band on this, not IIFE vitals
+      let lastSample = {}; // latest noteSample snapshot; AIMD bands on this, not IIFE vitals
       // 'wt' = WiredTiger FSM (mongod, or worst collection-owning shard on mongos);
       // 'pace' = paceMaker when WT vitals unavailable.
       let admissionMode = 'wt';
@@ -2427,11 +2425,24 @@
       let pacePendingDocs = 0;       // deleted docs accumulated since last rate sample
       let paceDropStrikes = 0;       // consecutive below-drop windows
       let paceInWall = false;
-      let paceAimdLastIncreaseAt = 0;
       let paceLastMdAt = 0;          // cooldown gate after multiplicative decrease
       let paceAiGraceUntil = 0;      // post-AI grace — suppress MD while probe settles
       let paceRateBeforeAi = null;   // EWMA snapshot at last +1 (benefit check)
       let paceClimbExhausted = false; // probe didn't help — stop AI until MD
+
+      function aimdMd(now = Date.now()) {
+         maxInFlight = Math.max(1, Math.floor(maxInFlight / 2));
+         aimdLastIncreaseAt = now;
+      }
+
+      function aimdAi(now = Date.now(), intervalMs) {
+         if ((now - aimdLastIncreaseAt) >= intervalMs && maxInFlight < maxInFlightCap) {
+            maxInFlight += 1;
+            aimdLastIncreaseAt = now;
+            return true;
+         }
+         return false;
+      }
 
       function paceWarmupDelay() {
          return Math.floor(PACE_WARMUP_DELAY_MIN_MS + Math.random() * (PACE_WARMUP_DELAY_MAX_MS - PACE_WARMUP_DELAY_MIN_MS));
@@ -2445,7 +2456,7 @@
          paceDropStrikes = 0;
          paceInWall = false;
          const now = Date.now();
-         paceAimdLastIncreaseAt = now;
+         aimdLastIncreaseAt = now;
          paceLastMdAt = 0;
          paceAiGraceUntil = 0;
          paceRateBeforeAi = null;
@@ -2472,7 +2483,7 @@
             if (!improved) {
                // Keep current mif; just stop climbing. Stepping back caused concurrency cliffs.
                paceClimbExhausted = true;
-               paceAimdLastIncreaseAt = now;
+               aimdLastIncreaseAt = now;
                return;
             }
          }
@@ -2481,11 +2492,10 @@
             if (fromSample) {
                paceDropStrikes += 1;
                if (paceDropStrikes >= PACE_MD_STRIKES && !paceInWall) {
-                  maxInFlight = Math.max(1, Math.floor(maxInFlight / 2));
+                  aimdMd(now);
                   pacePeakRate = paceEwmaRate;
                   paceInWall = true;
                   paceLastMdAt = now;
-                  paceAimdLastIncreaseAt = now;
                   paceDropStrikes = 0;
                   paceRateBeforeAi = null;
                   paceClimbExhausted = false; // allow re-climb after congestion clears
@@ -2497,12 +2507,8 @@
          paceInWall = false;
          if (inAiGrace || paceClimbExhausted) return;
          const cooledDown = paceLastMdAt === 0 || (now - paceLastMdAt) >= PACE_MD_COOLDOWN_MS;
-         if (cooledDown
-               && (now - paceAimdLastIncreaseAt) >= PACE_AIMD_INCREASE_INTERVAL_MS
-               && maxInFlight < maxInFlightCap) {
+         if (cooledDown && aimdAi(now, PACE_AIMD_INCREASE_INTERVAL_MS)) {
             paceRateBeforeAi = paceEwmaRate;
-            maxInFlight += 1;
-            paceAimdLastIncreaseAt = now;
             paceAiGraceUntil = now + PACE_AI_GRACE_MS;
             paceDropStrikes = 0;
          }
@@ -2553,7 +2559,7 @@
           *  pace / no-WT admit gate: shortfall-scaled delay + light jitter.
           *  Zero delay → burst/choke; fully deterministic delay → synchronized
           *  longer M0 stalls. ±PACE_DELAY_JITTER desyncs admits. maxInFlight
-          *  owned by paceMakerAimd.
+          *  owned by the shared AIMD (paceMakerAimd).
           */
          admissionState = 'PACE';
          const now = Date.now();
@@ -2689,9 +2695,9 @@
                admissionState = 'OPEN';
          }
 
-         // AIMD on concurrency: MD once when entering CLOSED; AI only while sustained OPEN and soft signals calm.
+         // Shared AIMD: MD once when entering CLOSED; AI only while sustained OPEN and soft signals calm.
          if (admissionState === 'CLOSED' && prevState !== 'CLOSED') {
-            maxInFlight = Math.max(1, Math.floor(maxInFlight / 2));
+            aimdMd(now);
             closedSince = now;
          } else if (admissionState !== 'CLOSED') {
             closedSince = 0;
@@ -2699,9 +2705,8 @@
          if (admissionState === 'OPEN' && !blockAimdIncrease) {
             if (prevState !== 'OPEN') {
                aimdLastIncreaseAt = now; // grace period before first +1 after re-entering OPEN
-            } else if ((now - aimdLastIncreaseAt) >= AIMD_INCREASE_INTERVAL_MS && maxInFlight < maxInFlightCap) {
-               maxInFlight += 1;
-               aimdLastIncreaseAt = now;
+            } else {
+               aimdAi(now, AIMD_INCREASE_INTERVAL_MS);
             }
          }
 
@@ -2782,7 +2787,7 @@
       }
 
       function noteSample(sample) {
-         // Keep the snapshot for AIMDs and HUD; EWMA from its WT utils.
+         // Keep the snapshot for AIMD and HUD; EWMA from its WT utils.
          if (sample == null || typeof sample !== 'object') return;
          lastSample = sample;
          ewma.cacheUtil = ewmaStep(ewma.cacheUtil, sample.cacheUtil);
