@@ -1,20 +1,20 @@
 // Sample schema A, general purpose.
-// Plug-in listed from fuzzer.schemas. Generator expressions are strings.
-// genDocument still builds this shape in the script.
+// A string that starts with "=" is an expression. Other strings, numbers, and null are literals.
+// Expressions may use the preamble names oid, date, ts, idioma, and totalDocs.
 {
-   "_id": "oid",
+   "_id": "=oid",
    "schema": {
       "type": "A",
       "version": 1.0,
       "comment": "General purpose schema"
    },
-   "language": "idioma",
+   "language": "=idioma",
    // hashed shard key
-   "string": "$genRandStr($getRandIntInc(6, 24))",
+   "string": "=$genRandStr($getRandIntInc(6, 24))",
    "quote": {
       // idiomas[$getRandRatioInt([80, 0, 0, 5, 0, 3, 2])]
       // weights line up with the first seven labels in idiomas
-      "language": "idiomas[$getRandRatioInt([80, 0, 0, 5, 0, 3, 2])]"
+      "language": "=idiomas[$getRandRatioInt([80, 0, 0, 5, 0, 3, 2])]"
       // "txt": (() => {
       //    const lines = $getRandIntInc(2, 512);
       //    let string = '';
@@ -25,34 +25,34 @@
       // })()
    },
    "object": {
-      "oid": "oid",
-      "str": "$genRandAlpha($getRandIntInc(8, 16))",
-      "num": "+$getRandNum(-Math.pow(2, 12), Math.pow(2, 12)).toFixed(4)",
-      "nestedArray": ["$genArrayElements($getRandIntInc(0, 10))"]
+      "oid": "=oid",
+      "str": "=$genRandAlpha($getRandIntInc(8, 16))",
+      "num": "=+$getRandNum(-Math.pow(2, 12), Math.pow(2, 12)).toFixed(4)",
+      "nestedArray": ["=$genArrayElements($getRandIntInc(0, 10))"]
    },
-   "array": "$genArrayElements($getRandIntInc(0, 10))",
+   "array": "=$genArrayElements($getRandIntInc(0, 10))",
    // "objectArray": [
    //    { "nestedArray": "$genArrayElements($getRandIntInc(0, 10))" }
    // ],
    // "1dArray": [
    //    { "2dArray": "$genArrayElements($getRandIntInc(1, 10))" }
    // ],
-   "boolean": "$bool()",
+   "boolean": "=$bool()",
    // "code": "Code('() => {}')",
    // "codeScoped": "Code('() => {}', {})",
-   "date": "date",
-   "dateString": "date.toISOString()",
-   "timestamp": "ts",
+   "date": "=date",
+   "dateString": "=date.toISOString()",
+   "timestamp": "=ts",
    "null": null,
-   "int32": "$NumberInt($getRandIntInc(int32MinVal, int32MaxVal))",
-   "int64": "$NumberLong($getRandIntInc(int64MinVal, int64MaxVal))",
-   "double": "$getRandNum(-Math.pow(2, 12), Math.pow(2, 12))",
-   "decimal128": "$NumberDecimal($getRandNum(dec128MinVal, dec128MaxVal))",
-   "regex": "$getRandRegex()",
-   "bin": "BinData(0, UUID().base64())",
-   "uuid": "UUID()",
-   "md5": "MD5($genRandHex(32))",
-   "fle": "BinData(6, UUID().base64())",
+   "int32": "=$NumberInt($getRandIntInc(int32MinVal, int32MaxVal))",
+   "int64": "=$NumberLong($getRandIntInc(int64MinVal, int64MaxVal))",
+   "double": "=$getRandNum(-Math.pow(2, 12), Math.pow(2, 12))",
+   "decimal128": "=$NumberDecimal($getRandNum(dec128MinVal, dec128MaxVal))",
+   "regex": "=$getRandRegex()",
+   "bin": "=BinData(0, UUID().base64())",
+   "uuid": "=UUID()",
+   "md5": "=MD5($genRandHex(32))",
+   "fle": "=BinData(6, UUID().base64())",
    // "columnStore": fCV(5.2)
    //              ? BinData(7, $getRandIntInc(0, Math.pow(10, 4)),
    //                {
@@ -74,7 +74,7 @@
    //                ["sign", "verify"],
    //                ))
    //            : 'requires v7.0+',
-   "random": "+$getRandNum(0, totalDocs).toFixed(4)",
-   "symbol": "$genRandSymbol()",
-   "credit card": "$genRandCardNumber()"
+   "random": "=+$getRandNum(0, totalDocs).toFixed(4)",
+   "symbol": "=$genRandSymbol()",
+   "credit card": "=$genRandCardNumber()"
 }

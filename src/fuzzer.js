@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "0.15.0"
+ *  Version: "0.15.1"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,7 +19,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "0.15.0" };
+   const __script = { "name": "fuzzer.js", "version": "0.15.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -248,7 +248,7 @@
    /*
     *  User defined parameters.
     *  fuzzer-options.jsonc overlays these defaults.
-    *  fuzzer.schemas points at the sample plug-ins.
+    *  fuzzer.schemas points at the sample plug-ins genDocument realises.
     */
 
    const optionDefaults = {
@@ -500,6 +500,15 @@
             ? `Schema sample ${sample.file} (${detail})`
             : `Schema sample ${sample.file}`);
       });
+      if (schemaSamples.length === 0) {
+         console.log('\n[red][ERROR][/] fuzzer.schemas is empty');
+         return;
+      }
+      const ratioProblem = schemaRatioProblem(fuzzer.ratios, schemaSamples.length);
+      if (ratioProblem) {
+         console.log(`\n[red][ERROR][/] ${ratioProblem}`);
+         return;
+      }
       const plan = collectionPlan();
       if (plan.length > 0) {
          plan.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
@@ -620,13 +629,61 @@
       return reasons;
    }
 
+   function schemaRatioProblem(ratios, count) {
+      if (!Array.isArray(ratios) || ratios.length === 0)
+         return 'fuzzer.ratios must list a weight for each schema';
+      let slots = 0;
+      for (let idx = 0; idx < ratios.length; idx++) {
+         if (!(ratios[idx] > 0))
+            continue;
+         slots++;
+         if (idx >= count)
+            return `fuzzer.ratios can select schema ${idx} but only ${count} ${plural(count, 'schema file is', 'schema files are')} loaded`;
+      }
+      if (slots === 0)
+         return 'fuzzer.ratios are all zero';
+      return null;
+   }
+
+   function evalSchemaExpr(expr, scope) {
+      const names = Object.keys(scope);
+      const fn = new Function(...names, `"use strict"; return (${expr});`);
+      return fn(...names.map(name => scope[name]));
+   }
+
+   function realiseSchema(node, scope, path) {
+      if (Array.isArray(node))
+         return node.map((item, i) => realiseSchema(item, scope, `${path}[${i}]`));
+      if (isPlainObject(node)) {
+         const out = {};
+         Object.keys(node).forEach(key => {
+            out[key] = realiseSchema(node[key], scope, path ? `${path}.${key}` : key);
+         });
+         return out;
+      }
+      if (typeof node === 'string' && node.startsWith('=')) {
+         const expr = node.slice(1);
+         try {
+            return evalSchemaExpr(expr, scope);
+         } catch(e) {
+            throw new Error(`schema field ${path}: ${expr}: ${errText(e)}`);
+         }
+      }
+      return node;
+   }
+
    function genDocument({
          id = 'ts', range = 365.2422, offset = -300, interval = 7,
-         distribution = 'uniform', /* schemas = [], */ ratios = [1] } = {},
+         distribution = 'uniform', ratios = [1] } = {},
          timestamp) {
       /*
-       *  generate pseudo-random key values
+       *  Pick one loaded schema, then build only that document.
+       *  A string that starts with "=" is an expression.
        */
+      const index = $getRandRatioInt(ratios);
+      const sample = schemaSamples[index];
+      if (!sample)
+         throw new Error(`schema ratio index ${index} but only ${schemaSamples.length} ${plural(schemaSamples.length, 'schema file is', 'schema files are')} loaded`);
       const day = 86400;
       let secondsOffset;
       switch (distribution.toLowerCase()) {
@@ -664,248 +721,9 @@
       }
       const date = new Date(now + secondsOffset * 1000);
       const ts = new Timestamp({ "t": timestamp + secondsOffset, "i": 0 });
-      // fuzzer.schemas files are loaded above. This still builds A, B, and C.
-      let schemas = new Array();
-      schemas.push({
-         "_id": oid,
-         "schema": {
-            "type": "A",
-            "version": 1.0,
-            "comment": "General purpose schema"
-         },
-         "language": idioma,
-         "string": $genRandStr($getRandIntInc(6, 24)), // hashed shard key
-         "quote": {
-            "language": idiomas[
-               $getRandRatioInt([80, 0, 0, 5, 0, 3, 2])
-            ],
-            // "txt": (() => {
-            //    const lines = $getRandIntInc(2, 512);
-            //    let string = '';
-            //    for (let line = 0; line < lines; line++) {
-            //       string += `${$genRandStr($getRandIntInc(8, 24)) + $genRandSymbol()}`;
-            //    }
-            //    return string;
-            // })()
-         },
-         "object": {
-            "oid": oid,
-            "str": $genRandAlpha($getRandIntInc(8, 16)),
-            "num": +$getRandNum(
-               -Math.pow(2, 12),
-               Math.pow(2, 12)
-            ).toFixed(4),
-            "nestedArray": [$genArrayElements($getRandIntInc(0, 10))]
-         },
-         "array": $genArrayElements($getRandIntInc(0, 10)),
-         // "objectArray": [
-         //    { "nestedArray": $genArrayElements($getRandIntInc(0, 10)) }
-         // ],
-         // "1dArray": [
-         //    { "2dArray": $genArrayElements($getRandIntInc(1, 10)) }
-         // ],
-         "boolean": $bool(),
-         // "code": Code('() => {}'),
-         // "codeScoped": Code('() => {}', {}),
-         "date": date,
-         "dateString": date.toISOString(),
-         "timestamp": ts,
-         "null": null,
-         "int32": $NumberInt(
-            $getRandIntInc(int32MinVal, int32MaxVal)
-         ),
-         "int64": $NumberLong(
-            $getRandIntInc(int64MinVal, int64MaxVal)
-         ),
-         "double": $getRandNum(
-            -Math.pow(2, 12), Math.pow(2, 12)
-         ),
-         "decimal128": $NumberDecimal(
-            $getRandNum(dec128MinVal, dec128MaxVal)
-         ),
-         "regex": $getRandRegex(),
-         "bin": BinData(0, UUID().base64()),
-         "uuid": UUID(),
-         "md5": MD5($genRandHex(32)),
-         "fle": BinData(6, UUID().base64()),
-         // "columnStore": fCV(5.2)
-         //              ? BinData(7, $getRandIntInc(0, Math.pow(10, 4)),
-         //                {
-         //                   "unit": +$getRandNum(0, Math.pow(10, 6)).toFixed(2),
-         //                   "qty": $getRandIntInc(0, Math.pow(10, 4)),
-         //                   "price": [
-         //                      +$getRandNum(0, Math.pow(10, 4)).toFixed(2),
-         //                      $genRandCurrency()
-         //                   ]
-         //                })
-         //              : 'requires v5.2+',
-         // "sensitive": fCV(7.0)
-         //            ? BinData(8, window.crypto.subtle.generateKey(
-         //                {
-         //                   "name": "HMAC",
-         //                   "hash": { "name": "SHA-512" },
-         //                },
-         //                true,
-         //                ["sign", "verify"],
-         //                ))
-         //            : 'requires v7.0+',
-         "random": +$getRandNum(0, totalDocs).toFixed(4),
-         "symbol": $genRandSymbol(),
-         "credit card": $genRandCardNumber()
-      });
-      schemas.push({
-         "_id": oid,
-         "schema": {
-            "type": "B",
-            "version": 1.0,
-            "comment": "Time series schema"
-         },
-         "language": idioma,
-         "string": $genRandStr($getRandIntInc(6, 24)), // hashed shard key
-         "timeField": date,
-         "metaField": [
-            'Series 1',
-            'Series 2',
-            'Series 3'
-         ][$getRandRatioInt([70, 20, 10])],
-         "granularity": "hours",
-         "unit": +$getRandNum(0, Math.pow(10, 6)).toFixed(2),
-         "qty": $getRandIntInc(0, Math.pow(10, 4)),
-         "price": [
-            +$getRandNum(0, Math.pow(10, 4)).toFixed(2),
-            $genRandCurrency()
-         ]
-      });
-      schemas.push({
-         "_id": oid,
-         "schema": {
-            "type": "C",
-            "version": 1.0,
-            "comment": "GeoJSON schema"
-         },
-         "language": idioma,
-         "string": $genRandStr($getRandIntInc(6, 24)), // hashed shard key
-         "temperature": [
-            +$genNormal(15, 10).toFixed(1),
-            ['K', '°F', '°C'][$getRandIntInc(0, 2)]
-         ],
-         "dB": +$genNormal(20, 10).toFixed(3),
-         "status": [
-            'Active',
-            'Inactive',
-            null
-         ][$getRandRatioInt([80, 20, 1])],
-         "locality": $getRandCountry()['alpha-3 code'],
-         "location": { // GeoJSON Point
-            "type": "Point",
-            "coordinates": [
-               +$getRandNum(-180, 180).toFixed(4),
-               +$getRandNum(-90, 90).toFixed(4)
-         ] },
-         "lineString": { // GeoJSON LineString
-            "type": "LineString",
-            "coordinates": [[
-                  +$getRandNum(-180, 180).toFixed(4),
-                  +$getRandNum(-90, 90).toFixed(4)
-               ],[
-                  +$getRandNum(-180, 180).toFixed(4),
-                  +$getRandNum(-90, 90).toFixed(4)
-            ]]
-         },
-         "polygon": { // polygon with a single ring
-            "type": "Polygon",
-            "coordinates": [[
-               [0, 0],
-               [$getRandIntInc(0, 10), $getRandIntInc(0, 10)],
-               [$getRandIntInc(0, 10), $getRandIntInc(0, 10)],
-               [0, 0]
-            ]]
-         },
-         "polygonMulti": { // polygons with multiple rings
-            "type": "Polygon",
-            "coordinates": [[
-                  [0, 0],
-                  [$getRandIntInc(0, 10), $getRandIntInc(0, 10)],
-                  [$getRandIntInc(0, 10), $getRandIntInc(0, 10)],
-                  [0, 0]
-               ],[
-                  [4, 4],
-                  [$getRandIntInc(0, 10), $getRandIntInc(0, 10)],
-                  [$getRandIntInc(0, 10), $getRandIntInc(0, 10)],
-                  [4, 4]
-            ]]
-         },
-         "multiPoint": { // GeoJSON MultiPoint
-            "type": "MultiPoint",
-            "coordinates": [
-               [-73.9580, 40.8003],
-               [-73.9498, 40.7968],
-               [-73.9737, 40.7648],
-               [-73.9814, 40.7681]
-            ]
-         },
-         "multiLineString": { // GeoJSON MultiLineString
-            "type": "MultiLineString",
-            "coordinates": [[
-                  [-73.96943, 40.78519],
-                  [-73.96082, 40.78095]
-               ],[
-                  [-73.96415, 40.79229],
-                  [-73.95544, 40.78854]
-               ],[
-                  [-73.97162, 40.78205],
-                  [-73.96374, 40.77715]
-               ],[
-                  [-73.97880, 40.77247],
-                  [-73.97036, 40.76811]
-            ]]
-         },
-         "multiPolygon": { // GeoJSON MultiPolygon
-            "type": "MultiPolygon",
-            "coordinates": [[[
-                  [-73.958, 40.8003],
-                  [-73.9498, 40.7968],
-                  [-73.9737, 40.7648],
-                  [-73.9814, 40.7681],
-                  [-73.958, 40.8003]
-               ]],
-               [[
-                  [-73.958, 40.8003],
-                  [-73.9498, 40.7968],
-                  [-73.9737, 40.7648],
-                  [-73.958, 40.8003]
-            ]]]
-         },
-         "geoCollection": { // GeoJSON GeometryCollection
-            "type": "GeometryCollection",
-            "geometries": [{
-               "type": "MultiPoint",
-               "coordinates": [
-                  [-73.9580, 40.8003],
-                  [-73.9498, 40.7968],
-                  [-73.9737, 40.7648],
-                  [-73.9814, 40.7681]
-               ]
-            },{
-               "type": "MultiLineString",
-               "coordinates": [[
-                     [-73.9694, 40.7851],
-                     [-73.9608, 40.7809]
-                  ],[
-                     [-73.9641, 40.7922],
-                     [-73.9554, 40.7885]
-                  ],[
-                     [-73.9716, 40.7820],
-                     [-73.9637, 40.7771]
-                  ],[
-                     [-73.9788, 40.7724],
-                     [-73.9703, 40.7681]
-               ]]
-            }]
-         }
-      });
-
-      return schemas[$getRandRatioInt(ratios)];
+      return realiseSchema(sample.spec, {
+         oid, date, ts, idioma, totalDocs
+      }, sample.file);
    }
 
    function dropNS() {

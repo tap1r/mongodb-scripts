@@ -1,31 +1,31 @@
 // Sample schema C, GeoJSON.
-// Plug-in listed from fuzzer.schemas. Generator expressions are strings.
-// genDocument still builds this shape in the script.
+// A string that starts with "=" is an expression. Other strings, numbers, and null are literals.
+// Expressions may use the preamble names oid, date, ts, idioma, and totalDocs.
 // Point, line, and the single-ring polygons draw coordinates.
 // The multi* geometries and the geometry collection use fixed positions.
 {
-   "_id": "oid",
+   "_id": "=oid",
    "schema": {
       "type": "C",
       "version": 1.0,
       "comment": "GeoJSON schema"
    },
-   "language": "idioma",
+   "language": "=idioma",
    // hashed shard key
-   "string": "$genRandStr($getRandIntInc(6, 24))",
+   "string": "=$genRandStr($getRandIntInc(6, 24))",
    "temperature": [
-      "+$genNormal(15, 10).toFixed(1)",
-      "['K', '°F', '°C'][$getRandIntInc(0, 2)]"
+      "=+$genNormal(15, 10).toFixed(1)",
+      "=['K', '°F', '°C'][$getRandIntInc(0, 2)]"
    ],
-   "dB": "+$genNormal(20, 10).toFixed(3)",
-   "status": "['Active', 'Inactive', null][$getRandRatioInt([80, 20, 1])]",
-   "locality": "$getRandCountry()['alpha-3 code']",
+   "dB": "=+$genNormal(20, 10).toFixed(3)",
+   "status": "=['Active', 'Inactive', null][$getRandRatioInt([80, 20, 1])]",
+   "locality": "=$getRandCountry()['alpha-3 code']",
    // GeoJSON Point
    "location": {
       "type": "Point",
       "coordinates": [
-         "+$getRandNum(-180, 180).toFixed(4)",
-         "+$getRandNum(-90, 90).toFixed(4)"
+         "=+$getRandNum(-180, 180).toFixed(4)",
+         "=+$getRandNum(-90, 90).toFixed(4)"
       ]
    },
    // GeoJSON LineString
@@ -33,12 +33,12 @@
       "type": "LineString",
       "coordinates": [
          [
-            "+$getRandNum(-180, 180).toFixed(4)",
-            "+$getRandNum(-90, 90).toFixed(4)"
+            "=+$getRandNum(-180, 180).toFixed(4)",
+            "=+$getRandNum(-90, 90).toFixed(4)"
          ],
          [
-            "+$getRandNum(-180, 180).toFixed(4)",
-            "+$getRandNum(-90, 90).toFixed(4)"
+            "=+$getRandNum(-180, 180).toFixed(4)",
+            "=+$getRandNum(-90, 90).toFixed(4)"
          ]
       ]
    },
@@ -47,8 +47,8 @@
       "type": "Polygon",
       "coordinates": [[
          [0, 0],
-         ["$getRandIntInc(0, 10)", "$getRandIntInc(0, 10)"],
-         ["$getRandIntInc(0, 10)", "$getRandIntInc(0, 10)"],
+         ["=$getRandIntInc(0, 10)", "=$getRandIntInc(0, 10)"],
+         ["=$getRandIntInc(0, 10)", "=$getRandIntInc(0, 10)"],
          [0, 0]
       ]]
    },
@@ -58,14 +58,14 @@
       "coordinates": [
          [
             [0, 0],
-            ["$getRandIntInc(0, 10)", "$getRandIntInc(0, 10)"],
-            ["$getRandIntInc(0, 10)", "$getRandIntInc(0, 10)"],
+            ["=$getRandIntInc(0, 10)", "=$getRandIntInc(0, 10)"],
+            ["=$getRandIntInc(0, 10)", "=$getRandIntInc(0, 10)"],
             [0, 0]
          ],
          [
             [4, 4],
-            ["$getRandIntInc(0, 10)", "$getRandIntInc(0, 10)"],
-            ["$getRandIntInc(0, 10)", "$getRandIntInc(0, 10)"],
+            ["=$getRandIntInc(0, 10)", "=$getRandIntInc(0, 10)"],
+            ["=$getRandIntInc(0, 10)", "=$getRandIntInc(0, 10)"],
             [4, 4]
          ]
       ]

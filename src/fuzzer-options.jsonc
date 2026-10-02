@@ -11,7 +11,8 @@
 // When indexes omits both "object.$**" and "object.oid", the script appends
 // { "object.$**": 1 } on fCV 4.2+, otherwise { "object.oid": 1 }.
 // storageEngine is applied by the script when idxCompressor is not "default".
-// Sample schemas are pluggable files. genDocument still builds shapes A, B, and C.
+// Sample schemas are pluggable files. genDocument picks one, then builds only that document.
+// A schema string that starts with "=" is an expression. Other strings are literals.
 {
    "dbName": "database",
    "collName": "collection",
