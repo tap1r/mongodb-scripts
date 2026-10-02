@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.15.1"
+ *  Version: "0.15.2"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -118,7 +118,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.15.1" };
+   const __script = { "name": "dbstats.js", "version": "0.15.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -158,7 +158,15 @@
    }
    __dbstatsCliFile = isDbstatsCliFile();
    const jsonCli = (typeof options !== 'undefined' && options && options.output && options.output.format === 'json');
-   if (__dbstatsCliFile && !jsonCli) console.log(`\n\n[yellow]${__comment}[/]`);
+   if (__dbstatsCliFile && !jsonCli) {
+      if (typeof __mdblibShellIncompatible !== 'undefined' && __mdblibShellIncompatible) {
+         console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${__mdblibShellIncompatible}[/]`);
+      }
+      if (typeof __mdblibServerUnsupported !== 'undefined' && __mdblibServerUnsupported) {
+         console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${__mdblibServerUnsupported}[/]`);
+      }
+      console.log(`\n\n[yellow]${__comment}[/]`);
+   }
 })();
 
 (() => {
@@ -350,8 +358,7 @@
       let { 'db': dbFilter, 'collection': collFilter, 'system': systemOpt = true } = filterOptions;
       collFilter = new RegExp(collFilter);
       const acceptCollName = systemCollectionFilter(systemOpt);
-      const dbPath = new DbPathStats();
-      dbPath.init();
+      const dbPath = new DbPathStats({ "host": HostNode.discover() });
 
       const dbNames = stableSort(getDBNames(dbFilter), compareBy(v => v, 1));
       const jsonCli = outputOptions.format === 'json';
@@ -1110,7 +1117,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.15.1',
+         "version": '0.15.2',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
