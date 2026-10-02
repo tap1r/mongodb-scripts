@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.13.5"
+    *  Version: "0.13.6"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -69,7 +69,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.13.5" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.13.6" };
    let vitals = {};
    let vitalsSampling = false;
    let startupLogDone = false; // after writeConsole of the startup banner; attach WARN is banner-only until then
@@ -1180,8 +1180,10 @@
 
       function foldWorstShardVitals(namedSamples = []) {
          /*
-          *  Conservative fold: max of util/lag, OR of boolean pressure, min of
-          *  eviction targets/triggers so any owning primary can trip the FSM.
+          *  Conservative fold from VITALS_FOLD_* (next to vitalsFromServerStatus):
+          *  max util/lag, OR boolean pressure, min eviction knobs so any owning
+          *  primary can trip the FSM. checkpointStatus is ranked; worstShard is
+          *  the highest dirty/cache/lag sample.
           */
          const nums = key => namedSamples.map(s => +s[key]).filter(n => !Number.isNaN(n));
          const maxNum = (key, d = 0) => {
@@ -1211,32 +1213,14 @@
                worst = s;
             }
          }
-         return {
-            "cacheSizeBytes": maxNum('cacheSizeBytes'),
-            "dirtyBytes": maxNum('dirtyBytes'),
-            "cacheUtil": maxNum('cacheUtil'),
-            "dirtyUtil": maxNum('dirtyUtil'),
-            "dirtyUpdatesUtil": maxNum('dirtyUpdatesUtil'),
-            "wtWriteTicketsUtil": maxNum('wtWriteTicketsUtil'),
-            "activeReplLag": maxNum('activeReplLag'),
-            "activeFlowControl": namedSamples.some(s => s.activeFlowControl),
-            "activeIndexBuilds": namedSamples.some(s => s.activeIndexBuilds),
-            "activeRangeDeleter": namedSamples.some(s => s.activeRangeDeleter),
-            "backupCursorOpen": namedSamples.some(s => s.backupCursorOpen),
-            "activeCheckpoint": namedSamples.some(s => s.activeCheckpoint),
-            "slowRecentCheckpoint": namedSamples.some(s => s.slowRecentCheckpoint),
-            "checkpointStatus": checkpointStatus,
-            "evictionDirtyTarget": minNum('evictionDirtyTarget', 5),
-            "evictionDirtyTrigger": minNum('evictionDirtyTrigger', 20),
-            "evictionTarget": minNum('evictionTarget', 80),
-            "evictionTrigger": minNum('evictionTrigger', 95),
-            "evictionUpdatesTarget": minNum('evictionUpdatesTarget', 2.5),
-            "evictionUpdatesTrigger": minNum('evictionUpdatesTrigger', 10),
-            "evictionCheckpointTarget": minNum('evictionCheckpointTarget', 1),
-            "checkpointIntervalMS": minNum('checkpointIntervalMS', 60000),
-            "worstShard": worst?.id,
-            "owningShards": namedSamples.map(s => s.id)
-         };
+         const folded = {};
+         for (const key of VITALS_FOLD_MAX) folded[key] = maxNum(key);
+         for (const key of VITALS_FOLD_OR) folded[key] = namedSamples.some(s => s[key]);
+         for (const [key, d] of VITALS_FOLD_MIN) folded[key] = minNum(key, d);
+         folded["checkpointStatus"] = checkpointStatus;
+         folded["worstShard"] = worst?.id;
+         folded["owningShards"] = namedSamples.map(s => s.id);
+         return folded;
       }
 
       async function sample({ reconcile = true } = {}) {
@@ -2285,6 +2269,28 @@
          ...eviction
       };
    }
+
+   // Fold ops for vitalsFromServerStatus keys (plus eviction spread). checkpointStatus is ranked.
+   const VITALS_FOLD_MAX = [
+      "cacheSizeBytes", "dirtyBytes", "cacheUtil", "dirtyUtil", "dirtyUpdatesUtil",
+      "wtWriteTicketsUtil", "activeReplLag", "checkpointRuntimeRatio"
+   ];
+   const VITALS_FOLD_OR = [
+      "activeFlowControl", "activeIndexBuilds", "activeRangeDeleter",
+      "backupCursorOpen", "activeCheckpoint", "slowRecentCheckpoint"
+   ];
+   const VITALS_FOLD_MIN = [
+      ["evictionDirtyTarget", 5],
+      ["evictionDirtyTrigger", 20],
+      ["evictionTarget", 80],
+      ["evictionTrigger", 95],
+      ["evictionUpdatesTarget", 2.5],
+      ["evictionUpdatesTrigger", 10],
+      ["evictionCheckpointTarget", 1],
+      ["checkpointIntervalMS", 60000],
+      ["evictionThreadsMin", 4],
+      ["evictionThreadsMax", 4]
+   ];
 
    async function congestionMonitor() {
       /*
