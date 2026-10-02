@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.20.1"
+ *  Version: "0.21.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.20.1"
+      "version": "0.21.0"
 });
 
 /*  Notes:
@@ -42,6 +42,9 @@ if (typeof __lib === 'undefined') (
  *    construct from those DTOs. HostNode owns host identity; DbPathStats
  *    composes it. There is no MetaStats façade. TopologySnapshot waits on
  *    discovery.
+ *  - Catalog identity first, stats on demand: collection.fetchStats(),
+ *    database.fetchAllStats({ concurrency }), dbPath.materialize({ concurrency }).
+ *    Cache _statsPromise per collection. Callers materialise then serialise.
  */
 
 function isMongosh() {
@@ -488,9 +491,16 @@ class ViewRef {
 }
 
 class CollectionStats extends StorageMetrics {
+   /*
+    *  Catalog identity first (name, type, dbName). Storage fields stay at
+    *  constructor defaults until fetchStats / applyCollStats. type is kept
+    *  so listedCollectionCount can exclude timeseries after stats land.
+    */
    constructor(dto = {}) {
       super(dto);
       this.name = dto.name || '';
+      this.dbName = dto.dbName || '';
+      this.type = dto.type != null && dto.type !== '' ? dto.type : 'collection';
       this.compressor = dto.compressor != null ? dto.compressor : 'none';
       this.internalPageSize = dto.internalPageSize;
       this.allocUnit = (typeof dto.allocUnit === 'number' && dto.allocUnit > 0)
@@ -506,11 +516,76 @@ class CollectionStats extends StorageMetrics {
       this.totalIndexBytesReusableComplete = dto.totalIndexBytesReusableComplete !== false;
       this.statsIncomplete = dto.statsIncomplete === true;
       this.statsError = dto.statsError || null;
+      this.statsLoaded = dto.statsLoaded === true;
+      Object.defineProperty(this, '_statsPromise', {
+         "value": null,
+         "writable": true,
+         "enumerable": false,
+         "configurable": true
+      });
+   }
+   static catalogEntry({ name = '', type = 'collection', dbName = '' } = {}) {
+      return new CollectionStats({
+         "name": name || '',
+         "type": type != null && type !== '' ? type : 'collection',
+         "dbName": dbName || '',
+         "statsLoaded": false
+      });
    }
    static from(raw, nameFallback = '') {
       const dto = parseCollStats(raw || {});
       if (nameFallback && !dto.name) dto.name = nameFallback;
-      return new CollectionStats(dto);
+      const collection = new CollectionStats(dto);
+      collection.statsLoaded = true;
+      return collection;
+   }
+   applyCollStats(raw, nameFallback = '') {
+      const dto = parseCollStats(raw || {});
+      this.dataSize = dto.dataSize;
+      this.storageSize = dto.storageSize;
+      this.freeStorageSize = dto.freeStorageSize;
+      this.objects = dto.objects;
+      this.orphans = dto.orphans;
+      this.totalIndexSize = dto.totalIndexSize;
+      this.totalIndexBytesReusable = dto.totalIndexBytesReusable;
+      this.name = dto.name || nameFallback || this.name;
+      this.compressor = dto.compressor != null ? dto.compressor : 'none';
+      this.internalPageSize = dto.internalPageSize;
+      this.allocUnit = (typeof dto.allocUnit === 'number' && dto.allocUnit > 0)
+                     ? dto.allocUnit
+                     : ((typeof dto.internalPageSize === 'number' && dto.internalPageSize > 0)
+                        ? dto.internalPageSize
+                        : WIREDTIGER_MIN_ALLOC_SIZE);
+      this.indexes = Array.isArray(dto.indexes)
+         ? dto.indexes.map(idx => (idx instanceof IndexStats) ? idx : new IndexStats(idx))
+         : [];
+      this.nindexes = dto.nindexes != null ? dto.nindexes : this.indexes.length;
+      this.freeStorageComplete = dto.freeStorageComplete !== false;
+      this.totalIndexBytesReusableComplete = dto.totalIndexBytesReusableComplete !== false;
+      this.statsIncomplete = dto.statsIncomplete === true;
+      this.statsError = dto.statsError || null;
+      this.statsLoaded = true;
+      return this;
+   }
+   async fetchStats(dbName) {
+      if (this.statsLoaded) return this;
+      if (this._statsPromise) return this._statsPromise;
+      const collName = this.name;
+      if (dbName) this.dbName = dbName;
+      const nsDb = this.dbName
+         || ((typeof db !== 'undefined' && db && typeof db.getName === 'function')
+            ? db.getName()
+            : '');
+      this._statsPromise = (async () => {
+         try {
+            const raw = await $collStats(nsDb, collName) || { "name": collName };
+            this.applyCollStats(raw, collName);
+         } catch (_) {
+            this.applyCollStats({ "name": `${collName} (unavailable)` }, collName);
+         }
+         return this;
+      })();
+      return this._statsPromise;
    }
 }
 
@@ -533,6 +608,32 @@ class DatabaseStats extends StorageMetrics {
       const database = new DatabaseStats(parseDbStats(raw || {}));
       if (Array.isArray(extra.shards)) database.shards = extra.shards;
       return database;
+   }
+   async fetchAllStats({ concurrency, onProgress } = {}) {
+      /*
+       *  Bounded $collStats pool for this DB. Views stay nameOnly.
+       *  Wraps plain {name,type} catalog rows as CollectionStats shells.
+       */
+      const dbName = this.name;
+      this.collections = (this.collections || []).map(entry => {
+         if (entry instanceof CollectionStats) {
+            if (!entry.dbName) entry.dbName = dbName;
+            return entry;
+         }
+         return CollectionStats.catalogEntry({
+            "name": entry && entry.name,
+            "type": entry && entry.type,
+            "dbName": dbName
+         });
+      });
+      const targets = this.collections.filter(c => c && c.name && c.type !== 'view');
+      const pool = (Number.isFinite(+concurrency) && +concurrency > 0)
+         ? Math.floor(+concurrency)
+         : 8;
+      if (targets.length) {
+         await mapPool(targets, pool, coll => coll.fetchStats(dbName), onProgress);
+      }
+      return this;
    }
 }
 
@@ -600,6 +701,24 @@ class DbPathStats extends StorageMetrics {
    get proc() { return this.host && this.host.proc; }
    get dbPath() { return this.host && this.host.dbPath; }
    get shards() { return (this.host && this.host.shards) || []; }
+   async materialize({ concurrency, onProgress, onDatabase } = {}) {
+      /*
+       *  One DB at a time (P1): fetchAllStats then onDatabase, then the next
+       *  DB. Not a flat cluster-wide $collStats queue. $stats is the caller's
+       *  (buildDatabaseMeta), not this walk.
+       */
+      const pool = (Number.isFinite(+concurrency) && +concurrency > 0)
+         ? Math.floor(+concurrency)
+         : 8;
+      for (const database of (this.databases || [])) {
+         const progress = (typeof onProgress === 'function')
+            ? (p => onProgress({ "database": database, ...p }))
+            : undefined;
+         await database.fetchAllStats({ "concurrency": pool, "onProgress": progress });
+         if (typeof onDatabase === 'function') onDatabase(database);
+      }
+      return this;
+   }
 }
 
 function formatHudTime(s) {
@@ -1339,14 +1458,37 @@ function $genRandStr(len = 1) {
    return res;
 }
 
-function $genRandWord() { // TBA
-   /*
-    *  generate random word from a dictionary
-    */
-   const dict = '/usr/share/dict/words'; // /path/to/dictionary
-   let word = '';
+const phraseDet = ['the', 'a', 'one', 'some', 'each'];
+const phraseAdj = ['quiet', 'small', 'red', 'cold', 'bright', 'narrow', 'empty', 'heavy'];
+const phraseNoun = ['river', 'engine', 'garden', 'stone', 'window', 'market', 'bridge', 'forest', 'signal', 'harbor'];
+const phraseVerb = ['holds', 'finds', 'opens', 'leaves', 'carries', 'watches', 'follows', 'marks'];
+const phrasePrep = ['in', 'on', 'under', 'near', 'with', 'beside'];
+const phraseWords = phraseDet.concat(phraseAdj, phraseNoun, phraseVerb, phrasePrep);
 
-   return word;
+function $genRandWord(list) {
+   /*
+    *  pick one built-in word, or one entry from list
+    */
+   const words = (Array.isArray(list) && list.length > 0) ? list : phraseWords;
+   return words[$getRandInt(0, words.length)];
+}
+
+function $genRandPhrase(sentences) {
+   /*
+    *  one to three English sentences for a text index
+    *  an explicit count is capped at 8
+    */
+   const n = (sentences > 0 && Number.isFinite(+sentences))
+      ? Math.min($floor(+sentences), 8)
+      : $getRandIntInc(1, 3);
+   const out = [];
+   for (let i = 0; i < n; i++) {
+      const sentence = ($getRandInt(0, 2) === 0)
+         ? `${$genRandWord(phraseDet)} ${$genRandWord(phraseAdj)} ${$genRandWord(phraseNoun)} ${$genRandWord(phraseVerb)} ${$genRandWord(phraseDet)} ${$genRandWord(phraseNoun)}`
+         : `${$genRandWord(phraseNoun)} ${$genRandWord(phraseVerb)} ${$genRandWord(phrasePrep)} ${$genRandWord(phraseDet)} ${$genRandWord(phraseAdj)} ${$genRandWord(phraseNoun)}`;
+      out.push(sentence.charAt(0).toUpperCase() + sentence.slice(1) + '.');
+   }
+   return out.join(' ');
 }
 
 function $genRandAlpha(len = 1) {

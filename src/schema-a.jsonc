@@ -14,7 +14,8 @@
    "quote": {
       // idiomas[$getRandRatioInt([80, 0, 0, 5, 0, 3, 2])]
       // weights line up with the first seven labels in idiomas
-      "language": "=idiomas[$getRandRatioInt([80, 0, 0, 5, 0, 3, 2])]"
+      "language": "=idiomas[$getRandRatioInt([80, 0, 0, 5, 0, 3, 2])]",
+      "txt": "=$genRandPhrase()"
       // "txt": (() => {
       //    const lines = $getRandIntInc(2, 512);
       //    let string = '';
