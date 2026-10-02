@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.18.1"
+ *  Version: "0.18.2"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -125,7 +125,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.18.1" };
+   const __script = { "name": "dbstats.js", "version": "0.18.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -791,7 +791,6 @@
       database.namespaces = collections.length + views.length;
       const nidx = collections.reduce((s, c) => s + collectionIndexCount(c), 0);
       database.nindexes = nidx;
-      database.indexes = nidx;
       rollupDatabaseFreeFromCollStats(database);
       database.freeStorageComplete = false;
       database.totalIndexBytesReusableComplete = false;
@@ -910,27 +909,25 @@
             dbPath.ncollections = zeros;
             dbPath.nviews = zeros.slice();
             dbPath.namespaces = zeros.slice();
-            dbPath.indexes = zeros.slice();
-            dbPath.nindexes = dbPath.indexes;
+            dbPath.nindexes = zeros.slice();
          }
          return dbPath;
       }
       const shardCounts = nShards > 0 && databases.every(d =>
          Array.isArray(d.ncollections) && Array.isArray(d.nviews) && Array.isArray(d.namespaces)
-            && (Array.isArray(d.indexes) || Array.isArray(d.nindexes))
+            && Array.isArray(d.nindexes)
       );
       if (shardCounts) {
          dbPath.ncollections = sumPerShard(databases.map(d => d.ncollections), nShards);
          dbPath.nviews = sumPerShard(databases.map(d => d.nviews), nShards);
          dbPath.namespaces = sumPerShard(databases.map(d => d.namespaces), nShards);
-         dbPath.indexes = sumPerShard(databases.map(d => Array.isArray(d.indexes) ? d.indexes : d.nindexes), nShards);
-         dbPath.nindexes = dbPath.indexes;
+         dbPath.nindexes = sumPerShard(databases.map(d => d.nindexes), nShards);
       } else {
          dbPath.ncollections = databases.reduce((s, d) => s + countTotal(d.ncollections), 0);
          dbPath.nviews = databases.reduce((s, d) => s + countTotal(d.nviews), 0);
          dbPath.namespaces = databases.reduce((s, d) => s + countTotal(d.namespaces), 0);
          dbPath.nindexes = databases.reduce(
-            (s, d) => s + countTotal(d.nindexes != null ? d.nindexes : d.indexes), 0
+            (s, d) => s + countTotal(d.nindexes), 0
          );
       }
       dbPath.dataSize = databases.reduce((s, d) => s + d.dataSize, 0);
@@ -1241,7 +1238,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.18.1',
+         "version": '0.18.2',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
