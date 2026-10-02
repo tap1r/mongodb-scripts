@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.13.1"
+    *  Version: "0.13.2"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -69,7 +69,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.13.1" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.13.2" };
    let vitals = {};
    let vitalsSampling = false;
    let startupLogDone = false; // after writeConsole of the startup banner; attach WARN is banner-only until then
@@ -3099,12 +3099,6 @@
       let batchesDone = 0;
       let docsDeleted = 0;
       let batchesFailed = 0;
-      let hudSnap = {
-         "admission": admissionCtl.snapshot(),
-         "poolSize": concurrency,
-         "executing": 0,
-         "buffered": 0
-      };
       const { 'value': initialBatch, 'done': initialEmptyBatch } = await deletionList.next();
       if (initialEmptyBatch === true) {
          emit('\tNo matching documents found to match the filter, double-check the namespace and filter');
@@ -3113,6 +3107,14 @@
       emit(interactive
          ? `[blue][INFO][/] HUD: congestion / admission / pool — no % complete or ETA`
          : `[INFO] status: elapsed / congestion / admission / pool (plain, no bars) — no % complete or ETA`);
+      // First paint after reset+decide so maxInFlight is the pool cap (or pace 1/4), not factory 1/1.
+      admissionCtl.reset(admissionCtl.mode, concurrency);
+      let hudSnap = {
+         "admission": admissionCtl.decide(),
+         "poolSize": concurrency,
+         "executing": 0,
+         "buffered": 0
+      };
       hud.start({
          render() {
             return renderHud({
