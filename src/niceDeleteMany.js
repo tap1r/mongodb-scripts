@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.13.0"
+    *  Version: "0.13.1"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -68,7 +68,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.13.0" };
+   const __script = { "name": "niceDeleteMany.js", "version": "0.13.1" };
    let vitals = {};
    let vitalsSampling = false;
    let startupLogDone = false; // after writeConsole of the startup banner; attach WARN is banner-only until then
@@ -510,10 +510,11 @@
       return (okBatches * (bucketSizeLimit|0)) / elapsedSec;
    }
 
-   function renderCongestion(snap, vitals, admission) {
+   function renderCongestion(snap, admission) {
       /*
        *  Pace vs WT congestion line. Fill, flags (ckpt/flow/idx/range/backup/lag/worstShard),
-       *  and labels; drawing math stays in renderHud.
+       *  and labels from snapshot() (ewma + lastSample). Drawing math stays in renderHud.
+       *  Banner owningShards / numCores stay on IIFE vitals.
        */
       let congMetric = 'n/a';
       let congDetail = '';
@@ -526,12 +527,13 @@
          congDetail = `(${why}; paceMaker)`;
          return { congMetric, congDetail, congStatus, congFill };
       }
-      const dirtyTarget = vitals.evictionDirtyTarget ?? 5;
-      const dirtyTrigger = vitals.evictionDirtyTrigger ?? 20;
-      const updatesTarget = vitals.evictionUpdatesTarget ?? 2.5;
-      const updatesTrigger = vitals.evictionUpdatesTrigger ?? 10;
-      const dirtyUtil = snap.ewma?.dirtyUtil ?? vitals.dirtyUtil;
-      const dirtyUpdatesUtil = snap.ewma?.dirtyUpdatesUtil ?? vitals.dirtyUpdatesUtil;
+      const sample = snap.sample ?? {};
+      const dirtyTarget = sample.evictionDirtyTarget ?? 5;
+      const dirtyTrigger = sample.evictionDirtyTrigger ?? 20;
+      const updatesTarget = sample.evictionUpdatesTarget ?? 2.5;
+      const updatesTrigger = sample.evictionUpdatesTrigger ?? 10;
+      const dirtyUtil = snap.ewma?.dirtyUtil ?? sample.dirtyUtil;
+      const dirtyUpdatesUtil = snap.ewma?.dirtyUpdatesUtil ?? sample.dirtyUpdatesUtil;
       const dirtyFill = fillProgress(dirtyUtil, dirtyTarget, dirtyTrigger);
       const updatesFill = fillProgress(dirtyUpdatesUtil, updatesTarget, updatesTrigger);
       const peakIsUpdates = updatesFill > dirtyFill;
@@ -546,14 +548,14 @@
          : peakFill >= THROTTLE_ENTER_FRAC ? 'medium'
          : 'low';
       const flags = [];
-      if (vitals.checkpointStatus === 'high' || vitals.activeCheckpoint) flags.push('ckpt');
+      if (sample.checkpointStatus === 'high' || sample.activeCheckpoint) flags.push('ckpt');
       if (admission.flowControl) flags.push('flow');
       if (admission.indexBuilds) flags.push('idx');
       if (admission.rangeDeleter) flags.push('range');
       if (admission.backupCursor) flags.push('backup');
-      const lag = admission.replLag ?? vitals.activeReplLag ?? 0;
+      const lag = admission.replLag ?? sample.activeReplLag ?? 0;
       if (lag > 0) flags.push(`lag ${Math.round(lag)}s`);
-      if (vitals.worstShard) flags.push(vitals.worstShard);
+      if (sample.worstShard) flags.push(sample.worstShard);
       const flagTxt = flags.length ? `  ${flags.join(' ')}` : '';
       if (peakUtil == null || Number.isNaN(+peakUtil)) {
          congDetail = '(no WT)';
@@ -601,7 +603,7 @@
          `   ${hudLabel('deleted')}  ${hudValue(fmtNum(docsDeleted))}` +
          `   ${hudLabel('rate')}  ${hudValue(fmtRate(rate))}` + paceBit;
 
-      const { congMetric, congDetail, congStatus, congFill } = renderCongestion(snap, vitals, admission);
+      const { congMetric, congDetail, congStatus, congFill } = renderCongestion(snap, admission);
 
       const closedSec = (state === 'CLOSED' && snap.closedSince > 0)
          ? `  ${hudLabel('closed')} ${hudValue(`${Math.round((Date.now() - snap.closedSince) / 1000)}s`)}`
@@ -2385,10 +2387,11 @@
 
    function createAdmissionController({ onWarn } = {}) {
       /*
-       *  Owns WT/pace FSM lets and the WT EWMA series. asyncPool calls
-       *  reset/decide; the delete consumer calls noteBatchOk; sampler/attach
-       *  call noteSample. HUD/banner/attach use snapshot() and mode/reason/detail
-       *  getters. Do not mutate these fields from the pool.
+       *  Owns WT/pace FSM lets, lastSample, and the WT EWMA series. asyncPool
+       *  calls reset/decide; the delete consumer calls noteBatchOk; sampler/attach
+       *  call noteSample. HUD congestion and AIMDs read snapshot() (ewma + sample);
+       *  banner/pool sizing keep IIFE vitals (owningShards, numCores).
+       *  Do not mutate these fields from the pool.
        */
       let admissionState = 'OPEN'; // OPEN | THROTTLE | CLOSED | COOLDOWN | PACE
       let admissionCooldownUntil = 0;
@@ -2769,7 +2772,7 @@
       }
 
       function noteSample(sample) {
-         // Keep the snapshot for AIMDs; EWMA from its WT utils. Sampler/attach call after assigning IIFE vitals.
+         // Keep the snapshot for AIMDs and HUD; EWMA from its WT utils.
          if (sample == null || typeof sample !== 'object') return;
          lastSample = sample;
          ewma.cacheUtil = ewmaStep(ewma.cacheUtil, sample.cacheUtil);
@@ -2794,6 +2797,7 @@
                "dirtyUpdatesUtil": ewma.dirtyUpdatesUtil,
                "wtWriteTicketsUtil": ewma.wtWriteTicketsUtil
             },
+            "sample": lastSample,
             "paceEwmaRate": paceEwmaRate,
             "pacePeakRate": pacePeakRate,
             "paceInWall": paceInWall
