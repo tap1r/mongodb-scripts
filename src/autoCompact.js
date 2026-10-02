@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "0.4.38"
+    *  Version: "1.0.0"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -12,7 +12,7 @@
     *  Notes:
     *  - automates the autoCompact command with monitoring (https://www.mongodb.com/docs/v8.0/reference/command/autoCompact/)
     *  - mongosh only; MongoDB 8.0+ WiredTiger mongod (not mongos); FCV 8.0+ (binary 8 with FCV 7 is rejected). Do not top-level-await this IIFE (rewriter SyntaxError)
-    *  - Atlas M0/Flex: isAtlasPlatform('sharedTier') fails fast; serverless platform string kept (deprecated). https://www.mongodb.com/docs/atlas/unsupported-commands/
+    *  - Atlas M0/Flex fails fast; serverless platform string kept (deprecated). https://www.mongodb.com/docs/atlas/unsupported-commands/
     *  - per mongod only (not replicated); excludes local.oplog.rs
     *  - { autoCompact: true } (default) enables; { autoCompact: false } disables and exits (no log tail)
     *  - freeSpaceTargetMB passthrough (server default 20); runOnce defaults to true (opposite of the server)
@@ -41,7 +41,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "0.4.38" };
+   const __script = { "name": "autoCompact.js", "version": "1.0.0" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (from mdblib.js)
    const ansiTags = [
@@ -145,7 +145,7 @@
 
    console.log(`\n[yellow]#### Running script ${__script.name} v${__script.version} on shell v${version()}[/]\n`);
 
-   // Hoisted once — avoid rebuilding ~70-key maps on every serverStatus() call.
+   // Built once. `none: true` still needs the explicit false keys on servers that ignore it.
    const SERVER_STATUS_OPTIONS_DEFAULTS = { // multiversion compatible
       "none": true, // 8.3 feature: exclude all optional fields, then opt-in
       "activeIndexBuilds": false,
@@ -216,16 +216,24 @@
       "wiredTiger": false,
       "writeBacksQueued": false
    };
+   const serverStatusCommand = (opts = {}) => ({
+      "serverStatus": true,
+      ...SERVER_STATUS_OPTIONS_DEFAULTS,
+      ...opts
+   });
+   const SERVER_STATUS_CMD = serverStatusCommand();
+   const SERVER_STATUS_WT_CMD = serverStatusCommand({ "wiredTiger": true });
+   const SERVER_STATUS_ENGINE_CMD = serverStatusCommand({
+      "storageEngine": true,
+      "featureCompatibilityVersion": true
+   });
 
-   function serverStatus(serverStatusOptions = {}) {
+   function serverStatus(command = SERVER_STATUS_CMD) {
       /*
        *  opt-in version of db.serverStatus()
-       *  command options are multiversion compatible
+       *  Pass a command built once above (bare, wiredTiger, or storageEngine+FCV).
        */
-      return db.adminCommand({
-         "serverStatus": true,
-         ...{ ...SERVER_STATUS_OPTIONS_DEFAULTS, ...serverStatusOptions }
-      });
+      return db.adminCommand(command);
    }
 
    const SERVERSTATUS_MS = 1000;
@@ -256,9 +264,7 @@
          ({ 'wiredTiger': {
                'background-compact': bc = {}
             } = {}
-         } = serverStatus({
-            "wiredTiger": true
-         }));
+         } = serverStatus(SERVER_STATUS_WT_CMD));
          ({ 'background compact running': running,
             'background compact recovered bytes': bytesRecovered
          } = bc);
@@ -285,6 +291,23 @@
          if (localTime != null) return localTime;
       } catch(_) { /* fall through */ }
       return ISODate();
+   };
+   const delay = ms => new Promise(resolve => setTimeout(resolve, ms)); // non-blocking so $listCatalog pump can run
+   const waitWhileRunning = async (running, { onTick } = {}) => {
+      // Fresh running bit until it is no longer true. No timeout.
+      // onTick fires every DISABLE_STATUS_MS; omit it for a quiet wait.
+      if (running !== true) return running;
+      const startedAt = Date.now();
+      let lastStatusAt = startedAt;
+      while (running === true) {
+         await delay(DISABLE_POLL_MS);
+         if (onTick && Date.now() - lastStatusAt >= DISABLE_STATUS_MS) {
+            onTick(Date.now() - startedAt);
+            lastStatusAt = Date.now();
+         }
+         running = getBackgroundCompact(true).running;
+      }
+      return running;
    };
    const SCALE_METRICS = [
       { "unit": "bytes", "symbol": "B", "factor": 1, "precision": 0 },
@@ -339,81 +362,73 @@
       if (first !== last) return s; // IPv6 without brackets
       return (/^\d+$/).test(s.substring(last + 1)) ? s.substring(0, last) : s;
    };
-   const hostInfo = () => {
+   const atlasPlatform = helloDoc => {
       /*
-       *  mdblib.js hostInfo() — swallow Atlas/privilege failures
+       *  sharedTier is Atlas M0 (Free) / Flex. serverless is a separate platform string.
+       *  Caller already rejected mongos. One hostInfo, one bare serverStatus.
        *  Hostname: hostInfo.system.hostname, else serverStatus().host (M0/Flex),
-       *  else hello().me (mongod; often absent on mongos), else unknown.
+       *  else hello().me, else unknown.
        */
-      let info = {};
+      let hostInfoDoc = {};
+      let hostInfoError = null;
       try {
-         info = db.hostInfo();
-      } catch(_) { /* Atlas M0/Flex, serverless, or unauthorized */ }
-      const existing = (info.system && info.system.hostname) ? String(info.system.hostname) : '';
-      if (existing) return info;
-      let hostname = '';
+         hostInfoDoc = db.hostInfo();
+      } catch(e) {
+         hostInfoError = e;
+      }
+      let ss;
       try {
-         hostname = hostNameFromHostPort(serverStatus().host);
-      } catch(_) { /* fall through */ }
+         ss = serverStatus();
+      } catch(e) {
+         return { "error": e };
+      }
+      let hostname = (hostInfoDoc.system && hostInfoDoc.system.hostname)
+         ? String(hostInfoDoc.system.hostname)
+         : '';
+      if (!hostname) hostname = hostNameFromHostPort(ss.host);
       if (!hostname) {
-         try {
-            const helloDoc = db.hello();
-            hostname = hostNameFromHostPort(helloDoc.me);
-            if (!hostname && helloDoc.msg !== 'isdbgrid' && typeof helloDoc.me === 'undefined') {
-               hostname = 'serverless';
-            }
-         } catch(_) { /* fall through */ }
+         hostname = hostNameFromHostPort(helloDoc.me);
+         if (!hostname && helloDoc.msg !== 'isdbgrid' && typeof helloDoc.me === 'undefined') {
+            hostname = 'serverless';
+         }
       }
       if (!hostname) hostname = 'unknown';
-      if (typeof info.system === 'undefined') info.system = {};
-      info.system.hostname = hostname;
-      return info;
-   };
-   const isAtlasPlatform = (type = null) => {
-      /*
-       *  mdblib.js isAtlasPlatform() — 'sharedTier' is Atlas M0 (Free) / Flex
-       */
-      const { 'msg': helloMsg = false } = db.hello();
-      const isMongos = (helloMsg == 'isdbgrid') ? true : false;
-      const { hostname = false } = hostInfo().system;
-      const { atlasVersion = false } = serverStatus();
-      let isSharedTier = false;
-      try {
-         isSharedTier = (db.hostInfo().ok != 1);
-      } catch(e) {
-         isSharedTier = (e.codeName == 'AtlasError') ? true : false;
-      }
-      const isAtlas = (atlasVersion || (typeof hostname === 'string' && hostname.endsWith('.mongodb.net'))) ? true : false;
-      return (type === null && isMongos && isAtlas && hostname != 'serverless') ? 'dedicatedShardedCluster'
-           : (type == 'dedicatedShardedCluster' && isMongos && isAtlas && hostname != 'serverless') ? true
-           : (type === null && !isMongos && isAtlas && isSharedTier) ? 'sharedTier'
-           : (type == 'sharedTier' && !isMongos && isAtlas && isSharedTier) ? true
-           : (type === null && !isMongos && isAtlas) ? 'dedicatedReplicaSet'
-           : (type == 'dedicatedReplicaSet' && !isMongos && isAtlas) ? true
-           : (type === null && hostname == 'serverless') ? 'serverless'
-           : (type == 'serverless' && hostname == 'serverless') ? true
-           : false;
+      const isSharedTier = hostInfoError
+         ? (hostInfoError.codeName == 'AtlasError')
+         : (hostInfoDoc.ok != 1);
+      const atlasVersion = ss.atlasVersion || false;
+      const isAtlas = !!(atlasVersion || (typeof hostname === 'string' && hostname.endsWith('.mongodb.net')));
+      let platform = false;
+      if (isAtlas && isSharedTier) platform = 'sharedTier';
+      else if (isAtlas) platform = 'dedicatedReplicaSet';
+      else if (hostname == 'serverless') platform = 'serverless';
+      return { "platform": platform };
    };
    const preflight = () => {
       // autoCompact is mongod 8.0+ / wiredTiger only.
-      // Atlas M0/Flex = isAtlasPlatform('sharedTier'); serverless is a separate platform string.
       // Already-enabled is handled by the disable-wait-retry loop, not an error here.
+      let helloDoc;
       try {
-         if (db.hello().msg === 'isdbgrid') {
-            console.log('[red][ERROR] autoCompact is not supported on mongos; connect directly to a mongod[/]');
-            return false;
-         }
+         helloDoc = db.hello();
       } catch(e) {
          console.log('[red][ERROR] hello() failed:[/]', e);
          return false;
       }
-      const atlasPlatform = isAtlasPlatform();
-      if (atlasPlatform === 'sharedTier') {
+      if (helloDoc.msg === 'isdbgrid') {
+         console.log('[red][ERROR] autoCompact is not supported on mongos; connect directly to a mongod[/]');
+         return false;
+      }
+      const atlas = atlasPlatform(helloDoc);
+      if (atlas.error) {
+         console.log('[red][ERROR] serverStatus() failed:[/]', atlas.error);
+         return false;
+      }
+      if (atlas.platform === 'sharedTier') {
          console.log('[red][ERROR] autoCompact is not supported on Atlas M0 (Free) or Flex clusters[/] (https://www.mongodb.com/docs/atlas/unsupported-commands/)');
          return false;
       }
-      if (atlasPlatform === 'serverless') {
-         // Atlas Serverless is deprecated/gone; keep the mdblib.js platform string
+      if (atlas.platform === 'serverless') {
+         // Atlas Serverless is deprecated/gone; keep the platform string
          console.log('[red][ERROR] autoCompact is not supported on Atlas Serverless[/] (https://www.mongodb.com/docs/atlas/unsupported-commands/)');
          return false;
       }
@@ -433,10 +448,7 @@
          ({
             'storageEngine': { 'name': engine } = {},
             'featureCompatibilityVersion': fcv
-         } = serverStatus({
-            "storageEngine": true,
-            "featureCompatibilityVersion": true
-         }));
+         } = serverStatus(SERVER_STATUS_ENGINE_CMD));
       } catch(e) {
          console.log('[red][ERROR] serverStatus() failed:[/]', e);
          return false;
@@ -459,7 +471,6 @@
       }
       return true;
    };
-   const delay = ms => new Promise(resolve => setTimeout(resolve, ms)); // non-blocking so $listCatalog pump can run
    const identKey = name => {
       let s = String(name ?? '');
       if (s.startsWith('statistics:table:')) s = s.slice('statistics:table:'.length);
@@ -492,192 +503,6 @@
       const wtFile = text.match(WT_FILE_RE);
       return wtFile ? wtFile[0] : null;
    };
-   const IDENT_REFRESH_MS = 5000;
-   const IDENT_BATCH = 64;
-   const startNsResolver = () => {
-      // ident → { kind, ns, idx? }; internals first. The first $listCatalog pass settles
-      // before autoCompact so idents that already exist resolve. Later misses refresh
-      // in the background. stop() from the enable finally cancels the pump.
-      const map = new Map([
-         ['sizeStorer', { "kind": "internal", "ns": "(sizeStorer)" }],
-         ['WiredTigerHS', { "kind": "internal", "ns": "(history store)" }],
-         ['_mdb_catalog', { "kind": "internal", "ns": "(catalog)" }]
-      ]);
-      let pumping = false;
-      let cancelled = false;
-      let catalogOk = false;
-      let lastRefreshAt = 0;
-      let initialSettled = false;
-      let cursor;
-      let settleInitial;
-      const initialDone = new Promise(resolve => { settleInitial = resolve; });
-      const markInitialSettled = () => {
-         if (initialSettled) return;
-         initialSettled = true;
-         settleInitial();
-      };
-      const closeCursor = () => {
-         if (!cursor) return;
-         try { cursor.close(); } catch(_) { /* already closed */ }
-         cursor = undefined;
-      };
-      const ingest = doc => {
-         const ns = doc.ns ?? (doc.db && doc.name ? `${doc.db}.${doc.name}` : null);
-         if (typeof doc.ident === 'string' && ns) map.set(doc.ident, { "kind": "collection", "ns": ns });
-         if (doc.idxIdent && ns) {
-            for (const [idx, ident] of Object.entries(doc.idxIdent)) {
-               if (typeof ident === 'string') map.set(ident, { "kind": "index", "ns": ns, "idx": idx });
-            }
-         }
-      };
-      // 8.0+ injects a server-owned $match on collectionless $listCatalog for any caller
-      // without the internal action: drop local.*, config.*, and system.* except system.js
-      // and system.buckets.*. Targeted $listCatalog still returns those entries when the
-      // user has listIndexes on that namespace; collStats is the narrower fallback.
-      const isRedactedCatalogNs = (dbName, collName) => {
-         if (dbName === 'local' || dbName === 'config') return true;
-         if (collName === 'system.js' || collName.startsWith('system.buckets.')) return false;
-         return collName.startsWith('system.');
-      };
-      const ingestStats = (ns, st) => {
-         const collUri = st?.wiredTiger?.uri;
-         if (typeof collUri === 'string') {
-            const ident = identKey(collUri);
-            if (ident) map.set(ident, { "kind": "collection", "ns": ns });
-         }
-         const details = st?.indexDetails;
-         if (!details || typeof details !== 'object') return;
-         for (const [idx, info] of Object.entries(details)) {
-            const uri = info?.uri;
-            if (typeof uri !== 'string') continue;
-            const ident = identKey(uri);
-            if (ident) map.set(ident, { "kind": "index", "ns": ns, "idx": idx });
-         }
-      };
-      const readRedacted = async(dbName, collName) => {
-         try {
-            cursor = db.getSiblingDB(dbName).getCollection(collName).aggregate([
-               { "$listCatalog": {} }
-            ], {
-               "cursor": { "batchSize": 1 },
-               "comment": `Executed by ${__script.name} v${__script.version} ident map`
-            });
-            let saw = false;
-            for await (const doc of cursor) {
-               if (cancelled) break;
-               ingest(doc);
-               saw = true;
-            }
-            return saw;
-         } catch(_) {
-            // listIndexes denied, or the stage rejected this namespace
-         } finally {
-            closeCursor();
-         }
-         if (cancelled) return false;
-         try {
-            const st = db.getSiblingDB(dbName).runCommand({ "collStats": collName, "scale": 1 });
-            if (st?.ok && (typeof st.wiredTiger?.uri === 'string' || st.indexDetails)) {
-               ingestStats(`${dbName}.${collName}`, st);
-               return true;
-            }
-         } catch(_) { /* collStats denied; WT filename stays */ }
-         return false;
-      };
-      const ingestRedacted = async() => {
-         let databases;
-         try {
-            ({ "databases": databases = [] } = db.adminCommand({ "listDatabases": 1, "nameOnly": true }));
-         } catch(_) {
-            return;
-         }
-         let denied = 0;
-         for (const entry of databases) {
-            if (cancelled) return;
-            const dbName = entry?.name;
-            if (typeof dbName !== 'string') continue;
-            // local/config are redacted wholesale; elsewhere only system.* is hidden
-            const filter = (dbName === 'local' || dbName === 'config')
-               ? { "type": "collection" }
-               : { "type": "collection", "name": { "$regex": "^system\\." } };
-            let infos;
-            try {
-               infos = db.getSiblingDB(dbName).getCollectionInfos(filter);
-            } catch(_) {
-               continue;
-            }
-            for (const info of infos) {
-               if (cancelled) return;
-               const collName = info?.name;
-               if (typeof collName !== 'string' || !isRedactedCatalogNs(dbName, collName)) continue;
-               if (!await readRedacted(dbName, collName)) denied++;
-            }
-         }
-         if (!cancelled && denied > 0) {
-            const noun = denied === 1 ? 'namespace lacks' : 'namespaces lack';
-            console.log(`[yellow][NOTE][/] ${denied} ${noun} listIndexes and collStats; those lines stay collection-*.wt / index-*.wt`);
-         }
-      };
-      const pump = async() => {
-         if (pumping || cancelled) return;
-         pumping = true;
-         const firstPass = !initialSettled; // refresh stays collectionless; redacted misses would re-scan every 5s
-         try {
-            try {
-               cursor = db.getSiblingDB('admin').aggregate([
-                  { "$listCatalog": {} },
-                  { "$project": {
-                     "ns": 1,
-                     "db": 1,
-                     "name": 1,
-                     "ident": 1,
-                     "idxIdent": 1
-                  } }
-               ], {
-                  "cursor": { "batchSize": IDENT_BATCH },
-                  "comment": `Executed by ${__script.name} v${__script.version} ident map`
-               });
-               for await (const doc of cursor) {
-                  if (cancelled) break;
-                  ingest(doc);
-               }
-               if (!cancelled) catalogOk = true;
-            } catch(e) {
-               if (!cancelled) {
-                  catalogOk = false;
-                  console.log('[red][WARN] $listCatalog() unavailable, WTCMPCT lines will show WT filenames:[/]', e);
-               }
-            } finally {
-               closeCursor();
-            }
-            if (firstPass && !cancelled) await ingestRedacted();
-         } finally {
-            closeCursor();
-            pumping = false;
-            lastRefreshAt = Date.now();
-            markInitialSettled(); // first pass only; later refreshes no-op
-         }
-      };
-      pump();
-      const resolveNs = name => {
-         const ns = nsFromWt(name, map);
-         if (ns || !name) return ns;
-         if (!cancelled && !pumping && Date.now() - lastRefreshAt >= IDENT_REFRESH_MS) pump();
-         return nsFromWt(name, map);
-      };
-      const stop = () => {
-         cancelled = true;
-         closeCursor();
-         markInitialSettled();
-      };
-      return {
-         initialDone,
-         resolve: resolveNs,
-         stop,
-         size: () => map.size,
-         catalogReady: () => catalogOk && !pumping
-      };
-   };
    const WT_NO_WORK = 'there is no useful work to do -';
    const stripWtNoWork = text => {
       const cut = text.indexOf(WT_NO_WORK);
@@ -706,6 +531,210 @@
    const isSizeStorer = (msg = '', dhandle = '') => {
       // last expected file of the walk
       return `${dhandle} ${msg}`.includes('sizeStorer');
+   };
+   const isUnauthorized = e => e?.code == 13 || e?.codeName === 'Unauthorized'
+      || e?.errorResponse?.code == 13 || e?.errorResponse?.codeName === 'Unauthorized';
+   // 8.0+ injects a server-owned $match on collectionless $listCatalog for any caller
+   // without the internal action: drop local.*, config.*, and system.* except system.js
+   // and system.buckets.*. Targeted $listCatalog still returns those entries when the
+   // user has listIndexes on that namespace; collStats is the narrower fallback.
+   const isRedactedCatalogNs = (dbName, collName) => {
+      if (dbName === 'local' || dbName === 'config') return true;
+      if (collName === 'system.js' || collName.startsWith('system.buckets.')) return false;
+      return collName.startsWith('system.');
+   };
+   const ingestCatalogDoc = (map, doc) => {
+      const ns = doc.ns ?? (doc.db && doc.name ? `${doc.db}.${doc.name}` : null);
+      if (typeof doc.ident === 'string' && ns) map.set(doc.ident, { "kind": "collection", "ns": ns });
+      if (doc.idxIdent && ns) {
+         for (const [idx, ident] of Object.entries(doc.idxIdent)) {
+            if (typeof ident === 'string') map.set(ident, { "kind": "index", "ns": ns, "idx": idx });
+         }
+      }
+   };
+   const ingestStats = (map, ns, st) => {
+      const collUri = st?.wiredTiger?.uri;
+      if (typeof collUri === 'string') {
+         const ident = identKey(collUri);
+         if (ident) map.set(ident, { "kind": "collection", "ns": ns });
+      }
+      const details = st?.indexDetails;
+      if (!details || typeof details !== 'object') return;
+      for (const [idx, info] of Object.entries(details)) {
+         const uri = info?.uri;
+         if (typeof uri !== 'string') continue;
+         const ident = identKey(uri);
+         if (ident) map.set(ident, { "kind": "index", "ns": ns, "idx": idx });
+      }
+   };
+   const readRedacted = async (map, dbName, collName, session) => {
+      // 'named' ingested an ident. 'denied' is Unauthorized (code 13) only.
+      // Any other failure stays unnamed and does not count toward the NOTE.
+      const comment = `Executed by ${__script.name} v${__script.version} ident map`;
+      let saw = false;
+      let listDenied = false;
+      try {
+         const agg = db.getSiblingDB(dbName).getCollection(collName).aggregate([
+            { "$listCatalog": {} }
+         ], {
+            "cursor": { "batchSize": 1 },
+            "comment": comment
+         });
+         session.setCursor(agg);
+         for await (const doc of agg) {
+            if (session.isCancelled()) break;
+            ingestCatalogDoc(map, doc);
+            saw = true;
+         }
+      } catch(e) {
+         if (saw) return 'named';
+         if (session.isCancelled()) return 'cancelled';
+         if (isUnauthorized(e)) listDenied = true;
+      } finally {
+         session.closeCursor();
+      }
+      if (saw) return 'named';
+      if (session.isCancelled()) return 'cancelled';
+      try {
+         const st = db.getSiblingDB(dbName).runCommand({ "collStats": collName, "scale": 1 });
+         if (st?.ok && (typeof st.wiredTiger?.uri === 'string' || st.indexDetails)) {
+            ingestStats(map, `${dbName}.${collName}`, st);
+            return 'named';
+         }
+      } catch(e) {
+         // A network error on collStats is not a privilege gap unless listIndexes already was.
+         if (isUnauthorized(e) || listDenied) return 'denied';
+         return 'other';
+      }
+      return listDenied ? 'denied' : 'other';
+   };
+   const ingestRedactedCatalog = async (map, session) => {
+      let databases;
+      try {
+         ({ "databases": databases = [] } = db.adminCommand({ "listDatabases": 1, "nameOnly": true }));
+      } catch(_) {
+         return 0;
+      }
+      let denied = 0;
+      for (const entry of databases) {
+         if (session.isCancelled()) return denied;
+         const dbName = entry?.name;
+         if (typeof dbName !== 'string') continue;
+         // local/config are redacted wholesale; elsewhere only system.* is hidden
+         const filter = (dbName === 'local' || dbName === 'config')
+            ? { "type": "collection" }
+            : { "type": "collection", "name": { "$regex": "^system\\." } };
+         let infos;
+         try {
+            infos = db.getSiblingDB(dbName).getCollectionInfos(filter);
+         } catch(_) {
+            continue;
+         }
+         for (const info of infos) {
+            if (session.isCancelled()) return denied;
+            const collName = info?.name;
+            if (typeof collName !== 'string' || !isRedactedCatalogNs(dbName, collName)) continue;
+            if (await readRedacted(map, dbName, collName, session) === 'denied') denied++;
+         }
+      }
+      return denied;
+   };
+   const IDENT_REFRESH_MS = 5000;
+   const IDENT_BATCH = 64;
+   const startNsResolver = () => {
+      // ident → { kind, ns, idx? }; internals first. The first $listCatalog pass settles
+      // before autoCompact so idents that already exist resolve. Later misses refresh
+      // in the background. stop() from the enable finally cancels the pump.
+      const map = new Map([
+         ['sizeStorer', { "kind": "internal", "ns": "(sizeStorer)" }],
+         ['WiredTigerHS', { "kind": "internal", "ns": "(history store)" }],
+         ['_mdb_catalog', { "kind": "internal", "ns": "(catalog)" }]
+      ]);
+      let pumping = false;
+      let cancelled = false;
+      let catalogOk = false;
+      let deniedCount = 0;
+      let lastRefreshAt = 0;
+      let initialSettled = false;
+      let cursor;
+      let settleInitial;
+      const initialDone = new Promise(resolve => { settleInitial = resolve; });
+      const markInitialSettled = () => {
+         if (initialSettled) return;
+         initialSettled = true;
+         settleInitial();
+      };
+      const closeCursor = () => {
+         if (!cursor) return;
+         try { cursor.close(); } catch(_) { /* already closed */ }
+         cursor = undefined;
+      };
+      const session = {
+         isCancelled: () => cancelled,
+         setCursor: agg => { cursor = agg; },
+         closeCursor
+      };
+      const pump = async() => {
+         if (pumping || cancelled) return;
+         pumping = true;
+         const firstPass = !initialSettled; // refresh stays collectionless; redacted misses would re-scan every 5s
+         try {
+            try {
+               cursor = db.getSiblingDB('admin').aggregate([
+                  { "$listCatalog": {} },
+                  { "$project": {
+                     "ns": 1,
+                     "db": 1,
+                     "name": 1,
+                     "ident": 1,
+                     "idxIdent": 1
+                  } }
+               ], {
+                  "cursor": { "batchSize": IDENT_BATCH },
+                  "comment": `Executed by ${__script.name} v${__script.version} ident map`
+               });
+               for await (const doc of cursor) {
+                  if (cancelled) break;
+                  ingestCatalogDoc(map, doc);
+               }
+               if (!cancelled) catalogOk = true;
+            } catch(e) {
+               if (!cancelled) {
+                  catalogOk = false;
+                  console.log('[red][WARN] $listCatalog() unavailable, WTCMPCT lines will show WT filenames:[/]', e);
+               }
+            } finally {
+               closeCursor(); // drop the collectionless cursor before targeted aggregates
+            }
+            if (firstPass && !cancelled) deniedCount = await ingestRedactedCatalog(map, session);
+         } finally {
+            closeCursor();
+            pumping = false;
+            lastRefreshAt = Date.now();
+            markInitialSettled(); // first pass only; later refreshes no-op
+         }
+      };
+      pump();
+      const resolveNs = name => {
+         const ns = nsFromWt(name, map);
+         if (ns || !name) return ns;
+         if (!cancelled && !pumping && Date.now() - lastRefreshAt >= IDENT_REFRESH_MS) pump();
+         return nsFromWt(name, map);
+      };
+      const stop = () => {
+         cancelled = true;
+         closeCursor();
+         markInitialSettled();
+      };
+      return {
+         initialDone,
+         resolve: resolveNs,
+         stop,
+         size: () => map.size,
+         // Privilege gap: size() is short of the files WT visits, so the count latch stays off.
+         catalogReady: () => catalogOk && deniedCount === 0 && !pumping && !cancelled,
+         denied: () => deniedCount
+      };
    };
    const POLL_MS_MIN = 50;     // after new WTCMPCT, overflow, visit increment, or full ramlog
    const POLL_MS_MAX = 1000;   // quiet backoff ceiling (only once first pass is latched or still a no-op)
@@ -766,12 +795,41 @@
       }
       return { "logs": out, "totalLinesWritten": totalLinesWritten, "rawCount": lines.length };
    };
+   const decideFirstPass = ({
+      catalogCount,
+      deltaVisits,
+      visitsQuiet,
+      logsHeartbeat,
+      startedAt,
+      now,
+      runOnce,
+      running,
+      seenRunning
+   }) => {
+      // First matching reason wins. sizeStorer is a line hint in the printer, not a counter test.
+      if (catalogCount != null && deltaVisits != null
+            && deltaVisits >= catalogCount && visitsQuiet) {
+         return `WT file visits reached catalog size (${deltaVisits}/${catalogCount})`;
+      }
+      if (deltaVisits > 0 && visitsQuiet && !logsHeartbeat) {
+         return 'WT file visits stalled (no WTCMPCT heartbeat)';
+      }
+      if ((deltaVisits === 0 || deltaVisits == null)
+            && now - startedAt >= NOOP_GRACE_MS && !logsHeartbeat) {
+         return 'serverStatus: no WT file visits (no-op)';
+      }
+      if (runOnce && running === false && (seenRunning || deltaVisits > 0)) {
+         return 'serverStatus: background compact thread idle';
+      }
+      return null;
+   };
    const tailLogs = async(ts, nsResolver = {}, runOnce = true) => {
       /*
        *  Follow WTCMPCT until the first catalog walk ends, then report recovered bytes.
        *  Latch (not $currentOp; WT thread never appears there):
        *  - sizeStorer WTCMPCT is a last-file hint (ramlog can drop it)
        *  - visits = success + skipped* + timeout + interrupted + failed (process-lifetime)
+       *  - Δvisits >= catalog size only when catalogReady (no Unauthorized namespaces)
        *  - WTCMPCT is a heartbeat; ramlog overflow (lost lines) counts as heartbeat, not quiet
        *  - stall visits but still logging/overflow → still in a file
        *  - recovered-bytes stall is not a stop
@@ -843,19 +901,19 @@
             || (lastOverflowAt != null && now - lastOverflowAt < LOG_QUIET_MS);
          const catalogCount = nsResolver.catalogReady?.() ? nsResolver.size() : null;
 
-         if (!firstPassDone && catalogCount != null && deltaVisits != null
-               && deltaVisits >= catalogCount && visitsQuiet) {
-            markFirstPass(`WT file visits reached catalog size (${deltaVisits}/${catalogCount})`);
-         }
-         if (!firstPassDone && deltaVisits > 0 && visitsQuiet && !logsHeartbeat) {
-            markFirstPass('WT file visits stalled (no WTCMPCT heartbeat)');
-         }
-         if (!firstPassDone && (deltaVisits === 0 || deltaVisits == null)
-               && now - startedAt >= NOOP_GRACE_MS && !logsHeartbeat) {
-            markFirstPass('serverStatus: no WT file visits (no-op)');
-         }
-         if (runOnce && !firstPassDone && running === false && (seenRunning || deltaVisits > 0)) {
-            markFirstPass('serverStatus: background compact thread idle');
+         if (!firstPassDone) {
+            const reason = decideFirstPass({
+               catalogCount,
+               deltaVisits,
+               visitsQuiet,
+               logsHeartbeat,
+               startedAt,
+               now,
+               runOnce,
+               running,
+               seenRunning
+            });
+            if (reason) markFirstPass(reason);
          }
          if (firstPassDone) break;
          pollMS = regulatePollMS(pollMS, {
@@ -876,10 +934,7 @@
       let running = getBackgroundCompact(true).running;
       if (running === true) {
          console.log('\n══════ [yellow]last file done, waiting for background compact idle[/] ══════');
-         while (running === true) {
-            await delay(DISABLE_POLL_MS);
-            running = getBackgroundCompact(true).running;
-         }
+         running = await waitWhileRunning(running);
       }
       if (running === false) {
          console.log('\n══════ [yellow]serverStatus: background compact thread idle[/] ══════');
@@ -935,16 +990,11 @@
          if (running === true) {
             // disable is queued; WT flips the enable bit after the current file compact is safe to stop
             console.log('[yellow][NOTE][/] existing autoCompaction still in progress; waiting indefinitely for serverStatus background compact running to clear. CTRL+C to abort — if you do, re-run later so the new command options are applied.\n');
-         }
-         const startedAt = Date.now();
-         let lastStatusAt = startedAt;
-         while (running === true) {
-            await delay(DISABLE_POLL_MS);
-            if (Date.now() - lastStatusAt >= DISABLE_STATUS_MS) {
-               console.log(`[yellow][NOTE][/] still waiting after ${Math.round((Date.now() - startedAt) / 1000)}s (background compact running). CTRL+C to abort — you will need to re-run later to apply the new command options.`);
-               lastStatusAt = Date.now();
-            }
-            running = getBackgroundCompact(true).running;
+            running = await waitWhileRunning(running, {
+               onTick: elapsedMs => {
+                  console.log(`[yellow][NOTE][/] still waiting after ${Math.round(elapsedMs / 1000)}s (background compact running). CTRL+C to abort — you will need to re-run later to apply the new command options.`);
+               }
+            });
          }
          if (running !== false) {
             console.log('[red][ERROR] could not confirm background compact disabled (serverStatus unavailable)[/]');
@@ -952,7 +1002,14 @@
          }
          console.log('══════ [yellow]serverStatus: background compact running is false; retrying with updated options[/] ══════\n');
       }
-      if (nsResolver) await nsResolver.initialDone; // full initial $listCatalog before enable
+      if (nsResolver) {
+         await nsResolver.initialDone; // full initial $listCatalog before enable
+         const denied = nsResolver.denied();
+         if (denied > 0) {
+            const noun = denied === 1 ? 'namespace lacks' : 'namespaces lack';
+            console.log(`[yellow][NOTE][/] ${denied} ${noun} listIndexes and collStats; those lines stay collection-*.wt / index-*.wt`);
+         }
+      }
       const ts = enable ? serverLocalTime() : null; // WTCMPCT watermark; exclusive start in getLogs
       if (!runCmd(cmd)) return;
       if (!enable) {
