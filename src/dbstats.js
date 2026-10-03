@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.21.0"
+ *  Version: "0.23.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -77,8 +77,8 @@
  *        format: <'tabular'|'table'|'nsTable'|'json'|'html'>, // 'table' aliases 'tabular'
  *        concurrency: <int>, // 0 = auto (8 mongod / 4 mongos); $collStats pool per DB
  *        topology: <'summary'|'expanded'>, // printer: summary = connecting catalog + member footer; expanded = one catalog table per materialized node
- *        colour: <true|false>, // TBA
- *        verbosity: <'full'|'summary'|'summaryIdx'|'compactOnly'/> // TBA
+ *        colour: <true|false>, // tabular TBA; html colour checkbox
+ *        verbosity: <'full'|'summary'|'summaryIdx'|'compactOnly'> // printer: full = collections+indexes+views; summary = DB rollup; summaryIdx = collections+indexes; compactOnly = compact/rebuild/wait/resync rows
  *     },
  *     topology: {
  *        discover: <true|false>, // default true; shared-tier / serverless stay one node
@@ -110,6 +110,10 @@
  *    mongosh --quiet --eval 'var options = { output: { format: "tabular" } };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { output: { format: "table" } };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { output: { format: "json" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { output: { format: "html" } };' -f dbstats.js > dbstats.html
+ *    mongosh --quiet --eval 'var options = { output: { verbosity: "summary" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { output: { verbosity: "summaryIdx" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { output: { verbosity: "compactOnly" } };' -f dbstats.js
  *
  *  Examples of catalog listing:
  *
@@ -132,7 +136,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.21.0" };
+   const __script = { "name": "dbstats.js", "version": "0.23.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -171,7 +175,8 @@
       return files.some(f => /(^|[\\/])dbstats\.js$/i.test(String(f)));
    }
    __dbstatsCliFile = isDbstatsCliFile();
-   const jsonCli = (typeof options !== 'undefined' && options && options.output && options.output.format === 'json');
+   const __dbstatsOutFmt = (typeof options !== 'undefined' && options && options.output) ? options.output.format : '';
+   const jsonCli = __dbstatsOutFmt === 'json' || __dbstatsOutFmt === 'html';
    if (__dbstatsCliFile && !jsonCli) {
       if (typeof __mdblibShellIncompatible !== 'undefined' && __mdblibShellIncompatible) {
          console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${__mdblibShellIncompatible}[/]`);
@@ -196,7 +201,8 @@
       if (e.codeName == 'Unauthorized' || +e.code === 13
             || /not authorized|unauthorized/i.test(e.errmsg || e.message || '')) {
          __dbstatsAuthRequired = true;
-         const jsonCli = (typeof options !== 'undefined' && options && options.output && options.output.format === 'json');
+         const outFmt = (typeof options !== 'undefined' && options && options.output) ? options.output.format : '';
+         const jsonCli = outFmt === 'json' || outFmt === 'html';
          if (__dbstatsCliFile && !jsonCli) console.log('[red][ERR] MongoServerError: Unauthorized user requires authentication[/]');
       }
    }
@@ -221,7 +227,8 @@
    const isUnauthenticated = authenticatedUsers.length === 0; // localhost exception / auth off
    const hasMonitorAndRead = hasMonitorRole && hasReadAnyRole;
    const authzAdequate = isUnauthenticated || hasAdminRole || hasMonitorAndRead;
-   const jsonCli = (typeof options !== 'undefined' && options && options.output && options.output.format === 'json');
+   const jsonCli = (typeof options !== 'undefined' && options && options.output
+      && (options.output.format === 'json' || options.output.format === 'html'));
    __dbstatsAuthzInadequate = !authzAdequate;
 
    if (!authzAdequate && __dbstatsCliFile && !jsonCli) {
@@ -300,8 +307,8 @@
          "format": "tabular", // ['tabular'|'table'|'nsTable'|'json'|'html'] ('table' → 'tabular')
          "concurrency": 0, // 0 = auto (8 mongod / 4 mongos); per-DB $collStats pool
          "topology": "summary", // ['summary'|'expanded'] printer; gather stays topology.replica / topology.sharded
-         "colour": true, // [true|false] // TBA
-         "verbosity": "full" // ['full'|'summary'|'summaryIdx'|'compactOnly'] // TBA
+         "colour": true, // [true|false] tabular TBA; html colour checkbox
+         "verbosity": "full" // ['full'|'summary'|'summaryIdx'|'compactOnly'] printer; JSON stays the full contract
       },
       "topology": {
          "discover": true, // [true|false]
@@ -354,8 +361,7 @@
          case 'json':
             return jsonOut(dbStats);
          case 'html':
-            htmlOut(dbStats);
-            break;
+            return htmlOut(dbStats);
          case 'nsTable':
             nsTableOut(dbStats);
             break;
@@ -372,9 +378,9 @@
        *  Connecting-session gather, then optional per-node fan-out.
        */
       const topology = TopologySnapshot.fromSession();
-      const jsonCli = outputOptions.format === 'json';
+      const jsonCli = outputOptions.format === 'json' || outputOptions.format === 'html';
       const hud = new MiniHud({
-         "enabled": __dbstatsCliFile && !jsonCli && outputOptions.format !== 'html'
+         "enabled": __dbstatsCliFile && !jsonCli
       });
 
       if (__dbstatsCliFile && !jsonCli && !hud.enabled) console.log('');
@@ -1012,15 +1018,33 @@
    }
 
    function printDatabaseTables(dbStats = {}) {
+      const verb = outputVerbosity();
       (dbStats.databases || []).forEach(database => {
+         const collections = database.collections || [];
+         const views = database.views || [];
+         if (verb === 'summary') {
+            printDbHeader(database);
+            printDb(database);
+            return;
+         }
+         const listed = (verb === 'compactonly')
+            ? collections.filter(collectionHasCompactable)
+            : collections;
+         if (verb === 'compactonly' && !listed.length) return;
          printDbHeader(database);
-         printCollHeader((database.collections || []).length);
-         (database.collections || []).forEach(collection => {
+         printCollHeader(listed.length);
+         listed.forEach(collection => {
             printCollection(collection);
-            (collection.indexes || []).forEach(printIndex);
+            const indexes = collection.indexes || [];
+            const idxRows = (verb === 'compactonly')
+               ? indexes.filter(indexIsCompactable)
+               : indexes;
+            idxRows.forEach(printIndex);
          });
-         printViewHeader((database.views || []).length);
-         (database.views || []).forEach(({ name }) => printView(name));
+         if (verb === 'full') {
+            printViewHeader(views.length);
+            views.forEach(({ name }) => printView(name));
+         }
          printDb(database);
       });
    }
@@ -1029,7 +1053,8 @@
       /*
        *  Copy rows — do not mutate live collection objects.
        */
-      const namespaces = (dbStats.databases || []).flatMap(database =>
+      const verb = outputVerbosity();
+      let namespaces = (dbStats.databases || []).flatMap(database =>
          (database.collections || []).map(collection => ({
             "namespace": database.name + '.' + collection.name,
             "name": collection.name,
@@ -1045,13 +1070,47 @@
             "internalPageSize": collection.internalPageSize
          }))
       );
+      if (verb === 'compactonly') {
+         namespaces = namespaces.filter(collectionHasCompactable);
+      }
       const sortedNamespaces = stableSort(namespaces, sortBy('namespace'));
 
       printNSHeader(sortedNamespaces.length);
       sortedNamespaces.forEach(namespace => {
          printNamespace(namespace);
-         (namespace.indexes || []).forEach(printIndex);
+         if (verb === 'summary') return;
+         const indexes = namespace.indexes || [];
+         const idxRows = (verb === 'compactonly')
+            ? indexes.filter(indexIsCompactable)
+            : indexes;
+         idxRows.forEach(printIndex);
       });
+   }
+
+   function collectionCompactionExtra(collection = {}) {
+      const name = collection.name || '';
+      const ns = collection.namespace || '';
+      return {
+         "oplog": name === 'oplog.rs' || ns === 'local.oplog.rs',
+         "incomplete": collection.freeStorageComplete === false
+      };
+   }
+
+   function indexCompactionExtra(index = {}) {
+      return {
+         "idIndex": index.name === '_id_',
+         "incomplete": index.freeStorageComplete === false
+      };
+   }
+
+   function indexIsCompactable(index = {}) {
+      return jsonCompaction('index', index.storageSize, index.freeStorageSize, indexCompactionExtra(index)) != null;
+   }
+
+   function collectionHasCompactable(collection = {}) {
+      if (jsonCompaction('collection', collection.storageSize, collection.freeStorageSize, collectionCompactionExtra(collection)) != null)
+         return true;
+      return (collection.indexes || []).some(indexIsCompactable);
    }
 
    function printExpandedNodes(dbStats, printBody) {
@@ -1355,7 +1414,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.21.0',
+         "version": '0.23.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1391,13 +1450,360 @@
       return payload;
    }
 
+   function jsonForScript(value) {
+      return JSON.stringify(value, jsonStringifyReplacer)
+         .replace(/</g, '\\u003c')
+         .replace(/\u2028/g, '\\u2028')
+         .replace(/\u2029/g, '\\u2029');
+   }
+
+   function htmlEsc(s) {
+      return String(s == null ? '' : s)
+         .replace(/&/g, '&amp;')
+         .replace(/</g, '&lt;')
+         .replace(/>/g, '&gt;')
+         .replace(/"/g, '&quot;');
+   }
+
+   function htmlReportBoot() {
+      const pack = window.__DBSTATS || {};
+      const data = pack.payload || {};
+      const ui = pack.ui || {};
+      const root = document.getElementById('report');
+      const verbSel = document.getElementById('verbosity');
+      const colourBox = document.getElementById('colour');
+
+      function esc(s) {
+         return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+      }
+
+      function fmtBytes(n) {
+         if (n == null || n === '' || !Number.isFinite(+n)) return 'n/a';
+         const sign = +n < 0 ? '-' : '';
+         let v = Math.abs(+n);
+         const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
+         let i = 0;
+         while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+         const t = i === 0 ? String(Math.round(v)) : v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2);
+         return sign + t + ' ' + units[i];
+      }
+
+      function fmtPct(n) {
+         if (n == null || !Number.isFinite(+n)) return 'n/a';
+         return (100 * +n).toFixed(1) + '%';
+      }
+
+      function fmtRatio(n) {
+         if (n == null || !Number.isFinite(+n)) return 'n/a';
+         return Number(+n).toFixed(2) + ':1';
+      }
+
+      function fmtNum(n) {
+         if (n == null || n === '' || !Number.isFinite(+n)) return 'n/a';
+         return String(n);
+      }
+
+      function fmtCount(n) {
+         if (!Array.isArray(n)) return fmtNum(n);
+         const shards = data.shards || [];
+         return n.map((v, i) => (shards[i] != null ? shards[i] : i) + ': ' + (v == null ? 'n/a' : v)).join(', ');
+      }
+
+      function fmtCompaction(label) {
+         return label ? String(label) : '—';
+      }
+
+      function compactionRank(label) {
+         if (label === 'resync') return 4;
+         if (label === 'rebuild') return 3;
+         if (label === 'compact') return 2;
+         if (label === 'wait') return 1;
+         return '';
+      }
+
+      function verb() {
+         return (verbSel && verbSel.value) || ui.verbosity || 'full';
+      }
+
+      function td(text, sortVal, cls) {
+         const v = (sortVal === undefined || sortVal === null || sortVal === '') ? '' : sortVal;
+         return '<td data-v="' + esc(v) + '"' + (cls ? ' class="' + cls + '"' : '') + '>' + esc(text) + '</td>';
+      }
+
+      function bytesTd(n) {
+         return td(fmtBytes(n), n == null ? '' : n);
+      }
+
+      function makeSortable(table) {
+         const heads = table.tHead && table.tHead.rows[0] ? table.tHead.rows[0].cells : [];
+         for (let c = 0; c < heads.length; c++) {
+            heads[c].addEventListener('click', () => {
+               const tbody = table.tBodies[0];
+               if (!tbody) return;
+               const rows = Array.from(tbody.rows);
+               const dir = table.dataset.sortCol === String(c) && table.dataset.sortDir === 'asc' ? 'desc' : 'asc';
+               table.dataset.sortCol = String(c);
+               table.dataset.sortDir = dir;
+               for (let i = 0; i < heads.length; i++) heads[i].classList.remove('sort-asc', 'sort-desc');
+               heads[c].classList.add(dir === 'asc' ? 'sort-asc' : 'sort-desc');
+               rows.sort((a, b) => {
+                  const av = a.cells[c] ? a.cells[c].getAttribute('data-v') : '';
+                  const bv = b.cells[c] ? b.cells[c].getAttribute('data-v') : '';
+                  const an = av === '' ? NaN : +av;
+                  const bn = bv === '' ? NaN : +bv;
+                  const aOk = Number.isFinite(an);
+                  const bOk = Number.isFinite(bn);
+                  let cmp;
+                  if (aOk && bOk) cmp = an - bn;
+                  else if (aOk !== bOk) cmp = aOk ? -1 : 1;
+                  else cmp = String(av).localeCompare(String(bv));
+                  return dir === 'asc' ? cmp : -cmp;
+               });
+               rows.forEach(r => tbody.appendChild(r));
+            });
+         }
+      }
+
+      function tableHtml(caption, headers, rowHtml, leftCols) {
+         if (!rowHtml) return '';
+         leftCols = leftCols == null ? 1 : leftCols;
+         return '<table class="sortable"><caption>' + esc(caption) + '</caption><thead><tr>'
+            + headers.map((h, i) => '<th' + (i < leftCols ? ' class="name"' : '') + '>' + esc(h) + '</th>').join('')
+            + '</tr></thead><tbody>' + rowHtml + '</tbody></table>';
+      }
+
+      function collectionVisible(c) {
+         if (verb() !== 'compactonly') return true;
+         if (c && c.compaction) return true;
+         return (c.indexes || []).some(idx => idx && idx.compaction);
+      }
+
+      function indexVisible(idx) {
+         return verb() !== 'compactonly' || !!(idx && idx.compaction);
+      }
+
+      function dbVisible(db) {
+         if (verb() !== 'compactonly') return true;
+         return (db.collections || []).some(collectionVisible);
+      }
+
+      function metricsCells(row, kind) {
+         const reuse = row.reuse;
+         const free = row.freeStorageSize;
+         const storage = row.storageSize;
+         const compact = row.compaction;
+         const compactCls = compact ? 'act' : '';
+         let cells = bytesTd(row.dataSize)
+            + td(fmtRatio(row.compression) + (row.compressor ? ' ' + row.compressor : ''), row.compression)
+            + bytesTd(storage)
+            + td(fmtBytes(free) + ' │ ' + fmtPct(reuse), reuse == null ? '' : reuse)
+            + td(fmtNum(row.objects), row.objects)
+            + td(fmtCompaction(compact), compactionRank(compact), compactCls);
+         if (kind === 'db') {
+            cells += td(fmtCount(row.ncollections), Array.isArray(row.ncollections) ? '' : row.ncollections)
+               + td(fmtCount(row.nindexes), Array.isArray(row.nindexes) ? '' : row.nindexes)
+               + td(fmtCompaction(row.idxCompaction), compactionRank(row.idxCompaction), row.idxCompaction ? 'act' : '');
+         }
+         return cells;
+      }
+
+      function totalsRow(row, label) {
+         return '<tr>' + td(label, label, 'name') + metricsCells(row || {}, 'db') + '</tr>';
+      }
+
+      function dbRow(db) {
+         const name = db.name || '';
+         return '<tr>' + td(name, name, 'name') + metricsCells(db, 'db') + '</tr>';
+      }
+
+      function nsRow(c) {
+         const ns = c.ns || ((c.db ? c.db + '.' : '') + (c.name || ''));
+         const mark = c.unauthorized ? ' (unauthorized)' : (c.unavailable ? ' (unavailable)' : '');
+         return '<tr>' + td(ns + mark, ns, 'name') + metricsCells(c, 'ns') + td(fmtNum(c.nindexes), c.nindexes) + '</tr>';
+      }
+
+      function idxRow(c, idx) {
+         const ns = c.ns || ((c.db ? c.db + '.' : '') + (c.name || ''));
+         const name = idx.name || '';
+         return '<tr>' + td(ns, ns, 'name') + td(name, name, 'name') + bytesTd(idx.storageSize)
+            + td(fmtBytes(idx.freeStorageSize) + ' │ ' + fmtPct(idx.reuse), idx.reuse == null ? '' : idx.reuse)
+            + td(fmtCompaction(idx.compaction), compactionRank(idx.compaction), idx.compaction ? 'act' : '')
+            + '</tr>';
+      }
+
+      function catalogs() {
+         const topo = data.topology || {};
+         const nodes = topo.nodes || [];
+         if (!ui.topologyExpanded) {
+            return [{ "title": null, "databases": data.databases || [], "namespaces": data.namespaces || [] }];
+         }
+         return nodes.map(node => {
+            const dbs = node.connecting ? (data.databases || []) : (node.databases || []);
+            return {
+               "title": (node.connecting ? '* ' : '') + (node.instance || node.hostname || ''),
+               "node": node,
+               "databases": dbs,
+               "namespaces": dbs.flatMap(d => d.collections || [])
+            };
+         }).filter(block => block.node && (block.node.connecting || (block.databases && block.databases.length) || block.node.error));
+      }
+
+      function renderBlock(block) {
+         const v = verb();
+         let html = '';
+         if (block.title) html += '<h2>' + esc(block.title) + '</h2>';
+         const dbs = (block.databases || []).filter(dbVisible);
+         html += tableHtml('Databases',
+            ['Database', 'Data size', 'Compression', 'Size on disk', 'Free │ reuse', 'Objects', 'Compaction', 'Collections', 'Indexes', 'Idx compaction'],
+            dbs.map(dbRow).join(''));
+         if (v === 'summary') return html;
+         const nss = dbs.flatMap(d => d.collections || []).filter(collectionVisible);
+         html += tableHtml('Namespaces',
+            ['Namespace', 'Data size', 'Compression', 'Size on disk', 'Free │ reuse', 'Objects', 'Compaction', 'Indexes'],
+            nss.map(nsRow).join(''));
+         const idxHtml = nss.flatMap(c => (c.indexes || []).filter(indexVisible).map(idx => idxRow(c, idx))).join('');
+         html += tableHtml('Indexes',
+            ['Namespace', 'Index', 'Size on disk', 'Free │ reuse', 'Compaction'],
+            idxHtml, 2);
+         if (v === 'full') {
+            const views = dbs.flatMap(d => (d.views || []).map(x => {
+               const ns = x.ns || ((d.name ? d.name + '.' : '') + (x.name || ''));
+               return '<tr>' + td(ns, ns, 'name') + '</tr>';
+            })).join('');
+            html += tableHtml('Views', ['View'], views);
+         }
+         return html;
+      }
+
+      function renderTopology() {
+         const topo = data.topology || {};
+         const nodes = topo.nodes || [];
+         if (!nodes.length) return '';
+         const head = (topo.kind === 'replSet')
+            ? ('Replica set ' + (topo.setName || '') + ' — ' + nodes.length + ' members')
+            : (topo.kind === 'sharded')
+               ? ('Sharded cluster — ' + nodes.length + ' nodes' + ((topo.shardIds || []).length ? ' — shards ' + JSON.stringify(topo.shardIds) : ''))
+               : ('Topology ' + (topo.kind || '') + ' — ' + nodes.length + ' nodes');
+         const rows = nodes.map(node => {
+            const host = node.instance || node.hostname || '';
+            const mark = node.connecting ? '*' : '';
+            const stats = node.stats || {};
+            return '<tr>'
+               + td(mark, mark, 'name')
+               + td(host, host, 'name')
+               + td(node.role || '', node.role || '', 'name')
+               + td(node.proc || '', node.proc || '', 'name')
+               + td(node.dbPath || '', node.dbPath || '', 'name')
+               + bytesTd(stats.storageSize)
+               + td(fmtBytes(stats.freeStorageSize) + ' │ ' + fmtPct(stats.reuse), stats.reuse == null ? '' : stats.reuse)
+               + td(node.error || '', node.error || '', node.error ? 'err' : '')
+               + '</tr>';
+         }).join('');
+         let html = tableHtml(head, ['', 'Node', 'Role', 'Type', 'dbPath', 'Size on disk', 'Free │ reuse', 'Error'], rows, 5);
+         (topo.errors || []).forEach(err => {
+            html += '<p class="warn">' + esc((err && (err.message || err.step)) || err) + '</p>';
+         });
+         return html;
+      }
+
+      function render() {
+         document.body.classList.toggle('plain', colourBox && !colourBox.checked);
+         const totals = data.totals || {};
+         let html = '';
+         (data.warnings || []).forEach(w => {
+            html += '<p class="warn">[' + esc(w.code || 'NOTE') + '] ' + esc(w.message || '') + '</p>';
+         });
+         html += renderTopology();
+         html += tableHtml('dbPath totals',
+            ['', 'Data size', 'Compression', 'Size on disk', 'Free │ reuse', 'Objects', 'Compaction', 'Collections', 'Indexes', 'Idx compaction'],
+            totalsRow(totals, 'All namespaces'));
+         catalogs().forEach(block => { html += renderBlock(block); });
+         root.innerHTML = html;
+         root.querySelectorAll('table.sortable').forEach(makeSortable);
+      }
+
+      if (verbSel) {
+         verbSel.value = ui.verbosity || 'full';
+         verbSel.addEventListener('change', render);
+      }
+      if (colourBox) {
+         colourBox.checked = ui.colour !== false;
+         colourBox.addEventListener('change', render);
+      }
+      render();
+   }
+
+   function htmlDocument(payload, ui) {
+      const host = payload.hostname || payload.instance || '';
+      const generated = (payload.generatedAt instanceof Date)
+         ? payload.generatedAt.toISOString()
+         : String(payload.generatedAt || '');
+      const title = 'dbstats.js ' + (payload.version || '') + ' — ' + host;
+      const boot = Function.prototype.toString.call(htmlReportBoot)
+         .replace(/<\/script/gi, '<\\/script');
+      const css = 'html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}'
+         + ':root{--bg:#121212;--fg:#e8e8e8;--muted:#9aa0a6;--acc:#7dce7a;--cyan:#6ec8d4;--warn:#d4c06e;--err:#e07070;--line:#2a2a2a;--th:#1c1c1c}'
+         + 'body.plain{--acc:#ddd;--cyan:#ddd;--warn:#ccc;--err:#ccc}'
+         + 'header{padding:1rem 1.25rem;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:.75rem 1.5rem;align-items:baseline}'
+         + 'h1{font-size:1.1rem;margin:0;color:var(--acc)}'
+         + 'h2{font-size:1rem;margin:1.5rem 0 .5rem;color:var(--acc)}'
+         + '.meta{color:var(--muted)} .meta b{color:var(--cyan);font-weight:600}'
+         + '.controls{margin-left:auto;display:flex;gap:1rem;align-items:center}'
+         + 'label{color:var(--muted)} select{background:var(--th);color:var(--fg);border:1px solid var(--line);padding:.2rem .4rem}'
+         + 'main{padding:1rem 1.25rem 3rem}'
+         + 'table{border-collapse:collapse;width:100%;margin:0 0 1.5rem;font-size:13px}'
+         + 'caption{text-align:left;color:var(--acc);font-weight:600;padding:.4rem 0}'
+         + 'th,td{border-bottom:1px solid var(--line);padding:.28rem .55rem;text-align:right;white-space:nowrap}'
+         + 'th.name,td.name{text-align:left}'
+         + 'th{background:var(--th);color:var(--acc);cursor:pointer;position:sticky;top:0;user-select:none}'
+         + 'th.sort-asc:after{content:" \\25b2";font-size:.7em} th.sort-desc:after{content:" \\25bc";font-size:.7em}'
+         + 'tr:hover td{background:#1a1a1a} td.act{color:var(--warn)} td.err{color:var(--err)}'
+         + '.warn{color:var(--warn);margin:.35rem 0}';
+      return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+         + '<meta name="viewport" content="width=device-width, initial-scale=1">'
+         + '<title>' + htmlEsc(title) + '</title>'
+         + '<style>' + css + '</style></head><body'
+         + (ui.colour === false ? ' class="plain"' : '') + '>'
+         + '<header><h1>dbstats.js v' + htmlEsc(payload.version || '') + '</h1>'
+         + '<div class="meta">'
+         + '<b>' + htmlEsc(host) + '</b>'
+         + ' · ' + htmlEsc(payload.proc || '')
+         + ' · ' + htmlEsc(payload.mongod || '')
+         + (payload.dbPath ? ' · ' + htmlEsc(payload.dbPath) : '')
+         + (generated ? ' · ' + htmlEsc(generated) : '')
+         + (payload.catalog && payload.catalog.builder ? ' · catalog ' + htmlEsc(payload.catalog.builder) : '')
+         + '</div>'
+         + '<div class="controls"><label>verbosity <select id="verbosity">'
+         + '<option value="full">full</option>'
+         + '<option value="summary">summary</option>'
+         + '<option value="summaryidx">summaryIdx</option>'
+         + '<option value="compactonly">compactOnly</option>'
+         + '</select></label>'
+         + '<label><input type="checkbox" id="colour"> colour</label></div></header>'
+         + '<main id="report"></main>'
+         + '<script>window.__DBSTATS=' + jsonForScript({ "payload": payload, "ui": ui }) + ';</script>'
+         + '<script>(' + boot + ')();</script>'
+         + '</body></html>';
+   }
+
    function htmlOut(dbStats = {}) {
       /*
-       *  HTML out
+       *  HTML from the JSON contract (embed + click-to-sort).
+       *  Verbosity / colour / topology expanded filter that payload in the page.
+       *  stdout.write so mdblib console.log colour tags cannot rewrite the document.
        */
-      console.log('HTML support TBA');
-
-      return;
+      const payload = toJsonContract(dbStats);
+      const ui = {
+         "verbosity": outputVerbosity(),
+         "topologyExpanded": outputTopologyExpanded(),
+         "colour": outputOptions.colour !== false
+      };
+      process.stdout.write(htmlDocument(payload, ui) + '\n');
+      return payload;
    }
 
    function compareBy(keyOrGetter, dir = 1) {
@@ -1827,6 +2233,12 @@
 
    function outputTopologyExpanded() {
       return String(outputOptions.topology || 'summary').toLowerCase() === 'expanded';
+   }
+
+   function outputVerbosity() {
+      const v = String(outputOptions.verbosity || 'full').toLowerCase();
+      if (v === 'summary' || v === 'summaryidx' || v === 'compactonly') return v;
+      return 'full';
    }
 
    function nodeDbPath(node) {
