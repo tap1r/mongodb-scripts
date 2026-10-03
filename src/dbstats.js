@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.20.1"
+ *  Version: "0.21.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -76,7 +76,7 @@
  *     output: {
  *        format: <'tabular'|'table'|'nsTable'|'json'|'html'>, // 'table' aliases 'tabular'
  *        concurrency: <int>, // 0 = auto (8 mongod / 4 mongos); $collStats pool per DB
- *        topology: <'summary'|'expanded'>, // TBA printer
+ *        topology: <'summary'|'expanded'>, // printer: summary = connecting catalog + member footer; expanded = one catalog table per materialized node
  *        colour: <true|false>, // TBA
  *        verbosity: <'full'|'summary'|'summaryIdx'|'compactOnly'/> // TBA
  *     },
@@ -122,6 +122,7 @@
  *    mongosh --quiet --eval 'var options = { topology: { discover: false } };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { topology: { replica: "expanded" } };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { topology: { sharded: "expanded" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { output: { topology: "expanded" }, topology: { replica: "expanded" } };' -f dbstats.js
  */
 
 /*
@@ -131,7 +132,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.20.1" };
+   const __script = { "name": "dbstats.js", "version": "0.21.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -298,7 +299,7 @@
       "output": {
          "format": "tabular", // ['tabular'|'table'|'nsTable'|'json'|'html'] ('table' → 'tabular')
          "concurrency": 0, // 0 = auto (8 mongod / 4 mongos); per-DB $collStats pool
-         "topology": "summary", // ['summary'|'expanded'] // TBA printer
+         "topology": "summary", // ['summary'|'expanded'] printer; gather stays topology.replica / topology.sharded
          "colour": true, // [true|false] // TBA
          "verbosity": "full" // ['full'|'summary'|'summaryIdx'|'compactOnly'] // TBA
       },
@@ -1055,11 +1056,12 @@
 
    function printExpandedNodes(dbStats, printBody) {
       /*
-       *  replica/sharded expanded: one catalog table per materialized node.
+       *  output.topology expanded: one catalog table per materialized node.
+       *  Gather depth stays topology.replica / topology.sharded.
        */
       const topology = dbStats.topology;
       const nodes = (topology && topology.nodes) || [];
-      if (!topologyDepthExpanded(topology)) return false;
+      if (!outputTopologyExpanded()) return false;
       if (!nodes.some(n => n && n.connecting !== true && n.stats)) return false;
       const widths = nodeIdentityWidths(nodes);
       nodes.forEach(node => {
@@ -1353,7 +1355,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.20.1',
+         "version": '0.21.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1821,6 +1823,10 @@
       const kind = topology && topology.cluster && topology.cluster.kind;
       if (kind === 'sharded') return topologyOptions.sharded === 'expanded';
       return topologyOptions.replica === 'expanded';
+   }
+
+   function outputTopologyExpanded() {
+      return String(outputOptions.topology || 'summary').toLowerCase() === 'expanded';
    }
 
    function nodeDbPath(node) {
