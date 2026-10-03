@@ -1,6 +1,6 @@
 /*
  *  Name: "indexCacheUtil.js"
- *  Version: "1.1.0"
+ *  Version: "1.2.0"
  *  Description: "index cache util"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,9 +14,12 @@
  *  - Catalog is collectionless $listCatalog (6.0+), drained with the driver cursor.
  *    Pre-6.0, authz failure, and Atlas M0/Flex AtlasError 8000 fall back to
  *    listDatabases + getCollectionInfos (the full list, not cursor.firstBatch).
- *  - admin, config, and local are omitted. system.* and replset.* are omitted
- *    except system.buckets.*. A timeseries view is skipped when its buckets
- *    collection is listed, so those index bytes are counted once.
+ *  - admin, config, and local are included, as are system.* and replset.* in
+ *    every database. 8.0 collectionless $listCatalog hides most of those, so
+ *    getCollectionInfos is unioned in. A timeseries view is skipped when its
+ *    buckets collection is listed, so those index bytes are counted once.
+ *  - An Unauthorized $collStats is skipped and reported. It does not blank
+ *    the totals. The snapshot is the namespaces authz allowed.
  *  - $collStats runs in a pool of 8. Driver cursor._cursor.toArray() overlaps
  *    the drains; shell toArray() would serialise them. Read concern local.
  *  - Cache sample is { serverStatus: 1, none: true, wiredTiger: 1 }, once after
@@ -29,12 +32,11 @@
  *  - The collection btree's cache bytes come from the same $collStats.
  *    Other bytes currently in the cache are the server total minus indexes
  *    minus those collection bytes.
- *  - Up to 5 namespaces: the report lists each namespace and each index.
+ *  - Every measured namespace is listed. Up to 5 namespaces: each index too.
  *
  *  TODOs:
  *  - Shard / cluster-wide report (discovery fan-out)
  *  - runCommand instead of adminCommand for directed execution
- *  - admin / config / local cache scope
  */
 
 // Usage: mongosh [<connection options>] [--quiet] [-f|--file] </path/to/>indexCacheUtil.js
@@ -209,14 +211,14 @@
       return results;
    }
 
-   function isSkippedSystemName(name) {
+   function isUnauthorized(e) {
       /*
-       *  system.* and replset.* stay out of the snapshot. system.buckets.* is
-       *  the WiredTiger collection behind a timeseries view, so it stays in.
+       *  code 13. A denied system namespace is omitted, not a failed sum.
        */
-      const s = String(name);
-      if (s.startsWith('system.buckets.')) return false;
-      return /^(system\.|replset\.)/.test(s);
+      if (!e) return false;
+      const code = (e.code != null) ? e.code : (e.errorResponse && e.errorResponse.code);
+      const name = e.codeName || (e.errorResponse && e.errorResponse.codeName);
+      return code == 13 || name === 'Unauthorized';
    }
 
    function catalogEntryDb(doc = {}) {
@@ -279,15 +281,15 @@
 
    function selectNamespaces(entries) {
       /*
-       *  User collections on this node. Count system.buckets.<name> and skip the
-       *  logical collection of the same suffix when that buckets row is listed.
+       *  Collections on this node, including admin, config, local, system.*,
+       *  and replset.*. Count system.buckets.<name> and skip the logical
+       *  collection of the same suffix when that buckets row is listed.
        *  If the buckets name is absent, keep the timeseries name.
        */
       const kept = [];
       const bucketKeys = new Set();
       for (const entry of entries) {
          if (!entry || !entry.dbName || !entry.collName) continue;
-         if (entry.dbName === 'admin' || entry.dbName === 'config' || entry.dbName === 'local') continue;
          if (entry.type === 'view') continue;
          if (String(entry.collName).startsWith('system.buckets.')) {
             bucketKeys.add(`${entry.dbName}\0${entry.collName}`);
@@ -298,7 +300,6 @@
             });
             continue;
          }
-         if (isSkippedSystemName(entry.collName)) continue;
          if (entry.type === 'timeseries') {
             kept.push({
                "dbName": entry.dbName,
@@ -356,10 +357,14 @@
       return dedupeEntries(docs.map(normalizeCatalogEntry).filter(Boolean));
    }
 
-   async function listNamespacesLegacy(listErrors) {
+   async function listAllCollectionRows(listErrors) {
       /*
-       *  Full getCollectionInfos list. listDatabases.filter is applied client-side
-       *  (Atlas shared tiers reject the server-side filter).
+       *  Full getCollectionInfos list, including admin, config, and local.
+       *  authorizedCollections limits the list to names this user may see.
+       *  8.0 collectionless $listCatalog hides those databases and most
+       *  system.* names, so this union is what puts them in the snapshot.
+       *  listDatabases.filter is applied client-side (Atlas shared tiers
+       *  reject the server-side filter).
        */
       await Promise.resolve();
       const listed = db.adminCommand({
@@ -370,7 +375,7 @@
       await Promise.resolve();
       const dbNames = (listed.databases || [])
          .map(entry => entry.name)
-         .filter(name => name && name !== 'admin' && name !== 'config' && name !== 'local');
+         .filter(Boolean);
       const rows = [];
       for (let i = 0; i < dbNames.length; i++) {
          const dbName = dbNames[i];
@@ -395,43 +400,42 @@
          }
          await Promise.resolve();
       }
-      return selectNamespaces(rows);
+      return rows;
    }
 
    async function listNamespaces() {
       const listErrors = [];
+      let catalogEntries = [];
+      let builder = 'legacy';
+      let fallback = false;
+      let fallbackError = null;
       if (serverAtLeast('6.0')) {
          try {
-            const entries = await listCatalogEntries();
-            return {
-               "builder": 'listCatalog',
-               "fallback": false,
-               "fallbackError": null,
-               "listErrors": listErrors,
-               "namespaces": selectNamespaces(entries)
-            };
+            catalogEntries = await listCatalogEntries();
+            builder = 'listCatalog';
          } catch(e) {
-            const stageError = commandErrorMessage(e);
-            try {
-               const namespaces = await listNamespacesLegacy(listErrors);
-               return {
-                  "builder": 'legacy',
-                  "fallback": true,
-                  "fallbackError": stageError,
-                  "listErrors": listErrors,
-                  "namespaces": namespaces
-               };
-            } catch(legacyError) {
-               throw new Error(`${stageError}; ${commandErrorMessage(legacyError)}`);
-            }
+            fallback = true;
+            fallbackError = commandErrorMessage(e);
          }
       }
+      let listed = [];
+      try {
+         listed = await listAllCollectionRows(listErrors);
+      } catch(e) {
+         if (!catalogEntries.length) {
+            const message = fallbackError
+               ? `${fallbackError}; ${commandErrorMessage(e)}`
+               : commandErrorMessage(e);
+            throw new Error(message);
+         }
+         listErrors.push(commandErrorMessage(e));
+      }
       return {
-         "builder": 'legacy',
-         "fallback": false,
-         "fallbackError": null,
+         "builder": fallback ? 'legacy' : builder,
+         "fallback": fallback,
+         "fallbackError": fallbackError,
          "listErrors": listErrors,
-         "namespaces": await listNamespacesLegacy(listErrors)
+         "namespaces": selectNamespaces(dedupeEntries(catalogEntries.concat(listed)))
       };
    }
 
@@ -571,9 +575,16 @@
       return `${cache}    ${disk}    ${pct}`;
    }
 
+   function formatNsLine(row) {
+      const cache = (row.residentComplete && row.resident != null) ? `${row.resident} index bytes in cache` : 'n/a index bytes in cache';
+      const disk = (row.diskComplete && row.diskBytes != null) ? `${row.diskBytes} index bytes on disk` : 'n/a index bytes on disk';
+      const coll = (row.collComplete && row.collResident != null) ? `${row.collResident} collection bytes in cache` : 'n/a collection bytes in cache';
+      return `${cache}    ${disk}    ${coll}`;
+   }
+
    function printReport({
       before, after, resident, residentComplete, diskBytes, diskComplete,
-      collResident, collComplete, indexRows, showDetail, catalog, measured, failed
+      collResident, collComplete, indexRows, nsRows, showDetail, catalog, measured, failed, unauthorized
    }) {
       /*
        *  Headline cache figures are the sample taken when the pool finished.
@@ -611,10 +622,17 @@
       console.log('');
       printLine('Catalog:', catalog.builder === 'listCatalog' ? '$listCatalog' : 'listCollections');
       printLine('Namespaces measured:', measured);
+      if (unauthorized) printLine('Namespaces unauthorized:', unauthorized);
+      const nsLines = (nsRows || []).slice().sort((a, b) => {
+         const ar = (a.resident == null) ? -1 : a.resident;
+         const br = (b.resident == null) ? -1 : b.resident;
+         return br - ar;
+      });
+      for (const row of nsLines) {
+         console.log(`\t${row.ns}`);
+         console.log(`\t    ${formatNsLine(row)}`);
+      }
       if (showDetail) {
-         for (const ns of catalog.namespaces || []) {
-            console.log(`\t${ns.dbName}.${ns.collName}`);
-         }
          if (indexRows.length) {
             const rows = indexRows.slice().sort((a, b) => {
                const ar = (a.resident == null) ? -1 : a.resident;
@@ -667,8 +685,11 @@
       let collResident = 0;
       let collComplete = true;
       let failed = 0;
+      let unauthorized = 0;
       const statFailures = [];
+      const authzSkips = [];
       const indexRows = [];
+      const nsRows = [];
       let before = null;
       let after = null;
       try {
@@ -686,12 +707,27 @@
                for (const idx of stats.indexes) {
                   indexRows.push({ "ns": nsName, ...idx });
                }
+               nsRows.push({
+                  "ns": nsName,
+                  "resident": stats.resident,
+                  "residentComplete": stats.residentComplete,
+                  "diskBytes": stats.diskBytes,
+                  "diskComplete": stats.diskComplete,
+                  "collResident": stats.collResident,
+                  "collComplete": stats.collComplete
+               });
             } catch(e) {
-               failed++;
-               residentComplete = false;
-               diskComplete = false;
-               collComplete = false;
-               statFailures.push(`${ns.dbName}.${ns.collName}: ${commandErrorMessage(e)}`);
+               const message = `${ns.dbName}.${ns.collName}: ${commandErrorMessage(e)}`;
+               if (isUnauthorized(e)) {
+                  unauthorized++;
+                  authzSkips.push(message);
+               } else {
+                  failed++;
+                  residentComplete = false;
+                  diskComplete = false;
+                  collComplete = false;
+                  statFailures.push(message);
+               }
             }
          }, ({ done, inFlight, queued }) => {
             progressLine(`collStats  ${done}/${total}  run=${inFlight}  q=${queued}`);
@@ -711,6 +747,7 @@
       }
 
       for (const message of catalog.listErrors || []) console.error('Listing failed:', message);
+      for (const message of authzSkips) console.error('unauthorized:', message);
       for (const message of statFailures) console.error('rejected:', message);
       printReport({
          before,
@@ -722,10 +759,12 @@
          collResident,
          collComplete,
          indexRows,
-         "showDetail": total <= INDEX_DETAIL_MAX_NAMESPACES,
+         nsRows,
+         "showDetail": (total - failed - unauthorized) <= INDEX_DETAIL_MAX_NAMESPACES,
          catalog,
-         "measured": total - failed,
-         failed
+         "measured": total - failed - unauthorized,
+         failed,
+         unauthorized
       });
    }
 
