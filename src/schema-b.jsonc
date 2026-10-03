@@ -19,10 +19,12 @@
    // ['Series 1', 'Series 2', 'Series 3'][$getRandRatioInt([70, 20, 10])]
    "data": "=['Series 1', 'Series 2', 'Series 3'][$getRandRatioInt([70, 20, 10])]",
    "granularity": "hours",
-   "unit": "=+$getRandNum(0, Math.pow(10, 6)).toFixed(2)",
+   // Benford magnitude in [1, 1e6). qty stays a uniform count.
+   "unit": "=+$benford(0, 5).toFixed(2)",
    "qty": "=$getRandIntInc(0, Math.pow(10, 4))",
    "price": [
-      "=+$getRandNum(0, Math.pow(10, 4)).toFixed(2)",
+      // Benford amount in [0.01, 1e4)
+      "=+$benford(-2, 3).toFixed(2)",
       "=$genRandCurrency()"
    ]
 }

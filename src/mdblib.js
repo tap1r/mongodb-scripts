@@ -2104,17 +2104,62 @@ function $bool(chance = 0.5) {
    return $rand() < chance;
 }
 
-function $benford() { // TBA
-   /*
-    *  Benford's law (experimental)
-    */
-   array => [1, 2, 3, 4, 5, 6, 7, 8, 9].map(
-      val => [val, array.reduce(
-         (sum, item) => sum + (item[0] == val), 0
-      ) / array.length, Math.log10(1 + (1 / val))
-   ]);
+const benfordBins = 4096; // power of two: a uint32 maps onto the table with no modulo bias
+const benfordSignificand = new Float64Array(benfordBins);
+for (let benfordBin = 0; benfordBin < benfordBins; benfordBin++)
+   benfordSignificand[benfordBin] = Math.pow(10, (benfordBin + 0.5) / benfordBins);
 
-   return array;
+const benfordRandBuf = new Uint32Array(1024);
+let benfordRandAt = benfordRandBuf.length;
+
+function benfordUint32() {
+   /*
+    *  One uint32 from a refilled crypto buffer.
+    */
+   if (benfordRandAt >= benfordRandBuf.length) {
+      crypto.webcrypto.getRandomValues(benfordRandBuf);
+      benfordRandAt = 0;
+   }
+   return benfordRandBuf[benfordRandAt++];
+}
+
+function $benford(expMin = 0, expMax = 6) {
+   /*
+    *  Positive magnitude whose significand follows Benford's law.
+    *  expMin and expMax are inclusive powers of ten.
+    *  The draw is in [10^expMin, 10^(expMax+1)).
+    *  A schema "=" expression calls this directly.
+    */
+   let lo = +expMin;
+   let hi = +expMax;
+   if (!Number.isFinite(lo)) lo = 0;
+   if (!Number.isFinite(hi)) hi = 6;
+   lo = $floor(lo);
+   hi = $floor(hi);
+   if (hi < lo) {
+      const swap = lo;
+      lo = hi;
+      hi = swap;
+   }
+   // significand is in [1, 10); keep sig * 10^exp finite and normal
+   if (lo < -307) lo = -307;
+   if (lo > 307) lo = 307;
+   if (hi > 307) hi = 307;
+   if (hi < -307) hi = -307;
+   if (hi < lo) hi = lo;
+
+   const sig = benfordSignificand[benfordUint32() % benfordBins];
+   const span = hi - lo + 1;
+   let offset = 0;
+   if (span > 1) {
+      // rejection keeps the exponent uniform when span does not divide 2^32
+      const limit = 0x100000000 - (0x100000000 % span);
+      let unit = benfordUint32();
+      while (unit >= limit)
+         unit = benfordUint32();
+      offset = unit % span;
+   }
+   return sig * Math.pow(10, lo + offset);
 }
 
 function isUnauthorizedError(e) {
