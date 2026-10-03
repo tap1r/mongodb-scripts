@@ -527,29 +527,119 @@
    const SHARD_VITALS_SAMPLE_INTERVAL_MS = 2000;
    const REPL_LAG_HARD_SEC = 30;
 
-   let _parentConnectionParts = null;
-   function parentConnectionParts() {
-      if (_parentConnectionParts) return _parentConnectionParts;
+   function parseReplSetHosts(hostString) {
+      const { setName = null, seedList = null } = /^(?<setName>[^/]+)\/(?<seedList>.+)$/.exec(hostString)?.groups || {};
+      if (!setName || !seedList) throw new Error(`Invalid replSet connection string: ${hostString}`);
+      return { setName, seedList };
+   }
+
+   let _decomposedParentUri = null; // URI is stable for the run; shardPrimaryUri copies searchParams
+   function decomposeParentUri() {
+      /*
+       *  Public Mongo.getURI(); mongosh _uri is private and can lag.
+       *  WHATWG URL rejects comma-separated hosts: parse userinfo/query via the
+       *  first host; hosts is the full seed list / SRV hostname.
+       */
+      if (_decomposedParentUri) return _decomposedParentUri;
       const rawUri = db.getMongo().getURI();
-      if (!rawUri || typeof rawUri !== 'string') throw new Error('missing parent URI');
+      if (!rawUri || typeof rawUri !== 'string') throw new Error('decomposeParentUri: missing parent URI');
       const isSrv = /^mongodb\+srv:/i.test(rawUri);
-      const stripped = rawUri.replace(/^mongodb\+srv:/i, 'mongodb:');
-      const url = new URL(stripped);
+      const parseable = rawUri.replace(/^mongodb\+srv:/i, 'mongodb:');
+      const withoutScheme = parseable.replace(/^mongodb:\/\//i, '');
+      const authEnd = withoutScheme.search(/[/?]/);
+      const authority = authEnd >= 0 ? withoutScheme.slice(0, authEnd) : withoutScheme;
+      const at = authority.lastIndexOf('@');
+      const hosts = at >= 0 ? authority.slice(at + 1) : authority;
+      const userinfo = at >= 0 ? authority.slice(0, at + 1) : '';
+      const rest = authEnd >= 0 ? withoutScheme.slice(authEnd) : '/';
+      const firstHost = (hosts.split(',')[0] || '').trim() || 'localhost';
+      let url;
+      try {
+         url = new URL(`mongodb://${userinfo}${firstHost}${rest || '/'}`);
+      } catch(e) {
+         throw new Error(`decomposeParentUri: cannot parse parent URI (${e.message})`);
+      }
       const searchParams = new URLSearchParams(url.searchParams);
       searchParams.delete('srvMaxHosts');
       searchParams.delete('srvServiceName');
-      const authority = stripped.replace(/^mongodb:\/\//i, '').split(/[/?]/, 1)[0];
-      const at = authority.lastIndexOf('@');
-      const hosts = (at >= 0 ? authority.slice(at + 1) : authority) || url.host || '';
-      _parentConnectionParts = {
+      searchParams.delete('srvQueryTimeoutMS');
+      _decomposedParentUri = {
          "isSrv": isSrv,
          "username": url.username || '',
          "password": url.password || '',
          "pathname": url.pathname && url.pathname.length ? url.pathname : '/',
          "searchParams": searchParams,
-         "hosts": hosts
+         "hosts": hosts || url.host || ''
       };
-      return _parentConnectionParts;
+      return _decomposedParentUri;
+   }
+
+   function formatLegacyMongoUri({ username = '', password = '', hosts, pathname = '/', searchParams } = {}) {
+      /*
+       *  Always mongodb://. Re-encode userinfo: URL() may return decoded or
+       *  already-percent-encoded username/password depending on Node.
+       */
+      if (!hosts) throw new Error('formatLegacyMongoUri: hosts required');
+      const encodePart = (value) => {
+         let decoded = String(value);
+         try { decoded = decodeURIComponent(decoded); } catch(_) { /* keep raw */ }
+         return encodeURIComponent(decoded);
+      };
+      let auth = '';
+      if (username) {
+         auth = encodePart(username);
+         if (password !== '' && password != null) auth += `:${encodePart(password)}`;
+         auth += '@';
+      }
+      const path = pathname || '/';
+      const q = searchParams && searchParams.toString ? searchParams.toString() : '';
+      return `mongodb://${auth}${hosts}${path}${q ? `?${q}` : ''}`;
+   }
+
+   function shardPrimaryUri(shardHost) {
+      /*
+       *  Child mongodb:// to the shard replica-set primary (or standalone shard).
+       *  SRV parent without tls/ssl forces tls. Replica-set children use
+       *  readPreference=primary. Drop loadBalanced. Do not log the URI.
+       */
+      const parent = decomposeParentUri();
+      const params = new URLSearchParams(parent.searchParams);
+      params.delete('tags');
+      params.delete('readPreferenceTags');
+      params.delete('maxStalenessSeconds');
+      params.delete('minPoolSize');
+      params.delete('readPreference');
+      params.delete('loadBalanced');
+      params.set('maxPoolSize', '2');
+      params.set('serverSelectionTimeoutMS', String(SHARD_CONNECT_TIMEOUT_MS));
+      params.set('connectTimeoutMS', String(SHARD_CONNECT_TIMEOUT_MS));
+      params.set('socketTimeoutMS', String(SHARD_CONNECT_TIMEOUT_MS));
+      if (parent.isSrv && !params.has('tls') && !params.has('ssl')) {
+         params.set('tls', 'true');
+      }
+      const host = String(shardHost || '');
+      let hosts;
+      if (host.includes('/')) {
+         const { setName, seedList } = parseReplSetHosts(host);
+         params.set('replicaSet', setName);
+         params.set('directConnection', 'false');
+         params.set('readPreference', 'primary');
+         hosts = seedList;
+      } else {
+         params.delete('replicaSet');
+         params.set('directConnection', 'true');
+         params.set('readPreference', 'primary');
+         hosts = host;
+      }
+      if (!hosts) throw new Error('shard host is empty');
+      params.sort();
+      return formatLegacyMongoUri({
+         "username": parent.username,
+         "password": parent.password,
+         "hosts": hosts,
+         "pathname": parent.pathname,
+         "searchParams": params
+      });
    }
 
    function createShardVitals() {
@@ -601,48 +691,6 @@
          } catch(_) { /* config auth */ }
 
          return [...ids];
-      }
-
-      function shardPrimaryUri(shardHost) {
-         const parent = parentConnectionParts();
-         const params = new URLSearchParams(parent.searchParams);
-         params.delete('tags');
-         params.delete('readPreferenceTags');
-         params.delete('maxStalenessSeconds');
-         params.delete('minPoolSize');
-         params.delete('readPreference');
-         params.set('maxPoolSize', '2');
-         params.set('serverSelectionTimeoutMS', String(SHARD_CONNECT_TIMEOUT_MS));
-         params.set('connectTimeoutMS', String(SHARD_CONNECT_TIMEOUT_MS));
-         params.set('socketTimeoutMS', String(SHARD_CONNECT_TIMEOUT_MS));
-         if (parent.isSrv && !params.has('tls') && !params.has('ssl')) {
-            params.set('tls', 'true');
-         }
-         const host = String(shardHost || '');
-         const slash = host.indexOf('/');
-         let hosts;
-         if (slash > 0) {
-            params.set('replicaSet', host.slice(0, slash));
-            params.set('directConnection', 'false');
-            params.set('readPreference', 'primary');
-            hosts = host.slice(slash + 1);
-         } else {
-            params.delete('replicaSet');
-            params.set('directConnection', 'true');
-            params.set('readPreference', 'primary');
-            hosts = host;
-         }
-         if (!hosts) throw new Error('shard host is empty');
-         params.sort();
-         let auth = '';
-         if (parent.username) {
-            auth = parent.username;
-            if (parent.password !== '' && parent.password != null) auth += `:${parent.password}`;
-            auth += '@';
-         }
-         const path = parent.pathname || '/';
-         const q = params.toString();
-         return `mongodb://${auth}${hosts}${path}${q ? `?${q}` : ''}`;
       }
 
       function openShardPrimary(uri) {
