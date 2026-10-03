@@ -41,7 +41,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | **`latency.js`** | **v0.4.9** (mongosh-first) | Dual-shell lite: inline `console`/`EJSON` polyfill, no mdblib. `$function`+`sleep` synthetic slow op (Flex / `javascriptEnabled`). `getLog` + EJSON to recover `durationMillis`. Further work (`$sleep`, Flex bounce, mdblib) is **mongosh-line**. Header documents this freeze. |
 | **`schema-sampler.js`** | **v0.2.16** (dual-shell lite) | No mdblib. Dropped `Mongo.setReadPref`; `$sample` per-command RP (mongosh `options.readPreference`; mongo `cursor.readPref`). `listDatabases`/`getCollectionInfos` stay on the connected node. Further work (mdblib, `filter.db` actually applied, `--eval` overlay) is **mongosh-line**. Header documents this freeze. |
 | **`schema-import.js`** | **v0.1.8** (mongosh-only) | Companion stub to schema-sampler. Dropped `Mongo.setReadPref`. `fs.readFileSync` schema JSON; create collection/index/view still commented. In-file `const userOptions` is not an `--eval` overlay. Further work (apply sampler JSON) is **mongosh-line**. Header documents this freeze. |
-| **`indexCacheUtil.js`** | **v0.1.5** (mongosh-only) | Not dual-shell (`async` IIFE, `Promise.allSettled`). `$collStats` index cache bytes vs WT `serverStatus` cache. Do not top-level-await. Further work (sharding, `runCommand`, admin/config/local scope) is **mongosh-line**. The live line shipped the pool, `$listCatalog`, and the bracketed cache sample in **v1.0.0**. Header documents this freeze. |
+| **`indexCacheUtil.js`** | **v0.1.5** (mongosh-only) | Not dual-shell (`async` IIFE, `Promise.allSettled`). `$collStats` index cache bytes vs WT `serverStatus` cache. Do not top-level-await. Further work (sharding, `runCommand`, admin/config/local scope) is **mongosh-line**. The live line shipped the pool, `$listCatalog`, and the bracketed cache sample in **v1.0.0**, and the per-index lines, collection-btree bytes, and non-page-image gap in **v1.1.0**. Header documents this freeze. |
 | **`connStats.js`** | **v0.1.14** (mongosh-only) | `$currentOp` pool stats with inprog fallback (`allUsers: false`). IPv6-bracket client parse. Further work (`whatsmyuri`, DRIVERS-3027, mongos `targetAllNodes`) is **mongosh-line**. Header documents this freeze. |
 | **`mdblib.js`** | **v0.15.10** | Dual-shell library snapshot. `fCV()` → `serverVer()` on Atlas M0/Flex is **by design** (`getParameter` FCV restricted; Atlas not on a lagging FCV). `slaveOk()` mongosh path can `setReadPref` (callers use per-command RP). `shellVer`/`serverVer` `+"x.y"` (2.10 ≡ 2.1) stays. Further work (`for(db)`, MetaStats, integer version parse) is **mongosh-line**. Header documents this freeze. |
 | **`discovery.js`** | **v0.2.1** (mongosh-only) | Not dual-shell (`async` IIFE, named capture groups). Topology fan-out stub; cmd profiles TBA. Do not top-level-await. Do not strip `(?<setName>)` for mongo. Further work (standalone/LB/arbiters, pool/jitter, primary-vs-secondary targeting) is **mongosh-line**. Header documents this freeze. |
@@ -93,7 +93,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `niceDeleteMany.js` | 0.4.11 | **0.15.0** |
 | `congestionMonitor.js` | 0.2.13 | **0.4.0** |
 | `onlineDefrag.js` | 0.1.4 | **1.6.2** |
-| `indexCacheUtil.js` | 0.1.5 | **1.0.0** |
+| `indexCacheUtil.js` | 0.1.5 | **1.1.0** |
 | `compact.js` | 0.2.15 | **removed** (archive only) |
 | `batchUpdater.js` | 0.1.6 | **removed** (archive only) |
 
@@ -351,7 +351,7 @@ Shipped recently: views listed once on the nameOnly pass; collection `$collStats
 
 #### System namespace filter
 
-Orthogonal to `filter.db` / `filter.collection` regexes. “System” means collection/view **names** matching `system.*` or `replset.*` (not admin/config/local DB exclusion — that stays in `getDBNames` / Atlas paths). Default **include** preserves historical dbstats behaviour; operators opt into `system: false` or `system: 'only'` instead of negative-lookahead regexes. Shared predicate lives in mdblib so dual catalog builders (legacy + `$listCatalog`) reuse it. Listing is `listCatalogSnapshot`; the unused `getAllNonSystem*` / `getAllSystemNamespaces` stubs are gone. `indexCacheUtil.js` v1.0.0 keeps its own local walker (`$listCatalog`, then `getCollectionInfos`).
+Orthogonal to `filter.db` / `filter.collection` regexes. “System” means collection/view **names** matching `system.*` or `replset.*` (not admin/config/local DB exclusion — that stays in `getDBNames` / Atlas paths). Default **include** preserves historical dbstats behaviour; operators opt into `system: false` or `system: 'only'` instead of negative-lookahead regexes. Shared predicate lives in mdblib so dual catalog builders (legacy + `$listCatalog`) reuse it. Listing is `listCatalogSnapshot`; the unused `getAllNonSystem*` / `getAllSystemNamespaces` stubs are gone. `indexCacheUtil.js` v1.1.0 keeps its own local walker (`$listCatalog`, then `getCollectionInfos`).
 
 #### Output formats
 
@@ -465,7 +465,7 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `indexCacheUtil.js`
 
-**Live: v1.0.0.** **Legacy archive line: v0.1.5** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await the IIFE. Do not `load()` `mdblib.js`; the walker stays local. Post-freeze feature work proceeds on the mongosh line only.
+**Live: v1.1.0.** **Legacy archive line: v0.1.5** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await the IIFE. Do not `load()` `mdblib.js`; the walker stays local. Post-freeze feature work proceeds on the mongosh line only.
 
 Shipped in 1.0.0:
 
@@ -474,6 +474,13 @@ Shipped in 1.0.0:
 - Bounded local `mapPool` (width 8). Per-namespace failures are collected and do not abort the snapshot. `$collStats` uses `batchSize: 1`, read concern `local`, and the driver drain. `await Promise.resolve()` around sync `adminCommand` on the legacy list. See the scripting guide.
 - Cache sample immediately before and after the pool. Headline ratios use the after sample. `Total bytes in cache` / `Total cache util` stay server page images / configured (the pre-1.0.0 lines). `Index bytes in cache` is the sum of per-index `bytes currently in the cache`. `Cache util by indexes` divides that sum by server `bytes currently in the cache`. `Index share of page images` is the old mix (that sum / server page images). `Index working set util` divides that sum by index file size minus bytes available for reuse. A zero denominator prints `n/a`. Drift is the after sample minus the before sample.
 - TTY `\r` progress, cleared before the report. Not `console.log`. Not `MiniHud` (that painter stays in `mdblib.js`).
+
+Shipped in 1.1.0:
+
+- Per-index rows from the same `$collStats` (`name`, `bytes currently in the cache` via `$getField`, file size, reusable bytes). A missing counter stays unknown and the affected total prints `n/a`, not 0. Sums are in the shell. Up to 5 namespaces: list each namespace and each index, largest resident first. A per-index working set may exceed 100%.
+- Collection btree `wiredTiger.cache` bytes currently in the cache from that same document. `Other bytes in cache` is the server bytes-currently total minus index bytes minus collection bytes.
+- `Bytes not belonging to page images` sits beside occupancy. `Cache util by indexes` stays index bytes / server bytes currently. `Index share of page images` stays the mixed ratio.
+- Cache sample is `{ serverStatus: 1, none: true, wiredTiger: 1 }`, after the catalog and after the pool. Full `serverStatus` is the fallback. The discarded pre-catalog probe is gone.
 
 Remaining mongosh-line work (do not block the archive):
 
@@ -489,7 +496,7 @@ Remaining mongosh-line work (do not block the archive):
 - Namespaced helpers / `for(db)` — **after** the library strategy change, not before.
 - **Legacy `mongo` shims** — stripped (`mdblib.js` v0.15.11+). Do not restore `slaveOk` / dual `Timestamp` / `_getEnv` loaders. Integer `serverVer` / `fCV` / `shellVer` are in place; do not couple further cleanup to `for(db)`.
 - **Shared emit helpers** (see [Script consumption](#script-consumption-unify-standalone-vs-modular)): finish the story beyond today’s `console.log` TTY overload — one path for markup→ANSI, non-TTY strip, progress suppress, and module-quiet. Bring `print` / raw-escape call sites onto it over time.
-- **System name policy (shipped):** `isSystemCollectionName` / `normalizeSystemFilter` / `acceptSystemCollectionName` / `systemCollectionFilter` — used by dbstats `filter.system`. Listing is `listCatalogSnapshot`. The unused `getAllNonSystem*` / `getAllSystemNamespaces` stubs are gone. `indexCacheUtil.js` v1.0.0 keeps its own local walker (`$listCatalog`, then `getCollectionInfos`).
+- **System name policy (shipped):** `isSystemCollectionName` / `normalizeSystemFilter` / `acceptSystemCollectionName` / `systemCollectionFilter` — used by dbstats `filter.system`. Listing is `listCatalogSnapshot`. The unused `getAllNonSystem*` / `getAllSystemNamespaces` stubs are gone. `indexCacheUtil.js` v1.1.0 keeps its own local walker (`$listCatalog`, then `getCollectionInfos`).
 - `AutoFactor` NaN / scale clamp (the copy in `autoCompact.js` is stricter).
 - **`MetaStats` redesign** — see below; underpins dbstats catalog-first work and discovery’s per-node payload shape.
 
