@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.22.2"
+ *  Version: "0.22.3"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -14,7 +14,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.22.2"
+      "version": "0.22.3"
 });
 
 /*  Notes:
@@ -49,6 +49,8 @@ if (typeof __lib === 'undefined') (
  *    listCatalogSnapshot selects auto|legacy|listCatalog|listClusterCatalog;
  *    on authz/failure the caller falls back to getCollectionInfos.
  *    $listClusterCatalog is an optional mongos fast path, never the only path.
+ *    Name policy is systemCollectionFilter. The getAllNonSystem* /
+ *    getAllSystemNamespaces stubs are gone.
  *  - statsIncomplete compares returned $collStats shards to owning shards
  *    (config.chunks / db primary), not cluster-wide listShards.
  *  - parseDbStats / parseCollStats / parseIndexStats turn normalised $stats /
@@ -960,55 +962,6 @@ function systemCollectionFilter(system = true) {
     *  Predicate for getCollectionInfos results: ({ name }) => boolean
     */
    return ({ name }) => acceptSystemCollectionName(name, system);
-}
-
-function getAllNonSystemNamespaces() { // TBA — full catalog walk; use systemCollectionFilter() for name policy
-   /*
-    *  getAllNonSystemNamespaces
-    */
-   const listDbOpts = [{
-      "listDatabases": 1,
-      "filter": { "name": /(?:^(?!(admin|config|local)$).+)/ },
-      "nameOnly": true,
-      "authorizedDatabases": true
-   }];
-   // db.runCommand({ "listCollections": 1, "authorizedCollections": true, "nameOnly": true });
-   const listColOpts = [{
-         "type": /^(?:collection|timeseries)$/,
-         "name": /(?:^(?!(system\..+|replset\..+)$).+)/
-      },
-      { "nameOnly": true, "authorizedCollections": true }
-   ];
-   const listViewOpts = [{
-         "type": "view",
-         "name": /(?:^(?!system\..+$).+)/
-      },
-      { "nameOnly": true, "authorizedCollections": true }
-   ];
-   // Prefer client-side systemCollectionFilter('exclude') when listing with nameOnly + authorizedCollections.
-   // return dbs = db.adminCommand(...listDbOpts).databases.map(dbName => dbName.name);
-   return null;
-}
-
-function getAllNonSystemCollections() { // TBA
-   /*
-    *  getAllNonSystemCollections — apply systemCollectionFilter(false) after listCollections
-    */
-   return null;
-}
-
-function getAllNonSystemViews() { // TBA
-   /*
-    *  getAllNonSystemViews — apply systemCollectionFilter(false) after listCollections
-    */
-   return null;
-}
-
-function getAllSystemNamespaces() { // TBA
-   /*
-    *  getAllSystemNamespaces — apply systemCollectionFilter('only')
-    */
-   return null;
 }
 
 /*
