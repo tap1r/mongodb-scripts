@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.3.0"
+ *  Version: "1.4.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,7 +19,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.3.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.4.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -32,7 +32,30 @@
    let __comment = `#### Running script ${__script.name} v${__script.version}`;
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
-   console.log(`\n\n[yellow]${__comment}[/]`);
+   function isFuzzerCliFile() {
+      /*
+       *  mongosh --file/-f (or positional *.js) targeting this script.
+       *  load() from a REPL or another --file is quiet. mdblib still loads.
+       */
+      const argv = (typeof process !== 'undefined' && Array.isArray(process.argv)) ? process.argv : [];
+      const files = [];
+      for (let i = 2; i < argv.length; i++) {
+         const a = String(argv[i]);
+         if (a === '-f' || a === '--file') {
+            if (i + 1 < argv.length) files.push(argv[++i]);
+            continue;
+         }
+         if (a.startsWith('--file=')) {
+            files.push(a.slice(7));
+            continue;
+         }
+         if (a === '--eval') { i++; continue; }
+         if (a.startsWith('--eval=') || a.startsWith('-')) continue;
+         if (/\.(js|mongodb)$/i.test(a)) files.push(a);
+      }
+      return files.some(f => /(^|[\\/])fuzzer\.js$/i.test(String(f)));
+   }
+   if (isFuzzerCliFile()) console.log(`\n\n[yellow]${__comment}[/]`);
 })();
 
 (async() => {
