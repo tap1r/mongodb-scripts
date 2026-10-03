@@ -84,7 +84,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `mdblib.js` | 0.15.10 | **0.22.3** |
 | `dbstats.js` | 0.12.19 | **0.18.3** |
 | `autoCompact.js` | 0.4.36 | **1.0.1** |
-| `fuzzer.js` | 0.6.43 | **1.1.0** |
+| `fuzzer.js` | 0.6.43 | **1.2.0** |
 | `oplogchurn.js` | 0.5.22 | **0.5.24** |
 | `latency.js` | 0.4.9 | **0.4.10** |
 | `schema-sampler.js` | 0.2.16 | **0.2.17** |
@@ -439,7 +439,7 @@ Remaining mongosh-line work (do not block the archive):
 
 Remaining mongosh-line work (do not block the archive):
 
-- Sharding (per-shard WT vitals; same need as niceDeleteMany). Live mongosh line folds collection-owning (or all) shard primaries; archive freeze stays v0.2.13.
+- Sharding (per-shard WT vitals; same need as niceDeleteMany). Live mongosh line folds collection-owning (or all) shard primaries; child `mongodb://` construction matches niceDeleteMany (local discovery-style helpers, not `load()`). Archive freeze stays v0.2.13.
 - MongoDB 8 execution-control: live snapshot + EQ for `executionControlDeprioritizationGate`, `usesThroughputProbing`, normal and low-priority `queues.execution.{read,write}.queueLength`, and interval wait from `totalTimeQueuedMicros` (per-shard `_queuedPrev`, MAX wait-ms / RANK wait status on fold). Monitor-only — niceDeleteMany AIMD does not trip on these. `lowPriorityAdmissionBypassThreshold` is dropped (fairness knob, not a pressure signal).
 - `bytes_dirty_intl` / `bytes_dirty_leaf` when the server exposes them. Live mongosh line already maps `tracked dirty internal/leaf page bytes in the cache`.
 - Pause / closed signal for auto-trim: backup cursor, repl-lag settle, WT dirty/updates (already has `backupCursorOpen`). Auto-trim is a consumer of these vitals, not a second monitor implementation if inlining is still required.
@@ -450,7 +450,7 @@ Remaining mongosh-line work (do not block the archive):
 
 **Apply (shell):** `deleteManyTask` uses `(await namespace.deleteMany(...)).deletedCount`. See the scripting guide (result fields). Do not re-add the Promise-field unwrap as new work.
 
-Range-deleter throttle is in the file at v0.13.1 (`shardingStatistics.rangeDeleterTasks` on collection-owning shard primaries → THROTTLE, not CLOSED). Do not re-add it as new work. Parent shard URIs already use `db.getMongo().getURI()`.
+Range-deleter throttle is in the file at v0.13.1 (`shardingStatistics.rangeDeleterTasks` on collection-owning shard primaries → THROTTLE, not CLOSED). Do not re-add it as new work. Parent shard URIs already use `db.getMongo().getURI()`. Child `mongodb://` URIs are built inside each IIFE with discovery-style `decomposeParentUri` / `formatLegacyMongoUri` / `parseReplSetHosts` (do not `load()` `discovery.js`): re-encoded userinfo, `loadBalanced` dropped, replica-set children `readPreference=primary`, `maxPoolSize=2`, 5s timeouts. Construction matches `congestionMonitor.js`.
 
 ### `connStats.js`
 
@@ -578,7 +578,7 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `fuzzer.js`
 
-**Live: v1.1.0.** **Archive: v0.6.43.** Mongosh-only. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()`. Compact is archive-only. Header tags this file as requiring this roadmap.
+**Live: v1.2.0.** **Archive: v0.6.43.** Mongosh-only. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()`. Compact is archive-only. Header tags this file as requiring this roadmap.
 
 Options overlay is **`fuzzer-options.jsonc`** (search path, in-shell JSONC strip, deep-merge). That is the reference for [User options UX](#user-options-ux-streamline-past---eval-globals). Do not paste the parser into other scripts. `--eval` stays unwired; do not add a second options channel, and do not declare `const dbName` if an eval overlay is ever added. In-file defaults stay the defaults.
 
