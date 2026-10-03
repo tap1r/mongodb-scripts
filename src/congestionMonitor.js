@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.3.2"
+    *  Version: "0.3.3"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,12 +25,10 @@
    const SERVER_STATUS_CACHE_TTL_MS = pollingIntervalMS;
    const HOST_INFO_CACHE_TTL_MS = 60 * 1000;
    const RS_STATUS_CACHE_TTL_MS = 10 * 1000;
-   const SLOWMS_CACHE_TTL_MS = 60 * 1000;
    const GET_PARAMETER_CACHE_TTL_MS = 60 * 1000;
    const _serverStatusCache = { "key": null, "at": 0, "value": null, "inflight": null };
    const _hostInfoCache = { "at": 0, "value": null };
    const _rsStatusCache = { "at": 0, "value": null };
-   const _slowmsCache = { "at": 0, "value": null };
    const _getParameterCache = Object.create(null); // name -> { at, value }
 
    // Hoisted once — avoid rebuilding ~60-key maps on every serverStatus() call.
@@ -174,23 +172,6 @@
       return rsStatus;
    }
 
-   function slowms() {
-      // Profiling threshold rarely changes at runtime.
-      const now = Date.now();
-      if (_slowmsCache.value !== null && (now - _slowmsCache.at) < SLOWMS_CACHE_TTL_MS) {
-         return _slowmsCache.value;
-      }
-      let slowms = null;
-      try {
-         slowms = db.getSiblingDB('admin').getProfilingStatus().slowms;
-      } catch(e) {
-         // console.debug(`\x1b[31m[WARN] insufficient rights to execute getProfilingStatus()\n${e}\x1b[0m`);
-      }
-      _slowmsCache.value = slowms;
-      _slowmsCache.at = now;
-      return slowms;
-   }
-
    function evictionConfigFromWterc(wterc = '') {
       // WT eviction defaults (https://kb.corp.mongodb.com/article/000019073)
       // evictionDirtyTarget:    overall targets but only apply to dirty data in cache
@@ -316,14 +297,14 @@
       rsSt = {},
       host = {},
       wterc = '',
-      slowms = null,
-      storageEngineConcurrentReadTransactions = null,
-      storageEngineConcurrentWriteTransactions = null,
       executionControlDeprioritizationGate = false
    } = {}) {
       /*
        *  Plain congestion snapshot each poll. EQ bars read these fields as
        *  data properties. Missing WT / queues / shardingStatistics stay 0/false.
+       *  Exploratory, not sampled: getProfilingStatus().slowms (latency band)
+       *  and wiredTigerConcurrentRead/WriteTransactions (configured ticket
+       *  caps, redundant with ticketPool totalTickets). AIMD stays off these.
        */
       const cache = ss.wiredTiger?.cache ?? {};
       const eviction = evictionConfigFromWterc(wterc);
@@ -474,10 +455,7 @@
             : (activeReplLag > 90) ? 'high'
             : 'medium',
          "replLagScale": 30,
-         "heartbeatIntervalMillis": heartbeatIntervalMillis,
-         "slowms": slowms,
-         "storageEngineConcurrentReadTransactions": storageEngineConcurrentReadTransactions,
-         "storageEngineConcurrentWriteTransactions": storageEngineConcurrentWriteTransactions
+         "heartbeatIntervalMillis": heartbeatIntervalMillis
       };
    }
 
@@ -966,9 +944,6 @@
          "rsSt": rsStatus(),
          "host": hostInfo(),
          "wterc": getParameter('wiredTigerEngineRuntimeConfig', '') || '',
-         "slowms": slowms(),
-         "storageEngineConcurrentReadTransactions": getParameter('wiredTigerConcurrentReadTransactions', null),
-         "storageEngineConcurrentWriteTransactions": getParameter('wiredTigerConcurrentWriteTransactions', null),
          "executionControlDeprioritizationGate": getParameter('executionControlDeprioritizationGate', false)
       }), 'local');
    }
