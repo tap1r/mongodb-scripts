@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.19.0"
+ *  Version: "0.20.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -76,14 +76,14 @@
  *     output: {
  *        format: <'tabular'|'table'|'nsTable'|'json'|'html'>, // 'table' aliases 'tabular'
  *        concurrency: <int>, // 0 = auto (8 mongod / 4 mongos); $collStats pool per DB
- *        topology: <'summary'|'expanded'>, // TBA
+ *        topology: <'summary'|'expanded'>, // TBA printer
  *        colour: <true|false>, // TBA
  *        verbosity: <'full'|'summary'|'summaryIdx'|'compactOnly'/> // TBA
  *     },
- *     topology: { // TBA
- *        discover: <true|false>,
- *        replica: <'summary'|'expanded'>,
- *        sharded: <'summary'|'expanded'>
+ *     topology: {
+ *        discover: <true|false>, // default true; shared-tier / serverless stay one node
+ *        replica: <'summary'|'expanded'>, // summary = $stats rollup per member; expanded = catalog+$collStats
+ *        sharded: <'summary'|'expanded'> // summary = one snapshot per shard primary; expanded = each shard member
  *     },
  *     catalog: <'auto'|'legacy'|'listCatalog'|'listClusterCatalog'> // default auto
  *  }
@@ -116,6 +116,12 @@
  *    mongosh --quiet --eval 'var options = { catalog: "auto" };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { catalog: "legacy" };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { catalog: "listCatalog" };' -f dbstats.js
+ *
+ *  Examples of topology fan-out:
+ *
+ *    mongosh --quiet --eval 'var options = { topology: { discover: false } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { topology: { replica: "expanded" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { topology: { sharded: "expanded" } };' -f dbstats.js
  */
 
 /*
@@ -125,7 +131,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.19.0" };
+   const __script = { "name": "dbstats.js", "version": "0.20.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -292,11 +298,11 @@
       "output": {
          "format": "tabular", // ['tabular'|'table'|'nsTable'|'json'|'html'] ('table' → 'tabular')
          "concurrency": 0, // 0 = auto (8 mongod / 4 mongos); per-DB $collStats pool
-         "topology": "summary", // ['summary'|'expanded'] // TBA
+         "topology": "summary", // ['summary'|'expanded'] // TBA printer
          "colour": true, // [true|false] // TBA
          "verbosity": "full" // ['full'|'summary'|'summaryIdx'|'compactOnly'] // TBA
       },
-      "topology": { // TBA
+      "topology": {
          "discover": true, // [true|false]
          "replica": "summary", // ['summary'|'expanded']
          "sharded": "summary" // ['summary'|'expanded']
@@ -316,7 +322,7 @@
    const outputOptions = { ...optionsDefaults.output, ...(options.output || {}) };
    const catalogMode = (options.catalog != null) ? options.catalog : optionsDefaults.catalog;
    // const limitOptions = { ...optionsDefaults.limit, ...(options.limit || {}) };
-   // const topologyOptions = { ...optionsDefaults.topology, ...(options.topology || {}) };
+   const topologyOptions = { ...optionsDefaults.topology, ...(options.topology || {}) };
 
    /*
     *  Global defaults
@@ -362,94 +368,135 @@
 
    async function getStats() {
       /*
-       *  Gather DB stats
+       *  Connecting-session gather, then optional per-node fan-out.
        */
-      let { 'db': dbFilter, 'collection': collFilter, 'system': systemOpt = true } = filterOptions;
-      collFilter = new RegExp(collFilter);
-      const acceptCollName = systemCollectionFilter(systemOpt);
       const topology = TopologySnapshot.fromSession();
-      const dbPath = new DbPathStats({
-         "host": topology.connecting || HostNode.discover()
-      });
-      dbPath.topology = topology;
-      topology.aggregate = dbPath;
-
-      const dbNames = stableSort(getDBNames(dbFilter), compareBy(v => v, 1));
       const jsonCli = outputOptions.format === 'json';
       const hud = new MiniHud({
          "enabled": __dbstatsCliFile && !jsonCli && outputOptions.format !== 'html'
       });
-      const concurrency = statsConcurrency();
-      const dbTotal = dbNames.length;
 
       if (__dbstatsCliFile && !jsonCli && !hud.enabled) console.log('');
 
       try {
-         dbPath.databases = [];
-         for (let i = 0; i < dbNames.length; i++) {
-            hud.render(`[cyan]dbStats[/]  ${i + 1}/${dbTotal}  ${dbNames[i]}`, { "force": i === 0 || i + 1 === dbTotal });
-            dbPath.databases.push(buildDatabaseMeta(dbNames[i], dbPath.shards));
-         }
-         rollupDbPath(dbPath, dbPath.databases);
-
-         hud.render(`[cyan]catalog[/]  listing`, { "force": true });
-         const catalogSnapshot = await listCatalogSnapshot(catalogMode);
-         for (let i = 0; i < dbPath.databases.length; i++) {
-            const database = dbPath.databases[i];
-            hud.render(`[cyan]catalog[/]  ${i + 1}/${dbTotal}  ${database.name}`, { "force": i === 0 || i + 1 === dbTotal });
-            await listDatabaseCatalog(database, collFilter, acceptCollName, catalogSnapshot);
-         }
-         const usedStage = dbPath.databases.some(
-            d => d.catalogSource === 'listCatalog' || d.catalogSource === 'listClusterCatalog'
-         );
-         dbPath.catalogBuilder = usedStage ? catalogSnapshot.builder : 'legacy';
-         dbPath.catalogFallback = catalogSnapshot.fallback === true
-            || (catalogSnapshot.builder !== 'legacy' && !usedStage);
-         if (catalogSnapshot.fallbackError) dbPath.catalogFallbackError = catalogSnapshot.fallbackError;
-
-         const collTotal = dbPath.databases.reduce((n, d) => n + (d.collections || []).length, 0);
-         const collStarted = Date.now();
-         let collDone = 0;
-
-         await dbPath.materialize({
-            concurrency,
-            "onProgress": ({ database, done, inFlight, queued }) => {
-               const finished = collDone + done;
-               const elapsed = (Date.now() - collStarted) / 1000;
-               const frac = collTotal ? finished / collTotal : 1;
-               const eta = (finished > 0 && finished < collTotal)
-                  ? formatHudTime((elapsed / finished) * (collTotal - finished))
-                  : '--';
-               const pct = collTotal ? (frac * 100).toFixed(0) : '100';
-               hud.render(
-                  `[cyan]collStats[/] ${hud.bar(frac)} ${finished}/${collTotal} ${pct}%  db=${database.name}  run=${inFlight} q=${queued}  ETA ${eta}`,
-                  { "force": done === 0 || finished === collTotal }
-               );
-            },
-            "onDatabase": database => {
-               collDone += (database.collections || []).length;
-               database.collections = stableSort(database.collections || [], sortBy('collection'));
-               for (const collection of database.collections) {
-                  collection.indexes = stableSort(collection.indexes || [], sortBy('index'));
-               }
-               rollupDatabase(database);
-            }
+         const dbPath = await gatherDbPath({
+            "host": topology.connecting || HostNode.discover(),
+            hud,
+            "depth": 'expanded'
          });
+         dbPath.topology = topology;
+         topology.aggregate = dbPath;
+         if (topology.connecting) topology.connecting.stats = dbPath;
 
-         hud.render(
-            `[cyan]collStats[/] ${hud.bar(1)} ${collTotal}/${collTotal} 100%`,
-            { "force": true }
-         );
-
-         dbPath.databases = stableSort(dbPath.databases, sortBy('db'));
-         rollupDbPath(dbPath, dbPath.databases);
-         rollupDbPathFree(dbPath);
-         dbPath.gatherWarnings = collectGatherWarnings(dbPath);
-
+         if (topologyOptions.discover !== false) {
+            await topology.materializeNodes({
+               "replica": topologyOptions.replica,
+               "sharded": topologyOptions.sharded,
+               "gather": (node, { depth } = {}) => gatherDbPath({
+                  "host": node,
+                  hud,
+                  "depth": depth || 'summary',
+                  "hudLabel": node && node.instance
+               }),
+               "onProgress": ({ node, index, total }) => {
+                  hud.render(
+                     `[cyan]topology[/]  ${index + 1}/${total}  ${node && node.instance || ''}`,
+                     { "force": true }
+                  );
+               }
+            });
+         }
          return dbPath;
       } finally {
          hud.clear();
       }
+   }
+
+   async function gatherDbPath({ host, hud, depth = 'expanded', hudLabel } = {}) {
+      /*
+       *  One session: $stats all DBs; expanded also catalogs and $collStats.
+       *  Same filters as the connecting gather. hud may be a no-op MiniHud.
+       */
+      const dbPath = new DbPathStats({
+         "host": host || HostNode.discover()
+      });
+      let { 'db': dbFilter, 'collection': collFilter, 'system': systemOpt = true } = filterOptions;
+      collFilter = new RegExp(collFilter);
+      const acceptCollName = systemCollectionFilter(systemOpt);
+      const concurrency = statsConcurrency();
+      const prefix = hudLabel ? `[cyan]node[/] ${hudLabel}  ` : '';
+      const paint = (line, opts) => { if (hud && typeof hud.render === 'function') hud.render(line, opts); };
+      const bar = (frac) => (hud && typeof hud.bar === 'function') ? hud.bar(frac) : '';
+
+      const dbNames = stableSort(getDBNames(dbFilter), compareBy(v => v, 1));
+      const dbTotal = dbNames.length;
+      dbPath.databases = [];
+      for (let i = 0; i < dbNames.length; i++) {
+         paint(`${prefix}[cyan]dbStats[/]  ${i + 1}/${dbTotal}  ${dbNames[i]}`, { "force": i === 0 || i + 1 === dbTotal });
+         dbPath.databases.push(buildDatabaseMeta(dbNames[i], dbPath.shards));
+      }
+      rollupDbPath(dbPath, dbPath.databases);
+
+      if (depth !== 'expanded') {
+         rollupDbPathFree(dbPath);
+         dbPath.gatherWarnings = collectGatherWarnings(dbPath);
+         return dbPath;
+      }
+
+      paint(`${prefix}[cyan]catalog[/]  listing`, { "force": true });
+      const catalogSnapshot = await listCatalogSnapshot(catalogMode);
+      for (let i = 0; i < dbPath.databases.length; i++) {
+         const database = dbPath.databases[i];
+         paint(`${prefix}[cyan]catalog[/]  ${i + 1}/${dbTotal}  ${database.name}`, { "force": i === 0 || i + 1 === dbTotal });
+         await listDatabaseCatalog(database, collFilter, acceptCollName, catalogSnapshot);
+      }
+      const usedStage = dbPath.databases.some(
+         d => d.catalogSource === 'listCatalog' || d.catalogSource === 'listClusterCatalog'
+      );
+      dbPath.catalogBuilder = usedStage ? catalogSnapshot.builder : 'legacy';
+      dbPath.catalogFallback = catalogSnapshot.fallback === true
+         || (catalogSnapshot.builder !== 'legacy' && !usedStage);
+      if (catalogSnapshot.fallbackError) dbPath.catalogFallbackError = catalogSnapshot.fallbackError;
+
+      const collTotal = dbPath.databases.reduce((n, d) => n + (d.collections || []).length, 0);
+      const collStarted = Date.now();
+      let collDone = 0;
+
+      await dbPath.materialize({
+         concurrency,
+         "onProgress": ({ database, done, inFlight, queued }) => {
+            const finished = collDone + done;
+            const elapsed = (Date.now() - collStarted) / 1000;
+            const frac = collTotal ? finished / collTotal : 1;
+            const eta = (finished > 0 && finished < collTotal)
+               ? formatHudTime((elapsed / finished) * (collTotal - finished))
+               : '--';
+            const pct = collTotal ? (frac * 100).toFixed(0) : '100';
+            paint(
+               `${prefix}[cyan]collStats[/] ${bar(frac)} ${finished}/${collTotal} ${pct}%  db=${database.name}  run=${inFlight} q=${queued}  ETA ${eta}`,
+               { "force": done === 0 || finished === collTotal }
+            );
+         },
+         "onDatabase": database => {
+            collDone += (database.collections || []).length;
+            database.collections = stableSort(database.collections || [], sortBy('collection'));
+            for (const collection of database.collections) {
+               collection.indexes = stableSort(collection.indexes || [], sortBy('index'));
+            }
+            rollupDatabase(database);
+         }
+      });
+
+      paint(
+         `${prefix}[cyan]collStats[/] ${bar(1)} ${collTotal}/${collTotal} 100%`,
+         { "force": true }
+      );
+
+      dbPath.databases = stableSort(dbPath.databases, sortBy('db'));
+      rollupDbPath(dbPath, dbPath.databases);
+      rollupDbPathFree(dbPath);
+      dbPath.gatherWarnings = collectGatherWarnings(dbPath);
+      return dbPath;
    }
 
    function statsConcurrency() {
@@ -949,28 +996,39 @@
       /*
        *  Print plain tabular report
        */
-      dbStats.databases.forEach(database => {
-         printDbHeader(database);
-         printCollHeader(database.collections.length);
-         database.collections.forEach(collection => {
-            printCollection(collection);
-            collection.indexes.forEach(printIndex);
-         });
-         printViewHeader(database.views.length);
-         database.views.forEach(({ name }) => printView(name));
-         printDb(database);
-      });
+      if (printExpandedNodes(dbStats, printDatabaseTables)) return;
+      printDatabaseTables(dbStats);
       printDbPath(dbStats);
-
-      return;
    }
 
    function nsTableOut(dbStats = {}) {
       /*
        *  Print aggregated namespaces tabular report.
+       */
+      if (printExpandedNodes(dbStats, printNamespaceTables)) return;
+      printNamespaceTables(dbStats);
+      printDbPath(dbStats);
+   }
+
+   function printDatabaseTables(dbStats = {}) {
+      (dbStats.databases || []).forEach(database => {
+         printDbHeader(database);
+         printCollHeader((database.collections || []).length);
+         (database.collections || []).forEach(collection => {
+            printCollection(collection);
+            (collection.indexes || []).forEach(printIndex);
+         });
+         printViewHeader((database.views || []).length);
+         (database.views || []).forEach(({ name }) => printView(name));
+         printDb(database);
+      });
+   }
+
+   function printNamespaceTables(dbStats = {}) {
+      /*
        *  Copy rows — do not mutate live collection objects.
        */
-      const namespaces = dbStats.databases.flatMap(database =>
+      const namespaces = (dbStats.databases || []).flatMap(database =>
          (database.collections || []).map(collection => ({
             "namespace": database.name + '.' + collection.name,
             "name": collection.name,
@@ -993,9 +1051,30 @@
          printNamespace(namespace);
          (namespace.indexes || []).forEach(printIndex);
       });
-      printDbPath(dbStats);
+   }
 
-      return;
+   function printExpandedNodes(dbStats, printBody) {
+      /*
+       *  replica/sharded expanded: one catalog table per materialized node.
+       */
+      const topology = dbStats.topology;
+      const nodes = (topology && topology.nodes) || [];
+      if (!topologyDepthExpanded(topology)) return false;
+      if (!nodes.some(n => n && n.connecting !== true && n.stats)) return false;
+      nodes.forEach(node => {
+         if (!node || (!node.stats && !node.error)) return;
+         printNodeBanner(node);
+         if (!node.stats) return;
+         printBody(node.stats);
+         printDbPath(node.stats, { "hostLine": false });
+      });
+      if (nodes.length > 1) {
+         printRule('heavy');
+         printTopologyMembers(topology);
+         printRule('heavy');
+         console.log('');
+      }
+      return true;
    }
 
    function jsonNumber(n) {
@@ -1133,18 +1212,29 @@
    function jsonTopology(topology) {
       if (!topology || typeof topology !== 'object') return null;
       const cluster = topology.cluster || {};
+      const kind = cluster.kind || null;
+      const expanded = topologyDepthExpanded(topology);
       return {
-         "kind": cluster.kind || null,
+         "kind": kind,
          "setName": cluster.setName || null,
          "shardIds": Array.isArray(cluster.shardIds) ? cluster.shardIds : [],
-         "nodes": (topology.nodes || []).map(node => ({
-            "instance": node.instance || null,
-            "hostname": node.hostname || null,
-            "proc": node.proc || null,
-            "role": node.role || null,
-            "connecting": node.connecting === true,
-            "shards": Array.isArray(node.shards) ? node.shards : []
-         })),
+         "nodes": (topology.nodes || []).map(node => {
+            const row = {
+               "instance": node.instance || null,
+               "hostname": node.hostname || null,
+               "proc": node.proc || null,
+               "role": node.role || null,
+               "connecting": node.connecting === true,
+               "shards": Array.isArray(node.shards) ? node.shards : [],
+               "dbPath": node.dbPath || null,
+               "stats": node.stats ? jsonTotals(node.stats) : null,
+               "error": node.error || null
+            };
+            if (expanded && node.stats && !node.connecting) {
+               row.databases = (node.stats.databases || []).map(jsonDatabase);
+            }
+            return row;
+         }),
          "errors": Array.isArray(topology.errors) ? topology.errors : []
       };
    }
@@ -1262,7 +1352,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.19.0',
+         "version": '0.20.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1676,7 +1766,60 @@
       }
    }
 
-   function printDbPath(dbStats = {}) {
+   function topologyDepthExpanded(topology) {
+      const kind = topology && topology.cluster && topology.cluster.kind;
+      if (kind === 'sharded') return topologyOptions.sharded === 'expanded';
+      return topologyOptions.replica === 'expanded';
+   }
+
+   function nodeDbPath(node) {
+      if (node && node.stats && node.stats.dbPath) return node.stats.dbPath;
+      return (node && node.dbPath) || '';
+   }
+
+   function printNodeBanner(node = {}) {
+      const host = node.instance || node.hostname || 'unknown';
+      const role = node.role || '';
+      const proc = node.proc || '';
+      const path = nodeDbPath(node) || '';
+      const mark = node.connecting ? '   [green]connecting[/]' : '';
+      const err = node.error ? `   [red]${node.error}[/]` : '';
+      console.log('');
+      printRule('heavy');
+      console.log(`[bold][green]Node:[/] [cyan]${host}[/]   [bold][green]Role:[/] [cyan]${role}[/]   [bold][green]Type:[/] [cyan]${proc}[/]   [bold][green]dbPath:[/] [cyan]${path}[/]${mark}${err}`);
+   }
+
+   function printTopologyMembers(topology) {
+      const nodes = (topology && Array.isArray(topology.nodes)) ? topology.nodes : [];
+      if (!nodes.length) return false;
+      const cluster = topology.cluster || {};
+      const kind = cluster.kind || '';
+      const setName = cluster.setName;
+      if (kind === 'replSet') {
+         const name = setName || 'replSet';
+         console.log(`[bold][green]Replica set:[/] [cyan]${name}[/]   [bold][green]Members:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]`);
+      } else if (kind === 'sharded') {
+         const shardIds = Array.isArray(cluster.shardIds) ? cluster.shardIds : [];
+         const shardsBit = shardIds.length ? `   [bold][green]Shards:[/] ${JSON.stringify(shardIds)}` : '';
+         console.log(`[bold][green]Sharded cluster[/]   [bold][green]Nodes:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]${shardsBit}`);
+      } else if (kind) {
+         console.log(`[bold][green]Topology:[/] [cyan]${kind}[/]   [bold][green]Nodes:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]`);
+      } else {
+         console.log(`[bold][green]Nodes:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]`);
+      }
+      nodes.forEach(node => {
+         const host = node.instance || node.hostname || 'unknown';
+         const role = node.role || '';
+         const proc = node.proc || '';
+         const path = nodeDbPath(node) || '';
+         const mark = node.connecting ? '   [green]connecting[/]' : '';
+         const err = node.error ? `   [red]${node.error}[/]` : '';
+         console.log(`  [cyan]${host}[/]   [bold][green]Role:[/] [cyan]${role}[/]   [bold][green]Type:[/] [cyan]${proc}[/]   [bold][green]dbPath:[/] [cyan]${path}[/]${mark}${err}`);
+      });
+      return true;
+   }
+
+   function printDbPath(dbStats = {}, { hostLine = true } = {}) {
       const {
          dbPath, shards = [], proc, hostname, compression, dataSize, storageSize, freeStorageSize, objects, namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
          freeStorageComplete, totalIndexBytesReusableComplete
@@ -1695,9 +1838,17 @@
          "idxIncomplete": totalIndexBytesReusableComplete === false
       });
       printRule('heavy');
-      console.log(`[bold][green]Hostname:[/] [cyan]${hostname}[/]   [bold][green]Type:[/] [cyan]${proc}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]   [bold][green]dbPath:[/] [cyan]${dbPath}[/]`);
-      if (shards.length > 0) {
-         console.log(`[bold][green]Shards:[/] ${JSON.stringify(shards)}`);
+      const topology = dbStats.topology;
+      const nodeCount = (topology && Array.isArray(topology.nodes)) ? topology.nodes.length : 0;
+      if (hostLine) {
+         if (nodeCount > 1) {
+            printTopologyMembers(topology);
+         } else {
+            console.log(`[bold][green]Hostname:[/] [cyan]${hostname}[/]   [bold][green]Type:[/] [cyan]${proc}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]   [bold][green]dbPath:[/] [cyan]${dbPath}[/]`);
+            if (shards.length > 0) {
+               console.log(`[bold][green]Shards:[/] ${JSON.stringify(shards)}`);
+            }
+         }
       }
       printFreeStorageFootnote(dbStats);
       if (dbStats.catalogFallback === true) {
