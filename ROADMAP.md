@@ -41,7 +41,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | **`latency.js`** | **v0.4.9** (mongosh-first) | Dual-shell lite: inline `console`/`EJSON` polyfill, no mdblib. `$function`+`sleep` synthetic slow op (Flex / `javascriptEnabled`). `getLog` + EJSON to recover `durationMillis`. Further work (`$sleep`, Flex bounce, mdblib) is **mongosh-line**. Header documents this freeze. |
 | **`schema-sampler.js`** | **v0.2.16** (dual-shell lite) | No mdblib. Dropped `Mongo.setReadPref`; `$sample` per-command RP (mongosh `options.readPreference`; mongo `cursor.readPref`). `listDatabases`/`getCollectionInfos` stay on the connected node. Further work (mdblib, `filter.db` actually applied, `--eval` overlay) is **mongosh-line**. Header documents this freeze. |
 | **`schema-import.js`** | **v0.1.8** (mongosh-only) | Companion stub to schema-sampler. Dropped `Mongo.setReadPref`. `fs.readFileSync` schema JSON; create collection/index/view still commented. In-file `const userOptions` is not an `--eval` overlay. Further work (apply sampler JSON) is **mongosh-line**. Header documents this freeze. |
-| **`indexCacheUtil.js`** | **v0.1.5** (mongosh-only) | Not dual-shell (`async` IIFE, `Promise.allSettled`). `$collStats` index cache bytes vs WT `serverStatus` cache. Do not top-level-await. Further work (sharding, `runCommand`, admin/config/local scope) is **mongosh-line**. The live line shipped the pool, `$listCatalog`, and the bracketed cache sample in **v1.0.0**, and the per-index lines, collection-btree bytes, and non-page-image gap in **v1.1.0**. Header documents this freeze. |
+| **`indexCacheUtil.js`** | **v0.1.5** (mongosh-only) | Not dual-shell (`async` IIFE, `Promise.allSettled`). `$collStats` index cache bytes vs WT `serverStatus` cache. Do not top-level-await. Further work (sharding, `runCommand`, admin/config/local scope) is **mongosh-line**. The live line shipped the pool, `$listCatalog`, and the bracketed cache sample in **v1.0.0**, and the per-index lines, collection-btree bytes, and non-page-image gap in **v1.1.0**. **v1.2.0** includes `admin` / `config` / `local` and `system.*` / `replset.*` where authz allows. Header documents this freeze. |
 | **`connStats.js`** | **v0.1.14** (mongosh-only) | `$currentOp` pool stats with inprog fallback (`allUsers: false`). IPv6-bracket client parse. Further work (`whatsmyuri`, DRIVERS-3027, mongos `targetAllNodes`) is **mongosh-line**. Header documents this freeze. |
 | **`mdblib.js`** | **v0.15.10** | Dual-shell library snapshot. `fCV()` → `serverVer()` on Atlas M0/Flex is **by design** (`getParameter` FCV restricted; Atlas not on a lagging FCV). `slaveOk()` mongosh path can `setReadPref` (callers use per-command RP). `shellVer`/`serverVer` `+"x.y"` (2.10 ≡ 2.1) stays. Further work (`for(db)`, MetaStats, integer version parse) is **mongosh-line**. Header documents this freeze. |
 | **`discovery.js`** | **v0.2.1** (mongosh-only) | Not dual-shell (`async` IIFE, named capture groups). Topology fan-out stub; cmd profiles TBA. Do not top-level-await. Do not strip `(?<setName>)` for mongo. Further work (standalone/LB/arbiters, pool/jitter, primary-vs-secondary targeting) is **mongosh-line**. Header documents this freeze. |
@@ -83,17 +83,17 @@ No further dual-shell feature work on the archived line. Operators who still hav
 |--------|----------------|-------------|
 | `mdblib.js` | 0.15.10 | **0.26.0** |
 | `dbstats.js` | 0.12.19 | **0.20.0** |
-| `autoCompact.js` | 0.4.36 | **1.1.0** |
-| `fuzzer.js` | 0.6.43 | **1.3.0** |
-| `oplogchurn.js` | 0.5.22 | **0.5.24** |
+| `autoCompact.js` | 0.4.36 | **1.2.0** |
+| `fuzzer.js` | 0.6.43 | **1.4.0** |
+| `oplogchurn.js` | 0.5.22 | **0.6.0** |
 | `latency.js` | 0.4.9 | **0.4.10** |
 | `schema-sampler.js` | 0.2.16 | **0.2.17** |
 | `sleepy.js` | 0.2.6 | **0.2.7** |
 | `docSizes.js` | 0.1.34 | **0.1.35** |
 | `niceDeleteMany.js` | 0.4.11 | **0.15.0** |
 | `congestionMonitor.js` | 0.2.13 | **0.4.0** |
-| `onlineDefrag.js` | 0.1.4 | **1.6.2** |
-| `indexCacheUtil.js` | 0.1.5 | **1.1.0** |
+| `onlineDefrag.js` | 0.1.4 | **1.7.0** |
+| `indexCacheUtil.js` | 0.1.5 | **1.2.0** |
 | `compact.js` | 0.2.15 | **removed** (archive only) |
 | `batchUpdater.js` | 0.1.6 | **removed** (archive only) |
 
@@ -163,9 +163,7 @@ module mode:      gather → return contract   (emit only if caller asks)
 
 Do **not** block feature work on a full `mdblib.for(db)` redesign; a convention (`options.output.mode: 'interactive' | 'module'`, or `collect*()` vs `main()`) can land first inside each script, then homogenise emit helpers when the library path settles.
 
-**Shipped:** `dbstats.js` detects CLI `--file` from `process.argv` (`isDbstatsCliFile`). `await load('dbstats.js')` is quiet and the async IIFE returns the JSON contract. `load()` is not rewriter-awaited.
-
-**Apply:** loader IIFEs in `autoCompact.js`, `onlineDefrag.js`, `fuzzer.js`, and `oplogchurn.js` still print a banner when the file is `load()`ed. Gate them with the same argv test before discovery `load()`s them. `onlineDefrag.js` v1.6.2 does not `load()` dbstats; a snapshot is the awaited contract, not a scraped table and not three interactive loads.
+**Shipped:** `dbstats.js` detects CLI `--file` from `process.argv` (`isDbstatsCliFile`). `await load('dbstats.js')` is quiet and the async IIFE returns the JSON contract. `load()` is not rewriter-awaited. The same argv test gates the loader banner in `autoCompact.js` (`isAutoCompactCliFile`, v1.2.0), `onlineDefrag.js` (`isOnlineDefragCliFile`, v1.7.0), `fuzzer.js` (`isFuzzerCliFile`, v1.4.0), and `oplogchurn.js` (`isOplogchurnCliFile`, v0.6.0). `load()` of those files stays quiet; mdblib still loads where the script requires it. `oplogchurn.js` clears the screen only on a TTY CLI run. `onlineDefrag.js` does not `load()` dbstats; a snapshot is the awaited contract, not a scraped table and not three interactive loads.
 
 ### User options UX (streamline past `--eval` globals)
 
@@ -301,7 +299,7 @@ Pin down in the implementation:
 
 ### `autoCompact.js`
 
-Executor auto-trim will call. Keep the file standalone. **Live: v1.1.0.** **Archive: v0.4.36.** Direct-to-member targeting belongs in `discovery.js`; cron/JSON/wait caps belong in `autoTrim.js`. Further feature work (progress bar, auto-trim coupling) is mongosh-line only.
+Executor auto-trim will call. Keep the file standalone. **Live: v1.2.0.** **Archive: v0.4.36.** Direct-to-member targeting belongs in `discovery.js`; cron/JSON/wait caps belong in `autoTrim.js`. Further feature work (progress bar, auto-trim coupling) is mongosh-line only.
 
 **Shipped**
 
@@ -333,7 +331,7 @@ Replace or sit beside the WTCMPCT line dump with a `ProgressTracker`-style bar f
 - `runOnce: false` still latches first pass the same way; the bar completes on first-pass latch, not on the ~24h thread.
 - Keep sizeStorer / visits-quiet / running-bit stops; the bar must not become a stop condition.
 - Paint with `MiniHud` (`process.stdout.write('\\r')` in mdblib). Not a second painter, and not `console.log`.
-- The loader IIFE always prints. Gate that banner with the dbstats `process.argv` test before anything `load()`s this file. Header tags this file as requiring this roadmap.
+- The banner prints only when `process.argv` names this file (`isAutoCompactCliFile`). `load()` stays quiet. Header tags this file as requiring this roadmap.
 
 ### `dbstats.js`
 
@@ -351,7 +349,7 @@ Shipped recently: views listed once on the nameOnly pass; collection `$collStats
 
 #### System namespace filter
 
-Orthogonal to `filter.db` / `filter.collection` regexes. “System” means collection/view **names** matching `system.*` or `replset.*` (not admin/config/local DB exclusion — that stays in `getDBNames` / Atlas paths). Default **include** preserves historical dbstats behaviour; operators opt into `system: false` or `system: 'only'` instead of negative-lookahead regexes. Shared predicate lives in mdblib so dual catalog builders (legacy + `$listCatalog`) reuse it. Listing is `listCatalogSnapshot`; the unused `getAllNonSystem*` / `getAllSystemNamespaces` stubs are gone. `indexCacheUtil.js` v1.1.0 keeps its own local walker (`$listCatalog`, then `getCollectionInfos`).
+Orthogonal to `filter.db` / `filter.collection` regexes. “System” means collection/view **names** matching `system.*` or `replset.*` (not admin/config/local DB exclusion — that stays in `getDBNames` / Atlas paths). Default **include** preserves historical dbstats behaviour; operators opt into `system: false` or `system: 'only'` instead of negative-lookahead regexes. Shared predicate lives in mdblib so dual catalog builders (legacy + `$listCatalog`) reuse it. Listing is `listCatalogSnapshot`; the unused `getAllNonSystem*` / `getAllSystemNamespaces` stubs are gone. `indexCacheUtil.js` v1.2.0 keeps its own local walker (`$listCatalog`, then `getCollectionInfos`, including `admin` / `config` / `local`).
 
 #### Output formats
 
@@ -407,14 +405,14 @@ Per-namespace `compact` and update-based defrag. Not auto-trim. Auto-trim’s **
 
 **`compact.js`:** not in live `src/` (archive **v0.2.15** only). Do not restore it without a mongosh-line rewrite. Do not restore `const … reportLog`. Entropy-loop compact is not auto-trim.
 
-**`onlineDefrag.js` live: v1.6.2** (mdblib). **Archive: v0.1.4.** `--eval var` for `dbName` / `collName` / `defragOptions`. Do not top-level-await. Header tags this file as requiring this roadmap.
+**`onlineDefrag.js` live: v1.7.0** (mdblib). **Archive: v0.1.4.** `--eval var` for `dbName` / `collName` / `defragOptions`. Do not top-level-await. Header tags this file as requiring this roadmap.
 
 Remaining mongosh-line work (do not block the archive):
 
-- Consume dbstats in **module/JSON** mode when a ranked snapshot is needed (`await load('dbstats.js')`). v1.6.2 does not load dbstats; do not bring back three interactive loads, and do not scrape the tabular report.
+- Consume dbstats in **module/JSON** mode when a ranked snapshot is needed (`await load('dbstats.js')`). v1.7.0 does not load dbstats; do not bring back three interactive loads, and do not scrape the tabular report.
 - Later: point compact/rebuild at a single dbstats “compact” / “rebuild” row when autoCompact’s file walk is the wrong tool (one collection, dryRun estimate, `_id` rebuild).
 - `compact` is also [unsupported on Atlas M0/Flex](https://www.mongodb.com/docs/atlas/unsupported-commands/); same bounce as autoCompact. Pre-v8 `compact` has no `freeSpaceTargetMB` — no oplog trim path.
-- **onlineDefrag (v1.6.2):** loads mdblib. No `storageStats()` and no `withTransaction`. Packed-temp WT is one shell `aggregate().toArray()[0]` (fine for a single document). `$collStats` is awaited. The loader IIFE still prints on `load()`; gate it with the dbstats argv test before discovery loads this file. Do not read `mongo._uri`.
+- **onlineDefrag (v1.7.0):** loads mdblib. No `storageStats()` and no `withTransaction`. Packed-temp WT is one shell `aggregate().toArray()[0]` (fine for a single document). `$collStats` is awaited. The loader banner prints only when `process.argv` names this file (`isOnlineDefragCliFile`). Do not read `mongo._uri`.
 - **onlineDefrag page fill:** autotune `pageFillRatio` / `pageFillTarget` from settled `$collStats` (compression, `avgObjSize`, leaf page size, reusable) instead of a fixed 0.9. Next discussion; wave count and dirty-byte budget already exist.
 - **onlineDefrag control loop:** AIMD on `dirtyBudgetRatio` from **settled** (post-checkpoint) density and reusable. Stop when reusable is ~10–20% or density plateaus. Do not treat packing-induced reusable **up** in a **fixed** `storageSize` as failure (that is compact-ready); treat `storageSize` **up** as failure (file extend).
 - **onlineDefrag `doubleParked`:** rewrite the same `_id` batch twice with a checkpoint settle between, so the second rewrite can consume the free list instead of appending again. File trim is **organic**: WT shortens the file when the **boundary page** is relocated (compact only *targets* the geometric tail, ~last 10%, and shuffles **blocks**; it does not raise intra-page fill). On M0/Flex `compact` is unavailable — EOF rewrite is the trim path.
@@ -465,7 +463,7 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `indexCacheUtil.js`
 
-**Live: v1.1.0.** **Legacy archive line: v0.1.5** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await the IIFE. Do not `load()` `mdblib.js`; the walker stays local. Post-freeze feature work proceeds on the mongosh line only.
+**Live: v1.2.0.** **Legacy archive line: v0.1.5** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await the IIFE. Do not `load()` `mdblib.js`; the walker stays local. Post-freeze feature work proceeds on the mongosh line only.
 
 Shipped in 1.0.0:
 
@@ -482,10 +480,14 @@ Shipped in 1.1.0:
 - `Bytes not belonging to page images` sits beside occupancy. `Cache util by indexes` stays index bytes / server bytes currently. `Index share of page images` stays the mixed ratio.
 - Cache sample is `{ serverStatus: 1, none: true, wiredTiger: 1 }`, after the catalog and after the pool. Full `serverStatus` is the fallback. The discarded pre-catalog probe is gone.
 
+Shipped in 1.2.0:
+
+- `admin`, `config`, and `local` are in the snapshot, as are `system.*` and `replset.*` in every database. 8.0 collectionless `$listCatalog` hides `local.*`, `config.*`, and most `system.*`, so `getCollectionInfos` (`authorizedCollections: true`) is unioned with the catalog. A timeseries view is still skipped when its `system.buckets.*` row is listed.
+- `Unauthorized` (`code` 13) on `$collStats` skips that namespace, prints it, and does not blank the totals. The sums are the namespaces authz allowed. Each measured namespace is listed with its index and collection cache bytes. Per-index lines stay limited to 5 measured namespaces.
+
 Remaining mongosh-line work (do not block the archive):
 
 - Sharding and a cluster-wide report. `runCommand` via discovery for directed execution.
-- Whether `admin`, `config`, and `local` belong in the cache total.
 
 ### `mdblib.js`
 
@@ -496,7 +498,7 @@ Remaining mongosh-line work (do not block the archive):
 - Namespaced helpers / `for(db)` — **after** the library strategy change, not before.
 - **Legacy `mongo` shims** — stripped (`mdblib.js` v0.15.11+). Do not restore `slaveOk` / dual `Timestamp` / `_getEnv` loaders. Integer `serverVer` / `fCV` / `shellVer` are in place; do not couple further cleanup to `for(db)`.
 - **Shared emit helpers** (see [Script consumption](#script-consumption-unify-standalone-vs-modular)): finish the story beyond today’s `console.log` TTY overload — one path for markup→ANSI, non-TTY strip, progress suppress, and module-quiet. Bring `print` / raw-escape call sites onto it over time.
-- **System name policy (shipped):** `isSystemCollectionName` / `normalizeSystemFilter` / `acceptSystemCollectionName` / `systemCollectionFilter` — used by dbstats `filter.system`. Listing is `listCatalogSnapshot`. The unused `getAllNonSystem*` / `getAllSystemNamespaces` stubs are gone. `indexCacheUtil.js` v1.1.0 keeps its own local walker (`$listCatalog`, then `getCollectionInfos`).
+- **System name policy (shipped):** `isSystemCollectionName` / `normalizeSystemFilter` / `acceptSystemCollectionName` / `systemCollectionFilter` — used by dbstats `filter.system`. Listing is `listCatalogSnapshot`. The unused `getAllNonSystem*` / `getAllSystemNamespaces` stubs are gone. `indexCacheUtil.js` v1.2.0 keeps its own local walker (`$listCatalog`, then `getCollectionInfos`, including `admin` / `config` / `local`).
 - `AutoFactor` NaN / scale clamp (the copy in `autoCompact.js` is stricter).
 - **`MetaStats` redesign** — see below; underpins dbstats catalog-first work and discovery’s per-node payload shape.
 
@@ -593,11 +595,11 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `fuzzer.js`
 
-**Live: v1.3.0.** **Archive: v0.6.43.** Mongosh-only. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()`. Compact is archive-only. Schema C random geometries are mdblib `$genPoint`, `$genLine`, and `$genPolygon`. Header tags this file as requiring this roadmap.
+**Live: v1.4.0.** **Archive: v0.6.43.** Mongosh-only. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()`. Compact is archive-only. Schema C random geometries are mdblib `$genPoint`, `$genLine`, and `$genPolygon`. Header tags this file as requiring this roadmap.
 
 Options overlay is **`fuzzer-options.jsonc`** (search path, in-shell JSONC strip, deep-merge). That is the reference for [User options UX](#user-options-ux-streamline-past---eval-globals). Do not paste the parser into other scripts. `--eval` stays unwired; do not add a second options channel, and do not declare `const dbName` if an eval overlay is ever added. In-file defaults stay the defaults.
 
-**Apply (shell):** do not restore `Bulk.execute(writeConcern)` — the argument is ignored. `insertMany(..., { writeConcern })` is the path. `createIndexes` returns names and throws. `insertedIds` is an object (count keys, including on a partial bulk error). The loader IIFE prints even on `load()`; gate it with the dbstats argv test if a caller loads this file.
+**Apply (shell):** do not restore `Bulk.execute(writeConcern)` — the argument is ignored. `insertMany(..., { writeConcern })` is the path. `createIndexes` returns names and throws. `insertedIds` is an object (count keys, including on a partial bulk error). The loader banner prints only when `process.argv` names this file (`isFuzzerCliFile`). `load()` stays quiet; mdblib still loads.
 
 Remaining mongosh-line work (do not block the archive):
 
@@ -605,13 +607,15 @@ Remaining mongosh-line work (do not block the archive):
 - `w: "majority"` with no `wtimeout` can stall `createCollection` / bulk on PSA or a lagging secondary.
 - Shared-tier `fCV()` → `serverVer()` is by design (see mdblib).
 
+**TABLED:** further GeoJSON point classes. Subselect a point onto land, ocean, a major city, a port, a regional city, or leave it random. It may share that pick with other fields if cardinality is opened. Cardinality stays tabled. Shipped `$genPoint`, `$genLine`, and `$genPolygon` stay uniform inside the GeoJSON range until Luke opens this.
+
 ### `oplogchurn.js`
 
-**Live: v0.5.24.** **Archive: v0.5.22.** Mongosh-only. Do not restore `slaveOk(readPref)`. Per-command `options.readPreference = { mode: readPref }`. Keep `--eval var intervalHrs`. `Timestamp({ t, i })` only. Header tags this file as requiring this roadmap.
+**Live: v0.6.0.** **Archive: v0.5.22.** Mongosh-only. Do not restore `slaveOk(readPref)`. Per-command `options.readPreference = { mode: readPref }`. Keep `--eval var intervalHrs`. `Timestamp({ t, i })` only. Header tags this file as requiring this roadmap.
 
 Remaining mongosh-line work (do not block the archive):
 
-- TTY-guard or drop `console.clear()` in the loader (piped/CI). The loader banner also prints on `load()`; gate it with the dbstats argv test if discovery loads this file.
+- `console.clear()` runs only on a TTY CLI invocation. The loader banner prints only when `process.argv` names this file (`isOplogchurnCliFile`). `load()` stays quiet; mdblib still loads.
 - Atlas M0/Flex: `local.oplog.rs` / `hostInfo` / free-space may be hidden or denied — same n/a story as dbstats.
 - `$collStats` / `hostInfo` / `serverCmdLineOpts` stay on the connected member (not covered by the aggregate RP).
 
