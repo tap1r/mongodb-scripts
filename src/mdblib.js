@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.23.0"
+ *  Version: "0.26.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,13 +9,14 @@
  *
  *  Dual-shell snapshot: legacy/mongo-shell (tag legacy-mongo-shell, v0.15.10).
  *  This file is mongosh-only. TopologySnapshot.fromSession() lists cluster
- *  identity; per-node stats wait on discovery.js connect. for(db) still TBA.
+ *  identity; materializeNodes() gathers remotes via child Mongo() (no
+ *  load of discovery.js). for(db) still TBA.
  */
 
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.23.0"
+      "version": "0.26.0"
 });
 
 /*  Notes:
@@ -40,7 +41,8 @@ if (typeof __lib === 'undefined') (
  *  - fCV() → serverVer() on Atlas M0/Flex is by design (getParameter FCV is
  *    restricted; Atlas is not left on a lagging FCV)
  *  - serverStatus none:true is portable on 8.0 and Atlas M0 (no throw;
- *    process/pid remain). Keep SERVER_STATUS_OPTIONS_DEFAULTS.
+ *    process/pid remain). SERVER_STATUS_OPTIONS_DEFAULTS starts as none:true
+ *    and grows section:false from fat replies (pre-8.3 ignores none).
  *  - $collStats is async; callers must await it (user-defined async is not
  *    rewriter-awaited). Do not await the aggregate cursor (thenable drains).
  *    Drain via drainAggCursor / driver _cursor.toArray() (native Promise) so
@@ -65,8 +67,10 @@ if (typeof __lib === 'undefined') (
  *    TopologySnapshot.fromSession() lists cluster identity (kind, setName,
  *    shard ids, advertised replica members / shard seeds) from the
  *    connecting session. Shared-tier / serverless stay one connecting node.
- *    Per-node stats and mongos local.* wait on discovery.js connect.
- *    There is no MetaStats façade.
+ *    TopologySnapshot.materializeNodes() connects with discovery-style
+ *    child mongodb:// URIs (do not load discovery.js) and runs a gather
+ *    callback on each remote. Serial global-db swap; not for(db). Do not
+ *    gather mongos local.* from the router. There is no MetaStats façade.
  *  - Catalog identity first, stats on demand: collection.fetchStats(),
  *    database.fetchAllStats({ concurrency }), dbPath.materialize({ concurrency }).
  *    Cache _statsPromise per collection. Callers materialise then serialise.
@@ -668,13 +672,179 @@ class DatabaseStats extends StorageMetrics {
    }
 }
 
+const CHILD_CONNECT_TIMEOUT_MS = 5000;
+
+function parseReplSetHosts(hostString) {
+   const { setName = null, seedList = null } = /^(?<setName>[^/]+)\/(?<seedList>.+)$/.exec(hostString)?.groups || {};
+   if (!setName || !seedList) throw new Error(`Invalid replSet connection string: ${hostString}`);
+   return { setName, seedList };
+}
+
+function replicaSeedHosts(host) {
+   const s = String(host || '');
+   if (!s) return [];
+   if (s.includes('/')) {
+      try {
+         return parseReplSetHosts(s).seedList.split(',').map(x => x.trim()).filter(Boolean);
+      } catch (_) {
+         return [s];
+      }
+   }
+   return [s];
+}
+
+function decomposeParentUri(rawUri) {
+   /*
+    *  Parent session URI → parts for rebuilding legacy mongodb:// child URIs.
+    *  Public Mongo.getURI(); mongosh _uri is private and can lag.
+    *  WHATWG URL rejects comma-separated hosts: parse userinfo/query via the
+    *  first host. Do not log the URI.
+    */
+   if (rawUri == null || rawUri === '') {
+      rawUri = db.getMongo().getURI();
+   }
+   if (!rawUri || typeof rawUri !== 'string') {
+      throw new Error('decomposeParentUri: missing parent URI');
+   }
+   const isSrv = /^mongodb\+srv:/i.test(rawUri);
+   const parseable = rawUri.replace(/^mongodb\+srv:/i, 'mongodb:');
+   const withoutScheme = parseable.replace(/^mongodb:\/\//i, '');
+   const authEnd = withoutScheme.search(/[/?]/);
+   const authority = authEnd >= 0 ? withoutScheme.slice(0, authEnd) : withoutScheme;
+   const at = authority.lastIndexOf('@');
+   const hosts = at >= 0 ? authority.slice(at + 1) : authority;
+   const userinfo = at >= 0 ? authority.slice(0, at + 1) : '';
+   const rest = authEnd >= 0 ? withoutScheme.slice(authEnd) : '/';
+   const firstHost = (hosts.split(',')[0] || '').trim() || 'localhost';
+   let url;
+   try {
+      url = new URL(`mongodb://${userinfo}${firstHost}${rest || '/'}`);
+   } catch (e) {
+      throw new Error(`decomposeParentUri: cannot parse parent URI (${e.message})`);
+   }
+   const searchParams = new URLSearchParams(url.searchParams);
+   searchParams.delete('srvMaxHosts');
+   searchParams.delete('srvServiceName');
+   searchParams.delete('srvQueryTimeoutMS');
+   return {
+      "isSrv": isSrv,
+      "username": url.username || '',
+      "password": url.password || '',
+      "pathname": url.pathname && url.pathname.length ? url.pathname : '/',
+      "searchParams": searchParams,
+      "hosts": hosts || url.host || ''
+   };
+}
+
+function formatLegacyMongoUri({ username = '', password = '', hosts, pathname = '/', searchParams } = {}) {
+   /*
+    *  Always mongodb://. Re-encode userinfo: URL() may return decoded or
+    *  already-percent-encoded username/password depending on Node.
+    */
+   if (!hosts) throw new Error('formatLegacyMongoUri: hosts required');
+   const encodePart = (value) => {
+      let decoded = String(value);
+      try { decoded = decodeURIComponent(decoded); } catch (_) { /* keep raw */ }
+      return encodeURIComponent(decoded);
+   };
+   let auth = '';
+   if (username) {
+      auth = encodePart(username);
+      if (password !== '' && password != null) auth += `:${encodePart(password)}`;
+      auth += '@';
+   }
+   const path = pathname || '/';
+   const q = searchParams && searchParams.toString ? searchParams.toString() : '';
+   return `mongodb://${auth}${hosts}${path}${q ? `?${q}` : ''}`;
+}
+
+function childMongoUri(host, { parent } = {}) {
+   /*
+    *  Child mongodb:// to one advertised member (direct) or a shard replica
+    *  set (setName/seedList). SRV parent without tls/ssl forces tls.
+    *  Drop loadBalanced. Do not log the URI. No socketTimeoutMS — $collStats
+    *  on the child can run longer than connect.
+    */
+   const parts = parent || decomposeParentUri();
+   const params = new URLSearchParams(parts.searchParams);
+   params.delete('tags');
+   params.delete('readPreferenceTags');
+   params.delete('maxStalenessSeconds');
+   params.delete('minPoolSize');
+   params.delete('readPreference');
+   params.delete('loadBalanced');
+   params.set('maxPoolSize', '2');
+   params.set('serverSelectionTimeoutMS', String(CHILD_CONNECT_TIMEOUT_MS));
+   params.set('connectTimeoutMS', String(CHILD_CONNECT_TIMEOUT_MS));
+   if (parts.isSrv && !params.has('tls') && !params.has('ssl')) {
+      params.set('tls', 'true');
+   }
+   const spec = String(host || '');
+   let hosts;
+   if (spec.includes('/')) {
+      const { setName, seedList } = parseReplSetHosts(spec);
+      params.set('replicaSet', setName);
+      params.set('directConnection', 'false');
+      params.set('readPreference', 'primaryPreferred');
+      hosts = seedList;
+   } else {
+      params.delete('replicaSet');
+      params.set('directConnection', 'true');
+      params.set('readPreference', 'primaryPreferred');
+      hosts = spec;
+   }
+   if (!hosts) throw new Error('child host is empty');
+   params.sort();
+   return formatLegacyMongoUri({
+      "username": parts.username,
+      "password": parts.password,
+      "hosts": hosts,
+      "pathname": parts.pathname,
+      "searchParams": params
+   });
+}
+
+function openChildMongo(uri) {
+   if (typeof Mongo === 'function') return new Mongo(uri);
+   const handle = connect(uri);
+   return (handle && typeof handle.getMongo === 'function') ? handle.getMongo() : handle;
+}
+
+function closeChildMongo(mongo) {
+   try {
+      if (mongo && typeof mongo.close === 'function') mongo.close();
+   } catch (_) { /* already closed */ }
+}
+
+async function withChildSession(mongo, fn) {
+   /*
+    *  Serial global-db swap so $stats / $collStats / listCatalogSnapshot
+    *  reuse the current session. Restores db, sessionSnapshot, and
+    *  __collStatsOnMongos. Not mdblib.for(db).
+    */
+   const parentDb = db;
+   const parentSnap = sessionSnapshot.cached;
+   const parentCollStats = __collStatsOnMongos;
+   try {
+      db = mongo.getDB(parentDb.getName());
+      sessionSnapshot.cached = null;
+      __collStatsOnMongos = undefined;
+      return await fn();
+   } finally {
+      db = parentDb;
+      sessionSnapshot.cached = parentSnap;
+      __collStatsOnMongos = parentCollStats;
+   }
+}
+
 class HostNode {
    /*
-    *  Host identity. init() / discover() fill the connecting session.
-    *  Remote members are constructor fields only until discovery connects.
+    *  Host identity. init() / discover() fill a session (connecting by
+    *  default). Remote members are constructor fields until
+    *  TopologySnapshot.materializeNodes() connects.
     */
    constructor({
-         instance, hostname, proc, dbPath, shards = [], role, connecting
+         instance, hostname, proc, dbPath, shards = [], role, connecting, stats = null
       } = {}) {
       this.instance = instance;
       this.hostname = hostname;
@@ -683,12 +853,16 @@ class HostNode {
       this.shards = Array.isArray(shards) ? shards : [];
       this.role = role;
       this.connecting = connecting === true;
+      this.stats = stats || null;
+      this.error = null;
    }
-   init() {
+   init({ connecting = true, preserveInstance = false } = {}) {
+      const advertised = this.instance;
       const snap = sessionSnapshot();
       this.instance = (snap.atlasPlatform === 'serverless') ? 'serverless'
                     : (snap.sharded) ? 'sharded'
                     : hello().me;
+      if (preserveInstance && advertised != null) this.instance = advertised;
       this.hostname = snap.hostname;
       this.proc = snap.proc;
       this.dbPath = (snap.atlasPlatform === 'serverless') ? 'serverless'
@@ -700,10 +874,10 @@ class HostNode {
          this.shards = Array.isArray(snap.shardIds)
             ? snap.shardIds
             : db.adminCommand({ "listShards": 1 }).shards.map(({ _id }) => _id);
-      } else {
+      } else if (!Array.isArray(this.shards) || this.shards.length === 0) {
          this.shards = [];
       }
-      this.connecting = true;
+      this.connecting = connecting === true;
       return this;
    }
    static discover() {
@@ -713,9 +887,9 @@ class HostNode {
 
 class TopologySnapshot {
    /*
-    *  Cluster identity from the connecting session.
-    *  nodes[] are HostNode shells (seed / role). Stats fan-out waits on
-    *  discovery.js connect. Do not gather mongos local.* here.
+    *  Cluster identity from the connecting session; per-node stats via
+    *  materializeNodes() (discovery-style child Mongo(), not load()).
+    *  Do not gather mongos local.* from the router.
     */
    constructor({
          cluster = {}, connecting = null, nodes = [], aggregate = null, errors = []
@@ -814,6 +988,118 @@ class TopologySnapshot {
    }
    static discover() {
       return TopologySnapshot.fromSession();
+   }
+   expandShardedMembers() {
+      /*
+       *  Replace listShards seed-list nodes with one HostNode per seed host.
+       *  Connecting mongos stays. Used when topology.sharded is expanded.
+       */
+      const connecting = this.connecting;
+      const out = connecting ? [connecting] : [];
+      const seen = new Set(out.map(n => n.instance));
+      const pushNode = node => {
+         if (!node || node.instance == null || seen.has(node.instance)) return;
+         seen.add(node.instance);
+         out.push(node);
+      };
+      (this.nodes || []).forEach(node => {
+         if (!node || node.connecting) return;
+         const hosts = replicaSeedHosts(node.instance);
+         if (!hosts.length) {
+            pushNode(node);
+            return;
+         }
+         hosts.forEach(host => {
+            pushNode(new HostNode({
+               "instance": host,
+               "hostname": hostNameFromHostPort(host),
+               "proc": 'mongod',
+               "shards": Array.isArray(node.shards) ? node.shards.slice() : [],
+               "connecting": false
+            }));
+         });
+      });
+      this.nodes = out;
+      return this;
+   }
+   async materializeNodes({ replica = 'summary', sharded = 'summary', gather, onProgress } = {}) {
+      /*
+       *  Connect to advertised remotes and run gather(node) on each child
+       *  session. Serial (global db). Shared-tier / serverless / standalone
+       *  are a no-op. Connecting node is skipped (already topology.aggregate).
+       *  replica/sharded summary = $stats-depth gather; expanded = full
+       *  catalog + $collStats (gather callback decides). Sharded expanded
+       *  fans out seed hosts.
+       */
+      const kind = (this.cluster && this.cluster.kind) || '';
+      if (kind === 'sharedTier' || kind === 'serverless' || kind === 'standalone') {
+         return this;
+      }
+      if (typeof gather !== 'function') {
+         throw new Error('TopologySnapshot.materializeNodes requires gather');
+      }
+      const depth = (kind === 'sharded')
+         ? ((sharded === 'expanded') ? 'expanded' : 'summary')
+         : ((replica === 'expanded') ? 'expanded' : 'summary');
+      if (kind === 'sharded' && depth === 'expanded') this.expandShardedMembers();
+
+      let parent;
+      try {
+         parent = decomposeParentUri(db.getMongo().getURI());
+      } catch (e) {
+         this.errors.push({
+            "step": "parentUri",
+            "message": (e && (e.errmsg || e.message)) || String(e)
+         });
+         return this;
+      }
+
+      const targets = (this.nodes || []).filter(n => n && n.connecting !== true);
+      for (let i = 0; i < targets.length; i++) {
+         const node = targets[i];
+         if (typeof onProgress === 'function') {
+            onProgress({ node, index: i, total: targets.length, depth });
+         }
+         await this.connectAndGather(node, { parent, gather, depth });
+      }
+      return this;
+   }
+   async connectAndGather(node, { parent, gather, depth } = {}) {
+      const host = node && node.instance;
+      if (!host || host === 'sharded' || host === 'serverless' || host === 'sharedTier') {
+         const message = 'no child host';
+         node.error = message;
+         this.errors.push({ "step": "connect", "instance": host || null, "message": message });
+         return node;
+      }
+      let mongo;
+      try {
+         mongo = openChildMongo(childMongoUri(host, { parent }));
+         await withChildSession(mongo, async () => {
+            const keepShards = Array.isArray(node.shards) ? node.shards.slice() : [];
+            node.init({ "connecting": false, "preserveInstance": true });
+            if (keepShards.length && node.proc !== 'mongos') node.shards = keepShards;
+            let helloDoc = {};
+            try { helloDoc = hello() || {}; } catch (_) { helloDoc = {}; }
+            if (node.proc === 'mongos') node.role = 'mongos';
+            else if (helloDoc.isWritablePrimary) node.role = 'PRIMARY';
+            else if (helloDoc.secondary) node.role = 'SECONDARY';
+            node.stats = await gather(node, { depth });
+            node.error = null;
+         });
+      } catch (e) {
+         const message = (e && (e.errmsg || e.message)) || String(e);
+         node.error = message;
+         node.stats = null;
+         this.errors.push({
+            "step": "gather",
+            "instance": node.instance || host,
+            "message": message
+         });
+      } finally {
+         closeChildMongo(mongo);
+      }
+      return node;
    }
 }
 
@@ -1358,77 +1644,28 @@ function hidesDbStatsFreeStorage() {
    return platform === 'sharedTier' || platform === 'serverless';
 }
 
-// Hoisted once — avoid rebuilding ~70-key maps on every serverStatus() call.
-const SERVER_STATUS_OPTIONS_DEFAULTS = { // multiversion compatible
-   "none": true, // 8.0+ slim; 8.0/M0 keep process/pid (no throw). Opt-in sections after.
-   "activeIndexBuilds": false,
-   "asserts": false,
-   "batchedDeletes": false,
-   "bucketCatalog": false,
-   "catalogStats": false,
-   "changeStreamPreImages": false,
-   "collectionCatalog": false,
-   "connections": false,
-   "defaultRWConcern": false,
-   "directShardConnections": false,
-   "electionMetrics": false,
-   "encryptionAtRest": false,
-   "extra_info": false,
-   "featureCompatibilityVersion": false,
-   "fle": false,
-   "flowControl": false,
-   "ftdcCollectionMetrics": false,
-   "globalLock": false,
-   "health": false,
-   "hedgingMetrics": false,
-   "indexBuilds": false,
-   "indexBulkBuilder": false,
-   "indexStats": false,
-   "internalTransactions": false,
-   "latchAnalysis": false,
-   "locks": false,
-   "lockContentionMetrics": false,
-   "logicalSessionRecordCache": false,
-   "mem": false,
-   "metrics": false,
-   "mirroredReads": false,
-   "network": false,
-   "opLatencies": false,
-   "opReadConcernCounters": false,
-   "opWorkingTime": false,
-   "opWriteConcernCounters": false,
-   "opcounters": false,
-   "opcountersRepl": false,
-   "oplogTruncation": false,
-   "oplogTruncationThread": false,
-   "planCache": false,
-   "profiler": false,
-   "queryAnalyzers": false,
-   "querySettings": false,
-   "queryStats": false,
-   "queues": false,
-   "readConcernCounters": false,
-   "readPreferenceCounters": false,
-   "recoveryOplogApplier": false,
-   "repl": false,
-   "scramCache": false,
-   "security": false,
-   "sharding": false,
-   "shardingStatistics": false,
-   "shardedIndexConsistency": false,
-   "shardSplits": false,
-   "spillWiredTiger": false,
-   "storageEngine": false,
-   "tcmalloc": false,
-   "tenantMigrations": false,
-   "trafficRecording": false,
-   "transactions": false,
-   "transportSecurity": false,
-   "twoPhaseCommitCoordinator": false,
-   "watchdog": false,
-   "wiredTiger": false,
-   "writeBacksQueued": false
-};
+const SERVER_STATUS_IDENTITY_KEYS = new Set([
+   "ok", "host", "version", "process", "pid",
+   "uptime", "uptimeMillis", "uptimeEstimate", "localTime",
+   "$clusterTime", "operationTime", "clusterTime",
+   "errmsg", "code", "codeName", "errorLabels"
+]);
+const SERVER_STATUS_OPTIONS_DEFAULTS = { "none": true }; // 8.3 exclude-all; pre-8.3 learned below
+function absorbServerStatusKeys(ss) {
+   /*
+    *  Pre-8.3 ignores none:true; learn section names from a fat reply
+    *  and exclude them on later calls. Skip identity/command fields.
+    */
+   if (!ss || typeof ss !== 'object' || ss.ok === 0) return false;
+   let grew = false;
+   for (const key of Object.keys(ss)) {
+      if (SERVER_STATUS_IDENTITY_KEYS.has(key)) continue;
+      if (Object.prototype.hasOwnProperty.call(SERVER_STATUS_OPTIONS_DEFAULTS, key)) continue;
+      SERVER_STATUS_OPTIONS_DEFAULTS[key] = false;
+      grew = true;
+   }
+   return grew;
+}
 
 function serverStatus(serverStatusOptions = {}, statusReadPref) {
    /*
@@ -1458,6 +1695,7 @@ function serverStatus(serverStatusOptions = {}, statusReadPref) {
          "serverStatus": true,
          ...{ ...SERVER_STATUS_OPTIONS_DEFAULTS, ...serverStatusOptions }
       }, options);
+      absorbServerStatusKeys(serverStatusResults);
    } catch(_) {
       serverStatusResults.ok = 0;
    }
@@ -1672,6 +1910,75 @@ function $genRandPhrase(sentences) {
       out.push(sentence.charAt(0).toUpperCase() + sentence.slice(1) + '.');
    }
    return out.join(' ');
+}
+
+function $geoNum(n, lo, hi) {
+   /*
+    *  four decimal places, clamped into the GeoJSON range
+    */
+   let x = Math.round(n * 10000) / 10000;
+   if (x < lo)
+      x = lo;
+   if (x > hi)
+      x = hi;
+   return x;
+}
+
+function $genPoint() {
+   /*
+    *  one GeoJSON Point inside the longitude and latitude bounds
+    */
+   return {
+      "type": "Point",
+      "coordinates": [
+         $geoNum($getRandNum(-180, 180), -180, 180),
+         $geoNum($getRandNum(-90, 90), -90, 90)
+      ]
+   };
+}
+
+function $genLine() {
+   /*
+    *  a short GeoJSON LineString. Both ends share one corner.
+    */
+   const span = $getRandNum(0.1, 1);
+   const lng = $geoNum($getRandNum(-180, 180 - span), -180, 180);
+   const lat = $geoNum($getRandNum(-90, 90 - span), -90, 90);
+   return {
+      "type": "LineString",
+      "coordinates": [
+         [lng, lat],
+         [
+            $geoNum(lng + $getRandNum(0.05, span), -180, 180),
+            $geoNum(lat + $getRandNum(0.05, span), -90, 90)
+         ]
+      ]
+   };
+}
+
+function $genPolygon(withHole) {
+   /*
+    *  one GeoJSON Polygon. The shell is a counterclockwise triangle
+    *  from one southwest corner. withHole adds a clockwise hole inside it.
+    */
+   const hole = !!withHole;
+   const east = $getRandNum(hole ? 1 : 0.1, hole ? 2 : 1);
+   const north = $getRandNum(hole ? 1 : 0.1, hole ? 2 : 1);
+   const lng = $geoNum($getRandNum(-180, 180 - east), -180, 180);
+   const lat = $geoNum($getRandNum(-90, 90 - north), -90, 90);
+   const lngE = $geoNum(lng + east, -180, 180);
+   const latN = $geoNum(lat + north, -90, 90);
+   const shell = [[lng, lat], [lngE, lat], [lng, latN], [lng, lat]];
+   const coordinates = [shell];
+   if (hole) {
+      const w = lngE - lng;
+      const h = latN - lat;
+      const a = [$geoNum(lng + w * 0.2, -180, 180), $geoNum(lat + h * 0.2, -90, 90)];
+      const b = [$geoNum(lng + w * 0.2, -180, 180), $geoNum(lat + h * 0.35, -90, 90)];
+      const c = [$geoNum(lng + w * 0.35, -180, 180), $geoNum(lat + h * 0.2, -90, 90)];
+      coordinates.push([a, b, c, [a[0], a[1]]]);
+   }
+   return { "type": "Polygon", "coordinates": coordinates };
 }
 
 function $genRandAlpha(len = 1) {

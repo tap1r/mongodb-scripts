@@ -1,8 +1,10 @@
 // Sample schema C, GeoJSON.
 // A string that starts with "=" is an expression. Other strings, numbers, and null are literals.
 // Expressions may use the preamble names oid, date, ts, idioma, and totalDocs.
-// The point, the line, both polygon fields, and the geometry collection draw coordinates.
-// multiPoint, multiLineString, and multiPolygon use fixed positions.
+// $genPoint, $genLine, and $genPolygon draw the random geometries.
+// A polygon shares one southwest corner, so the ring stays counterclockwise.
+// $genPolygon(true) adds a clockwise hole inside that ring.
+// multiPoint, multiLineString, and multiPolygon stay on fixed positions.
 {
    "_id": "=oid",
    "schema": {
@@ -21,55 +23,13 @@
    "status": "=['Active', 'Inactive', null][$getRandRatioInt([80, 20, 1])]",
    "locality": "=$getRandCountry()['alpha-3 code']",
    // GeoJSON Point
-   "location": {
-      "type": "Point",
-      "coordinates": [
-         "=+$getRandNum(-180, 180).toFixed(4)",
-         "=+$getRandNum(-90, 90).toFixed(4)"
-      ]
-   },
+   "location": "=$genPoint()",
    // GeoJSON LineString
-   "lineString": {
-      "type": "LineString",
-      "coordinates": [
-         [
-            "=+$getRandNum(-180, 180).toFixed(4)",
-            "=+$getRandNum(-90, 90).toFixed(4)"
-         ],
-         [
-            "=+$getRandNum(-180, 180).toFixed(4)",
-            "=+$getRandNum(-90, 90).toFixed(4)"
-         ]
-      ]
-   },
-   // polygon with a single ring. East and north offsets stay positive, so the ring is counterclockwise.
-   "polygon": {
-      "type": "Polygon",
-      "coordinates": [[
-         [0, 0],
-         ["=+$getRandNum(0.1, 1).toFixed(4)", 0],
-         [0, "=+$getRandNum(0.1, 1).toFixed(4)"],
-         [0, 0]
-      ]]
-   },
-   // shell offsets are at least 1, so the clockwise hole stays inside the triangle
-   "polygonMulti": {
-      "type": "Polygon",
-      "coordinates": [
-         [
-            [0, 0],
-            ["=+$getRandNum(1, 2).toFixed(4)", 0],
-            [0, "=+$getRandNum(1, 2).toFixed(4)"],
-            [0, 0]
-         ],
-         [
-            [0.2, 0.2],
-            [0.2, 0.35],
-            [0.35, 0.2],
-            [0.2, 0.2]
-         ]
-      ]
-   },
+   "lineString": "=$genLine()",
+   // GeoJSON Polygon. One corner, counterclockwise.
+   "polygon": "=$genPolygon()",
+   // Same triangle with a clockwise hole.
+   "polygonMulti": "=$genPolygon(true)",
    // GeoJSON MultiPoint
    "multiPoint": {
       "type": "MultiPoint",
@@ -126,35 +86,9 @@
    "geoCollection": {
       "type": "GeometryCollection",
       "geometries": [
-         {
-            "type": "Point",
-            "coordinates": [
-               "=+$getRandNum(-180, 180).toFixed(4)",
-               "=+$getRandNum(-90, 90).toFixed(4)"
-            ]
-         },
-         {
-            "type": "LineString",
-            "coordinates": [
-               [
-                  "=+$getRandNum(-180, 180).toFixed(4)",
-                  "=+$getRandNum(-90, 90).toFixed(4)"
-               ],
-               [
-                  "=+$getRandNum(-180, 180).toFixed(4)",
-                  "=+$getRandNum(-90, 90).toFixed(4)"
-               ]
-            ]
-         },
-         {
-            "type": "Polygon",
-            "coordinates": [[
-               [0, 0],
-               ["=+$getRandNum(0.1, 1).toFixed(4)", 0],
-               [0, "=+$getRandNum(0.1, 1).toFixed(4)"],
-               [0, 0]
-            ]]
-         }
+         "=$genPoint()",
+         "=$genLine()",
+         "=$genPolygon()"
       ]
    }
 }
