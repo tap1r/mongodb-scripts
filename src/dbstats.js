@@ -1061,16 +1061,17 @@
       const nodes = (topology && topology.nodes) || [];
       if (!topologyDepthExpanded(topology)) return false;
       if (!nodes.some(n => n && n.connecting !== true && n.stats)) return false;
+      const widths = nodeIdentityWidths(nodes);
       nodes.forEach(node => {
          if (!node || (!node.stats && !node.error)) return;
-         printNodeBanner(node);
+         printNodeBanner(node, widths);
          if (!node.stats) return;
          printBody(node.stats);
          printDbPath(node.stats, { "hostLine": false });
       });
       if (nodes.length > 1) {
          printRule('heavy');
-         printTopologyMembers(topology);
+         printTopologyMembers(topology, widths);
          printRule('heavy');
          console.log('');
       }
@@ -1777,21 +1778,49 @@
       return (node && node.dbPath) || '';
    }
 
-   function printNodeBanner(node = {}) {
-      const host = node.instance || node.hostname || 'unknown';
-      const role = node.role || '';
-      const proc = node.proc || '';
-      const path = nodeDbPath(node) || '';
-      const mark = node.connecting ? '   [green]connecting[/]' : '';
-      const err = node.error ? `   [red]${node.error}[/]` : '';
-      console.log('');
-      printRule('heavy');
-      console.log(`[bold][green]Node:[/] [cyan]${host}[/]   [bold][green]Role:[/] [cyan]${role}[/]   [bold][green]Type:[/] [cyan]${proc}[/]   [bold][green]dbPath:[/] [cyan]${path}[/]${mark}${err}`);
+   function nodeIdentityFields(node = {}) {
+      return {
+         "host": String(node.instance || node.hostname || 'unknown'),
+         "role": String(node.role || ''),
+         "proc": String(node.proc || ''),
+         "path": String(nodeDbPath(node) || ''),
+         "connecting": node.connecting === true,
+         "error": node.error || ''
+      };
    }
 
-   function printTopologyMembers(topology) {
+   function nodeIdentityWidths(nodes = []) {
+      const rows = (nodes || []).map(nodeIdentityFields);
+      const maxLen = (key) => rows.reduce((n, r) => Math.max(n, String(r[key] || '').length), 0);
+      return {
+         "host": maxLen('host'),
+         "role": maxLen('role'),
+         "proc": maxLen('proc'),
+         "path": maxLen('path')
+      };
+   }
+
+   function formatNodeIdentity(node, widths = {}, { indent = '' } = {}) {
+      const f = nodeIdentityFields(node);
+      const hostW = widths.host || f.host.length;
+      const roleW = widths.role || f.role.length;
+      const procW = widths.proc || f.proc.length;
+      const pathW = widths.path || f.path.length;
+      const mark = f.connecting ? '   [green]connecting[/]' : '';
+      const err = f.error ? `   [red]${f.error}[/]` : '';
+      return `${indent}[cyan]${f.host.padEnd(hostW)}[/]   [bold][green]Role:[/] [cyan]${f.role.padEnd(roleW)}[/]   [bold][green]Type:[/] [cyan]${f.proc.padEnd(procW)}[/]   [bold][green]dbPath:[/] [cyan]${f.path.padEnd(pathW)}[/]${mark}${err}`;
+   }
+
+   function printNodeBanner(node = {}, widths) {
+      console.log('');
+      printRule('heavy');
+      console.log(`[bold][green]Node:[/] ${formatNodeIdentity(node, widths)}`);
+   }
+
+   function printTopologyMembers(topology, widths) {
       const nodes = (topology && Array.isArray(topology.nodes)) ? topology.nodes : [];
       if (!nodes.length) return false;
+      const cols = widths || nodeIdentityWidths(nodes);
       const cluster = topology.cluster || {};
       const kind = cluster.kind || '';
       const setName = cluster.setName;
@@ -1808,13 +1837,7 @@
          console.log(`[bold][green]Nodes:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]`);
       }
       nodes.forEach(node => {
-         const host = node.instance || node.hostname || 'unknown';
-         const role = node.role || '';
-         const proc = node.proc || '';
-         const path = nodeDbPath(node) || '';
-         const mark = node.connecting ? '   [green]connecting[/]' : '';
-         const err = node.error ? `   [red]${node.error}[/]` : '';
-         console.log(`  [cyan]${host}[/]   [bold][green]Role:[/] [cyan]${role}[/]   [bold][green]Type:[/] [cyan]${proc}[/]   [bold][green]dbPath:[/] [cyan]${path}[/]${mark}${err}`);
+         console.log(formatNodeIdentity(node, cols, { "indent": '  ' }));
       });
       return true;
    }
