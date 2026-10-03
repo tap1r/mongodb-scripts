@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "1.0.1"
+    *  Version: "1.1.0"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -41,7 +41,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "1.0.1" };
+   const __script = { "name": "autoCompact.js", "version": "1.1.0" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (from mdblib.js)
    const ansiTags = [
@@ -145,95 +145,47 @@
 
    console.log(`\n[yellow]#### Running script ${__script.name} v${__script.version} on shell v${version()}[/]\n`);
 
-   // Built once. `none: true` still needs the explicit false keys on servers that ignore it.
-   const SERVER_STATUS_OPTIONS_DEFAULTS = { // multiversion compatible
-      "none": true, // 8.3 feature: exclude all optional fields, then opt-in
-      "activeIndexBuilds": false,
-      "asserts": false,
-      "batchedDeletes": false,
-      "bucketCatalog": false,
-      "catalogStats": false,
-      "changeStreamPreImages": false,
-      "collectionCatalog": false,
-      "connections": false,
-      "defaultRWConcern": false,
-      "directShardConnections": false,
-      "electionMetrics": false,
-      "encryptionAtRest": false,
-      "extra_info": false,
-      "featureCompatibilityVersion": false,
-      "fle": false,
-      "flowControl": false,
-      "ftdcCollectionMetrics": false,
-      "globalLock": false,
-      "health": false,
-      "hedgingMetrics": false,
-      "indexBuilds": false,
-      "indexBulkBuilder": false,
-      "indexStats": false,
-      "internalTransactions": false,
-      "latchAnalysis": false,
-      "locks": false,
-      "lockContentionMetrics": false,
-      "logicalSessionRecordCache": false,
-      "mem": false,
-      "metrics": false,
-      "mirroredReads": false,
-      "network": false,
-      "opLatencies": false,
-      "opReadConcernCounters": false,
-      "opWorkingTime": false,
-      "opWriteConcernCounters": false,
-      "opcounters": false,
-      "opcountersRepl": false,
-      "oplogTruncation": false,
-      "oplogTruncationThread": false,
-      "planCache": false,
-      "profiler": false,
-      "queryAnalyzers": false,
-      "querySettings": false,
-      "queryStats": false,
-      "queues": false,
-      "readConcernCounters": false,
-      "readPreferenceCounters": false,
-      "recoveryOplogApplier": false,
-      "repl": false,
-      "scramCache": false,
-      "security": false,
-      "sharding": false,
-      "shardingStatistics": false,
-      "shardedIndexConsistency": false,
-      "shardSplits": false,
-      "spillWiredTiger": false,
-      "storageEngine": false,
-      "tcmalloc": false,
-      "tenantMigrations": false,
-      "trafficRecording": false,
-      "transactions": false,
-      "transportSecurity": false,
-      "twoPhaseCommitCoordinator": false,
-      "watchdog": false,
-      "wiredTiger": false,
-      "writeBacksQueued": false
-   };
-   const serverStatusCommand = (opts = {}) => ({
-      "serverStatus": true,
-      ...SERVER_STATUS_OPTIONS_DEFAULTS,
-      ...opts
-   });
-   const SERVER_STATUS_CMD = serverStatusCommand();
-   const SERVER_STATUS_WT_CMD = serverStatusCommand({ "wiredTiger": true });
-   const SERVER_STATUS_ENGINE_CMD = serverStatusCommand({
+   const SERVER_STATUS_IDENTITY_KEYS = new Set([
+      "ok", "host", "version", "process", "pid",
+      "uptime", "uptimeMillis", "uptimeEstimate", "localTime",
+      "$clusterTime", "operationTime", "clusterTime",
+      "errmsg", "code", "codeName", "errorLabels"
+   ]);
+   const SERVER_STATUS_OPTIONS_DEFAULTS = { "none": true }; // 8.3 exclude-all; pre-8.3 learned below
+   function absorbServerStatusKeys(ss) {
+      /*
+       *  Pre-8.3 ignores none:true; learn section names from a fat reply
+       *  and exclude them on later calls. Skip identity/command fields.
+       */
+      if (!ss || typeof ss !== 'object' || ss.ok === 0) return false;
+      let grew = false;
+      for (const key of Object.keys(ss)) {
+         if (SERVER_STATUS_IDENTITY_KEYS.has(key)) continue;
+         if (Object.prototype.hasOwnProperty.call(SERVER_STATUS_OPTIONS_DEFAULTS, key)) continue;
+         SERVER_STATUS_OPTIONS_DEFAULTS[key] = false;
+         grew = true;
+      }
+      return grew;
+   }
+   const SERVER_STATUS_WT_OPTS = { "wiredTiger": true };
+   const SERVER_STATUS_ENGINE_OPTS = {
       "storageEngine": true,
       "featureCompatibilityVersion": true
-   });
+   };
 
-   function serverStatus(command = SERVER_STATUS_CMD) {
+   function serverStatus(opts = {}) {
       /*
-       *  opt-in version of db.serverStatus()
-       *  Pass a command built once above (bare, wiredTiger, or storageEngine+FCV).
+       *  opt-in version of db.serverStatus().
+       *  Pass section overlays (wiredTiger, storageEngine+FCV). Defaults grow
+       *  from the first fat reply on servers that ignore none:true.
        */
-      return db.adminCommand(command);
+      const ss = db.adminCommand({
+         "serverStatus": true,
+         ...SERVER_STATUS_OPTIONS_DEFAULTS,
+         ...opts
+      });
+      absorbServerStatusKeys(ss);
+      return ss;
    }
 
    const SERVERSTATUS_MS = 1000;
@@ -264,7 +216,7 @@
          ({ 'wiredTiger': {
                'background-compact': bc = {}
             } = {}
-         } = serverStatus(SERVER_STATUS_WT_CMD));
+         } = serverStatus(SERVER_STATUS_WT_OPTS));
          ({ 'background compact running': running,
             'background compact recovered bytes': bytesRecovered
          } = bc);
@@ -448,7 +400,7 @@
          ({
             'storageEngine': { 'name': engine } = {},
             'featureCompatibilityVersion': fcv
-         } = serverStatus(SERVER_STATUS_ENGINE_CMD));
+         } = serverStatus(SERVER_STATUS_ENGINE_OPTS));
       } catch(e) {
          console.log('[red][ERROR] serverStatus() failed:[/]', e);
          return false;
