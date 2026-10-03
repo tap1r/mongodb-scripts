@@ -1,6 +1,6 @@
 /*
  *  Name: "indexCacheUtil.js"
- *  Version: "1.0.0"
+ *  Version: "1.1.0"
  *  Description: "index cache util"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,10 +19,17 @@
  *    collection is listed, so those index bytes are counted once.
  *  - $collStats runs in a pool of 8. Driver cursor._cursor.toArray() overlaps
  *    the drains; shell toArray() would serialise them. Read concern local.
- *  - serverStatus().wiredTiger.cache is read immediately before and after the pool.
- *    The headline ratios use the after sample. Drift is after minus before.
- *    Index bytes in cache are per-index "bytes currently in the cache"
- *    (the pre-1.0.0 numerator). Page-image fill stays page images / configured.
+ *  - Cache sample is { serverStatus: 1, none: true, wiredTiger: 1 }, once after
+ *    the catalog and once after the pool. Full serverStatus is the fallback.
+ *    Headline ratios use the end sample. Drift is end minus start.
+ *  - Index bytes are per-index "bytes currently in the cache" via $getField.
+ *    A missing field is unknown (n/a), not 0. Page-image fill stays
+ *    page images / configured. Bytes not belonging to page images sit beside
+ *    occupancy.
+ *  - The collection btree's cache bytes come from the same $collStats.
+ *    Other bytes currently in the cache are the server total minus indexes
+ *    minus those collection bytes.
+ *  - Up to 5 namespaces: the report lists each namespace and each index.
  *
  *  TODOs:
  *  - Shard / cluster-wide report (discovery fan-out)
@@ -37,6 +44,7 @@
     *  Index cache util
     */
    const STATS_CONCURRENCY = 8;
+   const INDEX_DETAIL_MAX_NAMESPACES = 5;
 
    function commandErrorMessage(e) {
       if (!e) return 'unknown error';
@@ -62,24 +70,45 @@
       return !!(doc && doc.msg === 'isdbgrid');
    }
 
+   function cacheBlock(status) {
+      return status && status.wiredTiger && status.wiredTiger.cache;
+   }
+
    function readCache() {
       /*
        *  Point sample of this node's WiredTiger cache.
+       *  none:true plus wiredTiger is the slim 8.0 shape. Older servers fall
+       *  back to a full serverStatus.
        */
-      const status = db.serverStatus();
-      const cache = status && status.wiredTiger && status.wiredTiger.cache;
+      let cache = null;
+      try {
+         cache = cacheBlock(db.adminCommand({
+            "serverStatus": 1,
+            "none": true,
+            "wiredTiger": 1
+         }));
+      } catch(e) {
+         cache = null;
+      }
+      if (!cache) cache = cacheBlock(db.serverStatus());
       if (!cache) throw new Error('serverStatus().wiredTiger.cache is absent');
+      const current = +cache['bytes currently in the cache'] || 0;
+      const pageImages = +cache['bytes belonging to page images in the cache'] || 0;
+      const notPage = cache['bytes not belonging to page images in the cache'];
       return {
          "configured": +cache['maximum bytes configured'] || 0,
-         "current": +cache['bytes currently in the cache'] || 0,
-         "pageImages": +cache['bytes belonging to page images in the cache'] || 0
+         "current": current,
+         "pageImages": pageImages,
+         "notPageImages": (notPage == null) ? (current - pageImages) : +notPage
       };
    }
 
    function formatPct(numerator, denominator) {
       /*
-       *  Zero or non-finite denominator prints n/a.
+       *  A missing numerator or a zero/non-finite denominator prints n/a.
+       *  +null is 0, so null must be rejected before coercion.
        */
+      if (numerator == null || denominator == null) return 'n/a';
       const num = +numerator;
       const den = +denominator;
       if (!Number.isFinite(num) || !Number.isFinite(den) || den === 0) return 'n/a';
@@ -91,6 +120,11 @@
       if (!Number.isFinite(n)) return 'n/a';
       if (n > 0) return `+${n} bytes`;
       return `${n} bytes`;
+   }
+
+   function formatBytes(value) {
+      if (value == null || !Number.isFinite(+value)) return 'n/a';
+      return `${value} bytes`;
    }
 
    function progressLine(text) {
@@ -401,48 +435,78 @@
       };
    }
 
+   function wtField(parent, section, field) {
+      /*
+       *  $getField so a space-bearing WiredTiger name is one field, and a
+       *  missing field stays missing instead of collapsing to 0.
+       */
+      return {
+         "$getField": {
+            "field": field,
+            "input": { "$getField": { "field": section, "input": parent } }
+         }
+      };
+   }
+
+   function knownOrNull(expr) {
+      return {
+         "$let": {
+            "vars": { "v": expr },
+            "in": {
+               "$cond": [
+                  { "$eq": [{ "$type": "$$v" }, "missing"] },
+                  null,
+                  "$$v"
+               ]
+            }
+         }
+      };
+   }
+
+   function diskOf(fileBytes, reuseBytes) {
+      if (fileBytes == null || reuseBytes == null) return null;
+      const file = +fileBytes;
+      const reuse = +reuseBytes;
+      if (!Number.isFinite(file) || !Number.isFinite(reuse)) return null;
+      return Math.max(0, file - reuse);
+   }
+
    async function getIndexCacheStats({ dbName, collName }) {
       /*
-       *  One $collStats document.
-       *  resident: per-index "bytes currently in the cache" (pre-1.0.0 numerator).
-       *  On-disk bytes are index file size minus bytes available for reuse.
+       *  One $collStats document. Resident bytes are per-index and collection
+       *  "bytes currently in the cache". On-disk index bytes are file size
+       *  minus bytes available for reuse. A missing counter stays null.
        */
       const pipeline = [
          { "$collStats": {
             "storageStats": { "scale": 1 }
          } },
          { "$project": {
-            "indexStats": {
-               "$objectToArray": { "$ifNull": ["$storageStats.indexDetails", {}] }
-            }
-         } },
-         { "$project": {
             "_id": 0,
-            "totals": {
-               "$reduce": {
-                  "input": "$indexStats",
-                  "initialValue": { "resident": 0, "fileBytes": 0, "reuseBytes": 0 },
+            "indexDetailsPresent": {
+               "$ne": [{ "$type": "$storageStats.indexDetails" }, "missing"]
+            },
+            "collResident": knownOrNull(wtField(
+               "$storageStats.wiredTiger", "cache", "bytes currently in the cache"
+            )),
+            "indexes": {
+               "$map": {
+                  "input": { "$objectToArray": { "$ifNull": ["$storageStats.indexDetails", {}] } },
+                  "as": "i",
                   "in": {
-                     "resident": { "$add": [
-                        "$$value.resident",
-                        { "$ifNull": ["$$this.v.cache.bytes currently in the cache", 0] }
-                     ] },
-                     "fileBytes": { "$add": [
-                        "$$value.fileBytes",
-                        { "$ifNull": ["$$this.v.block-manager.file size in bytes", 0] }
-                     ] },
-                     "reuseBytes": { "$add": [
-                        "$$value.reuseBytes",
-                        { "$ifNull": ["$$this.v.block-manager.file bytes available for reuse", 0] }
-                     ] }
+                     "name": "$$i.k",
+                     "resident": knownOrNull(wtField(
+                        "$$i.v", "cache", "bytes currently in the cache"
+                     )),
+                     "fileBytes": knownOrNull(wtField(
+                        "$$i.v", "block-manager", "file size in bytes"
+                     )),
+                     "reuseBytes": knownOrNull(wtField(
+                        "$$i.v", "block-manager", "file bytes available for reuse"
+                     ))
                   }
                }
             }
-         } },
-         { "$project": {
-            "resident": "$totals.resident",
-            "fileBytes": "$totals.fileBytes",
-            "reuseBytes": "$totals.reuseBytes"
          } }
       ];
       const options = {
@@ -454,15 +518,43 @@
          db.getSiblingDB(dbName).getCollection(collName).aggregate(pipeline, options)
       );
       if (!docs.length) throw new Error('empty $collStats result');
-      let resident = 0, fileBytes = 0, reuseBytes = 0;
+      let resident = 0;
+      let residentComplete = true;
+      let diskBytes = 0;
+      let diskComplete = true;
+      let collResident = 0;
+      let collComplete = true;
+      const indexes = [];
       for (const doc of docs) {
-         resident += +doc.resident || 0;
-         fileBytes += +doc.fileBytes || 0;
-         reuseBytes += +doc.reuseBytes || 0;
+         if (!doc.indexDetailsPresent) {
+            residentComplete = false;
+            diskComplete = false;
+         } else {
+            for (const idx of doc.indexes || []) {
+               const idxResident = (idx.resident == null) ? null : +idx.resident;
+               const idxDisk = diskOf(idx.fileBytes, idx.reuseBytes);
+               if (idxResident == null || !Number.isFinite(idxResident)) residentComplete = false;
+               else resident += idxResident;
+               if (idxDisk == null) diskComplete = false;
+               else diskBytes += idxDisk;
+               indexes.push({
+                  "name": idx.name,
+                  "resident": (idxResident == null || !Number.isFinite(idxResident)) ? null : idxResident,
+                  "diskBytes": idxDisk
+               });
+            }
+         }
+         if (doc.collResident == null || !Number.isFinite(+doc.collResident)) collComplete = false;
+         else collResident += +doc.collResident;
       }
       return {
-         "resident": resident,
-         "diskBytes": Math.max(0, fileBytes - reuseBytes)
+         "resident": residentComplete ? resident : null,
+         "residentComplete": residentComplete,
+         "diskBytes": diskComplete ? diskBytes : null,
+         "diskComplete": diskComplete,
+         "collResident": collComplete ? collResident : null,
+         "collComplete": collComplete,
+         "indexes": indexes
       };
    }
 
@@ -470,25 +562,48 @@
       console.log(`\t${String(label).padEnd(36)}${value}`);
    }
 
-   function printReport({ before, after, resident, diskBytes, catalog, measured, failed }) {
+   function formatIndexLine(row) {
+      const cache = (row.resident == null) ? 'n/a' : `${row.resident} bytes in cache`;
+      const disk = (row.diskBytes == null) ? 'n/a' : `${row.diskBytes} bytes on disk`;
+      const pct = (row.resident == null || row.diskBytes == null)
+         ? 'n/a'
+         : formatPct(row.resident, row.diskBytes);
+      return `${cache}    ${disk}    ${pct}`;
+   }
+
+   function printReport({
+      before, after, resident, residentComplete, diskBytes, diskComplete,
+      collResident, collComplete, indexRows, showDetail, catalog, measured, failed
+   }) {
       /*
        *  Headline cache figures are the sample taken when the pool finished.
        *  before is the sample taken when the pool started.
+       *  An incomplete index or collection sum prints n/a, not a partial total.
        */
       const cache = after || before;
+      const indexBytes = residentComplete ? resident : null;
+      const indexDisk = diskComplete ? diskBytes : null;
+      const collBytes = collComplete ? collResident : null;
+      const otherBytes = (indexBytes == null || collBytes == null)
+         ? null
+         : (cache.current - indexBytes - collBytes);
       console.log('\n');
-      printLine('Configured WT cache size:', `${cache.configured} bytes`);
-      printLine('Total bytes in cache:', `${cache.pageImages} bytes`);
+      printLine('Configured WT cache size:', formatBytes(cache.configured));
+      printLine('Total bytes in cache:', formatBytes(cache.pageImages));
       printLine('Total cache util:', formatPct(cache.pageImages, cache.configured));
       console.log('');
-      printLine('Bytes currently in the cache:', `${cache.current} bytes`);
+      printLine('Bytes currently in the cache:', formatBytes(cache.current));
+      printLine('Bytes not belonging to page images:', formatBytes(cache.notPageImages));
       printLine('Cache occupancy:', formatPct(cache.current, cache.configured));
       console.log('');
-      printLine('Total indexes size on disk:', `${diskBytes} bytes`);
-      printLine('Index bytes in cache:', `${resident} bytes`);
-      printLine('Cache util by indexes:', formatPct(resident, cache.current));
-      printLine('Index share of page images:', formatPct(resident, cache.pageImages));
-      printLine('Index working set util:', formatPct(resident, diskBytes));
+      printLine('Total indexes size on disk:', formatBytes(indexDisk));
+      printLine('Index bytes in cache:', formatBytes(indexBytes));
+      printLine('Cache util by indexes:', formatPct(indexBytes, cache.current));
+      printLine('Index share of page images:', formatPct(indexBytes, cache.pageImages));
+      printLine('Index working set util:', formatPct(indexBytes, indexDisk));
+      console.log('');
+      printLine('Collection bytes in cache:', formatBytes(collBytes));
+      printLine('Other bytes in cache:', formatBytes(otherBytes));
       console.log('');
       console.log('\tGather drift (end minus start):');
       printLine('Bytes currently in the cache:', after ? formatDelta(after.current - before.current) : 'n/a');
@@ -496,6 +611,24 @@
       console.log('');
       printLine('Catalog:', catalog.builder === 'listCatalog' ? '$listCatalog' : 'listCollections');
       printLine('Namespaces measured:', measured);
+      if (showDetail) {
+         for (const ns of catalog.namespaces || []) {
+            console.log(`\t${ns.dbName}.${ns.collName}`);
+         }
+         if (indexRows.length) {
+            const rows = indexRows.slice().sort((a, b) => {
+               const ar = (a.resident == null) ? -1 : a.resident;
+               const br = (b.resident == null) ? -1 : b.resident;
+               return br - ar;
+            });
+            console.log('');
+            console.log('\tIndexes:');
+            for (const row of rows) {
+               console.log(`\t${row.ns}  ${row.name}`);
+               console.log(`\t    ${formatIndexLine(row)}`);
+            }
+         }
+      }
       if (failed) printLine('Namespaces failed:', failed);
       if (catalog.fallback === true) {
          let message = 'Catalog listing used listCollections after $listCatalog was unavailable or unauthorized.';
@@ -514,12 +647,6 @@
          console.log('indexCacheUtil reads the WiredTiger cache of the connected mongod. This session is a mongos; connect to a member directly.');
          return;
       }
-      try {
-         readCache();
-      } catch(e) {
-         console.error('WiredTiger cache stats are unavailable:', commandErrorMessage(e));
-         return;
-      }
 
       progressLine('catalog  listing');
       let catalog;
@@ -534,9 +661,14 @@
       const namespaces = catalog.namespaces || [];
       const total = namespaces.length;
       let resident = 0;
+      let residentComplete = true;
       let diskBytes = 0;
+      let diskComplete = true;
+      let collResident = 0;
+      let collComplete = true;
       let failed = 0;
       const statFailures = [];
+      const indexRows = [];
       let before = null;
       let after = null;
       try {
@@ -544,10 +676,21 @@
          await mapPool(namespaces, STATS_CONCURRENCY, async ns => {
             try {
                const stats = await getIndexCacheStats(ns);
-               resident += stats.resident;
-               diskBytes += stats.diskBytes;
+               const nsName = `${ns.dbName}.${ns.collName}`;
+               if (!stats.residentComplete) residentComplete = false;
+               else resident += stats.resident;
+               if (!stats.diskComplete) diskComplete = false;
+               else diskBytes += stats.diskBytes;
+               if (!stats.collComplete) collComplete = false;
+               else collResident += stats.collResident;
+               for (const idx of stats.indexes) {
+                  indexRows.push({ "ns": nsName, ...idx });
+               }
             } catch(e) {
                failed++;
+               residentComplete = false;
+               diskComplete = false;
+               collComplete = false;
                statFailures.push(`${ns.dbName}.${ns.collName}: ${commandErrorMessage(e)}`);
             }
          }, ({ done, inFlight, queued }) => {
@@ -573,7 +716,13 @@
          before,
          after,
          resident,
+         residentComplete,
          diskBytes,
+         diskComplete,
+         collResident,
+         collComplete,
+         indexRows,
+         "showDetail": total <= INDEX_DETAIL_MAX_NAMESPACES,
          catalog,
          "measured": total - failed,
          failed
