@@ -241,7 +241,7 @@ let docs = (typeof driverToArray === 'function')
 if (docs && typeof docs.then === 'function') docs = await docs;
 ```
 
-A single sequential `aggregate(...).toArray()[0]` (`onlineDefrag.js` packed-temp WT) is fine. A thread pool (`indexCacheUtil.js`, when it lands) must use the driver Promise.
+A single sequential `aggregate(...).toArray()[0]` (`onlineDefrag.js` packed-temp WT) is fine. `indexCacheUtil.js` v1.0.0 drains `$listCatalog` and the `$collStats` pool with this driver Promise inside a local `mapPool`.
 
 ### Sync shell calls do not overlap by themselves
 
@@ -259,7 +259,7 @@ p.finally(process.stdout.write('\x1b[?1049l'));
 p.finally(() => { process.stdout.write('\x1b[?1049l'); });
 ```
 
-Live `src/congestionMonitor.js` (v0.3.3) uses `.finally(() => process.stdout.write(…))` so the restore waits for the EQ paints. Archive freeze v0.2.13 passes `process.stdout.write(...)` directly; that write runs when the chain is built (wontfix on the freeze line).
+Live `src/congestionMonitor.js` (v0.4.0) uses `.finally(() => process.stdout.write(…))` so the restore waits for the EQ paints. Archive freeze v0.2.13 passes `process.stdout.write(...)` directly; that write runs when the chain is built (wontfix on the freeze line).
 
 ### Thenable cursors: do not `await` a live cursor
 
