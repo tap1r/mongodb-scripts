@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.0.0"
+ *  Version: "1.1.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,7 +19,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.0.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.1.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -290,6 +290,7 @@
          "granularity": "hours"
       },
       "capped": false,                  // build capped collection type
+      // Not applied when timeSeries is set. A capped collection is not sharded.
       "cappedOptions": {
          "size": Math.pow(2, 27),
          "max": Math.pow(2, 27) / Math.pow(2, 12)
@@ -530,6 +531,9 @@
       }
       const ratioSum = ratioTotal(fuzzer.ratios);
       const sampleSize = $floor((8 + ratioSum) ** 2);
+      // Printed before the plan so a later time-series error is not read as a capped failure.
+      if (capped && timeSeries)
+         console.log('\n[red][WARN] [yellow]capped[red] is not applied because a time series collection cannot be capped[/]');
       const plan = collectionPlan();
       if (plan.length > 0) {
          plan.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
@@ -540,6 +544,8 @@
          oidWindow.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
          return;
       }
+      if (cappedThisRun() && sharding && isSharded())
+         console.log('\n[red][WARN] [yellow]sharding[red] is skipped because a capped collection cannot be sharded[/]');
 
       console.log(`\nSynthesising ${totalDocs} ${plural(totalDocs, 'document', 'documents')}`);
 
@@ -967,7 +973,8 @@
    }
 
    function reshardDecision() {
-      if (!isSharded() || !shardedOptions.reShard)
+      // A capped collection is left unsharded, so reshardCollection does not apply.
+      if (!isSharded() || !shardedOptions.reShard || cappedThisRun())
          return { action: 'off' };
       if (!fCV(5.0))
          return {
@@ -1178,25 +1185,30 @@
       return reasons;
    }
 
+   // A time series collection cannot be capped. Time series keeps its own checks.
+   // A capped collection cannot be sharded, so this run leaves it unsharded.
+   function cappedThisRun() {
+      return !!(capped && !timeSeries);
+   }
+
+   function shardThisRun() {
+      return sharding && isSharded() && !cappedThisRun();
+   }
+
    function collectionPlan() {
-      const mongos = isSharded();
+      const willShard = shardThisRun();
       const reasons = [];
-      if (capped && timeSeries)
-         reasons.push('capped and time series cannot be combined');
-      // Sharding is skipped unless this process will call shardCollection.
-      if (capped && sharding && mongos)
-         reasons.push('capped and sharding cannot be combined');
       if (timeSeries && !fCV(5.0))
          reasons.push('time series requires fCV 5.0 or newer');
       if (timeSeries && isAtlasPlatform('serverless'))
          reasons.push('time series is not available on serverless');
       if (timeSeries)
-         timeSeriesSchemaProblems(sharding && mongos).forEach(reason => reasons.push(reason));
-      if (timeSeries && sharding && mongos && tsOptions.metaField && !shardKeyHasMetaField())
+         timeSeriesSchemaProblems(willShard).forEach(reason => reasons.push(reason));
+      if (timeSeries && willShard && tsOptions.metaField && !shardKeyHasMetaField())
          reasons.push(`time series shard key must include metaField "${tsOptions.metaField}"`);
-      if (sharding && mongos && collation.locale !== 'simple')
+      if (willShard && collation.locale !== 'simple')
          reasons.push('a non-simple collation on the hashed shard key conflicts with the simple hashed index');
-      if (sharding && mongos) {
+      if (willShard) {
          try {
             const chunks = initialChunkCount();
             if (!(chunks >= 1))
@@ -1211,7 +1223,7 @@
    function createNS() {
       if (namespace.exists()) {
          console.log(`\nNamespace "${dbName}.${collName}" exists`);
-         if (!(sharding && isSharded()))
+         if (!shardThisRun())
             return true;
          return shardPreservedNamespace();
       } else {
@@ -1234,8 +1246,8 @@
             // "viewOn": <string>,
             // "pipeline": []
          };
-         if (capped) {
-            options.capped = capped;
+         if (cappedThisRun()) {
+            options.capped = true;
             options.size = cappedOptions.size;
             options.max = cappedOptions.max;
             console.log(`\twith capped options:\t"${tojson(cappedOptions)}"`);
@@ -1254,7 +1266,7 @@
             return false;
          }
 
-         if (!(sharding && isSharded()))
+         if (!shardThisRun())
             return true;
          return shardNewNamespace();
       }

@@ -60,6 +60,7 @@
       "granularity": "hours"
    },
    "capped": false,
+   // Not applied when timeSeries is set. A capped collection is left unsharded.
    "cappedOptions": {
       // size is 2^27 bytes; max is 2^15 documents
       "size": 134217728,
