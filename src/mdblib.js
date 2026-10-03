@@ -8,7 +8,8 @@
  *  Roadmap: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/ROADMAP.md (required context)
  *
  *  Dual-shell snapshot: legacy/mongo-shell (tag legacy-mongo-shell, v0.15.10).
- *  This file is mongosh-only. Further work (for(db), TopologySnapshot) still TBA.
+ *  This file is mongosh-only. TopologySnapshot.fromSession() lists cluster
+ *  identity; per-node stats wait on discovery.js connect. for(db) still TBA.
  */
 
 if (typeof __lib === 'undefined') (
@@ -60,8 +61,12 @@ if (typeof __lib === 'undefined') (
  *    indexes to nindexes.
  *  - UUID/Binary.base64() is a method (this.toString('base64')).
  *  - CollectionStats / DatabaseStats / DbPathStats construct from those
- *    DTOs. HostNode owns host identity; DbPathStats composes it. There is
- *    no MetaStats façade. TopologySnapshot waits on discovery.
+ *    DTOs. HostNode owns connecting-host identity; DbPathStats composes it.
+ *    TopologySnapshot.fromSession() lists cluster identity (kind, setName,
+ *    shard ids, advertised replica members / shard seeds) from the
+ *    connecting session. Shared-tier / serverless stay one connecting node.
+ *    Per-node stats and mongos local.* wait on discovery.js connect.
+ *    There is no MetaStats façade.
  *  - Catalog identity first, stats on demand: collection.fetchStats(),
  *    database.fetchAllStats({ concurrency }), dbPath.materialize({ concurrency }).
  *    Cache _statsPromise per collection. Callers materialise then serialise.
@@ -665,16 +670,19 @@ class DatabaseStats extends StorageMetrics {
 
 class HostNode {
    /*
-    *  Connecting-host identity. TopologySnapshot (discovery fan-out) waits.
+    *  Host identity. init() / discover() fill the connecting session.
+    *  Remote members are constructor fields only until discovery connects.
     */
    constructor({
-         instance, hostname, proc, dbPath, shards = []
+         instance, hostname, proc, dbPath, shards = [], role, connecting
       } = {}) {
       this.instance = instance;
       this.hostname = hostname;
       this.proc = proc;
       this.dbPath = dbPath;
       this.shards = Array.isArray(shards) ? shards : [];
+      this.role = role;
+      this.connecting = connecting === true;
    }
    init() {
       const snap = sessionSnapshot();
@@ -695,10 +703,117 @@ class HostNode {
       } else {
          this.shards = [];
       }
+      this.connecting = true;
       return this;
    }
    static discover() {
       return new HostNode().init();
+   }
+}
+
+class TopologySnapshot {
+   /*
+    *  Cluster identity from the connecting session.
+    *  nodes[] are HostNode shells (seed / role). Stats fan-out waits on
+    *  discovery.js connect. Do not gather mongos local.* here.
+    */
+   constructor({
+         cluster = {}, connecting = null, nodes = [], aggregate = null, errors = []
+      } = {}) {
+      this.cluster = (cluster && typeof cluster === 'object') ? cluster : {};
+      this.connecting = (connecting instanceof HostNode) ? connecting : connecting;
+      this.nodes = Array.isArray(nodes) ? nodes : [];
+      this.aggregate = aggregate;
+      this.errors = Array.isArray(errors) ? errors : [];
+   }
+   static fromSession() {
+      const snap = sessionSnapshot();
+      const connecting = HostNode.discover();
+      const errors = [];
+      let helloDoc = {};
+      try {
+         helloDoc = hello() || {};
+      } catch (e) {
+         errors.push({
+            "step": "hello",
+            "message": (e && (e.errmsg || e.message)) || String(e)
+         });
+         helloDoc = {};
+      }
+      if (connecting.proc === 'mongos') connecting.role = 'mongos';
+      else if (helloDoc.isWritablePrimary) connecting.role = 'PRIMARY';
+      else if (helloDoc.secondary) connecting.role = 'SECONDARY';
+
+      const atlas = snap.atlasPlatform;
+      const kind = (atlas === 'sharedTier') ? 'sharedTier'
+                 : (atlas === 'serverless') ? 'serverless'
+                 : (snap.sharded) ? 'sharded'
+                 : (helloDoc.setName) ? 'replSet'
+                 : 'standalone';
+      const cluster = {
+         "kind": kind,
+         "setName": helloDoc.setName || null,
+         "shardIds": Array.isArray(snap.shardIds) ? snap.shardIds.slice() : []
+      };
+
+      const nodes = [connecting];
+      const seen = new Set([connecting.instance]);
+      const pushNode = node => {
+         if (!node || node.instance == null || seen.has(node.instance)) return;
+         seen.add(node.instance);
+         nodes.push(node);
+      };
+
+      if (kind === 'sharedTier' || kind === 'serverless') {
+         return new TopologySnapshot({ cluster, connecting, nodes, errors });
+      }
+
+      if (kind === 'replSet') {
+         const names = [];
+         if (Array.isArray(helloDoc.hosts)) names.push(...helloDoc.hosts);
+         if (Array.isArray(helloDoc.passives)) names.push(...helloDoc.passives);
+         const primary = helloDoc.primary;
+         names.forEach(name => {
+            pushNode(new HostNode({
+               "instance": name,
+               "hostname": hostNameFromHostPort(name),
+               "proc": 'mongod',
+               "shards": [],
+               "role": (name === primary) ? 'PRIMARY' : 'SECONDARY',
+               "connecting": false
+            }));
+         });
+      }
+
+      if (kind === 'sharded') {
+         let shardDocs = [];
+         try {
+            shardDocs = db.adminCommand({ "listShards": 1 }).shards;
+         } catch (e) {
+            errors.push({
+               "step": "listShards",
+               "message": (e && (e.errmsg || e.message)) || String(e)
+            });
+            shardDocs = [];
+         }
+         if (Array.isArray(shardDocs)) {
+            shardDocs.forEach(doc => {
+               if (!doc) return;
+               pushNode(new HostNode({
+                  "instance": doc.host || doc._id,
+                  "hostname": doc._id,
+                  "proc": 'mongod',
+                  "shards": doc._id != null ? [doc._id] : [],
+                  "connecting": false
+               }));
+            });
+         }
+      }
+
+      return new TopologySnapshot({ cluster, connecting, nodes, errors });
+   }
+   static discover() {
+      return TopologySnapshot.fromSession();
    }
 }
 

@@ -367,7 +367,12 @@
       let { 'db': dbFilter, 'collection': collFilter, 'system': systemOpt = true } = filterOptions;
       collFilter = new RegExp(collFilter);
       const acceptCollName = systemCollectionFilter(systemOpt);
-      const dbPath = new DbPathStats({ "host": HostNode.discover() });
+      const topology = TopologySnapshot.fromSession();
+      const dbPath = new DbPathStats({
+         "host": topology.connecting || HostNode.discover()
+      });
+      dbPath.topology = topology;
+      topology.aggregate = dbPath;
 
       const dbNames = stableSort(getDBNames(dbFilter), compareBy(v => v, 1));
       const jsonCli = outputOptions.format === 'json';
@@ -1125,6 +1130,25 @@
       };
    }
 
+   function jsonTopology(topology) {
+      if (!topology || typeof topology !== 'object') return null;
+      const cluster = topology.cluster || {};
+      return {
+         "kind": cluster.kind || null,
+         "setName": cluster.setName || null,
+         "shardIds": Array.isArray(cluster.shardIds) ? cluster.shardIds : [],
+         "nodes": (topology.nodes || []).map(node => ({
+            "instance": node.instance || null,
+            "hostname": node.hostname || null,
+            "proc": node.proc || null,
+            "role": node.role || null,
+            "connecting": node.connecting === true,
+            "shards": Array.isArray(node.shards) ? node.shards : []
+         })),
+         "errors": Array.isArray(topology.errors) ? topology.errors : []
+      };
+   }
+
    function jsonTotals(dbStats = {}) {
       const storageSize = jsonNumber(dbStats.storageSize);
       const freeStorageSize = jsonFree(dbStats.freeStorageSize);
@@ -1246,6 +1270,7 @@
          "mongod": db.version(),
          "dbPath": dbStats.dbPath || null,
          "shards": Array.isArray(dbStats.shards) ? dbStats.shards : [],
+         "topology": jsonTopology(dbStats.topology),
          "catalog": {
             "builder": dbStats.catalogBuilder || 'legacy',
             "fallback": dbStats.catalogFallback === true
