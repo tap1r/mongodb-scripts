@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "1.1.0"
+    *  Version: "1.2.0"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -41,7 +41,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "1.1.0" };
+   const __script = { "name": "autoCompact.js", "version": "1.2.0" };
 
    // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (from mdblib.js)
    const ansiTags = [
@@ -143,7 +143,32 @@
       return modifiedLog;
    })());
 
-   console.log(`\n[yellow]#### Running script ${__script.name} v${__script.version} on shell v${version()}[/]\n`);
+   function isAutoCompactCliFile() {
+      /*
+       *  mongosh --file/-f (or positional *.js) targeting this script.
+       *  load() from a REPL or another --file is quiet.
+       */
+      const argv = (typeof process !== 'undefined' && Array.isArray(process.argv)) ? process.argv : [];
+      const files = [];
+      for (let i = 2; i < argv.length; i++) {
+         const a = String(argv[i]);
+         if (a === '-f' || a === '--file') {
+            if (i + 1 < argv.length) files.push(argv[++i]);
+            continue;
+         }
+         if (a.startsWith('--file=')) {
+            files.push(a.slice(7));
+            continue;
+         }
+         if (a === '--eval') { i++; continue; }
+         if (a.startsWith('--eval=') || a.startsWith('-')) continue;
+         if (/\.(js|mongodb)$/i.test(a)) files.push(a);
+      }
+      return files.some(f => /(^|[\\/])autoCompact\.js$/i.test(String(f)));
+   }
+   if (isAutoCompactCliFile()) {
+      console.log(`\n[yellow]#### Running script ${__script.name} v${__script.version} on shell v${version()}[/]\n`);
+   }
 
    const SERVER_STATUS_IDENTITY_KEYS = new Set([
       "ok", "host", "version", "process", "pid",
