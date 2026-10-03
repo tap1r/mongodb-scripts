@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "1.6.2"
+ *  Version: "1.7.0"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -39,7 +39,7 @@
  */
 
 (() => { // User-facing comments are in the header. Mechanics live on the functions below. mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "1.6.2" };
+   const __script = { "name": "onlineDefrag.js", "version": "1.7.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -52,7 +52,30 @@
    let __comment = `#### Running script ${__script.name} v${__script.version}`;
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
-   console.log(`\n\n[yellow]${__comment}[/]\n`);
+   function isOnlineDefragCliFile() {
+      /*
+       *  mongosh --file/-f (or positional *.js) targeting this script.
+       *  load() from a REPL or another --file is quiet. mdblib still loads.
+       */
+      const argv = (typeof process !== 'undefined' && Array.isArray(process.argv)) ? process.argv : [];
+      const files = [];
+      for (let i = 2; i < argv.length; i++) {
+         const a = String(argv[i]);
+         if (a === '-f' || a === '--file') {
+            if (i + 1 < argv.length) files.push(argv[++i]);
+            continue;
+         }
+         if (a.startsWith('--file=')) {
+            files.push(a.slice(7));
+            continue;
+         }
+         if (a === '--eval') { i++; continue; }
+         if (a.startsWith('--eval=') || a.startsWith('-')) continue;
+         if (/\.(js|mongodb)$/i.test(a)) files.push(a);
+      }
+      return files.some(f => /(^|[\\/])onlineDefrag\.js$/i.test(String(f)));
+   }
+   if (isOnlineDefragCliFile()) console.log(`\n\n[yellow]${__comment}[/]\n`);
 })();
 
 (async() => {
