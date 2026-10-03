@@ -84,7 +84,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `mdblib.js` | 0.15.10 | **0.22.2** |
 | `dbstats.js` | 0.12.19 | **0.18.2** |
 | `autoCompact.js` | 0.4.36 | **1.0.1** |
-| `fuzzer.js` | 0.6.43 | **1.0.0** |
+| `fuzzer.js` | 0.6.43 | **1.1.0** |
 | `oplogchurn.js` | 0.5.22 | **0.5.24** |
 | `latency.js` | 0.4.9 | **0.4.10** |
 | `schema-sampler.js` | 0.2.16 | **0.2.17** |
@@ -483,7 +483,7 @@ Remaining mongosh-line work (do not block the archive):
 - **Shared emit helpers** (see [Script consumption](#script-consumption-unify-standalone-vs-modular)): finish the story beyond today’s `console.log` TTY overload — one path for markup→ANSI, non-TTY strip, progress suppress, and module-quiet. Bring `print` / raw-escape call sites onto it over time.
 - **System name policy (shipped):** `isSystemCollectionName` / `normalizeSystemFilter` / `acceptSystemCollectionName` / `systemCollectionFilter` — used by dbstats `filter.system`. Full catalog walkers (`getAllNonSystemNamespaces`, collections, views, `getAllSystemNamespaces`) still TBA; they should apply the same predicate after listCollections, not re-encode regexes.
 - `AutoFactor` NaN / scale clamp (the copy in `autoCompact.js` is stricter).
-- `$genRandWord`, `$benford` — later / fuzzer.
+- `$benford(expMin, expMax)` draws a positive magnitude from a precomputed Benford significand table (inclusive powers of ten, default 0..6, result in `[10^expMin, 10^(expMax+1))`). Schema B `unit` and `price` call it. `$genRandWord` / `$genRandPhrase` use the built-in lexicon.
 - **`MetaStats` redesign** — see below; underpins dbstats catalog-first work and discovery’s per-node payload shape.
 
 #### `MetaStats` → typed storage / topology model
@@ -579,7 +579,7 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `fuzzer.js`
 
-**Live: v1.0.0.** **Archive: v0.6.43.** Mongosh-only. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()`. Compact is archive-only. Header tags this file as requiring this roadmap.
+**Live: v1.1.0.** **Archive: v0.6.43.** Mongosh-only. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()`. Compact is archive-only. Header tags this file as requiring this roadmap.
 
 Options overlay is **`fuzzer-options.jsonc`** (search path, in-shell JSONC strip, deep-merge). That is the reference for [User options UX](#user-options-ux-streamline-past---eval-globals). Do not paste the parser into other scripts. `--eval` stays unwired; do not add a second options channel, and do not declare `const dbName` if an eval overlay is ever added. In-file defaults stay the defaults.
 
@@ -589,7 +589,7 @@ Remaining mongosh-line work (do not block the archive):
 
 - Reshard wait holds the user Promise so mongosh does not exit early. The poll races that promise with an awaited timer; `sleep()` would block the thread and stall the response.
 - `w: "majority"` with no `wtimeout` can stall `createCollection` / bulk on PSA or a lagging secondary.
-- `$genRandWord` / `$benford` stay later. Shared-tier `fCV()` → `serverVer()` is by design (see mdblib).
+- `$benford(expMin, expMax)` is the mdblib magnitude draw (schema B `unit` and `price`). Shared-tier `fCV()` → `serverVer()` is by design (see mdblib).
 
 ### `oplogchurn.js`
 
