@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.20.0"
+ *  Version: "0.20.1"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -131,7 +131,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.20.0" };
+   const __script = { "name": "dbstats.js", "version": "0.20.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -1353,7 +1353,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.20.0',
+         "version": '0.20.1',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1587,9 +1587,59 @@
       ).replace(/(?:\n\s+)|(?:\n)/g, ' ');
    }
 
+   function stripMarkupTags(str) {
+      return String(str == null ? '' : str).replace(/\[[a-zA-Z][a-zA-Z0-9 ]*\]|\[\/\]/g, '');
+   }
+
+   function codePointWidth(cp) {
+      if (!cp) return 0;
+      if (cp <= 0x1F || (cp >= 0x7F && cp <= 0x9F)) return 0;
+      if (cp === 0x200B || cp === 0x200C || cp === 0x200D || cp === 0xFEFF) return 0;
+      if (cp >= 0x300 && cp <= 0x36F) return 0;
+      if (cp >= 0xFE00 && cp <= 0xFE0F) return 0;
+      if (cp >= 0xE0100 && cp <= 0xE01EF) return 0;
+      if (cp >= 0x1100 && cp <= 0x115F) return 2;
+      if (cp >= 0x2329 && cp <= 0x232A) return 2;
+      if (cp >= 0x2E80 && cp <= 0xA4CF && cp !== 0x303F) return 2;
+      if (cp >= 0xAC00 && cp <= 0xD7A3) return 2;
+      if (cp >= 0xF900 && cp <= 0xFAFF) return 2;
+      if (cp >= 0xFE10 && cp <= 0xFE19) return 2;
+      if (cp >= 0xFE30 && cp <= 0xFE6F) return 2;
+      if (cp >= 0xFF00 && cp <= 0xFF60) return 2;
+      if (cp >= 0xFFE0 && cp <= 0xFFE6) return 2;
+      if (cp >= 0x1F000 && cp <= 0x1FFFF) return 2;
+      if (cp >= 0x2300 && cp <= 0x23FF) return 2;
+      if (cp >= 0x2600 && cp <= 0x27BF) return 2;
+      if (cp >= 0x2B00 && cp <= 0x2BFF) return 2;
+      return 1;
+   }
+
+   function visibleWidth(str) {
+      let w = 0;
+      for (const ch of stripMarkupTags(str)) w += codePointWidth(ch.codePointAt(0));
+      return w;
+   }
+
+   function padVisible(str, width, fill = ' ') {
+      str = String(str == null ? '' : str);
+      const w = visibleWidth(str);
+      if (w >= width) return str;
+      return str + String(fill).repeat(width - w);
+   }
+
    function truncateLabel(label, maxLen, cutWidth) {
       label = (label == null) ? '' : String(label);
-      return (label.length > maxLen) ? `${label.substring(0, cutWidth)}~` : label;
+      if (visibleWidth(label) <= maxLen) return label;
+      const cut = (cutWidth != null) ? cutWidth : Math.max(0, maxLen - 1);
+      let out = '';
+      let w = 0;
+      for (const ch of label) {
+         const cw = codePointWidth(ch.codePointAt(0));
+         if (w + cw > cut) break;
+         out += ch;
+         w += cw;
+      }
+      return `${out}~`;
    }
 
    function formatCompressionCell(compression, compressor) {
@@ -1642,13 +1692,13 @@
          "lowerBound": idxIncomplete
       });
       if (shards.length > 0 && Array.isArray(namespaces) && Array.isArray(nindexes)) {
-         console.log(`[bold][green]${`${nsLabel}:[/]`.padEnd(rowHeader + 4)}${nsMetrics}`);
+         console.log(`[bold][green]${padVisible(`${nsLabel}:`, rowHeader)}[/] ${nsMetrics}`);
          console.log(formatShardCounts(shards, namespaces));
-         console.log(`[bold][green]${`${idxLabel}:[/]`.padEnd(rowHeader + 4)}${idxMetrics}`);
+         console.log(`[bold][green]${padVisible(`${idxLabel}:`, rowHeader)}[/] ${idxMetrics}`);
          console.log(formatShardCounts(shards, nindexes));
       } else {
-         console.log(`[bold][green]${`${nsLabel}:[/] ${JSON.stringify(namespaces)}`.padEnd(rowHeader + 4)}${nsMetrics}`);
-         console.log(`[bold][green]${`${idxLabel}:[/]    ${JSON.stringify(nindexes)}`.padEnd(rowHeader + 4)}${idxMetrics}`);
+         console.log(`[bold][green]${padVisible(`${nsLabel}: ${JSON.stringify(namespaces)}`, rowHeader)}[/] ${nsMetrics}`);
+         console.log(`[bold][green]${padVisible(`${idxLabel}: ${JSON.stringify(nindexes)}`, rowHeader)}[/] ${idxMetrics}`);
       }
    }
 
@@ -1661,7 +1711,7 @@
    function printNSHeader(nsTotal = 0) {
       console.log('');
       printRule('heavy');
-      console.log(`[bold][green]${`Namespaces:[/] ${nsTotal}`.padEnd(rowHeader + 4)}[/] [bold][green]${columnHeaders()}[/]`);
+      console.log(`[bold][green]${padVisible(`Namespaces: ${nsTotal}`, rowHeader)}[/] [bold][green]${columnHeaders()}[/]`);
       return;
    }
 
@@ -1671,7 +1721,7 @@
       const compaction = formatCompaction('collection', storageSize, freeStorageSize, { "oplog": name == 'oplog.rs', incomplete });
       printRule('light');
       name = truncateLabel(name, 45, rowHeader - 4);
-      console.log(`╰>[cyan]${(' ' + name).padEnd(rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize, "lowerBound": incomplete })}`);
+      console.log(`╰>[cyan]${padVisible(' ' + name, rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize, "lowerBound": incomplete })}`);
       return;
    }
 
@@ -1681,7 +1731,7 @@
       const compaction = formatCompaction('collection', storageSize, freeStorageSize, { "oplog": namespace == 'local.oplog.rs', incomplete });
       printRule('light');
       namespace = truncateLabel(namespace, 45, rowHeader - 4);
-      console.log(`╰>[cyan]${(' ' + namespace).padEnd(rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize, "lowerBound": incomplete })}`);
+      console.log(`╰>[cyan]${padVisible(' ' + namespace, rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize, "lowerBound": incomplete })}`);
       return;
    }
 
@@ -1703,14 +1753,14 @@
       const compaction = formatCompaction('index', storageSize, freeStorageSize, { "idIndex": name == '_id_', incomplete });
       console.log(`  [yellow]${'━'.repeat(termWidth - 2)}[/]`);
       name = truncateLabel(name, 64, indexWidth);
-      console.log(`  ╰» [red]${name.padEnd(indexWidth - 2)}[/] ${metricsCols({ storageSize, freeStorageSize, compaction, "mode": 'indexRow', "lowerBound": incomplete })}`);
+      console.log(`  ╰» [red]${padVisible(name, indexWidth - 2)}[/] ${metricsCols({ storageSize, freeStorageSize, compaction, "mode": 'indexRow', "lowerBound": incomplete })}`);
       return;
    }
 
    function printDbHeader({ name } = {}) {
       console.log('');
       printRule('heavy');
-      console.log(`[bold][green]${`Database:[/] [cyan]${name}`.padEnd(rowHeader + 9)}[/] [bold][green]${columnHeaders()}[/]`);
+      console.log(`[bold][green]Database:[/] [cyan]${padVisible(String(name || ''), Math.max(0, rowHeader - 10))}[/] [bold][green]${columnHeaders()}[/]`);
       return;
    }
 
@@ -1791,7 +1841,7 @@
 
    function nodeIdentityWidths(nodes = []) {
       const rows = (nodes || []).map(nodeIdentityFields);
-      const maxLen = (key) => rows.reduce((n, r) => Math.max(n, String(r[key] || '').length), 0);
+      const maxLen = (key) => rows.reduce((n, r) => Math.max(n, visibleWidth(r[key] || '')), 0);
       return {
          "host": maxLen('host'),
          "role": maxLen('role'),
@@ -1802,13 +1852,13 @@
 
    function formatNodeIdentity(node, widths = {}, { indent = '' } = {}) {
       const f = nodeIdentityFields(node);
-      const hostW = widths.host || f.host.length;
-      const roleW = widths.role || f.role.length;
-      const procW = widths.proc || f.proc.length;
-      const pathW = widths.path || f.path.length;
-      const mark = f.connecting ? '   [green]connecting[/]' : '';
+      const hostW = widths.host || visibleWidth(f.host);
+      const roleW = widths.role || visibleWidth(f.role);
+      const procW = widths.proc || visibleWidth(f.proc);
+      const pathW = widths.path || visibleWidth(f.path);
+      const mark = f.connecting ? '[green]*[/] ' : '  ';
       const err = f.error ? `   [red]${f.error}[/]` : '';
-      return `${indent}[cyan]${f.host.padEnd(hostW)}[/]   [bold][green]Role:[/] [cyan]${f.role.padEnd(roleW)}[/]   [bold][green]Type:[/] [cyan]${f.proc.padEnd(procW)}[/]   [bold][green]dbPath:[/] [cyan]${f.path.padEnd(pathW)}[/]${mark}${err}`;
+      return `${indent}${mark}[cyan]${padVisible(f.host, hostW)}[/]   [bold][green]Role:[/] [cyan]${padVisible(f.role, roleW)}[/]   [bold][green]Type:[/] [cyan]${padVisible(f.proc, procW)}[/]   [bold][green]dbPath:[/] [cyan]${padVisible(f.path, pathW)}[/]${err}`;
    }
 
    function printNodeBanner(node = {}, widths) {
@@ -1849,7 +1899,7 @@
       } = dbStats;
       console.log('');
       printRule('heavy');
-      console.log(`[bold][green]${'dbPath totals'.padEnd(rowHeader)} ${columnHeaders()}[/]`);
+      console.log(`[bold][green]${padVisible('dbPath totals', rowHeader)} ${columnHeaders()}[/]`);
       printRule('light');
       printRollupRows({
          shards, dataSize, compression, storageSize, freeStorageSize, objects,
