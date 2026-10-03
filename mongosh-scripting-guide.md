@@ -259,7 +259,7 @@ p.finally(process.stdout.write('\x1b[?1049l'));
 p.finally(() => { process.stdout.write('\x1b[?1049l'); });
 ```
 
-`congestionMonitor.js` still passes `process.stdout.write(...)` directly. That teardown does not wait for the monitor.
+Live `src/congestionMonitor.js` (v0.3.3) uses `.finally(() => process.stdout.write(…))` so the restore waits for the EQ paints. Archive freeze v0.2.13 passes `process.stdout.write(...)` directly; that write runs when the chain is built (wontfix on the freeze line).
 
 ### Thenable cursors: do not `await` a live cursor
 

@@ -10,8 +10,8 @@
       "version": 1.0,
       "comment": "GeoJSON schema"
    },
+   // hashed index. The shard key is date, ranged.
    "language": "=idioma",
-   // hashed shard key
    "string": "=$genRandStr($getRandIntInc(6, 24))",
    "temperature": [
       "=+$genNormal(15, 10).toFixed(1)",

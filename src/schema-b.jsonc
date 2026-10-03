@@ -12,8 +12,8 @@
       "version": 1.0,
       "comment": "Time series schema"
    },
+   // hashed index. A time series shard key is data, ranged.
    "language": "=idioma",
-   // hashed shard key
    "string": "=$genRandStr($getRandIntInc(6, 24))",
    "timestamp": "=date",
    // ['Series 1', 'Series 2', 'Series 3'][$getRandRatioInt([70, 20, 10])]

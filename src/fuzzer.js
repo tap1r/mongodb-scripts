@@ -283,7 +283,7 @@
       },
       "timeSeries": false,              // build timeseries collection type
       // Schemas that miss a Date at timeField are omitted from the draw.
-      // On a mongos, schemas that miss metaField are omitted and the shard key is made legal.
+      // On a mongos, schemas that miss metaField are omitted and the shard key becomes ranged metaField.
       "tsOptions": {
          "timeField": "timestamp",
          "metaField": "data",
@@ -323,8 +323,8 @@
       "sharding": true,
       "shardedOptions": {
          "key": {
-            "string": "hashed"
-            // "date": 1
+            "date": 1
+            // "string": "hashed"
          },
          "unique": false,               // resharding a collection that has a uniqueness constraint is not supported
          "numInitialChunksPerShard": 2,
@@ -359,7 +359,7 @@
          // collation follows the collection collation unless the overlay sets it
       },
       "hashedIndexes": [
-         { "string": "hashed" }
+         { "language": "hashed" }
       ],
       "hashedIndexOptions": { /* hashed accepts simple collation only */
          // "background": fCV(4.0) ? true : false,
@@ -1195,11 +1195,9 @@
       if (omitted.length)
          console.log(`\n[red][WARN] [yellow]time series[red] omitted ${omitted.join(', ')}[/]`);
       if (willShard && timeSeriesShardKeyProblem(shardedOptions.key, metaField, timeField)) {
+         // Ranged, so the sample can keep a hashed index on another field.
          const next = {};
-         if (metaField)
-            next[metaField] = collation.locale === 'simple' ? 'hashed' : 1;
-         else
-            next[timeField] = 1;
+         next[metaField || timeField] = 1;
          console.log(`\n[red][WARN] [yellow]time series shard key[red] ${tojson(shardedOptions.key)} is replaced with ${tojson(next)}[/]`);
          shardedOptions.key = next;
       }

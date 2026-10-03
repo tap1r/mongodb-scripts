@@ -54,8 +54,8 @@
    // Schemas that do not store a Date at timeField are omitted from the draw.
    // Schema B does. Schema A stores a Timestamp at "timestamp", and schema C has no Date there.
    // On a mongos, a schema without metaField is omitted. A shard key that is not the
-   // metaField, a subfield of it, or a ranged timeField last, is replaced with metaField
-   // (hashed when the collation locale is simple).
+   // metaField, a subfield of it, or a ranged timeField last, is replaced with a ranged metaField.
+   // The hashed index stays on "language", so the sample still has one hashed index.
    "tsOptions": {
       "timeField": "timestamp",
       "metaField": "data",
@@ -99,8 +99,8 @@
    "sharding": true,
    "shardedOptions": {
       "key": {
-         "string": "hashed"
-         // "date": 1
+         "date": 1
+         // "string": "hashed"
       },
       "unique": false,
       // resharding a collection that has a uniqueness constraint is not supported
@@ -134,7 +134,7 @@
       // "collation" follows collation unless set here
    },
    "hashedIndexes": [
-      { "string": "hashed" }
+      { "language": "hashed" }
    ],
    "hashedIndexOptions": {
       // hashed accepts simple collation only

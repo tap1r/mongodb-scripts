@@ -8,8 +8,8 @@
       "version": 1.0,
       "comment": "General purpose schema"
    },
+   // hashed index. The shard key is date, ranged.
    "language": "=idioma",
-   // hashed shard key
    "string": "=$genRandStr($getRandIntInc(6, 24))",
    "quote": {
       // idiomas[$getRandRatioInt([80, 0, 0, 5, 0, 3, 2])]
