@@ -51,9 +51,11 @@
       // "commitQuorum": "majority"
    },
    "timeSeries": false,
-   // Each selected schema must store a Date at timeField.
+   // Schemas that do not store a Date at timeField are omitted from the draw.
    // Schema B does. Schema A stores a Timestamp at "timestamp", and schema C has no Date there.
-   // On a mongos the shard key must include metaField. The default key is { "string": "hashed" }.
+   // On a mongos, a schema without metaField is omitted. A shard key that is not the
+   // metaField, a subfield of it, or a ranged timeField last, is replaced with metaField
+   // (hashed when the collation locale is simple).
    "tsOptions": {
       "timeField": "timestamp",
       "metaField": "data",

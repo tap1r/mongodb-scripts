@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.1.0"
+ *  Version: "1.2.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,7 +19,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.1.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.2.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -282,8 +282,8 @@
          "order": "post"                // ["pre"|"post"] collection population
       },
       "timeSeries": false,              // build timeseries collection type
-      // Each selected schema must store a Date at timeField.
-      // On a mongos the shard key must include metaField.
+      // Schemas that miss a Date at timeField are omitted from the draw.
+      // On a mongos, schemas that miss metaField are omitted and the shard key is made legal.
       "tsOptions": {
          "timeField": "timestamp",
          "metaField": "data",
@@ -529,8 +529,6 @@
          console.log(`\n[red][ERROR][/] ${ratioProblem}`);
          return;
       }
-      const ratioSum = ratioTotal(fuzzer.ratios);
-      const sampleSize = $floor((8 + ratioSum) ** 2);
       // Printed before the plan so a later time-series error is not read as a capped failure.
       if (capped && timeSeries)
          console.log('\n[red][WARN] [yellow]capped[red] is not applied because a time series collection cannot be capped[/]');
@@ -539,6 +537,9 @@
          plan.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
          return;
       }
+      // Selection may have zeroed ratios. Size the sample from what this run still draws.
+      const ratioSum = ratioTotal(fuzzer.ratios);
+      const sampleSize = $floor((8 + ratioSum) ** 2);
       const oidWindow = tsObjectIdWindow();
       if (oidWindow.length > 0) {
          oidWindow.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
@@ -1132,11 +1133,77 @@
          console.log(`\nResharding complete.`);
    }
 
-   function shardKeyHasMetaField() {
-      const meta = tsOptions.metaField;
-      return Object.keys(shardedOptions.key).some(field =>
-         field === meta || field.startsWith(`${meta}.`)
-      );
+   function shardKeyUsesHash(key) {
+      return !!key && Object.keys(key).some(field => key[field] === 'hashed');
+   }
+
+   // metaField may be hashed or ranged. timeField must be ranged and last.
+   // Any other field is rejected by shardCollection. timeField in the key is deprecated from 8.0.
+   function timeSeriesShardKeyProblem(key, metaField, timeField) {
+      if (!key || typeof key !== 'object' || Array.isArray(key))
+         return 'missing';
+      const fields = Object.keys(key);
+      if (fields.length === 0)
+         return 'empty';
+      let sawMeta = false;
+      for (let i = 0; i < fields.length; i++) {
+         const field = fields[i];
+         const onMeta = !!(metaField && (field === metaField || field.startsWith(`${metaField}.`)));
+         const onTime = field === timeField;
+         if (!onMeta && !onTime)
+            return 'field';
+         if (onMeta)
+            sawMeta = true;
+         if (onTime && (key[field] === 'hashed' || i !== fields.length - 1))
+            return 'time';
+      }
+      if (metaField && !sawMeta)
+         return 'meta';
+      return null;
+   }
+
+   // Zero the weight of schemas that cannot be time series documents, and point the shard key at metaField.
+   // A legal key the overlay already set is left as it is.
+   function timeSeriesSelection(willShard) {
+      const timeField = tsOptions && tsOptions.timeField;
+      const metaField = tsOptions && tsOptions.metaField;
+      if (!timeField)
+         return ['time series requires tsOptions.timeField'];
+      const ratios = (Array.isArray(fuzzer.ratios) ? fuzzer.ratios : [1]).slice();
+      const omitted = [];
+      let kept = 0;
+      for (let i = 0; i < schemaSamples.length; i++) {
+         if (!(ratioWeight(ratios[i]) > 0))
+            continue;
+         const sample = schemaSamples[i];
+         const why = [];
+         if (!timeFieldIsDate(sample.spec[timeField]))
+            why.push(`timeField "${timeField}" is not a Date`);
+         if (willShard && metaField && !hasOwn(sample.spec, metaField))
+            why.push(`metaField "${metaField}" is absent`);
+         if (why.length) {
+            ratios[i] = 0;
+            omitted.push(`${sample.file} (${why.join('; ')})`);
+         } else
+            kept++;
+      }
+      if (kept === 0) {
+         const detail = omitted.length ? `: ${omitted.join(', ')}` : '';
+         return [`time series schema selection is empty${detail}`];
+      }
+      fuzzer.ratios = ratios;
+      if (omitted.length)
+         console.log(`\n[red][WARN] [yellow]time series[red] omitted ${omitted.join(', ')}[/]`);
+      if (willShard && timeSeriesShardKeyProblem(shardedOptions.key, metaField, timeField)) {
+         const next = {};
+         if (metaField)
+            next[metaField] = collation.locale === 'simple' ? 'hashed' : 1;
+         else
+            next[timeField] = 1;
+         console.log(`\n[red][WARN] [yellow]time series shard key[red] ${tojson(shardedOptions.key)} is replaced with ${tojson(next)}[/]`);
+         shardedOptions.key = next;
+      }
+      return [];
    }
 
    function timeFieldIsDate(value) {
@@ -1202,11 +1269,17 @@
          reasons.push('time series requires fCV 5.0 or newer');
       if (timeSeries && isAtlasPlatform('serverless'))
          reasons.push('time series is not available on serverless');
-      if (timeSeries)
+      if (reasons.length)
+         return reasons;
+      if (timeSeries) {
+         const fit = timeSeriesSelection(willShard);
+         if (fit.length)
+            return fit;
          timeSeriesSchemaProblems(willShard).forEach(reason => reasons.push(reason));
-      if (timeSeries && willShard && tsOptions.metaField && !shardKeyHasMetaField())
-         reasons.push(`time series shard key must include metaField "${tsOptions.metaField}"`);
-      if (willShard && collation.locale !== 'simple')
+         if (willShard && timeSeriesShardKeyProblem(shardedOptions.key, tsOptions && tsOptions.metaField, tsOptions && tsOptions.timeField))
+            reasons.push(`time series shard key ${tojson(shardedOptions.key)} is not usable`);
+      }
+      if (willShard && shardKeyUsesHash(shardedOptions.key) && collation.locale !== 'simple')
          reasons.push('a non-simple collation on the hashed shard key conflicts with the simple hashed index');
       if (willShard) {
          try {

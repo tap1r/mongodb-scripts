@@ -3,8 +3,8 @@
 // Expressions may use the preamble names oid, date, ts, idioma, and totalDocs.
 // tsOptions.timeField is "timestamp" and tsOptions.metaField is "data".
 // This sample stores the Date at "timestamp" and the series name at "data".
-// A time series run can select this file. Schema A stores a Timestamp at
-// "timestamp", and schema C has no Date there, so a mix of the three stops.
+// A time series run keeps this file. Schema A stores a Timestamp at
+// "timestamp", and schema C has no Date there, so those files are omitted.
 {
    "_id": "=oid",
    "schema": {
