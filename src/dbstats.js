@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.28.0"
+ *  Version: "0.29.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -78,9 +78,9 @@
  *     },
  *     output: {
  *        format: <'tabular'|'table'|'nsTable'|'json'|'html'>, // 'table' aliases 'tabular'
- *        concurrency: <int>, // 0 = auto (8 mongod / 4 mongos); $collStats pool per DB
+ *        concurrency: <int>, // 0 = auto (8 mongod / 4 mongos); global $collStats in-flight cap + $stats / catalog pools
  *        verbosity: <'full'|'summary'|'summaryIdx'|'compactOnly'> // printer: full = collections+indexes+views; summary = DB rollup; summaryIdx = collections+indexes; compactOnly = compact/rebuild/wait/resync rows
- *        profile: <true|false> // default false; gather phase timings + $collStats histogram (JSON additive `profile`)
+ *        profile: <true|false> // default false; gather phase timings + $collStats histogram (JSON additive `profile`; preGatherMs / sinceScriptMs)
  *     },
  *     topology: {
  *        discover: <true|false>, // default true; shared-tier / serverless stay one node
@@ -130,7 +130,8 @@
  *    mongosh --quiet --eval 'var options = { topology: { depth: "expanded" } };' -f dbstats.js
  *
  *  Gather profiling (tuning; default off). Tabular prints a PROFILE block; json/html
- *  add a `profile` key (phases, $collStats min/p50/p95/max, overlap, slowest NS).
+ *  add a `profile` key (phases, $collStats min/p50/p95/max, overlap, slowest NS,
+ *  preGatherMs, sinceScriptMs).
  *
  *    mongosh --quiet --eval 'var options = { output: { profile: true } };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { output: { format: "json", profile: true } };' -f dbstats.js
@@ -149,7 +150,8 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.28.0" };
+   const __script = { "name": "dbstats.js", "version": "0.29.0" };
+   __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -252,7 +254,7 @@
       },
       "output": {
          "format": "tabular", // ['tabular'|'table'|'nsTable'|'json'|'html'] ('table' → 'tabular')
-         "concurrency": 0, // 0 = auto (8 mongod / 4 mongos); per-DB $collStats pool
+         "concurrency": 0, // 0 = auto (8 mongod / 4 mongos); global $collStats in-flight cap
          "verbosity": "full", // ['full'|'summary'|'summaryIdx'|'compactOnly'] printer; JSON stays the full contract
          "profile": false // gather phase + $collStats histogram; JSON additive `profile`
       },
@@ -285,9 +287,6 @@
       if (typeof __mdblibShellIncompatible !== 'undefined' && __mdblibShellIncompatible) {
          console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${__mdblibShellIncompatible}[/]`);
       }
-      if (typeof __mdblibServerUnsupported !== 'undefined' && __mdblibServerUnsupported) {
-         console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${__mdblibServerUnsupported}[/]`);
-      }
       console.log(`\n\n[yellow]${__comment}[/]`);
       if (__dbstatsResolved && Array.isArray(__dbstatsResolved.warnings)) {
          __dbstatsResolved.warnings.forEach(w => {
@@ -302,11 +301,22 @@
     *  Minimum useful roles for a full report:
     *  clusterMonitor@admin && readAnyDatabase@admin
     *  (or a stronger admin role). Unauthenticated / localhost exception skips the warn.
+    *  Unauthorized is folded into connectionStatus (no extra features command).
     */
+   const monitorRoles = ['clusterMonitor'];
+   const adminRoles = ['atlasAdmin', 'clusterAdmin', 'backup', 'root', '__system'];
+   const dbRoles = ['dbAdminAnyDatabase', 'readAnyDatabase', 'readWriteAnyDatabase'];
+
+   let authenticatedUsers = [];
+   let authenticatedUserRoles = [];
    try {
-      db.adminCommand({ "features": 1 });
-   } catch(e) {
-      // Legacy mongo often has code 13 / errmsg only — same idea as $collStats.
+      const cs = db.adminCommand({ "connectionStatus": 1 });
+      const authInfo = (cs && cs.authInfo) || {};
+      authenticatedUsers = Array.isArray(authInfo.authenticatedUsers)
+         ? authInfo.authenticatedUsers : [];
+      authenticatedUserRoles = Array.isArray(authInfo.authenticatedUserRoles)
+         ? authInfo.authenticatedUserRoles : [];
+   } catch (e) {
       if (e.codeName == 'Unauthorized' || +e.code === 13
             || /not authorized|unauthorized/i.test(e.errmsg || e.message || '')) {
          __dbstatsAuthRequired = true;
@@ -314,13 +324,6 @@
          if (__dbstatsCliFile && !jsonCli) console.log('[red][ERR] MongoServerError: Unauthorized user requires authentication[/]');
       }
    }
-
-   const monitorRoles = ['clusterMonitor'];
-   const adminRoles = ['atlasAdmin', 'clusterAdmin', 'backup', 'root', '__system'];
-   const dbRoles = ['dbAdminAnyDatabase', 'readAnyDatabase', 'readWriteAnyDatabase'];
-
-   const { 'authInfo': { authenticatedUsers, authenticatedUserRoles } }
-      = db.adminCommand({ "connectionStatus": 1 });
 
    const hasAdminRole = authenticatedUserRoles.some(
       ({ role, db: roleDb }) => adminRoles.includes(role) && roleDb == 'admin'
@@ -332,10 +335,11 @@
       ({ role, db: roleDb }) => dbRoles.includes(role) && roleDb == 'admin'
    );
 
-   const isUnauthenticated = authenticatedUsers.length === 0; // localhost exception / auth off
+   const authFailed = typeof __dbstatsAuthRequired !== 'undefined' && __dbstatsAuthRequired;
+   const isUnauthenticated = !authFailed && authenticatedUsers.length === 0; // localhost exception / auth off
    const hasMonitorAndRead = hasMonitorRole && hasReadAnyRole;
-   const authzAdequate = isUnauthenticated || hasAdminRole || hasMonitorAndRead;
-   __dbstatsLacksClusterMonitor = !isUnauthenticated && !hasMonitorRole && !hasAdminRole;
+   const authzAdequate = !authFailed && (isUnauthenticated || hasAdminRole || hasMonitorAndRead);
+   __dbstatsLacksClusterMonitor = authFailed || (!isUnauthenticated && !hasMonitorRole && !hasAdminRole);
    const jsonCli = (typeof __dbstatsJsonCli !== 'undefined' && __dbstatsJsonCli);
    __dbstatsAuthzInadequate = !authzAdequate;
 
@@ -404,22 +408,43 @@
       /*
        *  Wall-clock gather profiler. Off unless output.profile is true.
        *  collStats overlap is sum(per-NS ms) / collStats-phase wall (mapPool).
+       *  start/end record overlapping phases; phase() is sequential from mark.
        */
       const t0 = Date.now();
+      const scriptStarted = (typeof __dbstatsScriptStarted === 'number')
+         ? __dbstatsScriptStarted
+         : t0;
       const phases = [];
       const coll = [];
+      const spans = {};
       let mark = t0;
       let scope = 'connecting';
+      const pushPhase = (name, ms, extra) => {
+         phases.push(Object.assign({ "name": name, "node": scope, "ms": ms }, extra || {}));
+      };
       return {
          "enabled": enabled === true,
          t0,
+         scriptStarted,
          setScope(name) { scope = name || 'connecting'; },
          phase(name, extra) {
             if (enabled !== true) return;
             const n = Date.now();
-            phases.push(Object.assign({ "name": name, "node": scope, "ms": n - mark }, extra || {}));
+            pushPhase(name, n - mark, extra);
             mark = n;
          },
+         start(name) {
+            if (enabled !== true) return;
+            spans[name] = Date.now();
+         },
+         end(name, extra) {
+            if (enabled !== true) return;
+            const n = Date.now();
+            const t = (spans[name] != null) ? spans[name] : mark;
+            pushPhase(name, n - t, extra);
+            delete spans[name];
+         },
+         touch() { mark = Date.now(); },
          sampleColl(ns, durationMs) {
             if (enabled !== true) return;
             coll.push({ "ns": ns, "ms": durationMs, "node": scope });
@@ -433,9 +458,13 @@
             const collPhase = [...phases].reverse().find(p => p.name === 'collStats');
             const wall = collPhase ? collPhase.ms : 0;
             const sum = xs.reduce((a, b) => a + b, 0);
+            const now = Date.now();
             return Object.assign({
-               "elapsedMs": Date.now() - t0,
+               "elapsedMs": now - t0,
+               "preGatherMs": t0 - scriptStarted,
+               "sinceScriptMs": now - scriptStarted,
                "startedAt": new Date(t0).toISOString(),
+               "scriptStartedAt": new Date(scriptStarted).toISOString(),
                phases,
                "collStats": {
                   "n": xs.length,
@@ -458,10 +487,14 @@
        */
       const profile = createGatherProfile(outputOptions.profile === true);
       const topology = TopologySnapshot.fromSession();
+      const jsonCli = outputOptions.format === 'json' || outputOptions.format === 'html';
+      if (__dbstatsCliFile && !jsonCli
+            && typeof __mdblibServerUnsupported !== 'undefined' && __mdblibServerUnsupported) {
+         console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${__mdblibServerUnsupported}[/]`);
+      }
       profile.phase('topology', {
          "kind": (topology.cluster && topology.cluster.kind) || null
       });
-      const jsonCli = outputOptions.format === 'json' || outputOptions.format === 'html';
       const hud = new MiniHud({
          "enabled": __dbstatsCliFile && !jsonCli
       });
@@ -547,42 +580,75 @@
       const mark = (name, extra) => {
          if (profile && typeof profile.phase === 'function') profile.phase(name, extra);
       };
+      const spanStart = (name) => {
+         if (profile && typeof profile.start === 'function') profile.start(name);
+      };
+      const spanEnd = (name, extra) => {
+         if (profile && typeof profile.end === 'function') profile.end(name, extra);
+      };
+      const touch = () => {
+         if (profile && typeof profile.touch === 'function') profile.touch();
+      };
 
       const dbNames = stableSort(getDBNames(dbFilter), compareBy(v => v, 1));
       mark('listDatabases', { "count": dbNames.length });
       const dbTotal = dbNames.length;
-      dbPath.databases = [];
-      for (let i = 0; i < dbNames.length; i++) {
-         paint(`${prefix}[cyan]dbStats[/]  ${i + 1}/${dbTotal}  ${dbNames[i]}`, { "force": i === 0 || i + 1 === dbTotal });
-         dbPath.databases.push(buildDatabaseMeta(dbNames[i], dbPath.shards));
-      }
-      rollupDbPath(dbPath, dbPath.databases);
-      mark('dbStats', { "count": dbTotal });
+      dbPath.databases = dbNames.map(name => new DatabaseStats({
+         "name": name,
+         "shards": dbPath.shards
+      }));
+
+      const fillAllDbStats = () => mapPool(dbPath.databases, concurrency, async (database, i) => {
+         paint(
+            `${prefix}[cyan]dbStats[/]  ${i + 1}/${dbTotal}  ${database.name}`,
+            { "force": i === 0 || i + 1 === dbTotal }
+         );
+         database.applyDbStats(await fetchDbStats(database.name));
+      });
 
       if (depth !== 'expanded') {
+         spanStart('dbStats');
+         await fillAllDbStats();
+         spanEnd('dbStats', { "count": dbTotal });
+         rollupDbPath(dbPath, dbPath.databases);
          rollupDbPathFree(dbPath);
          dbPath.gatherWarnings = collectGatherWarnings(dbPath);
          mark('summaryOnly');
          return dbPath;
       }
 
-      paint(`${prefix}[cyan]catalog[/]  listing`, { "force": true });
-      // Expanded only (summary returned above). Mongos consumes the owner
-      // list in markPartialShardStats; other sessions leave shards off.
-      const catalogSnapshot = await listCatalogSnapshot(catalogMode, {
+      paint(`${prefix}[cyan]dbStats+catalog[/]`, { "force": true });
+      touch();
+      spanStart('dbStats');
+      spanStart('catalogSnapshot');
+      // Expanded: overlap $stats with $listCatalog try. Mongos consumes the
+      // owner list in markPartialShardStats; other sessions leave shards off.
+      // catalog:legacy skips the stage; auto still tries on shared-tier.
+      const statsP = fillAllDbStats().then(() => {
+         spanEnd('dbStats', { "count": dbTotal });
+      });
+      const snapP = listCatalogSnapshot(catalogMode, {
          "shards": isSharded(),
          "skipCluster": typeof __dbstatsLacksClusterMonitor !== 'undefined' && __dbstatsLacksClusterMonitor
+      }).then(snapshot => {
+         spanEnd('catalogSnapshot', {
+            "builder": snapshot.builder || null,
+            "fallback": snapshot.fallback === true,
+            "entries": Array.isArray(snapshot.entries) ? snapshot.entries.length : 0
+         });
+         return snapshot;
       });
-      mark('catalogSnapshot', {
-         "builder": catalogSnapshot.builder || null,
-         "fallback": catalogSnapshot.fallback === true,
-         "entries": Array.isArray(catalogSnapshot.entries) ? catalogSnapshot.entries.length : 0
-      });
-      for (let i = 0; i < dbPath.databases.length; i++) {
-         const database = dbPath.databases[i];
-         paint(`${prefix}[cyan]catalog[/]  ${i + 1}/${dbTotal}  ${database.name}`, { "force": i === 0 || i + 1 === dbTotal });
+      const catalogSnapshot = (await Promise.all([statsP, snapP]))[1];
+      touch();
+      rollupDbPath(dbPath, dbPath.databases);
+
+      await mapPool(dbPath.databases, concurrency, async (database, i) => {
+         paint(
+            `${prefix}[cyan]catalog[/]  ${i + 1}/${dbTotal}  ${database.name}`,
+            { "force": i === 0 || i + 1 === dbTotal }
+         );
          await listDatabaseCatalog(database, collFilter, acceptCollName, catalogSnapshot);
-      }
+      });
       const usedStage = dbPath.databases.some(
          d => d.catalogSource === 'listCatalog' || d.catalogSource === 'listClusterCatalog'
       );
@@ -597,25 +663,24 @@
 
       const collTotal = dbPath.databases.reduce((n, d) => n + (d.collections || []).length, 0);
       const collStarted = Date.now();
-      let collDone = 0;
 
       await dbPath.materialize({
          concurrency,
-         "onProgress": ({ database, done, inFlight, queued }) => {
-            const finished = collDone + done;
+         "onProgress": ({ database, done, inFlight, queued, total }) => {
+            const n = Number.isFinite(+total) ? +total : collTotal;
             const elapsed = (Date.now() - collStarted) / 1000;
-            const frac = collTotal ? finished / collTotal : 1;
-            const eta = (finished > 0 && finished < collTotal)
-               ? formatHudTime((elapsed / finished) * (collTotal - finished))
+            const frac = n ? done / n : 1;
+            const eta = (done > 0 && done < n)
+               ? formatHudTime((elapsed / done) * (n - done))
                : '--';
-            const pct = collTotal ? (frac * 100).toFixed(0) : '100';
+            const pct = n ? (frac * 100).toFixed(0) : '100';
+            const dbn = (database && database.name) || '';
             paint(
-               `${prefix}[cyan]collStats[/] ${bar(frac)} ${finished}/${collTotal} ${pct}%  db=${database.name}  run=${inFlight} q=${queued}  ETA ${eta}`,
-               { "force": done === 0 || finished === collTotal }
+               `${prefix}[cyan]collStats[/] ${bar(frac)} ${done}/${n} ${pct}%  db=${dbn}  run=${inFlight} q=${queued}  ETA ${eta}`,
+               { "force": done === 0 || done === n }
             );
          },
          "onDatabase": database => {
-            collDone += (database.collections || []).length;
             database.collections = stableSort(database.collections || [], sortBy('collection'));
             for (const collection of database.collections) {
                collection.indexes = stableSort(collection.indexes || [], sortBy('index'));
@@ -691,80 +756,55 @@
       /*
        *  8.0+ collectionless $listCatalog hides system.* (except system.js /
        *  system.buckets.*) from non-internal users. Merge those names from
-       *  listCollections so listedCollectionCount still matches $stats.
+       *  one listCollections so listedCollectionCount still matches $stats.
        */
       const systemName = /^(system\.|replset\.)/;
       try {
-         let collections = db.getSiblingDB(database.name).getCollectionInfos({
-               "type": /^(collection|timeseries)$/,
-               "name": systemName
-            },
+         let infos = db.getSiblingDB(database.name).getCollectionInfos(
+            { "name": systemName },
             { "nameOnly": true, "authorizedCollections": true }
          );
-         collections = await Promise.resolve(collections);
-         const extra = (collections || []).filter(
+         infos = await Promise.resolve(infos);
+         const extra = (infos || []).filter(
             c => c && c.name && collFilter.test(c.name) && acceptCollName(c)
          );
-         const byName = new Map((database.collections || []).map(c => [c.name, c]));
-         for (const c of extra) {
-            if (!byName.has(c.name)) byName.set(c.name, catalogCollectionShell(database, c));
+         const byColl = new Map((database.collections || []).map(c => [c.name, c]));
+         const byView = new Map((database.views || []).map(v => [v.name, v]));
+         for (const row of extra) {
+            if (row.type === 'view') {
+               if (!byView.has(row.name)) byView.set(row.name, new ViewRef(row));
+            } else if (!byColl.has(row.name)) {
+               byColl.set(row.name, catalogCollectionShell(database, row));
+            }
          }
-         database.collections = stableSort([...byName.values()], compareBy('name', 1));
+         database.collections = stableSort([...byColl.values()], compareBy('name', 1));
          database.listedCollectionCount = countListedCollections(database.collections);
+         database.views = stableSort([...byView.values()], sortBy('view'));
       } catch(_) { /* keep snapshot collections */ }
-      try {
-         let views = db.getSiblingDB(database.name).getCollectionInfos({
-               "type": "view",
-               "name": systemName
-            },
-            { "nameOnly": true, "authorizedCollections": true }
-         );
-         views = await Promise.resolve(views);
-         const extra = (views || []).filter(
-            v => v && v.name && collFilter.test(v.name) && acceptCollName(v)
-         );
-         const byName = new Map((database.views || []).map(v => [v.name, v]));
-         for (const v of extra) {
-            if (!byName.has(v.name)) byName.set(v.name, new ViewRef(v));
-         }
-         database.views = stableSort([...byName.values()], sortBy('view'));
-      } catch(_) { /* keep snapshot views */ }
    }
 
    async function listDatabaseCatalogLegacy(database, collFilter, acceptCollName) {
       try {
-         let collections = db.getSiblingDB(database.name).getCollectionInfos({
-               "type": /^(collection|timeseries)$/,
-               "name": collFilter
-            },
+         let infos = db.getSiblingDB(database.name).getCollectionInfos(
+            { "name": collFilter },
             { "nameOnly": true, "authorizedCollections": true }
          );
-         collections = await Promise.resolve(collections);
+         infos = await Promise.resolve(infos);
+         const rows = (infos || []).filter(c => c && c.name && acceptCollName(c));
          database.collections = stableSort(
-            (collections || []).filter(acceptCollName).map(c => catalogCollectionShell(database, c)),
+            rows.filter(c => c.type !== 'view').map(c => catalogCollectionShell(database, c)),
             compareBy('name', 1)
          );
          database.listedCollectionCount = countListedCollections(database.collections);
-      } catch(e) {
-         database.collections = [];
-         database.listedCollectionCount = 0;
-         database.catalogError = commandErrorMessage(e);
-      }
-      try {
-         let views = db.getSiblingDB(database.name).getCollectionInfos({
-               "type": "view",
-               "name": collFilter
-            },
-            { "nameOnly": true, "authorizedCollections": true }
-         );
-         views = await Promise.resolve(views);
          database.views = stableSort(
-            (views || []).filter(acceptCollName).map(v => new ViewRef(v)),
+            rows.filter(c => c.type === 'view').map(v => new ViewRef(v)),
             sortBy('view')
          );
-      } catch(e) {
+      } catch (e) {
+         database.collections = [];
+         database.listedCollectionCount = 0;
          database.views = [];
-         if (!database.catalogError) database.catalogError = commandErrorMessage(e);
+         database.catalogError = commandErrorMessage(e);
       }
       database.catalogSource = 'legacy';
    }
@@ -784,13 +824,6 @@
       }
 
       await listDatabaseCatalogLegacy(database, collFilter, acceptCollName);
-   }
-
-   function buildDatabaseMeta(dbName, shards = []) {
-      /*
-       *  $stats → DatabaseStats for one DB (no cluster rollup mutation)
-       */
-      return DatabaseStats.from($stats(dbName), { shards });
    }
 
    function sumNullable(values) {
@@ -1532,6 +1565,14 @@
       return warnings;
    }
 
+   function mongodVersionLabel() {
+      if (typeof serverVerString === 'function') {
+         const s = serverVerString();
+         if (s) return s;
+      }
+      return '';
+   }
+
    function toJsonContract(dbStats = {}) {
       /*
        *  Versioned snapshot: bytes as numbers, unknown free-space as null.
@@ -1541,12 +1582,12 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.28.0',
+         "version": '0.29.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
          "instance": dbStats.instance || null,
-         "mongod": db.version(),
+         "mongod": mongodVersionLabel(),
          "dbPath": dbStats.dbPath || null,
          "shards": Array.isArray(dbStats.shards) ? dbStats.shards : [],
          "topology": jsonTopology(dbStats.topology),
@@ -2735,15 +2776,15 @@
       const setName = cluster.setName;
       if (kind === 'replSet') {
          const name = setName || 'replSet';
-         console.log(`[bold][green]Replica set:[/] [cyan]${name}[/]   [bold][green]Members:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]`);
+         console.log(`[bold][green]Replica set:[/] [cyan]${name}[/]   [bold][green]Members:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${mongodVersionLabel()}[/]`);
       } else if (kind === 'sharded') {
          const shardIds = Array.isArray(cluster.shardIds) ? cluster.shardIds : [];
          const shardsBit = shardIds.length ? `   [bold][green]Shards:[/] ${JSON.stringify(shardIds)}` : '';
-         console.log(`[bold][green]Sharded cluster[/]   [bold][green]Nodes:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]${shardsBit}`);
+         console.log(`[bold][green]Sharded cluster[/]   [bold][green]Nodes:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${mongodVersionLabel()}[/]${shardsBit}`);
       } else if (kind) {
-         console.log(`[bold][green]Topology:[/] [cyan]${kind}[/]   [bold][green]Nodes:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]`);
+         console.log(`[bold][green]Topology:[/] [cyan]${kind}[/]   [bold][green]Nodes:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${mongodVersionLabel()}[/]`);
       } else {
-         console.log(`[bold][green]Nodes:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]`);
+         console.log(`[bold][green]Nodes:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${mongodVersionLabel()}[/]`);
       }
       nodes.forEach(node => {
          console.log(formatNodeIdentity(node, cols, { "indent": '  ' }));
@@ -2776,7 +2817,7 @@
          if (nodeCount > 1) {
             printTopologyMembers(topology);
          } else {
-            console.log(`[bold][green]Hostname:[/] [cyan]${hostname}[/]   [bold][green]Type:[/] [cyan]${proc}[/]   [bold][green]Version:[/] [cyan]${db.version()}[/]   [bold][green]dbPath:[/] [cyan]${dbPath}[/]`);
+            console.log(`[bold][green]Hostname:[/] [cyan]${hostname}[/]   [bold][green]Type:[/] [cyan]${proc}[/]   [bold][green]Version:[/] [cyan]${mongodVersionLabel()}[/]   [bold][green]dbPath:[/] [cyan]${dbPath}[/]`);
             if (shards.length > 0) {
                console.log(`[bold][green]Shards:[/] ${JSON.stringify(shards)}`);
             }
@@ -2799,7 +2840,9 @@
       if (!profile || !Array.isArray(profile.phases)) return;
       const coll = profile.collStats || {};
       const elapsed = Number.isFinite(+profile.elapsedMs) ? (+profile.elapsedMs / 1000).toFixed(1) : '--';
-      console.log(`[cyan]PROFILE[/]  elapsed ${elapsed}s  concurrency ${profile.concurrency}  catalog ${profile.catalogBuilder || '?'}  fallback=${profile.catalogFallback === true}`);
+      const pre = Number.isFinite(+profile.preGatherMs) ? (+profile.preGatherMs / 1000).toFixed(1) : '--';
+      const since = Number.isFinite(+profile.sinceScriptMs) ? (+profile.sinceScriptMs / 1000).toFixed(1) : '--';
+      console.log(`[cyan]PROFILE[/]  elapsed ${elapsed}s  preGather ${pre}s  sinceScript ${since}s  concurrency ${profile.concurrency}  catalog ${profile.catalogBuilder || '?'}  fallback=${profile.catalogFallback === true}`);
       profile.phases.forEach(p => {
          const bits = [`${p.ms}ms`];
          if (p.node && p.node !== 'connecting') bits.push(p.node);
