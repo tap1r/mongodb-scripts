@@ -2030,7 +2030,7 @@ function $genArrayElements(len) {
     */
    const array = [];
    for (let i = 0; i < len; i++) {
-      array.push($genRandStr($getRandIntInc(6, 24)));
+      array.push($genRandStr($getRandIntInc(4, 12)));
    }
 
    return array;
