@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.26.0"
+ *  Version: "0.27.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -80,6 +80,7 @@
  *        format: <'tabular'|'table'|'nsTable'|'json'|'html'>, // 'table' aliases 'tabular'
  *        concurrency: <int>, // 0 = auto (8 mongod / 4 mongos); $collStats pool per DB
  *        verbosity: <'full'|'summary'|'summaryIdx'|'compactOnly'> // printer: full = collections+indexes+views; summary = DB rollup; summaryIdx = collections+indexes; compactOnly = compact/rebuild/wait/resync rows
+ *        profile: <true|false> // default false; gather phase timings + $collStats histogram (JSON additive `profile`)
  *     },
  *     topology: {
  *        discover: <true|false>, // default true; shared-tier / serverless stay one node
@@ -128,6 +129,12 @@
  *    mongosh --quiet --eval 'var options = { topology: { discover: false } };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { topology: { depth: "expanded" } };' -f dbstats.js
  *
+ *  Gather profiling (tuning; default off). Tabular prints a PROFILE block; json/html
+ *  add a `profile` key (phases, $collStats min/p50/p95/max, overlap, slowest NS).
+ *
+ *    mongosh --quiet --eval 'var options = { output: { profile: true } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { output: { format: "json", profile: true } };' -f dbstats.js
+ *
  *  Examples of an options file (JSONC). filter.db / filter.collection are strings
  *  ("^app$" or "/pat/i"); JSON has no RegExp. Missing dbstats-options.jsonc is silent.
  *
@@ -142,7 +149,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.26.0" };
+   const __script = { "name": "dbstats.js", "version": "0.27.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -246,7 +253,8 @@
       "output": {
          "format": "tabular", // ['tabular'|'table'|'nsTable'|'json'|'html'] ('table' → 'tabular')
          "concurrency": 0, // 0 = auto (8 mongod / 4 mongos); per-DB $collStats pool
-         "verbosity": "full" // ['full'|'summary'|'summaryIdx'|'compactOnly'] printer; JSON stays the full contract
+         "verbosity": "full", // ['full'|'summary'|'summaryIdx'|'compactOnly'] printer; JSON stays the full contract
+         "profile": false // gather phase + $collStats histogram; JSON additive `profile`
       },
       "topology": {
          "discover": true, // [true|false]
@@ -387,14 +395,71 @@
             tableOut(dbStats);
       }
 
+      if (dbStats.profile) printGatherProfile(dbStats.profile);
       return toJsonContract(dbStats);
+   }
+
+   function createGatherProfile(enabled) {
+      /*
+       *  Wall-clock gather profiler. Off unless output.profile is true.
+       *  collStats overlap is sum(per-NS ms) / collStats-phase wall (mapPool).
+       */
+      const t0 = Date.now();
+      const phases = [];
+      const coll = [];
+      let mark = t0;
+      let scope = 'connecting';
+      return {
+         "enabled": enabled === true,
+         t0,
+         setScope(name) { scope = name || 'connecting'; },
+         phase(name, extra) {
+            if (enabled !== true) return;
+            const n = Date.now();
+            phases.push(Object.assign({ "name": name, "node": scope, "ms": n - mark }, extra || {}));
+            mark = n;
+         },
+         sampleColl(ns, durationMs) {
+            if (enabled !== true) return;
+            coll.push({ "ns": ns, "ms": durationMs, "node": scope });
+         },
+         finalize(extra) {
+            if (enabled !== true) return null;
+            const xs = coll.map(s => s.ms).filter(Number.isFinite).sort((a, b) => a - b);
+            const pick = (p) => xs.length
+               ? xs[Math.min(xs.length - 1, Math.max(0, Math.floor(p * (xs.length - 1))))]
+               : null;
+            const collPhase = [...phases].reverse().find(p => p.name === 'collStats');
+            const wall = collPhase ? collPhase.ms : 0;
+            const sum = xs.reduce((a, b) => a + b, 0);
+            return Object.assign({
+               "elapsedMs": Date.now() - t0,
+               "startedAt": new Date(t0).toISOString(),
+               phases,
+               "collStats": {
+                  "n": xs.length,
+                  "minMs": xs.length ? xs[0] : null,
+                  "p50Ms": pick(0.5),
+                  "p95Ms": pick(0.95),
+                  "maxMs": xs.length ? xs[xs.length - 1] : null,
+                  "sumMs": sum,
+                  "overlap": (wall > 0 && sum > 0) ? +(sum / wall).toFixed(2) : null,
+                  "slowest": coll.slice().sort((a, b) => b.ms - a.ms).slice(0, 15)
+               }
+            }, extra || {});
+         }
+      };
    }
 
    async function getStats() {
       /*
        *  Connecting-session gather, then optional per-node fan-out.
        */
+      const profile = createGatherProfile(outputOptions.profile === true);
       const topology = TopologySnapshot.fromSession();
+      profile.phase('topology', {
+         "kind": (topology.cluster && topology.cluster.kind) || null
+      });
       const jsonCli = outputOptions.format === 'json' || outputOptions.format === 'html';
       const hud = new MiniHud({
          "enabled": __dbstatsCliFile && !jsonCli
@@ -402,11 +467,25 @@
 
       if (__dbstatsCliFile && !jsonCli && !hud.enabled) console.log('');
 
+      const origFetch = CollectionStats.prototype.fetchStats;
+      if (profile.enabled) {
+         CollectionStats.prototype.fetchStats = async function(dbName, cache) {
+            const t0 = Date.now();
+            try {
+               return await origFetch.call(this, dbName, cache);
+            } finally {
+               const dbn = dbName || this.dbName || '';
+               profile.sampleColl(`${dbn}.${this.name}`, Date.now() - t0);
+            }
+         };
+      }
+
       try {
          const dbPath = await gatherDbPath({
             "host": topology.connecting || HostNode.discover(),
             hud,
-            "depth": 'expanded'
+            "depth": 'expanded',
+            profile
          });
          dbPath.topology = topology;
          topology.aggregate = dbPath;
@@ -419,7 +498,8 @@
                   "host": node,
                   hud,
                   "depth": depth || 'summary',
-                  "hudLabel": node && node.instance
+                  "hudLabel": node && node.instance,
+                  profile
                }),
                "onProgress": ({ node, index, total }) => {
                   hud.render(
@@ -428,14 +508,24 @@
                   );
                }
             });
+            profile.phase('remoteGather', {
+               "nodes": Array.isArray(topology.nodes) ? topology.nodes.length : 0,
+               "kind": (topology.cluster && topology.cluster.kind) || null
+            });
          }
+         dbPath.profile = profile.finalize({
+            "concurrency": statsConcurrency(),
+            "catalogBuilder": dbPath.catalogBuilder || null,
+            "catalogFallback": dbPath.catalogFallback === true
+         });
          return dbPath;
       } finally {
+         if (profile.enabled) CollectionStats.prototype.fetchStats = origFetch;
          hud.clear();
       }
    }
 
-   async function gatherDbPath({ host, hud, depth = 'expanded', hudLabel } = {}) {
+   async function gatherDbPath({ host, hud, depth = 'expanded', hudLabel, profile } = {}) {
       /*
        *  One session: $stats all DBs; expanded also catalogs and $collStats.
        *  Same filters as the connecting gather. hud may be a no-op MiniHud.
@@ -450,8 +540,15 @@
       const prefix = hudLabel ? `[cyan]node[/] ${hudLabel}  ` : '';
       const paint = (line, opts) => { if (hud && typeof hud.render === 'function') hud.render(line, opts); };
       const bar = (frac) => (hud && typeof hud.bar === 'function') ? hud.bar(frac) : '';
+      if (profile && typeof profile.setScope === 'function') {
+         profile.setScope(hudLabel || 'connecting');
+      }
+      const mark = (name, extra) => {
+         if (profile && typeof profile.phase === 'function') profile.phase(name, extra);
+      };
 
       const dbNames = stableSort(getDBNames(dbFilter), compareBy(v => v, 1));
+      mark('listDatabases', { "count": dbNames.length });
       const dbTotal = dbNames.length;
       dbPath.databases = [];
       for (let i = 0; i < dbNames.length; i++) {
@@ -459,15 +556,22 @@
          dbPath.databases.push(buildDatabaseMeta(dbNames[i], dbPath.shards));
       }
       rollupDbPath(dbPath, dbPath.databases);
+      mark('dbStats', { "count": dbTotal });
 
       if (depth !== 'expanded') {
          rollupDbPathFree(dbPath);
          dbPath.gatherWarnings = collectGatherWarnings(dbPath);
+         mark('summaryOnly');
          return dbPath;
       }
 
       paint(`${prefix}[cyan]catalog[/]  listing`, { "force": true });
       const catalogSnapshot = await listCatalogSnapshot(catalogMode);
+      mark('catalogSnapshot', {
+         "builder": catalogSnapshot.builder || null,
+         "fallback": catalogSnapshot.fallback === true,
+         "entries": Array.isArray(catalogSnapshot.entries) ? catalogSnapshot.entries.length : 0
+      });
       for (let i = 0; i < dbPath.databases.length; i++) {
          const database = dbPath.databases[i];
          paint(`${prefix}[cyan]catalog[/]  ${i + 1}/${dbTotal}  ${database.name}`, { "force": i === 0 || i + 1 === dbTotal });
@@ -480,6 +584,10 @@
       dbPath.catalogFallback = catalogSnapshot.fallback === true
          || (catalogSnapshot.builder !== 'legacy' && !usedStage);
       if (catalogSnapshot.fallbackError) dbPath.catalogFallbackError = catalogSnapshot.fallbackError;
+      mark('catalogPerDb', {
+         "builder": dbPath.catalogBuilder,
+         "fallback": dbPath.catalogFallback === true
+      });
 
       const collTotal = dbPath.databases.reduce((n, d) => n + (d.collections || []).length, 0);
       const collStarted = Date.now();
@@ -514,11 +622,13 @@
          `${prefix}[cyan]collStats[/] ${bar(1)} ${collTotal}/${collTotal} 100%`,
          { "force": true }
       );
+      mark('collStats', { "n": collTotal, concurrency });
 
       dbPath.databases = stableSort(dbPath.databases, sortBy('db'));
       rollupDbPath(dbPath, dbPath.databases);
       rollupDbPathFree(dbPath);
       dbPath.gatherWarnings = collectGatherWarnings(dbPath);
+      mark('rollup');
       return dbPath;
    }
 
@@ -1421,10 +1531,10 @@
        *  Hierarchical rollup plus a flat namespaces list. No printer fields.
        */
       const databases = (dbStats.databases || []).map(jsonDatabase);
-      return {
+      const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.26.0',
+         "version": '0.27.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1442,6 +1552,8 @@
          "namespaces": databases.flatMap(d => d.collections),
          "warnings": jsonWarnings(dbStats)
       };
+      if (dbStats.profile) payload.profile = dbStats.profile;
+      return payload;
    }
 
    function jsonStringifyReplacer(_key, value) {
@@ -2670,6 +2782,36 @@
       printRule('heavy');
       console.log('');
       return;
+   }
+
+   function printGatherProfile(profile = {}) {
+      /*
+       *  Tabular/nsTable footer for output.profile. JSON/html carry the same
+       *  object on the contract.
+       */
+      if (!profile || !Array.isArray(profile.phases)) return;
+      const coll = profile.collStats || {};
+      const elapsed = Number.isFinite(+profile.elapsedMs) ? (+profile.elapsedMs / 1000).toFixed(1) : '--';
+      console.log(`[cyan]PROFILE[/]  elapsed ${elapsed}s  concurrency ${profile.concurrency}  catalog ${profile.catalogBuilder || '?'}  fallback=${profile.catalogFallback === true}`);
+      profile.phases.forEach(p => {
+         const bits = [`${p.ms}ms`];
+         if (p.node && p.node !== 'connecting') bits.push(p.node);
+         if (p.kind) bits.push(p.kind);
+         if (p.builder) bits.push(p.builder);
+         if (p.fallback === true) bits.push('fallback');
+         if (Number.isFinite(+p.n)) bits.push(`n=${p.n}`);
+         if (Number.isFinite(+p.count)) bits.push(`n=${p.count}`);
+         if (Number.isFinite(+p.concurrency)) bits.push(`run=${p.concurrency}`);
+         if (Number.isFinite(+p.entries)) bits.push(`entries=${p.entries}`);
+         console.log(`  ${String(p.name).padEnd(18)} ${bits.join('  ')}`);
+      });
+      if (coll.n) {
+         console.log(`  ${'collStats dist'.padEnd(18)} n=${coll.n}  min=${coll.minMs}  p50=${coll.p50Ms}  p95=${coll.p95Ms}  max=${coll.maxMs}  sum=${coll.sumMs}  overlap=${coll.overlap}x`);
+         (coll.slowest || []).slice(0, 8).forEach(s => {
+            console.log(`    ${String(s.ms).padStart(6)}ms  ${s.ns}${s.node && s.node !== 'connecting' ? '  ' + s.node : ''}`);
+         });
+      }
+      console.log('');
    }
 
    dbStats = await main();

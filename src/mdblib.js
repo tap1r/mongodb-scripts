@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.28.0"
+ *  Version: "0.29.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,7 +17,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.28.0"
+      "version": "0.29.0"
 });
 
 /*  Notes:
@@ -29,12 +29,14 @@ if (typeof __lib === 'undefined') (
  *    One hello() fills both BSON limits. fuzzer reads bsonMax.
  *  - Session snapshot (first read): atlas platform, fCV, and isSharded share
  *    one hello / hostInfo / serverStatus / listShards / getParameter.
- *    That serverStatus call gets the read preference from the hello already
- *    taken, so it does not hello again. hello msg isdbgrid still means
+ *    hello() and serverVer() are first-read on that snapshot (helloDoc,
+ *    serverVerParsed). hello(true) re-probes and updates the cache.
+ *    load() serverVer(4.4) may fill the version sidecar only. withChildSession
+ *    clears both sidecars with the snapshot. hello msg isdbgrid still means
  *    sharded when serverStatus is {ok:0} and listShards did not return shards.
  *    A proc of unknown is not cached (the next read retries). An M0/Flex
  *    getParameter denial still caches once proc is known. load() does not
- *    fill the snapshot. hello().me stays live (onlineDefrag can move).
+ *    fill the full snapshot. db.hello() stays a live shell command.
  *  - compactionHelper(type, storageSize, freeStorageSize) has no numeric
  *    defaults. Omitted storage is not the 4 KiB display floor. Omitted or
  *    null free is unknown, not an empty free list, and returns false.
@@ -1113,20 +1115,26 @@ function closeChildMongo(mongo) {
 async function withChildSession(mongo, fn) {
    /*
     *  Serial global-db swap so $stats / $collStats / listCatalogSnapshot
-    *  reuse the current session. Restores db, sessionSnapshot, and
-    *  __collStatsOnMongos. Not mdblib.for(db).
+    *  reuse the current session. Restores db, sessionSnapshot (including
+    *  hello / serverVer sidecars), and __collStatsOnMongos. Not mdblib.for(db).
     */
    const parentDb = db;
    const parentSnap = sessionSnapshot.cached;
+   const parentHello = sessionSnapshot.helloDoc;
+   const parentVer = sessionSnapshot.serverVerParsed;
    const parentCollStats = __collStatsOnMongos;
    try {
       db = mongo.getDB(parentDb.getName());
       sessionSnapshot.cached = null;
+      sessionSnapshot.helloDoc = null;
+      sessionSnapshot.serverVerParsed = null;
       __collStatsOnMongos = undefined;
       return await fn();
    } finally {
       db = parentDb;
       sessionSnapshot.cached = parentSnap;
+      sessionSnapshot.helloDoc = parentHello;
+      sessionSnapshot.serverVerParsed = parentVer;
       __collStatsOnMongos = parentCollStats;
    }
 }
@@ -1153,9 +1161,10 @@ class HostNode {
    init({ connecting = true, preserveInstance = false } = {}) {
       const advertised = this.instance;
       const snap = sessionSnapshot();
+      const helloDoc = snap.helloDoc || hello();
       this.instance = (snap.atlasPlatform === 'serverless') ? 'serverless'
                     : (snap.sharded) ? 'sharded'
-                    : hello().me;
+                    : helloDoc.me;
       if (preserveInstance && advertised != null) this.instance = advertised;
       this.hostname = snap.hostname;
       this.proc = snap.proc;
@@ -1210,15 +1219,17 @@ class TopologySnapshot {
       const snap = sessionSnapshot();
       const connecting = HostNode.discover();
       const errors = [];
-      let helloDoc = {};
-      try {
-         helloDoc = hello() || {};
-      } catch (e) {
-         errors.push({
-            "step": "hello",
-            "message": (e && (e.errmsg || e.message)) || String(e)
-         });
-         helloDoc = {};
+      let helloDoc = snap.helloDoc;
+      if (!helloDoc) {
+         try {
+            helloDoc = hello() || {};
+         } catch (e) {
+            errors.push({
+               "step": "hello",
+               "message": (e && (e.errmsg || e.message)) || String(e)
+            });
+            helloDoc = {};
+         }
       }
       if (connecting.proc === 'mongos') connecting.role = 'mongos';
       else if (helloDoc.isWritablePrimary) connecting.role = 'PRIMARY';
@@ -1705,12 +1716,39 @@ function verAtLeast(parsed, ver) {
    return !!(parsed && need && cmpVer(parsed, need) >= 0);
 }
 
+function rememberHelloDoc(doc) {
+   if (doc && typeof doc === 'object') {
+      sessionSnapshot.helloDoc = doc;
+      if (sessionSnapshot.cached) sessionSnapshot.cached.helloDoc = doc;
+   }
+   return doc;
+}
+
+function rememberServerVerParsed(parsed) {
+   if (parsed) {
+      sessionSnapshot.serverVerParsed = parsed;
+      if (sessionSnapshot.cached) sessionSnapshot.cached.serverVerParsed = parsed;
+   }
+   return parsed;
+}
+
+function cachedServerVerParsed() {
+   if (sessionSnapshot.serverVerParsed) return sessionSnapshot.serverVerParsed;
+   if (sessionSnapshot.cached && sessionSnapshot.cached.serverVerParsed) {
+      sessionSnapshot.serverVerParsed = sessionSnapshot.cached.serverVerParsed;
+      return sessionSnapshot.serverVerParsed;
+   }
+   const parsed = parseVer(db.version());
+   return rememberServerVerParsed(parsed);
+}
+
 function serverVer(ver = false) {
    /*
     *  Server binary version. Predicate: serverVer(4.4) / serverVer(8).
     *  Getter: numeric major.minor.patch with integer minors (2.10 ≠ 2.1).
+    *  First-read on the session snapshot (load() may fill the sidecar only).
     */
-   const parsed = parseVer(db.version());
+   const parsed = cachedServerVerParsed();
    if (ver === false) return parsed ? verNumber(parsed) : 0;
    return verAtLeast(parsed, ver);
 }
@@ -1735,16 +1773,20 @@ function shellVer(ver = false) {
    return verAtLeast(parsed, ver);
 }
 
-function hello() {
+function hello(refresh) {
    /*
-    *  One-shot topology probe ({ hello: 1 }).
+    *  First-read topology probe ({ hello: 1 }) on the session snapshot.
+    *  hello(true) re-probes and updates the cache (step-down / child session).
     *  SERVER-49989: send hello, do not wrap isMaster; replies differ
     *  (isWritablePrimary vs ismaster). hello exists on mongod >= 4.2
     *  (floor is 4.4), so there is no isMaster fallback.
     *  Never pass topologyVersion / maxAwaitTimeMS — that is awaitable
     *  hello and blocks up to heartbeatFrequencyMS (10s) on a quiet node.
+    *  db.hello() stays a live shell command.
     */
-   return db.adminCommand({ "hello": 1 });
+   if (refresh !== true && sessionSnapshot.helloDoc) return sessionSnapshot.helloDoc;
+   const doc = db.adminCommand({ "hello": 1 }) || {};
+   return rememberHelloDoc(doc);
 }
 
 function hostNameFromHostPort(value) {
@@ -1864,19 +1906,25 @@ function sessionSnapshot() {
    /*
     *  First-read session facts: atlas platform, fCV, isSharded.
     *  One hello, then hostInfo / serverStatus / listShards / getParameter.
-    *  serverStatus gets the read preference from that hello, so it does not
-    *  hello again. A thrown hello falls through to primaryPreferred.
+    *  hello() / serverVer() reuse helloDoc and serverVerParsed on this
+    *  snapshot. serverStatus gets the read preference from that hello, so
+    *  it does not hello again. A thrown hello falls through to primaryPreferred.
     *  hello msg isdbgrid still means sharded when serverStatus is {ok:0} and
     *  listShards did not return shards. proc unknown is not cached.
-    *  load() does not fill this. hello().me is not stored (onlineDefrag can move).
+    *  load() does not fill the full snapshot; serverVer(4.4) at load may
+    *  fill the version sidecar. Binary version prefers serverStatus.version
+    *  then the sidecar / db.version(); fCV still falls back to that binary
+    *  (M0/Flex getParameter denial).
     */
    if (sessionSnapshot.cached) return sessionSnapshot.cached;
 
-   let helloDoc = {};
-   try {
-      helloDoc = hello() || {};
-   } catch (_) {
-      helloDoc = {};
+   let helloDoc = sessionSnapshot.helloDoc;
+   if (!helloDoc) {
+      try {
+         helloDoc = hello() || {};
+      } catch (_) {
+         helloDoc = {};
+      }
    }
    const helloMsg = helloDoc.msg || false;
    const statusReadPref = helloDoc.secondary ? 'secondaryPreferred' : 'primaryPreferred';
@@ -1896,6 +1944,11 @@ function sessionSnapshot() {
       "platform": atlasPlatform
    } = atlasDeployment(helloDoc, hostInfoDoc, hostInfoError, ss);
 
+   let serverVerParsed = sessionSnapshot.serverVerParsed
+      || parseVer(ss && ss.version);
+   if (!serverVerParsed) serverVerParsed = parseVer(db.version());
+   rememberServerVerParsed(serverVerParsed);
+
    let fcvCmd = {};
    try {
       fcvCmd = db.adminCommand({ "getParameter": 1, "featureCompatibilityVersion": 1 });
@@ -1904,7 +1957,7 @@ function sessionSnapshot() {
    }
    const raw = fcvCmd.featureCompatibilityVersion;
    const versionStr = (typeof raw === 'string') ? raw : raw && raw.version;
-   const fcvParsed = parseVer(versionStr) || parseVer(db.version());
+   const fcvParsed = parseVer(versionStr) || serverVerParsed;
 
    let shardDocs = false;
    try {
@@ -1928,6 +1981,8 @@ function sessionSnapshot() {
    const snap = {
       atlasPlatform,
       fcvParsed,
+      serverVerParsed,
+      helloDoc,
       sharded,
       hostname,
       proc,
@@ -1935,7 +1990,10 @@ function sessionSnapshot() {
    };
    // A missed probe must not stick for the session. M0/Flex still caches:
    // proc is known and fCV falls back to the binary version.
-   if (proc !== 'unknown') sessionSnapshot.cached = snap;
+   if (proc !== 'unknown') {
+      sessionSnapshot.cached = snap;
+      if (helloDoc && Object.keys(helloDoc).length) sessionSnapshot.helloDoc = helloDoc;
+   }
    return snap;
 }
 
