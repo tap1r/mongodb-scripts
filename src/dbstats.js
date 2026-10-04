@@ -337,7 +337,6 @@
    }
 })();
 
-// (async(db, options, dbstats = {}) => {
 (async() => {
    /*
     *  User defined parameters
@@ -2673,8 +2672,9 @@
       return;
    }
 
-   dbStats = await main();
-   return dbStats;
+   // dbStats = await main();
+   // return dbStats;
+   return await main();
 })();
 
 // EOF
