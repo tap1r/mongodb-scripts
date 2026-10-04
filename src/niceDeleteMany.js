@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "0.15.0"
+    *  Version: "1.0.0"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -26,6 +26,7 @@
     *  - Unhinted window: if winningPlan is not IXSCAN-without-SORT, hint the first ranked rejectedPlan that is (planner order)
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
+    *  - MongoDB 9.0+ fails closed (null equality on dotted paths through arrays changed; deletes could over-match). v9 testing/refactor is tabled
     *  - Atlas M0/Flex (no WT vitals) always walk _id via find(); leftover window SORT cannot spill
     *  - On mongos: WT admission from collection-owning shard primaries (worst-shard fold, owners refreshed each sample); paceMaker if any of those shards is unreachable at attach, or after consecutive mid-run misses
     *  - "pace" admission mode when WT cache vitals are unavailable (unreachable shards / Atlas M0/Flex)
@@ -70,7 +71,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "0.15.0" };
+   const __script = { "name": "niceDeleteMany.js", "version": "1.0.0" };
    let vitals = {};
    let vitalsSampling = false;
    let startupLogDone = false; // after writeConsole of the startup banner; attach WARN is banner-only until then
@@ -791,6 +792,28 @@
 
    function redactMessage(value) {
       return String(value ?? '').replace(/\/\/[^@/]+@/g, '//');
+   }
+
+   function assertServerBelow9() {
+      /*
+       *  MongoDB 9.0 changed null equality on dotted paths that traverse
+       *  arrays ({ "a.b": null } matches more documents). User filters can
+       *  delete extra docs. v9 testing and filter refactor are tabled;
+       *  refuse binary 9+ until that lands. Unknown version fails closed.
+       *  https://www.mongodb.com/docs/manual/release-notes/9.0/
+       */
+      let detected;
+      try {
+         detected = String(db.version());
+      } catch(e) {
+         emit(`[red][ERROR][/] [yellow]unable to read server version[/] (${redactMessage(e?.message ?? e)}); refusing to run`);
+         throw new Error('unable to read server version; refusing to run');
+      }
+      const major = parseInt(detected.split('.')[0], 10);
+      if (!Number.isFinite(major) || major >= 9) {
+         emit(`[red][ERROR][/] [yellow]MongoDB ${detected} is not supported[/] — 9.0 changed null equality on dotted paths that traverse arrays; this delete script fails closed until that is tested. Use MongoDB 8.x or earlier.`);
+         throw new Error(`MongoDB ${detected} is not supported`);
+      }
    }
 
    function timestampSec(ts) {
@@ -3225,6 +3248,7 @@
    }
 
    async function main() {
+      assertServerBelow9();
       await attachVitals();
       const numCores = vitals?.numCores;
       const concurrency = Math.max((numCores > 4) ? numCores : 4, 32); // admission control throttles; do not chase live write tickets

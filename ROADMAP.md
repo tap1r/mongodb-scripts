@@ -90,7 +90,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `schema-sampler.js` | 0.2.16 | **0.2.17** |
 | `sleepy.js` | 0.2.6 | **0.2.7** |
 | `docSizes.js` | 0.1.34 | **0.1.35** |
-| `niceDeleteMany.js` | 0.4.11 | **0.15.0** |
+| `niceDeleteMany.js` | 0.4.11 | **1.0.0** |
 | `congestionMonitor.js` | 0.2.13 | **0.4.0** |
 | `onlineDefrag.js` | 0.1.4 | **1.7.0** |
 | `indexCacheUtil.js` | 0.1.5 | **1.2.0** |
@@ -443,7 +443,9 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `niceDeleteMany.js`
 
-**Live: v0.15.0.** **Archive: v0.4.11.** `--eval` must use `var`. Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`. Header tags this file as requiring this roadmap. Shared AIMD (`maxInFlight` MD/AI) for WT and paceMaker; WT FSM vs pace delay stay separate gates. `hasUserHint` / `hasUserCollation` collapsed to `hasNonEmptyDoc`. Policy A is `POLICY_A_STEPS` (C1 cannotSpill scan, C2–C3 user hint, C4/C7 unhinted planner then Policy B, C6 `_id` scan).
+**Live: v1.0.0.** **Archive: v0.4.11.** `--eval` must use `var`. Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`. Header tags this file as requiring this roadmap. Shared AIMD (`maxInFlight` MD/AI) for WT and paceMaker; WT FSM vs pace delay stay separate gates. `hasUserHint` / `hasUserCollation` collapsed to `hasNonEmptyDoc`. Policy A is `POLICY_A_STEPS` (C1 cannotSpill scan, C2–C3 user hint, C4/C7 unhinted planner then Policy B, C6 `_id` scan). Binary major ≥ 9 fails closed (`assertServerBelow9`); unknown `db.version()` also refuses.
+
+**TABLED:** MongoDB 9.0 null-equality on dotted paths that traverse arrays (`{ "a.b": null }`, `$eq` / `$ne` / `$in` / `$nin` / `$gte` / `$lte`, `$lookup`). Until testing and filter/curation refactor land, this script refuses MongoDB 9+. Mixed-version shards behind an 8.x mongos wait on that same work. Do not re-propose as the next leftover.
 
 **Apply (shell):** `deleteManyTask` uses `(await namespace.deleteMany(...)).deletedCount`. See the scripting guide (result fields). Do not re-add the Promise-field unwrap as new work.
 
