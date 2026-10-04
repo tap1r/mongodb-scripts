@@ -18,7 +18,7 @@
     *  - freeSpaceTargetMB passthrough (server default 20); runOnce defaults to true (opposite of the server)
     *  - ident map finishes before autoCompact. Naming a file needs the internal action (collectionless $listCatalog) or, on that namespace, listIndexes (targeted $listCatalog) or collStats (wiredTiger.uri, indexDetails.*.uri). With that, the line prints as ns or ns.index; without it, the line stays collection-*.wt / index-*.wt. Built-in roles have neither listIndexes nor collStats on local.replset.* or on system.views, system.rollback.id, system.keys, system.preimages, and system.indexBuilds. Idents created during the pass refresh in the background
     *  - First-pass TTY bar: distinct catalog namespaces seen in WTCMPCT logs, over the initial catalog namespace count. Ramlog loss marks the count fuzzy (~). The bar is not a latch. Piped runs stay on the log lines.
-    *  - Options: autoCompact-options.jsonc (cwd, --file dir, $MDBLIB, ~/.mongodb) then var autoCompactOptions. Missing default is silent. Explicit var optionsFile. mdblib supplies resolveOptions, the ANSI console.log patch, MiniHud, and hostNameFromHostPort. AutoFactor and serverStatus stay local.
+    *  - Options: autoCompact-options.jsonc (cwd, --file dir, $MDBLIB, ~/.mongodb) then var autoCompactOptions. Missing default is silent. Explicit var optionsFile. mdblib supplies resolveOptions, the ANSI console.log patch, MiniHud, hostNameFromHostPort, AutoFactor, serverStatus, and atlasDeployment.
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "autoCompact": true };'] [-f|--file] </path/to/>autoCompact.js
@@ -52,10 +52,9 @@
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js.
-       *  resolveOptions, the console.log colour patch, MiniHud, and
-       *  hostNameFromHostPort come from that file.
-       *  AutoFactor stays local (NaN is "unknown"; scale clamps below 1 byte).
-       *  serverStatus stays local (no read preference; throws to the caller).
+       *  resolveOptions, the console.log colour patch, MiniHud,
+       *  hostNameFromHostPort, AutoFactor, serverStatus, and atlasDeployment
+       *  come from that file. serverStatus(opts, null) is the member probe.
        */
       let __lib = { "name": "mdblib.js", "paths": null, "path": null };
       __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
@@ -118,51 +117,13 @@
       console.log(`\n[yellow]#### Running script ${__script.name} v${__script.version} on shell v${version()}[/]\n`);
    }
 
-   const SERVER_STATUS_IDENTITY_KEYS = new Set([
-      "ok", "host", "version", "process", "pid",
-      "uptime", "uptimeMillis", "uptimeEstimate", "localTime",
-      "$clusterTime", "operationTime", "clusterTime",
-      "errmsg", "code", "codeName", "errorLabels"
-   ]);
-   const SERVER_STATUS_OPTIONS_DEFAULTS = { "none": true }; // 8.3 exclude-all; pre-8.3 learned below
-   function absorbServerStatusKeys(ss) {
-      /*
-       *  Pre-8.3 ignores none:true; learn section names from a fat reply
-       *  and exclude them on later calls. Skip identity/command fields.
-       */
-      if (!ss || typeof ss !== 'object' || ss.ok === 0) return false;
-      let grew = false;
-      for (const key of Object.keys(ss)) {
-         if (SERVER_STATUS_IDENTITY_KEYS.has(key)) continue;
-         if (Object.prototype.hasOwnProperty.call(SERVER_STATUS_OPTIONS_DEFAULTS, key)) continue;
-         SERVER_STATUS_OPTIONS_DEFAULTS[key] = false;
-         grew = true;
-      }
-      return grew;
-   }
    const SERVER_STATUS_WT_OPTS = { "wiredTiger": true };
    const SERVER_STATUS_ENGINE_OPTS = {
       "storageEngine": true,
       "featureCompatibilityVersion": true
    };
-
-   function serverStatus(opts = {}) {
-      /*
-       *  opt-in version of db.serverStatus().
-       *  Stays local: mdblib serverStatus calls hello() for a read preference
-       *  and returns { ok: 0 } on failure. This probe has no read preference
-       *  and throws to the caller. Section overlays (wiredTiger,
-       *  storageEngine+FCV) are applied at the call. Defaults grow from the
-       *  first fat reply on servers that ignore none:true.
-       */
-      const ss = db.adminCommand({
-         "serverStatus": true,
-         ...SERVER_STATUS_OPTIONS_DEFAULTS,
-         ...opts
-      });
-      absorbServerStatusKeys(ss);
-      return ss;
-   }
+   // null: this shell is already the target mongod. Do not hello() for a read preference.
+   const memberServerStatus = (opts = {}) => serverStatus(opts, null);
 
    const SERVERSTATUS_MS = 1000;
    const DISABLE_POLL_MS = 200;      // poll interval while waiting for running bit to clear
@@ -192,7 +153,7 @@
          ({ 'wiredTiger': {
                'background-compact': bc = {}
             } = {}
-         } = serverStatus(SERVER_STATUS_WT_OPTS));
+         } = memberServerStatus(SERVER_STATUS_WT_OPTS));
          ({ 'background compact running': running,
             'background compact recovered bytes': bytesRecovered
          } = bc);
@@ -215,7 +176,7 @@
       // core serverStatus field (not an opt-in section); same clock as getLog t
       // enable watermark: call immediately before autoCompact (not client ISODate)
       try {
-         const { localTime } = serverStatus();
+         const { localTime } = memberServerStatus();
          if (localTime != null) return localTime;
       } catch(_) { /* fall through */ }
       return ISODate();
@@ -237,36 +198,6 @@
       }
       return running;
    };
-   const SCALE_METRICS = [
-      { "unit": "bytes", "symbol": "B", "factor": 1, "precision": 0 },
-      { "unit": "kibibytes", "symbol": "KiB", "factor": 1024, "precision": 2 },
-      { "unit": "mebibytes", "symbol": "MiB", "factor": Math.pow(1024, 2), "precision": 2 },
-      { "unit": "gibibytes", "symbol": "GiB", "factor": Math.pow(1024, 3), "precision": 2 },
-      { "unit": "tebibytes", "symbol": "TiB", "factor": Math.pow(1024, 4), "precision": 2 },
-      { "unit": "pebibytes", "symbol": "PiB", "factor": Math.pow(1024, 5), "precision": 2 },
-      { "unit": "exbibytes", "symbol": "EiB", "factor": Math.pow(1024, 6), "precision": 2 }
-   ];
-   class AutoFactor {
-      /*
-       *  Stricter than mdblib AutoFactor: non-finite is "unknown", and a
-       *  value below 1 byte still selects the byte scale (mdblib's log2
-       *  floor goes negative and format throws). Recovered bytes use this.
-       */
-      scale(number) {
-         if (number < 1) number = 1;
-         return Math.min(Math.floor(Math.log2(number) / 10), SCALE_METRICS.length - 1);
-      }
-      metric(number) {
-         return SCALE_METRICS[this.scale(number)];
-      }
-      format(number = 0) {
-         const n = Number(number);
-         if (!Number.isFinite(n)) return 'unknown';
-         const value = Math.max(0, n);
-         const metric = this.metric(value);
-         return `${+(value / metric.factor).toFixed(metric.precision)} ${metric.symbol}`;
-      }
-   }
    const scaled = new AutoFactor();
    const reportRecoveredBytes = startBytes => {
       // this-pass delta vs process-lifetime cumulative recovered bytes
@@ -281,9 +212,8 @@
    const atlasPlatform = helloDoc => {
       /*
        *  sharedTier is Atlas M0 (Free) / Flex. serverless is a separate platform string.
-       *  Caller already rejected mongos. One hostInfo, one bare serverStatus.
-       *  Hostname: hostInfo.system.hostname, else serverStatus().host (M0/Flex),
-       *  else hello().me, else unknown.
+       *  Caller already rejected mongos. One hostInfo, one member serverStatus.
+       *  Classification is mdblib atlasDeployment (no extra hello).
        */
       let hostInfoDoc = {};
       let hostInfoError = null;
@@ -292,32 +222,9 @@
       } catch(e) {
          hostInfoError = e;
       }
-      let ss;
-      try {
-         ss = serverStatus();
-      } catch(e) {
-         return { "error": e };
-      }
-      let hostname = (hostInfoDoc.system && hostInfoDoc.system.hostname)
-         ? String(hostInfoDoc.system.hostname)
-         : '';
-      if (!hostname) hostname = hostNameFromHostPort(ss.host);
-      if (!hostname) {
-         hostname = hostNameFromHostPort(helloDoc.me);
-         if (!hostname && helloDoc.msg !== 'isdbgrid' && typeof helloDoc.me === 'undefined') {
-            hostname = 'serverless';
-         }
-      }
-      if (!hostname) hostname = 'unknown';
-      const isSharedTier = hostInfoError
-         ? (hostInfoError.codeName == 'AtlasError')
-         : (hostInfoDoc.ok != 1);
-      const atlasVersion = ss.atlasVersion || false;
-      const isAtlas = !!(atlasVersion || (typeof hostname === 'string' && hostname.endsWith('.mongodb.net')));
-      let platform = false;
-      if (isAtlas && isSharedTier) platform = 'sharedTier';
-      else if (isAtlas) platform = 'dedicatedReplicaSet';
-      else if (hostname == 'serverless') platform = 'serverless';
+      const ss = memberServerStatus();
+      if (ss.ok != 1) return { "error": ss.error || ss };
+      const { "platform": platform } = atlasDeployment(helloDoc, hostInfoDoc, hostInfoError, ss);
       return { "platform": platform };
    };
    const preflight = () => {
@@ -360,15 +267,15 @@
          return false;
       }
       let engine, fcv;
-      try {
-         ({
-            'storageEngine': { 'name': engine } = {},
-            'featureCompatibilityVersion': fcv
-         } = serverStatus(SERVER_STATUS_ENGINE_OPTS));
-      } catch(e) {
-         console.log('[red][ERROR] serverStatus() failed:[/]', e);
+      const engineStatus = memberServerStatus(SERVER_STATUS_ENGINE_OPTS);
+      if (engineStatus.ok != 1) {
+         console.log('[red][ERROR] serverStatus() failed:[/]', engineStatus.error || engineStatus);
          return false;
       }
+      ({
+         'storageEngine': { 'name': engine } = {},
+         'featureCompatibilityVersion': fcv
+      } = engineStatus);
       // explicit FCV from serverStatus; if omitted, effective FCV equals the binary version
       const fcvVersion = (typeof fcv === 'string') ? fcv : fcv?.version;
       const effectiveFcv = fcvVersion ?? db.version();

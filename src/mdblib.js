@@ -44,6 +44,10 @@ if (typeof __lib === 'undefined') (
  *  - serverStatus none:true is portable on 8.0 and Atlas M0 (no throw;
  *    process/pid remain). SERVER_STATUS_OPTIONS_DEFAULTS starts as none:true
  *    and grows section:false from fat replies (pre-8.3 ignores none).
+ *    serverStatus(opts, null) skips the read-preference hello and runs on
+ *    the connected member. A thrown command becomes { ok: 0, error }.
+ *  - AutoFactor.format: non-finite is "unknown"; negatives clamp to 0;
+ *    a value below 1 byte stays on the byte scale.
  *  - $collStats is async; callers must await it (user-defined async is not
  *    rewriter-awaited). Do not await the aggregate cursor (thenable drains).
  *    Drain via drainAggCursor / driver _cursor.toArray() (native Promise) so
@@ -593,13 +597,17 @@ const SCALE_METRICS = [ // array ordered by scale factor
 
 class AutoFactor {
    /*
-    *  Determine scale factor automatically
+    *  Determine scale factor automatically.
+    *  format() is the display path: non-finite is "unknown", negatives
+    *  clamp to 0, and a value below 1 byte stays on the byte scale
+    *  (log2 of (0, 1) is negative and used to index off the table).
+    *  value() still rejects a non-finite or negative assignment.
     */
    constructor() {
       this.number = 0;
    }
    scale(number = this.number) {
-      if (!(number > 0)) return 0; // 0 B, not 1 B
+      if (!(number >= 1)) return 0;
       return Math.min(Math.floor(Math.log2(number) / 10), SCALE_METRICS.length - 1);
    }
    factor(number = this.number) {
@@ -609,12 +617,17 @@ class AutoFactor {
       return SCALE_METRICS[this.scale(number)];
    }
    format(number = this.number) {
-      this.value(number);
-      return `${+(number / this.metric(number).factor).toFixed(this.metric(number).precision)} ${this.metric(number).symbol}`;
+      const n = Number(number);
+      if (!Number.isFinite(n)) return 'unknown';
+      const value = Math.max(0, n);
+      this.number = value;
+      const metric = this.metric(value);
+      return `${+(value / metric.factor).toFixed(metric.precision)} ${metric.symbol}`;
    }
    value(number) {
-      if (number >= 0) {
-         this.number = Number(number);
+      const n = Number(number);
+      if (Number.isFinite(n) && n >= 0) {
+         this.number = n;
       } else {
          throw new Error(`Invalid scalar value or number type for AutoFactor: ${number}`);
       }
@@ -1810,6 +1823,43 @@ function serverCmdLineOpts() {
    return serverCmdLineOpts;
 }
 
+function atlasDeployment(helloDoc = {}, hostInfoDoc = {}, hostInfoError = null, serverStatusDoc = {}) {
+   /*
+    *  Atlas platform from probes the caller already took. Does not call
+    *  the server. sharedTier is M0/Flex (hostInfo AtlasError, or ok != 1).
+    *  dedicatedShardedCluster / dedicatedReplicaSet need atlasVersion or a
+    *  *.mongodb.net hostname. serverless is the deprecated platform string
+    *  when hello().me is absent on a non-mongos.
+    */
+   const hello = helloDoc || {};
+   const info = hostInfoDoc || {};
+   const status = serverStatusDoc || {};
+   const helloMsg = hello.msg;
+   const isMongos = helloMsg == 'isdbgrid';
+   let hostname = (info.system && info.system.hostname)
+      ? String(info.system.hostname)
+      : '';
+   if (!hostname) hostname = hostNameFromHostPort(status.host);
+   if (!hostname) {
+      hostname = hostNameFromHostPort(hello.me);
+      if (!hostname && helloMsg !== 'isdbgrid' && typeof hello.me === 'undefined') {
+         hostname = 'serverless';
+      }
+   }
+   if (!hostname) hostname = 'unknown';
+   const isSharedTier = hostInfoError
+      ? (hostInfoError.codeName == 'AtlasError')
+      : (info.ok != 1);
+   const atlasVersion = status.atlasVersion || false;
+   const isAtlas = !!(atlasVersion || (typeof hostname === 'string' && hostname.endsWith('.mongodb.net')));
+   let platform = false;
+   if (isMongos && isAtlas && hostname != 'serverless') platform = 'dedicatedShardedCluster';
+   else if (!isMongos && isAtlas && isSharedTier) platform = 'sharedTier';
+   else if (!isMongos && isAtlas) platform = 'dedicatedReplicaSet';
+   else if (hostname == 'serverless') platform = 'serverless';
+   return { hostname, platform, isMongos, isAtlas, isSharedTier };
+}
+
 function sessionSnapshot() {
    /*
     *  First-read session facts: atlas platform, fCV, isSharded.
@@ -1829,7 +1879,6 @@ function sessionSnapshot() {
       helloDoc = {};
    }
    const helloMsg = helloDoc.msg || false;
-   const isMongos = helloMsg == 'isdbgrid';
    const statusReadPref = helloDoc.secondary ? 'secondaryPreferred' : 'primaryPreferred';
 
    let hostInfoDoc = {};
@@ -1842,36 +1891,10 @@ function sessionSnapshot() {
    }
 
    const ss = serverStatus({}, statusReadPref);
-   let hostname = (hostInfoDoc.system && hostInfoDoc.system.hostname)
-      ? String(hostInfoDoc.system.hostname)
-      : '';
-   if (!hostname) {
-      try {
-         hostname = hostNameFromHostPort(ss.host);
-      } catch (_) { /* fall through */ }
-   }
-   if (!hostname) {
-      hostname = hostNameFromHostPort(helloDoc.me);
-      if (!hostname && helloDoc.msg !== 'isdbgrid' && typeof helloDoc.me === 'undefined') {
-         hostname = 'serverless';
-      }
-   }
-   if (!hostname) hostname = 'unknown';
-
-   let isSharedTier = false;
-   if (hostInfoError) {
-      isSharedTier = (hostInfoError.codeName == 'AtlasError');
-   } else {
-      isSharedTier = (hostInfoDoc.ok != 1);
-   }
-
-   const atlasVersion = ss.atlasVersion || false;
-   const isAtlas = !!(atlasVersion || (typeof hostname === 'string' && hostname.endsWith('.mongodb.net')));
-   let atlasPlatform = false;
-   if (isMongos && isAtlas && hostname != 'serverless') atlasPlatform = 'dedicatedShardedCluster';
-   else if (!isMongos && isAtlas && isSharedTier) atlasPlatform = 'sharedTier';
-   else if (!isMongos && isAtlas) atlasPlatform = 'dedicatedReplicaSet';
-   else if (hostname == 'serverless') atlasPlatform = 'serverless';
+   const {
+      "hostname": hostname,
+      "platform": atlasPlatform
+   } = atlasDeployment(helloDoc, hostInfoDoc, hostInfoError, ss);
 
    let fcvCmd = {};
    try {
@@ -1961,34 +1984,50 @@ function absorbServerStatusKeys(ss) {
 function serverStatus(serverStatusOptions = {}, statusReadPref) {
    /*
     *  opt-in version of db.serverStatus().
-    *  An explicit statusReadPref wins. Omitted: hello().secondary is true
-    *  only on a secondary, and the sample stays on that node
-    *  (secondaryPreferred). Otherwise primaryPreferred.
-    *  Not the stats global readPref ($collStats / getDBNames).
+    *  Second argument:
+    *    undefined — hello().secondary selects secondaryPreferred on a
+    *      secondary, otherwise primaryPreferred. Not the stats readPref.
+    *    string — that read preference, no extra hello().
+    *    null — no read preference and no hello(); the command runs on the
+    *      connected member (autoCompact's poll).
+    *  A thrown command returns { ok: 0, error } and does not throw.
+    *  error is the caught value. Callers that already pass a read
+    *  preference are unchanged.
     */
-   let readPreference = statusReadPref;
-   if (typeof readPreference === 'undefined') {
-      let onSecondary = false;
-      try {
-         onSecondary = !!(hello().secondary);
-      } catch (_) {
-         onSecondary = false;
+   let commandOptions;
+   if (statusReadPref !== null) {
+      let readPreference = statusReadPref;
+      if (typeof readPreference === 'undefined') {
+         let onSecondary = false;
+         try {
+            onSecondary = !!(hello().secondary);
+         } catch (_) {
+            onSecondary = false;
+         }
+         readPreference = onSecondary ? 'secondaryPreferred' : 'primaryPreferred';
       }
-      readPreference = onSecondary ? 'secondaryPreferred' : 'primaryPreferred';
+      commandOptions = { "readPreference": readPreference };
    }
-   const options = {
-      "readPreference": readPreference
-   };
 
+   const command = {
+      "serverStatus": true,
+      ...SERVER_STATUS_OPTIONS_DEFAULTS,
+      ...serverStatusOptions
+   };
    let serverStatusResults = {};
    try {
-      serverStatusResults = db.adminCommand({
-         "serverStatus": true,
-         ...{ ...SERVER_STATUS_OPTIONS_DEFAULTS, ...serverStatusOptions }
-      }, options);
+      serverStatusResults = commandOptions
+         ? db.adminCommand(command, commandOptions)
+         : db.adminCommand(command);
       absorbServerStatusKeys(serverStatusResults);
-   } catch(_) {
-      serverStatusResults.ok = 0;
+   } catch (e) {
+      serverStatusResults = { "ok": 0, "error": e };
+      if (e && typeof e === 'object') {
+         if (e.code != null) serverStatusResults.code = e.code;
+         if (e.codeName != null) serverStatusResults.codeName = e.codeName;
+         if (e.errmsg != null) serverStatusResults.errmsg = e.errmsg;
+         else if (e.message != null) serverStatusResults.errmsg = e.message;
+      }
    }
 
    return serverStatusResults;
