@@ -609,6 +609,8 @@ Remaining mongosh-line work (do not block the archive):
 
 **TABLED:** further GeoJSON point classes. Subselect a point onto land, ocean, a major city, a port, a regional city, or leave it random. It may share that pick with other fields if cardinality is opened. Cardinality stays tabled. Shipped `$genPoint`, `$genLine`, and `$genPolygon` stay uniform inside the GeoJSON range until Luke opens this.
 
+**TABLED:** `fuzzer-gen.js`. One `load()` from the fuzzer banner after `mdblib.js`, same search path, same `$` global names. Move the fuzzer-only generators and their data (phrase lists, Benford tables, `idiomas`, numeric bounds, `K`, the country table, and the unused pareto, exponential, array, and temperature helpers). Leave `$rand`, `$floor`, `$ceil`, `$getRandInt`, and `Uint32MaxVal` in `mdblib.js` because `shellPid` calls `$getRandInt`. No `module.exports`, no `for(db)`, and no helper-syntax redesign.
+
 ### `oplogchurn.js`
 
 **Live: v0.6.0.** **Archive: v0.5.22.** Mongosh-only. Do not restore `slaveOk(readPref)`. Per-command `options.readPreference = { mode: readPref }`. Keep `--eval var intervalHrs`. `Timestamp({ t, i })` only. Header tags this file as requiring this roadmap.
