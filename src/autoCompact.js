@@ -18,7 +18,7 @@
     *  - freeSpaceTargetMB passthrough (server default 20); runOnce defaults to true (opposite of the server)
     *  - ident map finishes before autoCompact. Naming a file needs the internal action (collectionless $listCatalog) or, on that namespace, listIndexes (targeted $listCatalog) or collStats (wiredTiger.uri, indexDetails.*.uri). With that, the line prints as ns or ns.index; without it, the line stays collection-*.wt / index-*.wt. Built-in roles have neither listIndexes nor collStats on local.replset.* or on system.views, system.rollback.id, system.keys, system.preimages, and system.indexBuilds. Idents created during the pass refresh in the background
     *  - First-pass TTY bar: distinct catalog namespaces seen in WTCMPCT logs, over the initial catalog namespace count. Ramlog loss marks the count fuzzy (~). The bar is not a latch. Piped runs stay on the log lines.
-    *  - Options: autoCompact-options.jsonc (cwd, --file dir, $MDBLIB, ~/.mongodb) then var autoCompactOptions. Missing default is silent. Explicit var optionsFile. mdblib is loaded for resolveOptions; ANSI, AutoFactor, and serverStatus stay local.
+    *  - Options: autoCompact-options.jsonc (cwd, --file dir, $MDBLIB, ~/.mongodb) then var autoCompactOptions. Missing default is silent. Explicit var optionsFile. mdblib supplies resolveOptions, the ANSI console.log patch, MiniHud, and hostNameFromHostPort. AutoFactor and serverStatus stay local.
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "autoCompact": true };'] [-f|--file] </path/to/>autoCompact.js
@@ -51,8 +51,11 @@
 
    if (typeof __lib === 'undefined') {
       /*
-       *  Load helper library mdblib.js for resolveOptions.
-       *  ANSI, AutoFactor, and serverStatus stay local to this IIFE.
+       *  Load helper library mdblib.js.
+       *  resolveOptions, the console.log colour patch, MiniHud, and
+       *  hostNameFromHostPort come from that file.
+       *  AutoFactor stays local (NaN is "unknown"; scale clamps below 1 byte).
+       *  serverStatus stays local (no read preference; throws to the caller).
        */
       let __lib = { "name": "mdblib.js", "paths": null, "path": null };
       __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
@@ -60,127 +63,7 @@
       load(__lib.path);
    }
 
-   // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (local copy)
-   const ansiTags = [
-      { "tag": "\/", "code": 0 },
-      { "tag": "bold", "code": 1 },
-      { "tag": "dim", "code": 2 },
-      { "tag": "italic", "code": 3 },
-      { "tag": "underline", "code": 4 },
-      { "tag": "blink", "code": 5 },
-      { "tag": "reverse", "code": 7 },
-      { "tag": "hide", "code": 8 },
-      { "tag": "strike", "code": 9 },
-      { "tag": "black", "code": 30 },
-      { "tag": "k", "code": 30 },
-      { "tag": "red", "code": 31 },
-      { "tag": "r", "code": 31 },
-      { "tag": "green", "code": 32 },
-      { "tag": "g", "code": 32 },
-      { "tag": "yellow", "code": 33 },
-      { "tag": "y", "code": 33 },
-      { "tag": "blue", "code": 34 },
-      { "tag": "b", "code": 34 },
-      { "tag": "magenta", "code": 35 },
-      { "tag": "m", "code": 35 },
-      { "tag": "cyan", "code": 36 },
-      { "tag": "c", "code": 36 },
-      { "tag": "white", "code": 37 },
-      { "tag": "e", "code": 37 },
-      { "tag": "default", "code": 39 },
-      { "tag": "bg black", "code": 40 },
-      { "tag": "bg red", "code": 41 },
-      { "tag": "bg green", "code": 42 },
-      { "tag": "bg yellow", "code": 43 },
-      { "tag": "bg blue", "code": 44 },
-      { "tag": "bg magenta", "code": 45 },
-      { "tag": "bg cyan", "code": 46 },
-      { "tag": "bg white", "code": 47 },
-      { "tag": "bg default", "code": 49 },
-      { "tag": "bright black", "code": 90 },
-      { "tag": "K", "code": 90 },
-      { "tag": "bright red", "code": 91 },
-      { "tag": "R", "code": 91 },
-      { "tag": "bright green", "code": 92 },
-      { "tag": "G", "code": 92 },
-      { "tag": "bright yellow", "code": 93 },
-      { "tag": "Y", "code": 93 },
-      { "tag": "bright blue", "code": 94 },
-      { "tag": "B", "code": 94 },
-      { "tag": "bright magenta", "code": 95 },
-      { "tag": "M", "code": 95 },
-      { "tag": "bright cyan", "code": 96 },
-      { "tag": "C", "code": 96 },
-      { "tag": "bright white", "code": 97 },
-      { "tag": "W", "code": 97 },
-      { "tag": "bg bright black", "code": 100 },
-      { "tag": "bg bright red", "code": 101 },
-      { "tag": "bg bright green", "code": 102 },
-      { "tag": "bg bright yellow", "code": 103 },
-      { "tag": "bg bright blue", "code": 104 },
-      { "tag": "bg bright magenta", "code": 105 },
-      { "tag": "bg bright cyan", "code": 106 },
-      { "tag": "bg bright white", "code": 107 }
-   ];
-   // One scan per string. TTY expands [red]/[/] … to CSI; piped output strips tags+CSI.
-   // Case-sensitive lookup first so [R] (bright red) is not eaten by [r].
-   // Plain object lookup (tag → CSI).
-   const ANSI_TAG_RE = /\[(\/|bg bright \w+|bright \w+|bg \w+|\w+)\]/gi;
-   const ANSI_CSI_RE = /(?:\x1b\[(?:\d*[;]?[\d]*[;]?[\d]*)m)/gi;
-   const ansiTagCode = {};
-   ansiTags.forEach(({ tag, code }) => {
-      ansiTagCode[tag] = code;
-      const lower = tag.toLowerCase();
-      if (ansiTagCode[lower] === undefined) ansiTagCode[lower] = code;
-   });
-   const ansiTagCodeOf = tag => {
-      let code = ansiTagCode[tag];
-      if (code === undefined) code = ansiTagCode[tag.toLowerCase()];
-      return code;
-   };
-   const applyAnsiTags = text => text.replace(ANSI_TAG_RE, (all, tag) => {
-      const code = ansiTagCodeOf(tag);
-      return (code === undefined) ? all : `\x1b[${code}m`;
-   });
-   const stripAnsiMarkup = text => text.replace(ANSI_TAG_RE, (all, tag) => (
-      ansiTagCodeOf(tag) === undefined ? all : ''
-   )).replace(ANSI_CSI_RE, '');
-   const createNamespaceHud = () => {
-      /*
-       *  Same contract as mdblib MiniHud: one TTY line via stdout.write('\\r').
-       *  The painter stays local. Piped output leaves the bar off.
-       */
-      const enabled = typeof process !== 'undefined' && process.stdout && process.stdout.isTTY;
-      let lastWidth = 0;
-      const bar = (frac, width = 16) => {
-         const n = Math.max(1, width);
-         const p = Number.isFinite(frac) ? Math.min(1, Math.max(0, frac)) : 0;
-         const filled = Math.round(p * n);
-         return '█'.repeat(filled) + '░'.repeat(n - filled);
-      };
-      return {
-         enabled,
-         bar,
-         clear() {
-            if (!enabled || lastWidth === 0) return;
-            process.stdout.write('\r\x1b[2K');
-            lastWidth = 0;
-         },
-         render(line) {
-            if (!enabled) return;
-            const cols = (process.stdout.columns > 0) ? process.stdout.columns : 80;
-            let msg = String(line || '').replace(/\s+/g, ' ').trim();
-            let visual = stripAnsiMarkup(msg);
-            const max = Math.max(1, cols - 1);
-            if (visual.length > max) {
-               visual = visual.slice(0, Math.max(1, cols - 2)) + '~';
-               msg = visual;
-            }
-            process.stdout.write('\r' + applyAnsiTags(msg + '[/]') + '\x1b[K');
-            lastWidth = visual.length;
-         }
-      };
-   };
+   // Colour tags and the console.log patch come from mdblib (loaded above).
    function catalogNamespaceNames(map, catalogOk) {
       /*
        *  Distinct db.coll from the initial ident map. Internal seeds
@@ -208,21 +91,6 @@
       seen.add(entry.ns);
       return seen.size !== before;
    }
-   const formatLogArgs = (args, isTTY) => {
-      const paint = isTTY ? applyAnsiTags : stripAnsiMarkup;
-      return [...args].map(arg => typeof arg === 'string' ? paint(arg) : arg);
-   };
-   (console['log'] = (function() {
-      const method = () => console;
-      const fn = 'log';
-      const _fn = '_' + fn;
-      if (method()[fn].name !== 'modifiedLog') method()[_fn] = method()[fn];
-      function modifiedLog() {
-         return method()[_fn].apply(null, formatLogArgs(arguments, process.stdout.isTTY));
-      }
-      return modifiedLog;
-   })());
-
    function isAutoCompactCliFile() {
       /*
        *  mongosh --file/-f (or positional *.js) targeting this script.
@@ -281,8 +149,11 @@
    function serverStatus(opts = {}) {
       /*
        *  opt-in version of db.serverStatus().
-       *  Pass section overlays (wiredTiger, storageEngine+FCV). Defaults grow
-       *  from the first fat reply on servers that ignore none:true.
+       *  Stays local: mdblib serverStatus calls hello() for a read preference
+       *  and returns { ok: 0 } on failure. This probe has no read preference
+       *  and throws to the caller. Section overlays (wiredTiger,
+       *  storageEngine+FCV) are applied at the call. Defaults grow from the
+       *  first fat reply on servers that ignore none:true.
        */
       const ss = db.adminCommand({
          "serverStatus": true,
@@ -377,7 +248,9 @@
    ];
    class AutoFactor {
       /*
-       *  Determine scale factor automatically (same idea as mdblib.js / dbstats.js)
+       *  Stricter than mdblib AutoFactor: non-finite is "unknown", and a
+       *  value below 1 byte still selects the byte scale (mdblib's log2
+       *  floor goes negative and format throws). Recovered bytes use this.
        */
       scale(number) {
          if (number < 1) number = 1;
@@ -404,20 +277,6 @@
       }
       const delta = startBytes != null ? endBytes - startBytes : endBytes;
       console.log(`\n══════ [yellow]recovered[/] [blue]${scaled.format(delta)}[/] [yellow]this pass ([/][blue]${scaled.format(endBytes)}[/] [yellow]cumulative runtime)[/] ══════`);
-   };
-   const hostNameFromHostPort = value => {
-      // Bare hostname from host:port, [IPv6]:port, or a bare host (mdblib.js)
-      const s = (value == null) ? '' : String(value);
-      if (!s) return '';
-      if (s.charAt(0) === '[') {
-         const end = s.indexOf(']');
-         return (end > 1) ? s.substring(1, end) : s;
-      }
-      const first = s.indexOf(':');
-      const last = s.lastIndexOf(':');
-      if (first === -1) return s;
-      if (first !== last) return s; // IPv6 without brackets
-      return (/^\d+$/).test(s.substring(last + 1)) ? s.substring(0, last) : s;
    };
    const atlasPlatform = helloDoc => {
       /*
@@ -898,7 +757,8 @@
        *  - runOnce:false: running bit stays on; first pass = hint or visits stall
        */
       const resolveNs = nsResolver.resolve ?? (() => null);
-      const hud = createNamespaceHud();
+      // throttleMs 0: getLog poll is 50ms; MiniHud's 100ms default would skip frames.
+      const hud = new MiniHud({ "enabled": true, "throttleMs": 0 });
       const projectedNs = (typeof nsResolver.namespaceNames === 'function')
          ? nsResolver.namespaceNames()
          : null;
