@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.4.0"
+ *  Version: "1.5.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,6 +11,7 @@
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>fuzzer.js
 // Overlay: fuzzer-options.jsonc in the working directory, beside this script, under $MDBLIB, or ~/.mongodb
+// JSONC parse/search lives in mdblib. --eval overlay stays unwired.
 // Sample schemas: schema-a.jsonc, schema-b.jsonc, schema-c.jsonc
 
 /*
@@ -19,7 +20,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.4.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.5.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -61,8 +62,10 @@
 (async() => {
    /*
     *  Config files. fuzzer-options.jsonc overlays the defaults below.
+    *  parseJsonc / resolveConfigFile / loadJsoncFile live in mdblib.
     *  Search order for a relative path: the options file's directory,
     *  the working directory, this script's directory, $MDBLIB, ~/.mongodb.
+    *  --eval overlay stays unwired.
     */
 
    const OPTIONS_FILE = 'fuzzer-options.jsonc';
@@ -73,159 +76,6 @@
 
    function hasOwn(obj, key) {
       return !!obj && Object.prototype.hasOwnProperty.call(obj, key);
-   }
-
-   function dirOf(file) {
-      const slash = String(file).lastIndexOf('/');
-      if (slash < 0)
-         return '.';
-      if (slash === 0)
-         return '/';
-      return file.slice(0, slash);
-   }
-
-   function configDirs(anchorDir) {
-      const dirs = [];
-      const add = (dir) => {
-         if (typeof dir === 'string' && dir.length > 0 && !dirs.includes(dir))
-            dirs.push(dir);
-      };
-      add(anchorDir);
-      add('.');
-      if (typeof __dirname === 'string')
-         add(__dirname);
-      add(process.env.MDBLIB);
-      if (process.env.HOME)
-         add(`${process.env.HOME}/.mongodb`);
-      return dirs;
-   }
-
-   function resolveConfigFile(name, anchorDir) {
-      if (typeof name !== 'string' || name.length === 0)
-         return null;
-      if (name.startsWith('/') || /^[A-Za-z]:[\\/]/.test(name))
-         return fs.existsSync(name) ? name : null;
-      let found = null;
-      configDirs(anchorDir).some(dir => {
-         const full = `${dir.replace(/\/$/, '')}/${name}`;
-         if (!fs.existsSync(full))
-            return false;
-         found = full;
-         return true;
-      });
-      return found;
-   }
-
-   function parseJsonc(text) {
-      const source = String(text).replace(/^\uFEFF/, '');
-      let stripped = '';
-      let i = 0;
-      const n = source.length;
-      while (i < n) {
-         const c = source[i];
-         if (c === '"') {
-            stripped += c;
-            i++;
-            while (i < n) {
-               const s = source[i];
-               stripped += s;
-               i++;
-               if (s === '\\') {
-                  if (i < n) {
-                     stripped += source[i];
-                     i++;
-                  }
-                  continue;
-               }
-               if (s === '"')
-                  break;
-            }
-            continue;
-         }
-         if (c === '/' && source[i + 1] === '/') {
-            i += 2;
-            while (i < n && source[i] !== '\n')
-               i++;
-            continue;
-         }
-         if (c === '/' && source[i + 1] === '*') {
-            i += 2;
-            while (i < n && !(source[i] === '*' && source[i + 1] === '/'))
-               i++;
-            i = Math.min(n, i + 2);
-            continue;
-         }
-         stripped += c;
-         i++;
-      }
-      let json = '';
-      i = 0;
-      const m = stripped.length;
-      while (i < m) {
-         const c = stripped[i];
-         if (c === '"') {
-            json += c;
-            i++;
-            while (i < m) {
-               const s = stripped[i];
-               json += s;
-               i++;
-               if (s === '\\') {
-                  if (i < m) {
-                     json += stripped[i];
-                     i++;
-                  }
-                  continue;
-               }
-               if (s === '"')
-                  break;
-            }
-            continue;
-         }
-         if (c === ',') {
-            let j = i + 1;
-            while (j < m && (stripped[j] === ' ' || stripped[j] === '\t' || stripped[j] === '\n' || stripped[j] === '\r'))
-               j++;
-            if (stripped[j] === '}' || stripped[j] === ']') {
-               i++;
-               continue;
-            }
-         }
-         json += c;
-         i++;
-      }
-      return JSON.parse(json);
-   }
-
-   function readJsonc(file) {
-      return parseJsonc(fs.readFileSync(file, 'utf8'));
-   }
-
-   function mergeOptions(base, over) {
-      if (!isPlainObject(over))
-         return base;
-      const out = isPlainObject(base) ? { ...base } : {};
-      Object.keys(over).forEach(key => {
-         if (isPlainObject(over[key]) && isPlainObject(out[key]))
-            out[key] = mergeOptions(out[key], over[key]);
-         else
-            out[key] = over[key];
-      });
-      return out;
-   }
-
-   function loadOptionsFile() {
-      const filePath = resolveConfigFile(OPTIONS_FILE, null);
-      if (!filePath)
-         return { "path": null, "value": null, "error": null };
-      try {
-         const value = readJsonc(filePath);
-         if (!isPlainObject(value))
-            return { "path": filePath, "value": null, "error": 'must contain an object' };
-         return { "path": filePath, "value": value, "error": null };
-      } catch(e) {
-         return { "path": filePath, "value": null, "error": errText(e) };
-      }
    }
 
    function withObjectIndex(list) {
@@ -424,9 +274,9 @@
       }
    };
 
-   const optionsFile = loadOptionsFile();
+   const optionsFile = loadJsoncFile(OPTIONS_FILE);
    const loaded = optionsFile.value;
-   const opt = mergeOptions(optionDefaults, loaded);
+   const opt = deepMergeOptions(optionDefaults, loaded);
    const dbName = opt.dbName,
       collName = opt.collName,
       totalDocs = hasOwn(loaded, 'totalDocs') ? loaded.totalDocs : $getRandExp(opt.totalDocsExp),
@@ -491,7 +341,7 @@
       if (isPlainObject(textIndexOptions))
          textIndexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
    }
-   const schemaAnchor = optionsFile.path ? dirOf(optionsFile.path) : null;
+   const schemaAnchor = optionsFile.path ? optionsDirOf(optionsFile.path) : null;
    const schemaLoad = optionsFile.error
       ? { "samples": [], "errors": [] }
       : loadSchemaSamples(isPlainObject(fuzzer) ? fuzzer.schemas : null, schemaAnchor);

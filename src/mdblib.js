@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.27.0"
+ *  Version: "0.28.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -10,13 +10,14 @@
  *  Dual-shell snapshot: legacy/mongo-shell (tag legacy-mongo-shell, v0.15.10).
  *  This file is mongosh-only. TopologySnapshot.fromSession() lists cluster
  *  identity; materializeNodes({ depth }) gathers remotes via child Mongo()
- *  (no load of discovery.js). for(db) still TBA.
+ *  (no load of discovery.js). resolveOptions overlays JSONC then --eval.
+ *  for(db) still TBA.
  */
 
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.27.0"
+      "version": "0.28.0"
 });
 
 /*  Notes:
@@ -86,6 +87,284 @@ function isMongosh() {
     *  Evaluate the shell type
     */
    return typeof process !== 'undefined';
+}
+
+/*
+ *  Options resolve (JSONC overlay)
+ *  Layer: defaults → file → --eval overlay. Missing default file is not an error.
+ *  Plain objects deep-merge; arrays and scalars replace. JSON has no RegExp —
+ *  callers pass revive paths (dbstats filter.db / filter.collection).
+ */
+
+function isPlainObject(value) {
+   return !!value && typeof value === 'object' && !Array.isArray(value)
+      && !(value instanceof Date) && !(value instanceof RegExp);
+}
+
+function optionsDirOf(file) {
+   const s = String(file || '');
+   const slash = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+   if (slash < 0) return '.';
+   if (slash === 0) return '/';
+   return s.slice(0, slash);
+}
+
+function configSearchDirs(anchorDir) {
+   const dirs = [];
+   const add = (dir) => {
+      if (typeof dir === 'string' && dir.length > 0 && !dirs.includes(dir))
+         dirs.push(dir);
+   };
+   add(anchorDir);
+   add('.');
+   if (typeof __dirname === 'string') add(__dirname);
+   if (typeof process !== 'undefined' && process.env) {
+      add(process.env.MDBLIB);
+      if (process.env.HOME) add(`${process.env.HOME}/.mongodb`);
+   }
+   return dirs;
+}
+
+function resolveConfigFile(name, anchorDir) {
+   if (typeof name !== 'string' || name.length === 0) return null;
+   const fsys = (typeof fs !== 'undefined') ? fs : null;
+   if (!fsys || typeof fsys.existsSync !== 'function') return null;
+   if (name.startsWith('/') || /^[A-Za-z]:[\\/]/.test(name))
+      return fsys.existsSync(name) ? name : null;
+   let found = null;
+   configSearchDirs(anchorDir).some(dir => {
+      const full = `${String(dir).replace(/\/$/, '')}/${name}`;
+      if (!fsys.existsSync(full)) return false;
+      found = full;
+      return true;
+   });
+   return found;
+}
+
+function parseJsonc(text) {
+   const source = String(text).replace(/^\uFEFF/, '');
+   let stripped = '';
+   let i = 0;
+   const n = source.length;
+   while (i < n) {
+      const c = source[i];
+      if (c === '"') {
+         stripped += c;
+         i++;
+         while (i < n) {
+            const s = source[i];
+            stripped += s;
+            i++;
+            if (s === '\\') {
+               if (i < n) {
+                  stripped += source[i];
+                  i++;
+               }
+               continue;
+            }
+            if (s === '"') break;
+         }
+         continue;
+      }
+      if (c === '/' && source[i + 1] === '/') {
+         i += 2;
+         while (i < n && source[i] !== '\n') i++;
+         continue;
+      }
+      if (c === '/' && source[i + 1] === '*') {
+         i += 2;
+         while (i < n && !(source[i] === '*' && source[i + 1] === '/')) i++;
+         i = Math.min(n, i + 2);
+         continue;
+      }
+      stripped += c;
+      i++;
+   }
+   let json = '';
+   i = 0;
+   const m = stripped.length;
+   while (i < m) {
+      const c = stripped[i];
+      if (c === '"') {
+         json += c;
+         i++;
+         while (i < m) {
+            const s = stripped[i];
+            json += s;
+            i++;
+            if (s === '\\') {
+               if (i < m) {
+                  json += stripped[i];
+                  i++;
+               }
+               continue;
+            }
+            if (s === '"') break;
+         }
+         continue;
+      }
+      if (c === ',') {
+         let j = i + 1;
+         while (j < m && (stripped[j] === ' ' || stripped[j] === '\t'
+               || stripped[j] === '\n' || stripped[j] === '\r'))
+            j++;
+         if (stripped[j] === '}' || stripped[j] === ']') {
+            i++;
+            continue;
+         }
+      }
+      json += c;
+      i++;
+   }
+   return JSON.parse(json);
+}
+
+function readJsonc(file) {
+   return parseJsonc(fs.readFileSync(file, 'utf8'));
+}
+
+function deepMergeOptions(base, over) {
+   if (!isPlainObject(over)) return base;
+   const out = isPlainObject(base) ? { ...base } : {};
+   Object.keys(over).forEach(key => {
+      if (isPlainObject(over[key]) && isPlainObject(out[key]))
+         out[key] = deepMergeOptions(out[key], over[key]);
+      else
+         out[key] = over[key];
+   });
+   return out;
+}
+
+function loadJsoncFile(name, { anchorDir, required = false } = {}) {
+   if (typeof name !== 'string' || name.length === 0)
+      return { "path": null, "value": null, "error": required ? 'path is empty' : null };
+   const filePath = resolveConfigFile(name, anchorDir);
+   if (!filePath)
+      return { "path": required ? name : null, "value": null, "error": required ? 'not found' : null };
+   try {
+      const value = readJsonc(filePath);
+      if (!isPlainObject(value))
+         return { "path": filePath, "value": null, "error": 'must contain an object' };
+      return { "path": filePath, "value": value, "error": null };
+   } catch(e) {
+      return { "path": filePath, "value": null, "error": (e && (e.errmsg || e.message)) || String(e) };
+   }
+}
+
+function parseScriptArgv(argv) {
+   /*
+    *  Script-owned args after `--` so mongosh URI/TLS flags stay untouched.
+    *  Recognises --config PATH and --config=PATH. mongosh 2.12 rejects
+    *  unknown flags before the script runs; var optionsFile is the working
+    *  explicit path.
+    */
+   const args = Array.isArray(argv) ? argv : [];
+   const out = { "config": null, "rest": [] };
+   let afterDash = false;
+   for (let i = 2; i < args.length; i++) {
+      const a = String(args[i]);
+      if (a === '--') { afterDash = true; continue; }
+      if (!afterDash) continue;
+      if (a === '--config' || a === '--options-file') {
+         if (i + 1 < args.length) out.config = String(args[++i]);
+         continue;
+      }
+      if (a.startsWith('--config=')) { out.config = a.slice(9); continue; }
+      if (a.startsWith('--options-file=')) { out.config = a.slice(15); continue; }
+      out.rest.push(a);
+   }
+   return out;
+}
+
+function optionsGetPath(obj, path) {
+   return String(path).split('.').reduce((o, k) => (o == null ? o : o[k]), obj);
+}
+
+function optionsSetPath(obj, path, value) {
+   const keys = String(path).split('.');
+   let cur = obj;
+   for (let i = 0; i < keys.length - 1; i++) {
+      if (!isPlainObject(cur[keys[i]])) return;
+      cur = cur[keys[i]];
+   }
+   if (isPlainObject(cur)) cur[keys[keys.length - 1]] = value;
+}
+
+function reviveRegex(value) {
+   if (value == null || value === '') return value;
+   if (value instanceof RegExp) return value;
+   if (typeof value !== 'string') return value;
+   const wrapped = value.match(/^\/([\s\S]*)\/([a-z]*)$/);
+   try {
+      if (wrapped) return new RegExp(wrapped[1], wrapped[2]);
+      return new RegExp(value);
+   } catch(_) {
+      return value;
+   }
+}
+
+function resolveOptions({
+      defaults = {},
+      file = null,
+      optionsFile = null,
+      overlay = null,
+      argv = (typeof process !== 'undefined' && process.argv) || [],
+      revive = {},
+      aliases = {}
+   } = {}) {
+   const warnings = [];
+   const flags = parseScriptArgv(argv);
+   let explicit = optionsFile;
+   if (explicit == null && flags.config) explicit = flags.config;
+   const overlayObj = isPlainObject(overlay) ? { ...overlay } : null;
+   if (explicit == null && overlayObj && typeof overlayObj.optionsFile === 'string')
+      explicit = overlayObj.optionsFile;
+   if (overlayObj) delete overlayObj.optionsFile;
+
+   const required = (explicit != null && String(explicit).length > 0);
+   const loaded = loadJsoncFile(required ? String(explicit) : file, { "required": required });
+   if (loaded.error) {
+      warnings.push({
+         "code": 'optionsFile',
+         "message": `Options file "${loaded.path}": ${loaded.error}`
+      });
+   }
+
+   let options = deepMergeOptions(defaults, loaded.value || {});
+   if (overlayObj) options = deepMergeOptions(options, overlayObj);
+
+   Object.keys(aliases || {}).forEach(path => {
+      const map = aliases[path];
+      if (!map || typeof map !== 'object') return;
+      const cur = optionsGetPath(options, path);
+      if (typeof cur === 'string' && Object.prototype.hasOwnProperty.call(map, cur))
+         optionsSetPath(options, path, map[cur]);
+   });
+
+   Object.keys(revive || {}).forEach(path => {
+      if (revive[path] !== 'regex') return;
+      const cur = optionsGetPath(options, path);
+      const next = reviveRegex(cur);
+      if (typeof cur === 'string' && !(next instanceof RegExp)) {
+         warnings.push({
+            "code": 'optionsRegex',
+            "message": `Could not revive ${path} as a regular expression`
+         });
+      }
+      optionsSetPath(options, path, next);
+   });
+
+   return {
+      "ok": !loaded.error,
+      options,
+      warnings,
+      "source": {
+         "file": loaded.error ? null : loaded.path,
+         "eval": !!overlayObj,
+         "configArg": flags.config || null
+      },
+      "error": loaded.error || null
+   };
 }
 
 const ansiTags = [

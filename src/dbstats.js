@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.25.1"
+ *  Version: "0.26.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -10,6 +10,8 @@
  */
 
 // Usage: mongosh [connection options] --quiet [--eval 'var options = {...};'] [-f|--file] </path/to/>dbstats.js
+// Overlay: dbstats-options.jsonc (cwd, --file dir, $MDBLIB, ~/.mongodb). Missing default is silent.
+// Explicit path: var optionsFile = "PATH". --eval var options overlays the file.
 // load('dbstats.js') gathers quietly and returns the JSON contract (await the load() Promise).
 
 /*
@@ -125,16 +127,22 @@
  *
  *    mongosh --quiet --eval 'var options = { topology: { discover: false } };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { topology: { depth: "expanded" } };' -f dbstats.js
+ *
+ *  Examples of an options file (JSONC). filter.db / filter.collection are strings
+ *  ("^app$" or "/pat/i"); JSON has no RegExp. Missing dbstats-options.jsonc is silent.
+ *
+ *    mongosh --quiet --eval 'var optionsFile = "/path/to/dbstats-options.jsonc"' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { output: { format: "json" } };' -f dbstats.js
  */
 
 /*
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
  *  Save libs to the $MDBLIB or other valid search path
- *  We overwrite options with var due to mongosh sloppy mode processing
+ *  Do not declare options or optionsFile in this file (eval globals).
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.25.1" };
+   const __script = { "name": "dbstats.js", "version": "0.26.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -173,73 +181,6 @@
       return files.some(f => /(^|[\\/])dbstats\.js$/i.test(String(f)));
    }
    __dbstatsCliFile = isDbstatsCliFile();
-   const __dbstatsOutFmt = (typeof options !== 'undefined' && options && options.output) ? options.output.format : '';
-   const jsonCli = __dbstatsOutFmt === 'json' || __dbstatsOutFmt === 'html';
-   if (__dbstatsCliFile && !jsonCli) {
-      if (typeof __mdblibShellIncompatible !== 'undefined' && __mdblibShellIncompatible) {
-         console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${__mdblibShellIncompatible}[/]`);
-      }
-      if (typeof __mdblibServerUnsupported !== 'undefined' && __mdblibServerUnsupported) {
-         console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${__mdblibServerUnsupported}[/]`);
-      }
-      console.log(`\n\n[yellow]${__comment}[/]`);
-   }
-})();
-
-(() => {
-   /*
-    *  Minimum useful roles for a full report:
-    *  clusterMonitor@admin && readAnyDatabase@admin
-    *  (or a stronger admin role). Unauthenticated / localhost exception skips the warn.
-    */
-   try {
-      db.adminCommand({ "features": 1 });
-   } catch(e) {
-      // Legacy mongo often has code 13 / errmsg only — same idea as $collStats.
-      if (e.codeName == 'Unauthorized' || +e.code === 13
-            || /not authorized|unauthorized/i.test(e.errmsg || e.message || '')) {
-         __dbstatsAuthRequired = true;
-         const outFmt = (typeof options !== 'undefined' && options && options.output) ? options.output.format : '';
-         const jsonCli = outFmt === 'json' || outFmt === 'html';
-         if (__dbstatsCliFile && !jsonCli) console.log('[red][ERR] MongoServerError: Unauthorized user requires authentication[/]');
-      }
-   }
-
-   const monitorRoles = ['clusterMonitor'];
-   const adminRoles = ['atlasAdmin', 'clusterAdmin', 'backup', 'root', '__system'];
-   const dbRoles = ['dbAdminAnyDatabase', 'readAnyDatabase', 'readWriteAnyDatabase'];
-
-   const { 'authInfo': { authenticatedUsers, authenticatedUserRoles } }
-      = db.adminCommand({ "connectionStatus": 1 });
-
-   const hasAdminRole = authenticatedUserRoles.some(
-      ({ role, db: roleDb }) => adminRoles.includes(role) && roleDb == 'admin'
-   );
-   const hasMonitorRole = authenticatedUserRoles.some(
-      ({ role, db: roleDb }) => monitorRoles.includes(role) && roleDb == 'admin'
-   );
-   const hasReadAnyRole = authenticatedUserRoles.some(
-      ({ role, db: roleDb }) => dbRoles.includes(role) && roleDb == 'admin'
-   );
-
-   const isUnauthenticated = authenticatedUsers.length === 0; // localhost exception / auth off
-   const hasMonitorAndRead = hasMonitorRole && hasReadAnyRole;
-   const authzAdequate = isUnauthenticated || hasAdminRole || hasMonitorAndRead;
-   const jsonCli = (typeof options !== 'undefined' && options && options.output
-      && (options.output.format === 'json' || options.output.format === 'html'));
-   __dbstatsAuthzInadequate = !authzAdequate;
-
-   if (!authzAdequate && __dbstatsCliFile && !jsonCli) {
-      console.log(`[red][WARN] The connecting user's authz privileges may be inadequate to report all namespaces statistics[/]`);
-      console.log(`[red][WARN] consider inheriting the built-in roles for 'clusterMonitor@admin' and 'readAnyDatabase@admin' at a minimum[/]`);
-   }
-})();
-
-// (async(db, options, dbstats = {}) => {
-(async() => {
-   /*
-    *  User defined parameters
-    */
    const optionsDefaults = {
       "filter": {
          "db": new RegExp(/.+/),
@@ -313,20 +254,100 @@
       },
       "catalog": "auto" // ['auto'|'legacy'|'listCatalog'|'listClusterCatalog']
    };
-   // Partial user overrides must not wipe sibling defaults (shallow merge was wrong for sort.*).
-   typeof options === 'undefined' && (options = {});
-   const filterOptions = { ...optionsDefaults.filter, ...(options.filter || {}) };
-   const sortOptions = {};
-   for (const section of Object.keys(optionsDefaults.sort)) {
-      sortOptions[section] = {
-         ...optionsDefaults.sort[section],
-         ...((options.sort || {})[section] || {})
-      };
+   const overlay = (typeof options !== 'undefined' && options) ? options : null;
+   const explicitFile = (typeof optionsFile !== 'undefined') ? optionsFile : null;
+   __dbstatsResolved = resolveOptions({
+      "defaults": optionsDefaults,
+      "file": 'dbstats-options.jsonc',
+      "optionsFile": explicitFile,
+      overlay,
+      "revive": {
+         "filter.db": 'regex',
+         "filter.collection": 'regex'
+      },
+      "aliases": {
+         "output.format": { "table": 'tabular' }
+      }
+   });
+   const resolvedOpts = (__dbstatsResolved && __dbstatsResolved.options) || optionsDefaults;
+   const __dbstatsOutFmt = (resolvedOpts.output && resolvedOpts.output.format) || '';
+   const jsonCli = __dbstatsOutFmt === 'json' || __dbstatsOutFmt === 'html';
+   __dbstatsJsonCli = jsonCli;
+   if (__dbstatsCliFile && !jsonCli) {
+      if (typeof __mdblibShellIncompatible !== 'undefined' && __mdblibShellIncompatible) {
+         console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${__mdblibShellIncompatible}[/]`);
+      }
+      if (typeof __mdblibServerUnsupported !== 'undefined' && __mdblibServerUnsupported) {
+         console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${__mdblibServerUnsupported}[/]`);
+      }
+      console.log(`\n\n[yellow]${__comment}[/]`);
+      if (__dbstatsResolved && Array.isArray(__dbstatsResolved.warnings)) {
+         __dbstatsResolved.warnings.forEach(w => {
+            console.log(`[red][WARN] ${w.message}[/]`);
+         });
+      }
    }
-   const outputOptions = { ...optionsDefaults.output, ...(options.output || {}) };
-   const catalogMode = (options.catalog != null) ? options.catalog : optionsDefaults.catalog;
-   const limitOptions = { ...optionsDefaults.limit, ...(options.limit || {}) };
-   const topologyOptions = { ...optionsDefaults.topology, ...(options.topology || {}) };
+})();
+
+(() => {
+   /*
+    *  Minimum useful roles for a full report:
+    *  clusterMonitor@admin && readAnyDatabase@admin
+    *  (or a stronger admin role). Unauthenticated / localhost exception skips the warn.
+    */
+   try {
+      db.adminCommand({ "features": 1 });
+   } catch(e) {
+      // Legacy mongo often has code 13 / errmsg only — same idea as $collStats.
+      if (e.codeName == 'Unauthorized' || +e.code === 13
+            || /not authorized|unauthorized/i.test(e.errmsg || e.message || '')) {
+         __dbstatsAuthRequired = true;
+         const jsonCli = (typeof __dbstatsJsonCli !== 'undefined' && __dbstatsJsonCli);
+         if (__dbstatsCliFile && !jsonCli) console.log('[red][ERR] MongoServerError: Unauthorized user requires authentication[/]');
+      }
+   }
+
+   const monitorRoles = ['clusterMonitor'];
+   const adminRoles = ['atlasAdmin', 'clusterAdmin', 'backup', 'root', '__system'];
+   const dbRoles = ['dbAdminAnyDatabase', 'readAnyDatabase', 'readWriteAnyDatabase'];
+
+   const { 'authInfo': { authenticatedUsers, authenticatedUserRoles } }
+      = db.adminCommand({ "connectionStatus": 1 });
+
+   const hasAdminRole = authenticatedUserRoles.some(
+      ({ role, db: roleDb }) => adminRoles.includes(role) && roleDb == 'admin'
+   );
+   const hasMonitorRole = authenticatedUserRoles.some(
+      ({ role, db: roleDb }) => monitorRoles.includes(role) && roleDb == 'admin'
+   );
+   const hasReadAnyRole = authenticatedUserRoles.some(
+      ({ role, db: roleDb }) => dbRoles.includes(role) && roleDb == 'admin'
+   );
+
+   const isUnauthenticated = authenticatedUsers.length === 0; // localhost exception / auth off
+   const hasMonitorAndRead = hasMonitorRole && hasReadAnyRole;
+   const authzAdequate = isUnauthenticated || hasAdminRole || hasMonitorAndRead;
+   const jsonCli = (typeof __dbstatsJsonCli !== 'undefined' && __dbstatsJsonCli);
+   __dbstatsAuthzInadequate = !authzAdequate;
+
+   if (!authzAdequate && __dbstatsCliFile && !jsonCli) {
+      console.log(`[red][WARN] The connecting user's authz privileges may be inadequate to report all namespaces statistics[/]`);
+      console.log(`[red][WARN] consider inheriting the built-in roles for 'clusterMonitor@admin' and 'readAnyDatabase@admin' at a minimum[/]`);
+   }
+})();
+
+// (async(db, options, dbstats = {}) => {
+(async() => {
+   /*
+    *  User defined parameters
+    */
+   const resolved = (typeof __dbstatsResolved !== 'undefined' && __dbstatsResolved) || { "options": {}, "warnings": [] };
+   const filterOptions = resolved.options.filter;
+   const sortOptions = resolved.options.sort;
+   const outputOptions = resolved.options.output;
+   const catalogMode = resolved.options.catalog;
+   const limitOptions = resolved.options.limit;
+   const topologyOptions = resolved.options.topology;
 
    /*
     *  Global defaults
@@ -1336,6 +1357,9 @@
             "message": `Unsupported mongod/s version detected: ${__mdblibServerUnsupported}`
          });
       }
+      if (typeof __dbstatsResolved !== 'undefined' && Array.isArray(__dbstatsResolved.warnings)) {
+         warnings.push(...__dbstatsResolved.warnings);
+      }
       if (Array.isArray(dbStats.gatherWarnings) && dbStats.gatherWarnings.length) {
          warnings.push(...dbStats.gatherWarnings);
       }
@@ -1400,7 +1424,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.25.1',
+         "version": '0.26.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
