@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.23.0"
+ *  Version: "0.23.1"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -77,7 +77,6 @@
  *        format: <'tabular'|'table'|'nsTable'|'json'|'html'>, // 'table' aliases 'tabular'
  *        concurrency: <int>, // 0 = auto (8 mongod / 4 mongos); $collStats pool per DB
  *        topology: <'summary'|'expanded'>, // printer: summary = connecting catalog + member footer; expanded = one catalog table per materialized node
- *        colour: <true|false>, // tabular TBA; html colour checkbox
  *        verbosity: <'full'|'summary'|'summaryIdx'|'compactOnly'> // printer: full = collections+indexes+views; summary = DB rollup; summaryIdx = collections+indexes; compactOnly = compact/rebuild/wait/resync rows
  *     },
  *     topology: {
@@ -136,7 +135,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.23.0" };
+   const __script = { "name": "dbstats.js", "version": "0.23.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -307,7 +306,6 @@
          "format": "tabular", // ['tabular'|'table'|'nsTable'|'json'|'html'] ('table' → 'tabular')
          "concurrency": 0, // 0 = auto (8 mongod / 4 mongos); per-DB $collStats pool
          "topology": "summary", // ['summary'|'expanded'] printer; gather stays topology.replica / topology.sharded
-         "colour": true, // [true|false] tabular TBA; html colour checkbox
          "verbosity": "full" // ['full'|'summary'|'summaryIdx'|'compactOnly'] printer; JSON stays the full contract
       },
       "topology": {
@@ -1414,7 +1412,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.23.0',
+         "version": '0.23.1',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1471,7 +1469,6 @@
       const ui = pack.ui || {};
       const root = document.getElementById('report');
       const verbSel = document.getElementById('verbosity');
-      const colourBox = document.getElementById('colour');
 
       function esc(s) {
          return String(s == null ? '' : s)
@@ -1711,7 +1708,6 @@
       }
 
       function render() {
-         document.body.classList.toggle('plain', colourBox && !colourBox.checked);
          const totals = data.totals || {};
          let html = '';
          (data.warnings || []).forEach(w => {
@@ -1730,10 +1726,6 @@
          verbSel.value = ui.verbosity || 'full';
          verbSel.addEventListener('change', render);
       }
-      if (colourBox) {
-         colourBox.checked = ui.colour !== false;
-         colourBox.addEventListener('change', render);
-      }
       render();
    }
 
@@ -1747,7 +1739,6 @@
          .replace(/<\/script/gi, '<\\/script');
       const css = 'html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}'
          + ':root{--bg:#121212;--fg:#e8e8e8;--muted:#9aa0a6;--acc:#7dce7a;--cyan:#6ec8d4;--warn:#d4c06e;--err:#e07070;--line:#2a2a2a;--th:#1c1c1c}'
-         + 'body.plain{--acc:#ddd;--cyan:#ddd;--warn:#ccc;--err:#ccc}'
          + 'header{padding:1rem 1.25rem;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:.75rem 1.5rem;align-items:baseline}'
          + 'h1{font-size:1.1rem;margin:0;color:var(--acc)}'
          + 'h2{font-size:1rem;margin:1.5rem 0 .5rem;color:var(--acc)}'
@@ -1766,8 +1757,7 @@
       return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
          + '<meta name="viewport" content="width=device-width, initial-scale=1">'
          + '<title>' + htmlEsc(title) + '</title>'
-         + '<style>' + css + '</style></head><body'
-         + (ui.colour === false ? ' class="plain"' : '') + '>'
+         + '<style>' + css + '</style></head><body>'
          + '<header><h1>dbstats.js v' + htmlEsc(payload.version || '') + '</h1>'
          + '<div class="meta">'
          + '<b>' + htmlEsc(host) + '</b>'
@@ -1782,8 +1772,7 @@
          + '<option value="summary">summary</option>'
          + '<option value="summaryidx">summaryIdx</option>'
          + '<option value="compactonly">compactOnly</option>'
-         + '</select></label>'
-         + '<label><input type="checkbox" id="colour"> colour</label></div></header>'
+         + '</select></label></div></header>'
          + '<main id="report"></main>'
          + '<script>window.__DBSTATS=' + jsonForScript({ "payload": payload, "ui": ui }) + ';</script>'
          + '<script>(' + boot + ')();</script>'
@@ -1793,14 +1782,14 @@
    function htmlOut(dbStats = {}) {
       /*
        *  HTML from the JSON contract (embed + click-to-sort).
-       *  Verbosity / colour / topology expanded filter that payload in the page.
+       *  Verbosity / topology expanded filter that payload in the page.
+       *  Colour is the inline stylesheet (not an option; later a pluggable CSS).
        *  stdout.write so mdblib console.log colour tags cannot rewrite the document.
        */
       const payload = toJsonContract(dbStats);
       const ui = {
          "verbosity": outputVerbosity(),
-         "topologyExpanded": outputTopologyExpanded(),
-         "colour": outputOptions.colour !== false
+         "topologyExpanded": outputTopologyExpanded()
       };
       process.stdout.write(htmlDocument(payload, ui) + '\n');
       return payload;
