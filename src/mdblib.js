@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.28.0"
+ *  Version: "0.31.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,7 +17,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.28.0"
+      "version": "0.31.0"
 });
 
 /*  Notes:
@@ -29,12 +29,19 @@ if (typeof __lib === 'undefined') (
  *    One hello() fills both BSON limits. fuzzer reads bsonMax.
  *  - Session snapshot (first read): atlas platform, fCV, and isSharded share
  *    one hello / hostInfo / serverStatus / listShards / getParameter.
- *    That serverStatus call gets the read preference from the hello already
- *    taken, so it does not hello again. hello msg isdbgrid still means
- *    sharded when serverStatus is {ok:0} and listShards did not return shards.
+ *    hello() and serverVer() are first-read on that snapshot (helloDoc,
+ *    serverVerParsed). hello(true) re-probes and updates the cache.
+ *    load() does not call serverVer()/db.version(); the 4.4 floor runs on
+ *    the first sessionSnapshot (ensureServerFloor). withChildSession
+ *    clears hello / serverVer sidecars with the snapshot. hello msg isdbgrid
+ *    still means sharded when serverStatus is {ok:0} and listShards did not
+ *    return shards. Snapshot takes serverStatus (wiredTiger:1) after hello;
+ *    Atlas shared-tier (atlasVersion or *.mongodb.net host, no wiredTiger,
+ *    not isdbgrid) skips hostInfo / getParameter / listShards. Auto catalog
+ *    still tries $listCatalog on that tier.
  *    A proc of unknown is not cached (the next read retries). An M0/Flex
  *    getParameter denial still caches once proc is known. load() does not
- *    fill the snapshot. hello().me stays live (onlineDefrag can move).
+ *    fill the full snapshot. db.hello() stays a live shell command.
  *  - compactionHelper(type, storageSize, freeStorageSize) has no numeric
  *    defaults. Omitted storage is not the 4 KiB display floor. Omitted or
  *    null free is unknown, not an empty free list, and returns false.
@@ -57,10 +64,14 @@ if (typeof __lib === 'undefined') (
  *    listCatalogSnapshot selects auto|legacy|listCatalog|listClusterCatalog;
  *    on authz/failure the caller falls back to getCollectionInfos.
  *    $listClusterCatalog is an optional mongos fast path, never the only path.
+ *    shards:true is added only when the caller will consume owners; those
+ *    ids stay on the entry. The caller skips the stage when connectionStatus
+ *    already lacks clusterMonitor.
  *    Name policy is systemCollectionFilter. The getAllNonSystem* /
  *    getAllSystemNamespaces stubs are gone.
- *  - statsIncomplete compares returned $collStats shards to owning shards
- *    (config.chunks / db primary), not cluster-wide listShards.
+ *  - statsIncomplete compares returned $collStats shards to owning shards.
+ *    Expanded mongos catalog owners win; otherwise config.chunks / db primary.
+ *    Not cluster-wide listShards.
  *  - parseDbStats / parseCollStats / parseIndexStats turn normalised $stats /
  *    $collStats output into DTOs. parseDbStats stores the index count as
  *    nindexes only (db.stats() names that field indexes). Collection
@@ -80,6 +91,10 @@ if (typeof __lib === 'undefined') (
  *    There is no MetaStats façade.
  *  - Catalog identity first, stats on demand: collection.fetchStats(),
  *    database.fetchAllStats({ concurrency }), dbPath.materialize({ concurrency }).
+ *    materialize uses a global $collStats in-flight cap and still calls
+ *    onDatabase when each DB's collections complete (per-DB free rollup).
+ *    fetchDbStats is the async $stats path (runCommand + awaitPlain) so
+ *    mapPool can overlap db.stats(). $stats stays a sync helper.
  *    Cache _statsPromise per collection. Callers materialise then serialise.
  *  - Owning-shard ids live on the Map for one materialize / fetchAllStats
  *    gather. A lone $collStats does not keep them. __collStatsOnMongos
@@ -499,9 +514,8 @@ function formatLogArgs(args, isTTY) {
    if (!((major === 1 && minor >= 10) || (major === 2 && minor >= 10) || major >= 3)) {
       __mdblibShellIncompatible = version();
    }
-   if (!serverVer(4.4)) {
-      __mdblibServerUnsupported = db.version();
-   }
+   // Server 4.4 floor waits for sessionSnapshot / ensureServerFloor (no
+   // db.version() at load). Callers print or fold __mdblibServerUnsupported.
 })();
 
 // Import crypto module for Node.js/mongosh environments
@@ -851,13 +865,20 @@ class CollectionStats extends StorageMetrics {
          "configurable": true
       });
    }
-   static catalogEntry({ name = '', type = 'collection', dbName = '' } = {}) {
-      return new CollectionStats({
+   static catalogEntry({ name = '', type = 'collection', dbName = '', shards = null } = {}) {
+      const collection = new CollectionStats({
          "name": name || '',
          "type": type != null && type !== '' ? type : 'collection',
          "dbName": dbName || '',
          "statsLoaded": false
       });
+      if (Array.isArray(shards) && shards.length) {
+         Object.defineProperty(collection, 'catalogShards', {
+            "value": shards.filter(id => typeof id === 'string' && id.length),
+            "enumerable": false
+         });
+      }
+      return collection;
    }
    static from(raw, nameFallback = '') {
       const dto = parseCollStats(raw || {});
@@ -903,6 +924,10 @@ class CollectionStats extends StorageMetrics {
          || ((typeof db !== 'undefined' && db && typeof db.getName === 'function')
             ? db.getName()
             : '');
+      if (owningShardCache instanceof Map && Array.isArray(this.catalogShards) && this.catalogShards.length) {
+         const ns = `${nsDb}.${collName}`;
+         if (!owningShardCache.has(ns)) owningShardCache.set(ns, this.catalogShards.slice());
+      }
       this._statsPromise = (async () => {
          try {
             const raw = await $collStats(nsDb, collName, owningShardCache) || { "name": collName };
@@ -935,6 +960,47 @@ class DatabaseStats extends StorageMetrics {
       if (Array.isArray(extra.shards)) database.shards = extra.shards;
       return database;
    }
+   applyDbStats(raw) {
+      /*
+       *  Merge $stats onto this DB. Leaves collections/views in place so
+       *  catalog listing can overlap the stats fetch.
+       */
+      const dto = parseDbStats(raw || {});
+      if (dto.name) this.name = dto.name;
+      this.dataSize = dto.dataSize;
+      this.storageSize = dto.storageSize;
+      this.freeStorageSize = dto.freeStorageSize;
+      this.objects = dto.objects;
+      this.orphans = dto.orphans;
+      this.ncollections = dto.ncollections;
+      this.nviews = dto.nviews;
+      this.namespaces = dto.namespaces;
+      this.nindexes = dto.nindexes;
+      this.totalIndexSize = dto.totalIndexSize;
+      this.totalIndexBytesReusable = dto.totalIndexBytesReusable;
+      this.statsError = dto.statsError || null;
+      this.unauthorized = dto.unauthorized === true;
+      return this;
+   }
+   catalogTargets() {
+      const dbName = this.name;
+      this.collections = (this.collections || []).map(entry => {
+         if (entry instanceof CollectionStats) {
+            if (!entry.dbName) entry.dbName = dbName;
+            return entry;
+         }
+         const shards = (entry && Array.isArray(entry.catalogShards))
+            ? entry.catalogShards
+            : (entry && entry.shards);
+         return CollectionStats.catalogEntry({
+            "name": entry && entry.name,
+            "type": entry && entry.type,
+            "dbName": dbName,
+            "shards": shards
+         });
+      });
+      return this.collections.filter(c => c && c.name && c.type !== 'view');
+   }
    async fetchAllStats({ concurrency, onProgress, owningShardCache } = {}) {
       /*
        *  Bounded $collStats pool for this DB. Views stay nameOnly.
@@ -944,18 +1010,7 @@ class DatabaseStats extends StorageMetrics {
        */
       const dbName = this.name;
       const shardCache = (owningShardCache instanceof Map) ? owningShardCache : new Map();
-      this.collections = (this.collections || []).map(entry => {
-         if (entry instanceof CollectionStats) {
-            if (!entry.dbName) entry.dbName = dbName;
-            return entry;
-         }
-         return CollectionStats.catalogEntry({
-            "name": entry && entry.name,
-            "type": entry && entry.type,
-            "dbName": dbName
-         });
-      });
-      const targets = this.collections.filter(c => c && c.name && c.type !== 'view');
+      const targets = this.catalogTargets();
       const pool = (Number.isFinite(+concurrency) && +concurrency > 0)
          ? Math.floor(+concurrency)
          : 8;
@@ -1113,20 +1168,29 @@ function closeChildMongo(mongo) {
 async function withChildSession(mongo, fn) {
    /*
     *  Serial global-db swap so $stats / $collStats / listCatalogSnapshot
-    *  reuse the current session. Restores db, sessionSnapshot, and
-    *  __collStatsOnMongos. Not mdblib.for(db).
+    *  reuse the current session. Restores db, sessionSnapshot (including
+    *  hello / serverVer sidecars), and __collStatsOnMongos. Not mdblib.for(db).
     */
    const parentDb = db;
    const parentSnap = sessionSnapshot.cached;
+   const parentHello = sessionSnapshot.helloDoc;
+   const parentVer = sessionSnapshot.serverVerParsed;
+   const parentVerStr = sessionSnapshot.serverVerString;
    const parentCollStats = __collStatsOnMongos;
    try {
       db = mongo.getDB(parentDb.getName());
       sessionSnapshot.cached = null;
+      sessionSnapshot.helloDoc = null;
+      sessionSnapshot.serverVerParsed = null;
+      sessionSnapshot.serverVerString = null;
       __collStatsOnMongos = undefined;
       return await fn();
    } finally {
       db = parentDb;
       sessionSnapshot.cached = parentSnap;
+      sessionSnapshot.helloDoc = parentHello;
+      sessionSnapshot.serverVerParsed = parentVer;
+      sessionSnapshot.serverVerString = parentVerStr;
       __collStatsOnMongos = parentCollStats;
    }
 }
@@ -1153,9 +1217,10 @@ class HostNode {
    init({ connecting = true, preserveInstance = false } = {}) {
       const advertised = this.instance;
       const snap = sessionSnapshot();
+      const helloDoc = snap.helloDoc || hello();
       this.instance = (snap.atlasPlatform === 'serverless') ? 'serverless'
                     : (snap.sharded) ? 'sharded'
-                    : hello().me;
+                    : helloDoc.me;
       if (preserveInstance && advertised != null) this.instance = advertised;
       this.hostname = snap.hostname;
       this.proc = snap.proc;
@@ -1210,15 +1275,17 @@ class TopologySnapshot {
       const snap = sessionSnapshot();
       const connecting = HostNode.discover();
       const errors = [];
-      let helloDoc = {};
-      try {
-         helloDoc = hello() || {};
-      } catch (e) {
-         errors.push({
-            "step": "hello",
-            "message": (e && (e.errmsg || e.message)) || String(e)
-         });
-         helloDoc = {};
+      let helloDoc = snap.helloDoc;
+      if (!helloDoc) {
+         try {
+            helloDoc = hello() || {};
+         } catch (e) {
+            errors.push({
+               "step": "hello",
+               "message": (e && (e.errmsg || e.message)) || String(e)
+            });
+            helloDoc = {};
+         }
       }
       if (connecting.proc === 'mongos') connecting.role = 'mongos';
       else if (helloDoc.isWritablePrimary) connecting.role = 'PRIMARY';
@@ -1437,25 +1504,39 @@ class DbPathStats extends StorageMetrics {
    get shards() { return (this.host && this.host.shards) || []; }
    async materialize({ concurrency, onProgress, onDatabase } = {}) {
       /*
-       *  One DB at a time (P1): fetchAllStats then onDatabase, then the next
-       *  DB. Not a flat cluster-wide $collStats queue. $stats is the caller's
-       *  (buildDatabaseMeta), not this walk.
+       *  Global $collStats in-flight cap. onDatabase runs when each DB's
+       *  collections complete (sort + free-space rollup). Views stay
+       *  nameOnly. $stats is the caller's (applyDbStats / fetchDbStats).
        */
       const pool = (Number.isFinite(+concurrency) && +concurrency > 0)
          ? Math.floor(+concurrency)
          : 8;
       const owningShardCache = new Map();
+      const work = [];
       for (const database of (this.databases || [])) {
-         const progress = (typeof onProgress === 'function')
-            ? (p => onProgress({ "database": database, ...p }))
-            : undefined;
-         await database.fetchAllStats({
-            "concurrency": pool,
-            "onProgress": progress,
-            "owningShardCache": owningShardCache
-         });
-         if (typeof onDatabase === 'function') onDatabase(database);
+         const targets = database.catalogTargets();
+         if (!targets.length) {
+            if (typeof onDatabase === 'function') onDatabase(database);
+            continue;
+         }
+         const state = { database, remaining: targets.length };
+         for (const coll of targets) work.push({ state, coll });
       }
+      if (!work.length) return this;
+      let hudDb = work[0].state.database;
+      await mapPool(work, pool, async ({ state, coll }) => {
+         hudDb = state.database;
+         try {
+            await coll.fetchStats(state.database.name, owningShardCache);
+         } finally {
+            state.remaining--;
+            if (state.remaining === 0 && typeof onDatabase === 'function') {
+               onDatabase(state.database);
+            }
+         }
+      }, (typeof onProgress === 'function')
+         ? (p => onProgress({ "database": hudDb, ...p }))
+         : undefined);
       return this;
    }
 }
@@ -1706,12 +1787,83 @@ function verAtLeast(parsed, ver) {
    return !!(parsed && need && cmpVer(parsed, need) >= 0);
 }
 
+function rememberHelloDoc(doc) {
+   if (doc && typeof doc === 'object') {
+      sessionSnapshot.helloDoc = doc;
+      if (sessionSnapshot.cached) sessionSnapshot.cached.helloDoc = doc;
+   }
+   return doc;
+}
+
+function rememberServerVerParsed(parsed) {
+   if (parsed) {
+      sessionSnapshot.serverVerParsed = parsed;
+      if (sessionSnapshot.cached) sessionSnapshot.cached.serverVerParsed = parsed;
+   }
+   return parsed;
+}
+
+function rememberServerVerString(value) {
+   if (typeof value === 'string' && value) {
+      sessionSnapshot.serverVerString = value;
+      if (sessionSnapshot.cached) sessionSnapshot.cached.serverVerString = value;
+   }
+   return sessionSnapshot.serverVerString;
+}
+
+function formatParsedVer(parsed) {
+   if (!parsed) return '';
+   return `${parsed[0]}.${parsed[1]}.${parsed[2]}`;
+}
+
+function serverVerString() {
+   /*
+    *  Cached binary version string (serverStatus.version / sidecar).
+    *  Empty when the snapshot has not run. Does not call db.version().
+    */
+   if (sessionSnapshot.serverVerString) return sessionSnapshot.serverVerString;
+   if (sessionSnapshot.cached && sessionSnapshot.cached.serverVerString) {
+      sessionSnapshot.serverVerString = sessionSnapshot.cached.serverVerString;
+      return sessionSnapshot.serverVerString;
+   }
+   const parsed = sessionSnapshot.serverVerParsed
+      || (sessionSnapshot.cached && sessionSnapshot.cached.serverVerParsed);
+   const formatted = formatParsedVer(parsed);
+   if (formatted) rememberServerVerString(formatted);
+   return formatted;
+}
+
+function ensureServerFloor() {
+   /*
+    *  mongod/s 4.4 floor after the snapshot has a binary version.
+    *  Sets __mdblibServerUnsupported once; does not print.
+    */
+   if (typeof __mdblibServerUnsupported !== 'undefined') return;
+   const parsed = sessionSnapshot.serverVerParsed
+      || (sessionSnapshot.cached && sessionSnapshot.cached.serverVerParsed);
+   if (parsed && !verAtLeast(parsed, 4.4)) {
+      __mdblibServerUnsupported = serverVerString() || formatParsedVer(parsed);
+   }
+}
+
+function cachedServerVerParsed() {
+   if (sessionSnapshot.serverVerParsed) return sessionSnapshot.serverVerParsed;
+   if (sessionSnapshot.cached && sessionSnapshot.cached.serverVerParsed) {
+      sessionSnapshot.serverVerParsed = sessionSnapshot.cached.serverVerParsed;
+      return sessionSnapshot.serverVerParsed;
+   }
+   const parsed = parseVer(db.version());
+   if (parsed) rememberServerVerString(formatParsedVer(parsed));
+   return rememberServerVerParsed(parsed);
+}
+
 function serverVer(ver = false) {
    /*
     *  Server binary version. Predicate: serverVer(4.4) / serverVer(8).
     *  Getter: numeric major.minor.patch with integer minors (2.10 ≠ 2.1).
+    *  First-read on the session snapshot (load() may fill the sidecar only).
     */
-   const parsed = parseVer(db.version());
+   const parsed = cachedServerVerParsed();
    if (ver === false) return parsed ? verNumber(parsed) : 0;
    return verAtLeast(parsed, ver);
 }
@@ -1736,16 +1888,20 @@ function shellVer(ver = false) {
    return verAtLeast(parsed, ver);
 }
 
-function hello() {
+function hello(refresh) {
    /*
-    *  One-shot topology probe ({ hello: 1 }).
+    *  First-read topology probe ({ hello: 1 }) on the session snapshot.
+    *  hello(true) re-probes and updates the cache (step-down / child session).
     *  SERVER-49989: send hello, do not wrap isMaster; replies differ
     *  (isWritablePrimary vs ismaster). hello exists on mongod >= 4.2
     *  (floor is 4.4), so there is no isMaster fallback.
     *  Never pass topologyVersion / maxAwaitTimeMS — that is awaitable
     *  hello and blocks up to heartbeatFrequencyMS (10s) on a quiet node.
+    *  db.hello() stays a live shell command.
     */
-   return db.adminCommand({ "hello": 1 });
+   if (refresh !== true && sessionSnapshot.helloDoc) return sessionSnapshot.helloDoc;
+   const doc = db.adminCommand({ "hello": 1 }) || {};
+   return rememberHelloDoc(doc);
 }
 
 function hostNameFromHostPort(value) {
@@ -1864,54 +2020,76 @@ function atlasDeployment(helloDoc = {}, hostInfoDoc = {}, hostInfoError = null, 
 function sessionSnapshot() {
    /*
     *  First-read session facts: atlas platform, fCV, isSharded.
-    *  One hello, then hostInfo / serverStatus / listShards / getParameter.
-    *  serverStatus gets the read preference from that hello, so it does not
-    *  hello again. A thrown hello falls through to primaryPreferred.
-    *  hello msg isdbgrid still means sharded when serverStatus is {ok:0} and
-    *  listShards did not return shards. proc unknown is not cached.
-    *  load() does not fill this. hello().me is not stored (onlineDefrag can move).
+    *  hello (cached), then serverStatus({ wiredTiger: 1 }). Atlas shared-tier
+    *  (atlasVersion or *.mongodb.net host, no wiredTiger, not isdbgrid)
+    *  skips hostInfo / getParameter / listShards. Auto catalog still tries
+    *  $listCatalog on that tier. hello() / serverVer() reuse helloDoc and
+    *  serverVerParsed. serverStatus gets the read preference from that hello.
+    *  A thrown hello falls through to primaryPreferred. hello msg isdbgrid
+    *  still means sharded when serverStatus is {ok:0} and listShards did
+    *  not return shards. proc unknown is not cached. Binary version prefers
+    *  serverStatus.version then the sidecar / db.version(); fCV falls back
+    *  to that binary (M0/Flex getParameter denial).
     */
    if (sessionSnapshot.cached) return sessionSnapshot.cached;
 
-   let helloDoc = {};
-   try {
-      helloDoc = hello() || {};
-   } catch (_) {
-      helloDoc = {};
+   let helloDoc = sessionSnapshot.helloDoc;
+   if (!helloDoc) {
+      try {
+         helloDoc = hello() || {};
+      } catch (_) {
+         helloDoc = {};
+      }
    }
    const helloMsg = helloDoc.msg || false;
    const statusReadPref = helloDoc.secondary ? 'secondaryPreferred' : 'primaryPreferred';
 
+   const ss = serverStatus({ "wiredTiger": 1 }, statusReadPref);
+   const ssHost = (ss && typeof ss.host === 'string') ? ss.host : '';
+   const looksSharedTier = !!(ss && ss.ok)
+      && helloMsg !== 'isdbgrid'
+      && !ss.wiredTiger
+      && !!(ss.atlasVersion || (ssHost.indexOf('.mongodb.net') !== -1));
+
    let hostInfoDoc = {};
    let hostInfoError = null;
-   try {
-      hostInfoDoc = db.hostInfo() || {};
-   } catch (e) {
-      hostInfoError = e;
-      hostInfoDoc = {};
+   if (!looksSharedTier) {
+      try {
+         hostInfoDoc = db.hostInfo() || {};
+      } catch (e) {
+         hostInfoError = e;
+         hostInfoDoc = {};
+      }
    }
 
-   const ss = serverStatus({}, statusReadPref);
    const {
       "hostname": hostname,
       "platform": atlasPlatform
    } = atlasDeployment(helloDoc, hostInfoDoc, hostInfoError, ss);
 
-   let fcvCmd = {};
-   try {
-      fcvCmd = db.adminCommand({ "getParameter": 1, "featureCompatibilityVersion": 1 });
-   } catch (_) {
-      fcvCmd.ok = 0;
-   }
-   const raw = fcvCmd.featureCompatibilityVersion;
-   const versionStr = (typeof raw === 'string') ? raw : raw && raw.version;
-   const fcvParsed = parseVer(versionStr) || parseVer(db.version());
+   let serverVerParsed = sessionSnapshot.serverVerParsed
+      || parseVer(ss && ss.version);
+   if (!serverVerParsed) serverVerParsed = parseVer(db.version());
+   rememberServerVerParsed(serverVerParsed);
+   rememberServerVerString((ss && ss.version) || formatParsedVer(serverVerParsed));
 
+   let fcvParsed = serverVerParsed;
    let shardDocs = false;
-   try {
-      shardDocs = db.adminCommand({ "listShards": 1 }).shards;
-   } catch (_) {
-      shardDocs = false;
+   if (!looksSharedTier) {
+      let fcvCmd = {};
+      try {
+         fcvCmd = db.adminCommand({ "getParameter": 1, "featureCompatibilityVersion": 1 });
+      } catch (_) {
+         fcvCmd.ok = 0;
+      }
+      const raw = fcvCmd.featureCompatibilityVersion;
+      const versionStr = (typeof raw === 'string') ? raw : raw && raw.version;
+      fcvParsed = parseVer(versionStr) || serverVerParsed;
+      try {
+         shardDocs = db.adminCommand({ "listShards": 1 }).shards;
+      } catch (_) {
+         shardDocs = false;
+      }
    }
    const shardedProc = (ss.ok) ? ss.process
                      : (shardDocs) ? 'mongos'
@@ -1929,6 +2107,9 @@ function sessionSnapshot() {
    const snap = {
       atlasPlatform,
       fcvParsed,
+      serverVerParsed,
+      "serverVerString": sessionSnapshot.serverVerString || formatParsedVer(serverVerParsed),
+      helloDoc,
       sharded,
       hostname,
       proc,
@@ -1936,7 +2117,11 @@ function sessionSnapshot() {
    };
    // A missed probe must not stick for the session. M0/Flex still caches:
    // proc is known and fCV falls back to the binary version.
-   if (proc !== 'unknown') sessionSnapshot.cached = snap;
+   if (proc !== 'unknown') {
+      sessionSnapshot.cached = snap;
+      if (helloDoc && Object.keys(helloDoc).length) sessionSnapshot.helloDoc = helloDoc;
+      ensureServerFloor();
+   }
    return snap;
 }
 
@@ -2881,39 +3066,54 @@ function commandErrorMessage(e) {
    return e.codeName || e.errmsg || e.message || String(e);
 }
 
+function dbStatsErrorStub(dbName, e) {
+   return {
+      "name": dbName,
+      "collections": 0,
+      "indexes": 0,
+      "nindexes": 0,
+      "views": 0,
+      "nviews": 0,
+      "namespaces": 0,
+      "objects": 0,
+      "orphans": 0,
+      "dataSize": 0,
+      "storageSize": 0,
+      "indexSize": 0,
+      "freeStorageSize": null,
+      "indexFreeStorageSize": null,
+      "totalIndexBytesReusable": null,
+      "scaleFactor": 1,
+      "statsError": commandErrorMessage(e),
+      "unauthorized": isUnauthorizedError(e)
+   };
+}
+
+function dbStatsCommandSpec() {
+   // MONGOSH-1108 (mongosh v1.2.0) & SERVER-62277 (mongod v5.0.6)
+   return (serverVer('5.0.6') && shellVer(1.2))
+      ? { "dbStats": 1, "freeStorage": 1, "scale": 1 }
+      : { "dbStats": 1, "scale": 1 };
+}
+
 function $stats(dbName = db.getName()) {
    /*
-    *  stats() wrapper
+    *  stats() wrapper (sync). Overlapped gathers use fetchDbStats.
     */
    let stats;
    try {
       stats = db.getSiblingDB(dbName).stats( // max precision due to SERVER-69036
-         // MONGOSH-1108 (mongosh v1.2.0) & SERVER-62277 (mongod v5.0.6)
          (serverVer('5.0.6') && shellVer(1.2))
          ? { "freeStorage": 1, "scale": 1 } : 1
       );
    } catch(e) {
-      return {
-         "name": dbName,
-         "collections": 0,
-         "indexes": 0,
-         "nindexes": 0,
-         "views": 0,
-         "nviews": 0,
-         "namespaces": 0,
-         "objects": 0,
-         "orphans": 0,
-         "dataSize": 0,
-         "storageSize": 0,
-         "indexSize": 0,
-         "freeStorageSize": null,
-         "indexFreeStorageSize": null,
-         "totalIndexBytesReusable": null,
-         "scaleFactor": 1,
-         "statsError": commandErrorMessage(e),
-         "unauthorized": isUnauthorizedError(e)
-      };
+      return dbStatsErrorStub(dbName, e);
    }
+   return normalizeDbStatsDoc(stats, dbName);
+}
+
+function normalizeDbStatsDoc(stats, dbName) {
+   stats = stats || {};
    stats.name = dbName;
    delete stats.db;
    // Atlas M0/Flex hide WT free-space; a 0 here is not an empty free list.
@@ -2985,6 +3185,21 @@ async function awaitPlain(value) {
    return value;
 }
 
+async function fetchDbStats(dbName = db.getName()) {
+   /*
+    *  Async $stats. runCommand + awaitPlain so mapPool overlaps.
+    *  Same normalised document as $stats. $stats stays the sync helper.
+    */
+   try {
+      const stats = await awaitPlain(
+         db.getSiblingDB(dbName).runCommand(dbStatsCommandSpec())
+      );
+      return normalizeDbStatsDoc(stats, dbName);
+   } catch (e) {
+      return dbStatsErrorStub(dbName, e);
+   }
+}
+
 async function collStatsOnMongos() {
    if (__collStatsOnMongos != null) return __collStatsOnMongos;
    __collStatsOnMongos = !!(await awaitPlain(isSharded()));
@@ -3012,7 +3227,8 @@ async function shardsFromConfigNs(ns) {
 
 async function collectionOwningShardIds(dbName, collName, cache) {
    /*
-    *  Shards that own this NS: config.chunks (uuid/ns), timeseries buckets,
+    *  Shards that own this NS. A non-empty catalogShards seed already in
+    *  the cache wins. Otherwise config.chunks (uuid/ns), timeseries buckets,
     *  then the database primary. cache is the gather Map (one materialize
     *  or one fetchAllStats). No cache means no remembered owners.
     *  null ids = unknown placement (skip the incomplete mark).
@@ -3137,15 +3353,34 @@ function catalogEntryType(doc = {}) {
    return 'collection';
 }
 
+function catalogOwnerShards(doc = {}) {
+   /*
+    *  $listClusterCatalog shards:true returns string shard ids.
+    *  Absent field stays off the entry. An array is kept, including empty.
+    */
+   if (!Array.isArray(doc.shards)) return null;
+   const ids = [];
+   const seen = new Set();
+   for (const id of doc.shards) {
+      if (typeof id !== 'string' || !id.length || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+   }
+   return ids;
+}
+
 function normalizeCatalogEntry(doc = {}) {
    const dbName = catalogEntryDb(doc);
    const name = catalogEntryName(doc);
    if (!dbName || !name) return null;
-   return {
+   const entry = {
       "db": dbName,
       "name": name,
       "type": catalogEntryType(doc)
    };
+   const shards = catalogOwnerShards(doc);
+   if (shards) entry.shards = shards;
+   return entry;
 }
 
 function dedupeCatalogEntries(entries = []) {
@@ -3213,22 +3448,27 @@ async function $listCatalog() {
    return dedupeCatalogEntries(docs.map(normalizeCatalogEntry).filter(Boolean));
 }
 
-async function $listClusterCatalog() {
+async function $listClusterCatalog({ shards = false } = {}) {
    /*
     *  $listClusterCatalog on admin (8.0.10+). Unsupported/unstable; optional
     *  cluster-wide fast path. First stage; admin = all collections.
+    *  shards:true adds the per-namespace owner list. Omit it otherwise.
     */
+   const spec = {};
+   if (shards) spec.shards = true;
+   const project = {
+      "ns": 1,
+      "db": 1,
+      "type": 1,
+      "name": 1,
+      "viewOn": 1,
+      "options.timeseries": 1,
+      "options.viewOn": 1
+   };
+   if (shards) project.shards = 1;
    const pipeline = [
-      { "$listClusterCatalog": {} },
-      { "$project": {
-         "ns": 1,
-         "db": 1,
-         "type": 1,
-         "name": 1,
-         "viewOn": 1,
-         "options.timeseries": 1,
-         "options.viewOn": 1
-      } }
+      { "$listClusterCatalog": spec },
+      { "$project": project }
    ];
    const docs = await drainAggCursor(
       db.getSiblingDB('admin').aggregate(pipeline, catalogAggOptions(
@@ -3238,27 +3478,40 @@ async function $listClusterCatalog() {
    return dedupeCatalogEntries(docs.map(normalizeCatalogEntry).filter(Boolean));
 }
 
-async function listCatalogSnapshot(mode = 'auto') {
+async function listCatalogSnapshot(mode = 'auto', opts = {}) {
    /*
     *  Whole-cluster namespace listing.
     *  mode: auto | legacy | listCatalog | listClusterCatalog.
     *  auto: mongos && 8.0.10+ → $listClusterCatalog; else 6.0+ → $listCatalog;
     *  else legacy. On stage failure / authz, builder is legacy and entries empty
     *  (caller lists per DB with getCollectionInfos).
+    *  opts.shards asks $listClusterCatalog for owners. The caller sets it
+    *  only when those ids will be consumed. opts.skipCluster skips the stage
+    *  when connectionStatus already lacks clusterMonitor.
     */
    const requested = normalizeCatalogMode(mode);
+   const wantShards = !!(opts && opts.shards);
+   const skipCluster = !!(opts && opts.skipCluster);
+   // auto still tries $listCatalog / $listClusterCatalog on shared-tier.
+   // Atlas M0 denies with AtlasError 8000 today; a later allow surfaces
+   // the stage. catalog:legacy is the operator A/B that skips the try.
    if (requested === 'legacy') {
       return catalogSnapshotResult('legacy', [], false);
    }
+   if (skipCluster && requested === 'listClusterCatalog') {
+      return catalogSnapshotResult('legacy', [], true, 'connectionStatus lacks clusterMonitor');
+   }
 
-   const tryCluster = requested === 'listClusterCatalog'
-      || (requested === 'auto' && isSharded() && serverVer('8.0.10'));
+   const tryCluster = !skipCluster && (
+      requested === 'listClusterCatalog'
+      || (requested === 'auto' && isSharded() && serverVer('8.0.10'))
+   );
    const tryList = requested === 'listCatalog' || requested === 'auto';
 
    if (tryCluster) {
       try {
          if (!serverVer('8.0.10')) throw new Error('requires MongoDB 8.0.10+');
-         const entries = await $listClusterCatalog();
+         const entries = await $listClusterCatalog({ "shards": wantShards });
          return catalogSnapshotResult('listClusterCatalog', entries, false);
       } catch(e) {
          if (requested === 'listClusterCatalog') {
