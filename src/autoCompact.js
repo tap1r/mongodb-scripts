@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "1.2.0"
+    *  Version: "1.3.0"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,6 +17,8 @@
     *  - { autoCompact: true } (default) enables; { autoCompact: false } disables and exits (no log tail)
     *  - freeSpaceTargetMB passthrough (server default 20); runOnce defaults to true (opposite of the server)
     *  - ident map finishes before autoCompact. Naming a file needs the internal action (collectionless $listCatalog) or, on that namespace, listIndexes (targeted $listCatalog) or collStats (wiredTiger.uri, indexDetails.*.uri). With that, the line prints as ns or ns.index; without it, the line stays collection-*.wt / index-*.wt. Built-in roles have neither listIndexes nor collStats on local.replset.* or on system.views, system.rollback.id, system.keys, system.preimages, and system.indexBuilds. Idents created during the pass refresh in the background
+    *  - First-pass TTY bar: distinct catalog namespaces seen in WTCMPCT logs, over the initial catalog namespace count. Ramlog loss marks the count fuzzy (~). The bar is not a latch. Piped runs stay on the log lines.
+    *  - Options: autoCompact-options.jsonc (cwd, --file dir, $MDBLIB, ~/.mongodb) then var autoCompactOptions. Missing default is silent. Explicit var optionsFile. mdblib is loaded for resolveOptions; ANSI, AutoFactor, and serverStatus stay local.
     */
 
    // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "autoCompact": true };'] [-f|--file] </path/to/>autoCompact.js
@@ -38,12 +40,27 @@
     *
     *    mongosh "localhost:27017" --quiet --eval 'var autoCompactOptions = { "autoCompact": false };' -f autoCompact.js
     *
+    *  Example with an options file (autoCompact-options.jsonc). Missing default is silent.
+    *
+    *    mongosh "localhost:27017" --quiet --eval 'var optionsFile = "/path/to/autoCompact-options.jsonc"' -f autoCompact.js
+    *
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "1.2.0" };
+   const __script = { "name": "autoCompact.js", "version": "1.3.0" };
 
-   // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (from mdblib.js)
+   if (typeof __lib === 'undefined') {
+      /*
+       *  Load helper library mdblib.js for resolveOptions.
+       *  ANSI, AutoFactor, and serverStatus stay local to this IIFE.
+       */
+      let __lib = { "name": "mdblib.js", "paths": null, "path": null };
+      __lib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
+      __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
+      load(__lib.path);
+   }
+
+   // colour tags ([red]/[yellow]/[/] …) expanded on TTY; tags+CSI stripped when piped (local copy)
    const ansiTags = [
       { "tag": "\/", "code": 0 },
       { "tag": "bold", "code": 1 },
@@ -128,6 +145,69 @@
    const stripAnsiMarkup = text => text.replace(ANSI_TAG_RE, (all, tag) => (
       ansiTagCodeOf(tag) === undefined ? all : ''
    )).replace(ANSI_CSI_RE, '');
+   const createNamespaceHud = () => {
+      /*
+       *  Same contract as mdblib MiniHud: one TTY line via stdout.write('\\r').
+       *  The painter stays local. Piped output leaves the bar off.
+       */
+      const enabled = typeof process !== 'undefined' && process.stdout && process.stdout.isTTY;
+      let lastWidth = 0;
+      const bar = (frac, width = 16) => {
+         const n = Math.max(1, width);
+         const p = Number.isFinite(frac) ? Math.min(1, Math.max(0, frac)) : 0;
+         const filled = Math.round(p * n);
+         return '█'.repeat(filled) + '░'.repeat(n - filled);
+      };
+      return {
+         enabled,
+         bar,
+         clear() {
+            if (!enabled || lastWidth === 0) return;
+            process.stdout.write('\r\x1b[2K');
+            lastWidth = 0;
+         },
+         render(line) {
+            if (!enabled) return;
+            const cols = (process.stdout.columns > 0) ? process.stdout.columns : 80;
+            let msg = String(line || '').replace(/\s+/g, ' ').trim();
+            let visual = stripAnsiMarkup(msg);
+            const max = Math.max(1, cols - 1);
+            if (visual.length > max) {
+               visual = visual.slice(0, Math.max(1, cols - 2)) + '~';
+               msg = visual;
+            }
+            process.stdout.write('\r' + applyAnsiTags(msg + '[/]') + '\x1b[K');
+            lastWidth = visual.length;
+         }
+      };
+   };
+   function catalogNamespaceNames(map, catalogOk) {
+      /*
+       *  Distinct db.coll from the initial ident map. Internal seeds
+       *  (sizeStorer, history store, catalog) are not catalog namespaces.
+       *  null when $listCatalog itself failed.
+       */
+      if (!catalogOk || !map) return null;
+      const names = new Set();
+      for (const entry of map.values()) {
+         if (!entry || entry.kind === 'internal') continue;
+         if (typeof entry.ns !== 'string' || entry.ns.length === 0) continue;
+         names.add(entry.ns);
+      }
+      return names;
+   }
+   function noteLoggedNamespace(projected, seen, entry) {
+      /*
+       *  One namespace counts once, when any of its files appears in a WTCMPCT
+       *  line and that namespace was in the initial catalog. Unresolved
+       *  filenames and internal files do not count.
+       */
+      if (!projected || !entry || entry.kind === 'internal') return false;
+      if (typeof entry.ns !== 'string' || !projected.has(entry.ns)) return false;
+      const before = seen.size;
+      seen.add(entry.ns);
+      return seen.size !== before;
+   }
    const formatLogArgs = (args, isTTY) => {
       const paint = isTTY ? applyAnsiTags : stripAnsiMarkup;
       return [...args].map(arg => typeof arg === 'string' ? paint(arg) : arg);
@@ -709,6 +789,8 @@
          stop,
          size: () => map.size,
          // Privilege gap: size() is short of the files WT visits, so the count latch stays off.
+         // namespaceNames() is the bar's projected total (distinct db.coll), not that latch.
+         namespaceNames: () => catalogNamespaceNames(map, catalogOk),
          catalogReady: () => catalogOk && deniedCount === 0 && !pumping && !cancelled,
          denied: () => deniedCount
       };
@@ -816,6 +898,26 @@
        *  - runOnce:false: running bit stays on; first pass = hint or visits stall
        */
       const resolveNs = nsResolver.resolve ?? (() => null);
+      const hud = createNamespaceHud();
+      const projectedNs = (typeof nsResolver.namespaceNames === 'function')
+         ? nsResolver.namespaceNames()
+         : null;
+      const seenNs = new Set();
+      let lastNs = '';
+      let logFuzzy = false;
+      const emit = (...args) => {
+         hud.clear();
+         console.log(...args);
+      };
+      const paintNamespaces = () => {
+         if (!projectedNs || firstPassDone) return;
+         const current = seenNs.size;
+         const total = projectedNs.size;
+         const frac = total > 0 ? current / total : 0;
+         const count = logFuzzy ? `~${current}` : String(current);
+         const last = lastNs ? ` [dim]${lastNs}[/]` : '';
+         hud.render(`[yellow]autoCompact[/] [blue]${count}[/]/[blue]${total}[/] namespaces ${hud.bar(frac)}${last}`);
+      };
       let pause = false;
       let firstPassDone = false;
       let seenRunning = false;
@@ -835,7 +937,7 @@
       const markFirstPass = reason => {
          if (firstPassDone) return;
          firstPassDone = true;
-         console.log(`\n══════ [yellow]${reason}[/] ══════`);
+         emit(`\n══════ [yellow]${reason}[/] ══════`);
       };
 
       while (!firstPassDone) {
@@ -846,7 +948,8 @@
          const ramlogFull = rawCount >= GETLOG_CAP;
          if (overflow) {
             lastOverflowAt = Date.now();
-            console.log(`[red][WARN] getLog overflow: ${totalLinesWritten - lastTotal} lines since last poll (ramlog ~${GETLOG_CAP}); treating as heartbeat, poll ${pollMS}ms → ${POLL_MS_MIN}ms[/]`);
+            logFuzzy = true; // dropped WTCMPCT lines; the namespace count can only under-report
+            emit(`[red][WARN] getLog overflow: ${totalLinesWritten - lastTotal} lines since last poll (ramlog ~${GETLOG_CAP}); treating as heartbeat, poll ${pollMS}ms → ${POLL_MS_MIN}ms[/]`);
          }
          if (Number.isFinite(totalLinesWritten)) lastTotal = totalLinesWritten;
          if (logs.length > 0) {
@@ -854,14 +957,17 @@
             logs.forEach(entry => {
                const { t = ISODate(), 'attr': { 'message': { msg = '', session_dhandle_name = '' } = {} } = {} } = entry;
                if (t > ts) ts = t;
-               console.log(`[blue]${t.toJSON()}[/]`, annotateWtMsg(msg, session_dhandle_name, resolveNs));
+               const wtName = wtNameFromMsg(msg, session_dhandle_name);
+               const nsEntry = wtName ? resolveNs(wtName) : null;
+               if (noteLoggedNamespace(projectedNs, seenNs, nsEntry)) lastNs = nsEntry.ns;
+               emit(`[blue]${t.toJSON()}[/]`, annotateWtMsg(msg, session_dhandle_name, resolveNs));
                if (isSizeStorer(msg, session_dhandle_name)) {
                   markFirstPass('sizeStorer (last file of catalog walk)');
                }
             });
             pause = false;
-         } else if (!pause) {
-            console.log('══════ [yellow]autoCompaction work in progress, waiting for new logs[/] ══════');
+         } else if (!pause && !hud.enabled) {
+            emit('══════ [yellow]autoCompaction work in progress, waiting for new logs[/] ══════');
             pause = true;
          }
          const { running, visits } = getBackgroundCompact();
@@ -893,6 +999,7 @@
             if (reason) markFirstPass(reason);
          }
          if (firstPassDone) break;
+         paintNamespaces();
          pollMS = regulatePollMS(pollMS, {
             "overflow": overflow,
             "active": logs.length > 0 || visitsMoved || ramlogFull,
@@ -901,6 +1008,7 @@
          await delay(pollMS);
       }
 
+      hud.clear();
       if (!runOnce) {
          console.log('\n══════ [yellow]first pass complete; background compact thread left enabled (next walk ~24h)[/] ══════');
          reportRecoveredBytes(startBytes);
@@ -923,8 +1031,22 @@
    };
 
    // Caller: var autoCompactOptions = { ... } (--eval or REPL). Do not declare or assign it in this file.
+   // Optional var optionsFile. Default autoCompact-options.jsonc (missing is silent).
    // Passthrough user fields as-is; default autoCompact: true and runOnce: true on enable, stamp comment.
-   const userOptions = typeof autoCompactOptions === 'undefined' ? {} : autoCompactOptions;
+   const __autoCompactResolved = resolveOptions({
+      "defaults": {},
+      "file": 'autoCompact-options.jsonc',
+      "optionsFile": (typeof optionsFile !== 'undefined') ? optionsFile : null,
+      "overlay": (typeof autoCompactOptions === 'undefined') ? null : autoCompactOptions
+   });
+   if (!__autoCompactResolved.ok) {
+      const msg = (__autoCompactResolved.warnings[0] && __autoCompactResolved.warnings[0].message)
+         || __autoCompactResolved.error
+         || 'options file failed';
+      console.log(`[red][ERROR][/] ${msg}`);
+      return;
+   }
+   const userOptions = __autoCompactResolved.options;
    const cmd = {
       "autoCompact": true,
       ...(userOptions?.autoCompact === false ? {} : { "runOnce": true }),
