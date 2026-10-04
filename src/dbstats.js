@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.24.0"
+ *  Version: "0.25.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -65,12 +65,13 @@
  *           compaction: <1|0|-1>
  *        }
  *     },
- *     limit: { // TBA
- *        dataSize: <int>,
+ *     limit: {
+ *        n: <int>, // 0 = unlimited; printer top-N after verbosity (rank by sort, else reclaimable); JSON stays full
+ *        dataSize: <int>, // min floors, 0 = off
  *        storageSize: <int>,
  *        freeStorageSize: <int>,
- *        reuse: <int>,
- *        compression: <int>,
+ *        reuse: <number>, // ratio 0–1, or percent if > 1
+ *        compression: <number>,
  *        objects: <int>
  *     },
  *     output: {
@@ -111,6 +112,8 @@
  *    mongosh --quiet --eval 'var options = { output: { verbosity: "summary" } };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { output: { verbosity: "summaryIdx" } };' -f dbstats.js
  *    mongosh --quiet --eval 'var options = { output: { verbosity: "compactOnly" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { limit: { n: 20 } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { output: { verbosity: "compactOnly" }, limit: { n: 10, freeStorageSize: 1048576 } };' -f dbstats.js
  *
  *  Examples of catalog listing:
  *
@@ -131,7 +134,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.24.0" };
+   const __script = { "name": "dbstats.js", "version": "0.25.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -290,7 +293,8 @@
             "compaction": 0
          }
       },
-      "limit": { // TBA
+      "limit": {
+         "n": 0, // 0 = unlimited; printer top-N after verbosity
          "dataSize": 0,
          "storageSize": 0,
          "freeStorageSize": 0,
@@ -321,7 +325,7 @@
    }
    const outputOptions = { ...optionsDefaults.output, ...(options.output || {}) };
    const catalogMode = (options.catalog != null) ? options.catalog : optionsDefaults.catalog;
-   // const limitOptions = { ...optionsDefaults.limit, ...(options.limit || {}) };
+   const limitOptions = { ...optionsDefaults.limit, ...(options.limit || {}) };
    const topologyOptions = { ...optionsDefaults.topology, ...(options.topology || {}) };
 
    /*
@@ -1010,29 +1014,22 @@
 
    function printDatabaseTables(dbStats = {}) {
       const verb = outputVerbosity();
-      (dbStats.databases || []).forEach(database => {
-         const collections = database.collections || [];
-         const views = database.views || [];
-         if (verb === 'summary') {
+      if (verb === 'summary') {
+         projectDatabases(dbStats.databases || []).forEach(database => {
             printDbHeader(database);
             printDb(database);
-            return;
-         }
-         const listed = (verb === 'compactonly')
-            ? collections.filter(collectionHasCompactable)
-            : collections;
-         if (verb === 'compactonly' && !listed.length) return;
-         printDbHeader(database);
-         printCollHeader(listed.length);
-         listed.forEach(collection => {
-            printCollection(collection);
-            const indexes = collection.indexes || [];
-            const idxRows = (verb === 'compactonly')
-               ? indexes.filter(indexIsCompactable)
-               : indexes;
-            idxRows.forEach(printIndex);
          });
-         if (verb === 'full') {
+         return;
+      }
+      projectCollectionsByDatabase(dbStats).forEach(({ database, collections }) => {
+         printDbHeader(database);
+         printCollHeader(collections.length);
+         collections.forEach(collection => {
+            printCollection(collection);
+            projectIndexes(collection).forEach(printIndex);
+         });
+         if (verb === 'full' && !limitActive()) {
+            const views = database.views || [];
             printViewHeader(views.length);
             views.forEach(({ name }) => printView(name));
          }
@@ -1064,17 +1061,16 @@
       if (verb === 'compactonly') {
          namespaces = namespaces.filter(collectionHasCompactable);
       }
-      const sortedNamespaces = stableSort(namespaces, sortBy('namespace'));
+      namespaces = namespaces.filter(ns => rowMeetsLimit(ns, 'collection'));
+      const ranked = (limitN() > 0)
+         ? stableSort(namespaces, printerRank('namespace')).slice(0, limitN())
+         : stableSort(namespaces, sortBy('namespace'));
 
-      printNSHeader(sortedNamespaces.length);
-      sortedNamespaces.forEach(namespace => {
+      printNSHeader(ranked.length);
+      ranked.forEach(namespace => {
          printNamespace(namespace);
          if (verb === 'summary') return;
-         const indexes = namespace.indexes || [];
-         const idxRows = (verb === 'compactonly')
-            ? indexes.filter(indexIsCompactable)
-            : indexes;
-         idxRows.forEach(printIndex);
+         projectIndexes(namespace).forEach(printIndex);
       });
    }
 
@@ -1404,7 +1400,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.24.0',
+         "version": '0.25.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1516,6 +1512,127 @@
 
       function verb() {
          return (verbSel && verbSel.value) || ui.verbosity || 'full';
+      }
+
+      function limitCfg() {
+         return ui.limit || {};
+      }
+
+      function htmlLimitN() {
+         const n = Math.floor(+limitCfg().n);
+         return n > 0 ? n : 0;
+      }
+
+      function htmlLimitFloor(key) {
+         const v = +limitCfg()[key];
+         return (Number.isFinite(v) && v > 0) ? v : 0;
+      }
+
+      function htmlLimitActive() {
+         if (htmlLimitN() > 0) return true;
+         return ['dataSize', 'storageSize', 'freeStorageSize', 'reuse', 'compression', 'objects']
+            .some(key => htmlLimitFloor(key) > 0);
+      }
+
+      function meetsLimit(o, kind) {
+         const dataSize = htmlLimitFloor('dataSize');
+         const storageSize = htmlLimitFloor('storageSize');
+         const freeStorageSize = htmlLimitFloor('freeStorageSize');
+         let reuse = htmlLimitFloor('reuse');
+         const compression = htmlLimitFloor('compression');
+         const objects = htmlLimitFloor('objects');
+         const known = (n) => n != null && n !== '' && Number.isFinite(+n);
+         if (kind === 'index') {
+            if (storageSize && !(+o.storageSize >= storageSize)) return false;
+            if (freeStorageSize && (!known(o.freeStorageSize) || !(+o.freeStorageSize >= freeStorageSize))) return false;
+            if (reuse) {
+               if (reuse > 1) reuse = reuse / 100;
+               if (o.reuse == null || !(+o.reuse >= reuse)) return false;
+            }
+            return true;
+         }
+         if (dataSize && !(+o.dataSize >= dataSize)) return false;
+         if (storageSize && !(+o.storageSize >= storageSize)) return false;
+         if (freeStorageSize) {
+            let free = known(o.freeStorageSize) ? +o.freeStorageSize : null;
+            if (kind === 'db') {
+               const idx = known(o.totalIndexBytesReusable) ? +o.totalIndexBytesReusable : null;
+               if (free == null && idx == null) return false;
+               free = (free || 0) + (idx || 0);
+            }
+            if (free == null || !(free >= freeStorageSize)) return false;
+         }
+         if (reuse) {
+            if (reuse > 1) reuse = reuse / 100;
+            if (o.reuse == null || !(+o.reuse >= reuse)) return false;
+         }
+         if (compression && (o.compression == null || !(+o.compression >= compression))) return false;
+         if (objects && !(+o.objects >= objects)) return false;
+         return true;
+      }
+
+      function hotFree(o, kind) {
+         const a = (o && o.freeStorageSize != null && Number.isFinite(+o.freeStorageSize)) ? +o.freeStorageSize : null;
+         if (kind !== 'db') return a == null ? NaN : a;
+         const b = (o && o.totalIndexBytesReusable != null && Number.isFinite(+o.totalIndexBytesReusable))
+            ? +o.totalIndexBytesReusable : null;
+         if (a == null && b == null) return NaN;
+         return (a || 0) + (b || 0);
+      }
+
+      function hotCmp(kind) {
+         return (a, b) => {
+            const av = hotFree(a, kind), bv = hotFree(b, kind);
+            const aOk = Number.isFinite(av), bOk = Number.isFinite(bv);
+            if (aOk && bOk && av !== bv) return bv - av;
+            if (aOk !== bOk) return aOk ? -1 : 1;
+            return (compactionRank(b && b.compaction) || 0) - (compactionRank(a && a.compaction) || 0);
+         };
+      }
+
+      function sortSpec(kind) {
+         const sort = ui.sort || {};
+         return (kind === 'db') ? sort.db : sort.ns;
+      }
+
+      function specCmp(spec, kind) {
+         if (!spec || !spec.key) return hotCmp(kind);
+         const dir = spec.dir === -1 ? -1 : 1;
+         const key = spec.key;
+         return (a, b) => {
+            const get = (o) => {
+               if (!o) return null;
+               if (key === 'compaction') {
+                  const rank = compactionRank(o.compaction);
+                  return (rank === '' || rank == null) ? null : rank;
+               }
+               if (key === 'ns' || key === 'namespace') return o.ns || o.namespace || o.name || '';
+               if (key === 'name') return o.name || '';
+               if (key === 'idxDataSize') {
+                  const storage = (kind === 'db') ? o.totalIndexSize : o.storageSize;
+                  const free = (kind === 'db') ? o.totalIndexBytesReusable : o.freeStorageSize;
+                  if (storage == null || free == null || !Number.isFinite(+storage) || !Number.isFinite(+free))
+                     return null;
+                  return +storage - +free;
+               }
+               return o[key];
+            };
+            const av = get(a), bv = get(b);
+            if (typeof av === 'string' && typeof bv === 'string')
+               return dir * av.localeCompare(bv);
+            const an = (av == null || av === '') ? NaN : +av;
+            const bn = (bv == null || bv === '') ? NaN : +bv;
+            const aOk = Number.isFinite(an), bOk = Number.isFinite(bn);
+            if (aOk && bOk && an !== bn) return dir * (an - bn);
+            if (aOk !== bOk) return aOk ? -1 : 1;
+            return 0;
+         };
+      }
+
+      function applyTop(arr, kind) {
+         const filtered = (arr || []).filter(o => meetsLimit(o, kind));
+         if (htmlLimitN() <= 0) return filtered;
+         return filtered.slice().sort(specCmp(sortSpec(kind), kind)).slice(0, htmlLimitN());
       }
 
       function td(text, sortVal, cls) {
@@ -1645,20 +1762,30 @@
          const v = verb();
          let html = '';
          if (block.title) html += '<h2>' + esc(block.title) + '</h2>';
-         const dbs = (block.databases || []).filter(dbVisible);
+         let dbs = (block.databases || []).filter(dbVisible);
+         if (v === 'summary') {
+            dbs = applyTop(dbs, 'db');
+            html += tableHtml('Databases',
+               ['Database', 'Data size', 'Compression', 'Size on disk', 'Free │ reuse', 'Objects', 'Compaction', 'Collections', 'Indexes', 'Idx compaction'],
+               dbs.map(dbRow).join(''));
+            return html;
+         }
+         let nss = dbs.flatMap(d => d.collections || []).filter(collectionVisible);
+         nss = applyTop(nss, 'ns');
+         const keep = {};
+         nss.forEach(c => { keep[c.db || ''] = true; });
+         dbs = dbs.filter(d => keep[d.name || '']);
          html += tableHtml('Databases',
             ['Database', 'Data size', 'Compression', 'Size on disk', 'Free │ reuse', 'Objects', 'Compaction', 'Collections', 'Indexes', 'Idx compaction'],
             dbs.map(dbRow).join(''));
-         if (v === 'summary') return html;
-         const nss = dbs.flatMap(d => d.collections || []).filter(collectionVisible);
          html += tableHtml('Namespaces',
             ['Namespace', 'Data size', 'Compression', 'Size on disk', 'Free │ reuse', 'Objects', 'Compaction', 'Indexes'],
             nss.map(nsRow).join(''));
-         const idxHtml = nss.flatMap(c => (c.indexes || []).filter(indexVisible).map(idx => idxRow(c, idx))).join('');
+         const idxHtml = nss.flatMap(c => (c.indexes || []).filter(indexVisible).filter(idx => meetsLimit(idx, 'index')).map(idx => idxRow(c, idx))).join('');
          html += tableHtml('Indexes',
             ['Namespace', 'Index', 'Size on disk', 'Free │ reuse', 'Compaction'],
             idxHtml, 2);
-         if (v === 'full') {
+         if (v === 'full' && !htmlLimitActive()) {
             const views = dbs.flatMap(d => (d.views || []).map(x => {
                const ns = x.ns || ((d.name ? d.name + '.' : '') + (x.name || ''));
                return '<tr>' + td(ns, ns, 'name') + '</tr>';
@@ -1774,14 +1901,27 @@
    function htmlOut(dbStats = {}) {
       /*
        *  HTML from the JSON contract (embed + click-to-sort).
-       *  Verbosity / topology expanded filter that payload in the page.
+       *  Verbosity / topology expanded / limit top-N filter that payload in the page.
        *  Colour is the inline stylesheet (not an option; later a pluggable CSS).
        *  stdout.write so mdblib console.log colour tags cannot rewrite the document.
        */
       const payload = toJsonContract(dbStats);
       const ui = {
          "verbosity": outputVerbosity(),
-         "topologyExpanded": topologyDepthExpanded()
+         "topologyExpanded": topologyDepthExpanded(),
+         "limit": {
+            "n": limitN(),
+            "dataSize": limitFloor('dataSize'),
+            "storageSize": limitFloor('storageSize'),
+            "freeStorageSize": limitFloor('freeStorageSize'),
+            "reuse": limitFloor('reuse'),
+            "compression": limitFloor('compression'),
+            "objects": limitFloor('objects')
+         },
+         "sort": {
+            "db": htmlSortSpec('db'),
+            "ns": htmlSortSpec('namespace')
+         }
       };
       process.stdout.write(htmlDocument(payload, ui) + '\n');
       return payload;
@@ -2223,6 +2363,148 @@
       const v = String(outputOptions.verbosity || 'full').toLowerCase();
       if (v === 'summary' || v === 'summaryidx' || v === 'compactonly') return v;
       return 'full';
+   }
+
+   function limitN() {
+      const n = Math.floor(+limitOptions.n);
+      return (Number.isFinite(n) && n > 0) ? n : 0;
+   }
+
+   function limitFloor(key) {
+      const v = +limitOptions[key];
+      return (Number.isFinite(v) && v > 0) ? v : 0;
+   }
+
+   function limitActive() {
+      if (limitN() > 0) return true;
+      return ['dataSize', 'storageSize', 'freeStorageSize', 'reuse', 'compression', 'objects']
+         .some(key => limitFloor(key) > 0);
+   }
+
+   function reclaimableBytes(o = {}, kind = 'collection') {
+      if (kind === 'db') {
+         const a = freeStorageKnown(o.freeStorageSize) ? +o.freeStorageSize : null;
+         const b = freeStorageKnown(o.totalIndexBytesReusable) ? +o.totalIndexBytesReusable : null;
+         if (a == null && b == null) return null;
+         return (a || 0) + (b || 0);
+      }
+      return freeStorageKnown(o.freeStorageSize) ? +o.freeStorageSize : null;
+   }
+
+   function rowMeetsLimit(o = {}, kind = 'collection') {
+      const dataSize = limitFloor('dataSize');
+      const storageSize = limitFloor('storageSize');
+      const freeStorageSize = limitFloor('freeStorageSize');
+      let reuse = limitFloor('reuse');
+      const compression = limitFloor('compression');
+      const objects = limitFloor('objects');
+      if (kind === 'index') {
+         if (storageSize && !(+o.storageSize >= storageSize)) return false;
+         if (freeStorageSize) {
+            if (!freeStorageKnown(o.freeStorageSize) || !(+o.freeStorageSize >= freeStorageSize)) return false;
+         }
+         if (reuse) {
+            if (reuse > 1) reuse = reuse / 100;
+            const r = jsonReuse(o.freeStorageSize, o.storageSize);
+            if (r == null || !(r >= reuse)) return false;
+         }
+         return true;
+      }
+      if (dataSize && !(+o.dataSize >= dataSize)) return false;
+      if (storageSize && !(+o.storageSize >= storageSize)) return false;
+      if (freeStorageSize) {
+         const free = reclaimableBytes(o, kind);
+         if (free == null || !(free >= freeStorageSize)) return false;
+      }
+      if (reuse) {
+         if (reuse > 1) reuse = reuse / 100;
+         const r = jsonReuse(o.freeStorageSize, o.storageSize);
+         if (r == null || !(r >= reuse)) return false;
+      }
+      if (compression) {
+         const c = +o.compression;
+         if (!Number.isFinite(c) || !(c >= compression)) return false;
+      }
+      if (objects && !(+o.objects >= objects)) return false;
+      return true;
+   }
+
+   function printerSortSpec(type) {
+      const o = sortOptions[type] || {};
+      const key = Object.keys(o).find(k => o[k] !== 0);
+      if (key) return { "key": key, "dir": o[key] === -1 ? -1 : 1 };
+      if (type === 'namespace') return printerSortSpec('collection');
+      return null;
+   }
+
+   function htmlSortSpec(type) {
+      const spec = printerSortSpec(type);
+      if (!spec) return null;
+      const aliases = {
+         "namespace": 'ns',
+         "idxStorageSize": 'totalIndexSize',
+         "idxFreeStorageSize": 'totalIndexBytesReusable',
+         "idxReuse": 'idxReuse',
+         "idxDataSize": 'idxDataSize'
+      };
+      return { "key": aliases[spec.key] || spec.key, "dir": spec.dir };
+   }
+
+   function printerHasSort(type) {
+      const o = sortOptions[type] || {};
+      return Object.keys(o).some(key => o[key] !== 0);
+   }
+
+   function printerRank(type) {
+      if (type === 'namespace' && printerHasSort('namespace')) return sortBy('namespace');
+      if (type === 'namespace' && printerHasSort('collection')) return sortBy('collection');
+      if (printerHasSort(type)) return sortBy(type);
+      const compactType = (type === 'namespace') ? 'collection' : type;
+      const freeCmp = compareBy(o => reclaimableBytes(o, compactType), -1);
+      const compactCmp = compareBy(o => compactionSortKey(o, compactType), -1);
+      return (a, b) => {
+         const byFree = freeCmp(a, b);
+         return byFree ? byFree : compactCmp(a, b);
+      };
+   }
+
+   function projectIndexes(collection = {}) {
+      const verb = outputVerbosity();
+      let indexes = collection.indexes || [];
+      if (verb === 'compactonly') indexes = indexes.filter(indexIsCompactable);
+      return indexes.filter(index => rowMeetsLimit(index, 'index'));
+   }
+
+   function projectDatabases(databases = []) {
+      let dbs = databases.filter(database => rowMeetsLimit(database, 'db'));
+      if (limitN() > 0) dbs = stableSort(dbs, printerRank('db')).slice(0, limitN());
+      return dbs;
+   }
+
+   function projectCollectionsByDatabase(dbStats = {}) {
+      const verb = outputVerbosity();
+      const rows = [];
+      (dbStats.databases || []).forEach(database => {
+         let collections = database.collections || [];
+         if (verb === 'compactonly') collections = collections.filter(collectionHasCompactable);
+         collections.forEach(collection => rows.push({ database, collection }));
+      });
+      const filtered = rows.filter(row => rowMeetsLimit(row.collection, 'collection'));
+      const ranked = (limitN() > 0)
+         ? stableSort(filtered, (a, b) => printerRank('collection')(a.collection, b.collection)).slice(0, limitN())
+         : filtered;
+      const grouped = [];
+      const seen = new Map();
+      ranked.forEach(({ database, collection }) => {
+         let group = seen.get(database);
+         if (!group) {
+            group = { database, "collections": [] };
+            seen.set(database, group);
+            grouped.push(group);
+         }
+         group.collections.push(collection);
+      });
+      return grouped;
    }
 
    function nodeDbPath(node) {
