@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.25.0"
+ *  Version: "0.25.1"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -134,7 +134,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.25.0" };
+   const __script = { "name": "dbstats.js", "version": "0.25.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -1400,7 +1400,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.25.0',
+         "version": '0.25.1',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1635,13 +1635,42 @@
          return filtered.slice().sort(specCmp(sortSpec(kind), kind)).slice(0, htmlLimitN());
       }
 
-      function td(text, sortVal, cls) {
+      function td(text, sortVal, cls, unit) {
          const v = (sortVal === undefined || sortVal === null || sortVal === '') ? '' : sortVal;
-         return '<td data-v="' + esc(v) + '"' + (cls ? ' class="' + cls + '"' : '') + '>' + esc(text) + '</td>';
+         return '<td data-v="' + esc(v) + '"'
+            + (cls ? ' class="' + cls + '"' : '')
+            + (unit ? ' data-unit="' + esc(unit) + '"' : '')
+            + '>' + esc(text) + '</td>';
       }
 
       function bytesTd(n) {
-         return td(fmtBytes(n), n == null ? '' : n);
+         const v = (n == null || n === '' || !Number.isFinite(+n)) ? '' : +n;
+         return td(fmtBytes(n), v, '', 'bytes');
+      }
+
+      function freeTd(free, reuse) {
+         const v = (free == null || free === '' || !Number.isFinite(+free)) ? '' : +free;
+         return td(fmtBytes(free) + ' │ ' + fmtPct(reuse), v, '', 'bytes');
+      }
+
+      function parseIecBytes(text) {
+         const m = String(text || '').match(/([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*(EiB|PiB|TiB|GiB|MiB|KiB|B)\b/i);
+         if (!m) return NaN;
+         const n = +m[1];
+         if (!Number.isFinite(n)) return NaN;
+         const exp = { b: 0, kib: 1, mib: 2, gib: 3, tib: 4, pib: 5, eib: 6 }[m[2].toLowerCase()];
+         return (exp == null) ? NaN : n * Math.pow(1024, exp);
+      }
+
+      function cellSortNumber(td) {
+         if (!td) return NaN;
+         const unit = td.getAttribute('data-unit');
+         const raw = td.getAttribute('data-v');
+         const n = (raw !== '' && raw != null) ? +raw : NaN;
+         const iec = parseIecBytes(td.textContent || '');
+         if (unit === 'bytes') return Number.isFinite(n) ? n : iec;
+         if (Number.isFinite(iec)) return iec;
+         return Number.isFinite(n) ? n : NaN;
       }
 
       function makeSortable(table) {
@@ -1657,16 +1686,18 @@
                for (let i = 0; i < heads.length; i++) heads[i].classList.remove('sort-asc', 'sort-desc');
                heads[c].classList.add(dir === 'asc' ? 'sort-asc' : 'sort-desc');
                rows.sort((a, b) => {
-                  const av = a.cells[c] ? a.cells[c].getAttribute('data-v') : '';
-                  const bv = b.cells[c] ? b.cells[c].getAttribute('data-v') : '';
-                  const an = av === '' ? NaN : +av;
-                  const bn = bv === '' ? NaN : +bv;
+                  const tdA = a.cells[c], tdB = b.cells[c];
+                  const an = cellSortNumber(tdA), bn = cellSortNumber(tdB);
                   const aOk = Number.isFinite(an);
                   const bOk = Number.isFinite(bn);
                   let cmp;
                   if (aOk && bOk) cmp = an - bn;
                   else if (aOk !== bOk) cmp = aOk ? -1 : 1;
-                  else cmp = String(av).localeCompare(String(bv));
+                  else {
+                     const av = (tdA && (tdA.getAttribute('data-v') || tdA.textContent)) || '';
+                     const bv = (tdB && (tdB.getAttribute('data-v') || tdB.textContent)) || '';
+                     cmp = String(av).localeCompare(String(bv));
+                  }
                   return dir === 'asc' ? cmp : -cmp;
                });
                rows.forEach(r => tbody.appendChild(r));
@@ -1706,7 +1737,7 @@
          let cells = bytesTd(row.dataSize)
             + td(fmtRatio(row.compression) + (row.compressor ? ' ' + row.compressor : ''), row.compression)
             + bytesTd(storage)
-            + td(fmtBytes(free) + ' │ ' + fmtPct(reuse), reuse == null ? '' : reuse)
+            + freeTd(free, reuse)
             + td(fmtNum(row.objects), row.objects)
             + td(fmtCompaction(compact), compactionRank(compact), compactCls);
          if (kind === 'db') {
@@ -1736,7 +1767,7 @@
          const ns = c.ns || ((c.db ? c.db + '.' : '') + (c.name || ''));
          const name = idx.name || '';
          return '<tr>' + td(ns, ns, 'name') + td(name, name, 'name') + bytesTd(idx.storageSize)
-            + td(fmtBytes(idx.freeStorageSize) + ' │ ' + fmtPct(idx.reuse), idx.reuse == null ? '' : idx.reuse)
+            + freeTd(idx.freeStorageSize, idx.reuse)
             + td(fmtCompaction(idx.compaction), compactionRank(idx.compaction), idx.compaction ? 'act' : '')
             + '</tr>';
       }
@@ -1815,7 +1846,7 @@
                + td(node.proc || '', node.proc || '', 'name')
                + td(node.dbPath || '', node.dbPath || '', 'name')
                + bytesTd(stats.storageSize)
-               + td(fmtBytes(stats.freeStorageSize) + ' │ ' + fmtPct(stats.reuse), stats.reuse == null ? '' : stats.reuse)
+               + freeTd(stats.freeStorageSize, stats.reuse)
                + td(node.error || '', node.error || '', node.error ? 'err' : '')
                + '</tr>';
          }).join('');
@@ -1902,6 +1933,7 @@
       /*
        *  HTML from the JSON contract (embed + click-to-sort).
        *  Verbosity / topology expanded / limit top-N filter that payload in the page.
+       *  Size columns click-sort by bytes (IEC units); Free │ reuse uses free bytes.
        *  Colour is the inline stylesheet (not an option; later a pluggable CSS).
        *  stdout.write so mdblib console.log colour tags cannot rewrite the document.
        */
