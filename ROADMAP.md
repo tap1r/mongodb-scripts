@@ -328,7 +328,7 @@ Executor auto-trim will call. Keep the file standalone. **Live: v1.3.0.** **Arch
 - TTY: one `\r` line (`current/total`, block bar, last namespace). The line clears before each log so `WTCMPCT` lines are not glued to it. Piped output has no `\r`; the quiet "waiting for new logs" line stays.
 - `runOnce: false` still latches first pass the same way; the bar clears on that latch, not on the ~24h thread.
 - Keep sizeStorer / visits-quiet / running-bit stops. The bar must not become a stop condition.
-- This file `load()`s mdblib for `resolveOptions`. ANSI, AutoFactor, serverStatus, and the first-pass painter stay local. The painter is the same `\r` contract as `MiniHud` (`process.stdout.write`, never `console.log`).
+- This file `load()`s mdblib. `resolveOptions`, the ANSI `console.log` patch, `MiniHud`, and `hostNameFromHostPort` come from mdblib. The first-pass bar is `MiniHud` with `throttleMs: 0` (getLog poll is 50ms; the 100ms default would skip frames). `AutoFactor` stays local (non-finite is `"unknown"`; a value below 1 byte still selects the byte scale). `serverStatus` stays local (no read-preference `hello()`, throws to the caller). The painter writes via `process.stdout.write`, never `console.log`.
 - The banner prints only when `process.argv` names this file (`isAutoCompactCliFile`). `load()` stays quiet. Header tags this file as requiring this roadmap.
 
 ### `dbstats.js`
