@@ -26,7 +26,7 @@
     *  - Unhinted window: if winningPlan is not IXSCAN-without-SORT, hint the first ranked rejectedPlan that is (planner order)
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
-    *  - MongoDB 9.0+ fails closed (null equality on dotted paths through arrays changed; deletes could over-match). v9 testing/refactor is tabled
+    *  - MongoDB 9.0+ fails closed (null equality on dotted paths through arrays changed; deletes could over-match). v9 testing/refactor, v9 optimisation, and backpressure-aware admission are tabled
     *  - Atlas M0/Flex (no WT vitals) always walk _id via find(); leftover window SORT cannot spill
     *  - On mongos: WT admission from collection-owning shard primaries (worst-shard fold, owners refreshed each sample); paceMaker if any of those shards is unreachable at attach, or after consecutive mid-run misses
     *  - "pace" admission mode when WT cache vitals are unavailable (unreachable shards / Atlas M0/Flex)
