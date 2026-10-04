@@ -321,13 +321,35 @@ An async IIFE **parameter** of the same name is also a shadow. `(async (options)
 
 ### JSONC options file
 
-`fuzzer.js` (v0.15.0) overlays in-file defaults from `fuzzer-options.jsonc`. That file is the reference until a shared resolver exists. Do not paste the parser into every script.
+`mdblib.js` `resolveOptions` overlays defaults from a JSONC file then `--eval`. Callers probe `typeof options === 'undefined'` (or `autoCompactOptions`, `optionsFile`) and pass `overlay` / `optionsFile`; the helper does not eval identifier names. Do not paste `parseJsonc` into each script. Do not `require('jsonc-require')` for options (`explainHisto.js` still uses that module for an operator `pipeline.jsonc`).
 
-- Search a relative name in this order: the options file’s own directory, the working directory, `__dirname` (set for `--file`), `$MDBLIB`, `~/.mongodb`. An absolute path is used as given. A missing file is not an error.
-- Strip JSONC in-process (BOM, `//` and `/* */` outside strings, trailing commas) and `JSON.parse`. Do not `require('jsonc-require')` for options. That module is a separate resolve (`explainHisto.js` still needs it for an operator `pipeline.jsonc`).
-- Deep-merge plain objects. Arrays and scalars replace.
-- JSON has no RegExp. Defaults that are regexes (`dbstats.js` `filter.db` / `filter.collection`) need an explicit string revive. A regex literal does not belong in the file.
-- `--eval` stays a thin `var` override and must still not be declared in the file. Fuzzer’s `--eval` overlay is unwired; the JSONC file is the overlay.
+Canonical names: `dbstats-options.jsonc`, `autoCompact-options.jsonc`, `fuzzer-options.jsonc`. Search a relative name in this order: explicit path, then `configSearchDirs` (anchor, working directory, `__dirname` for `--file`, `$MDBLIB`, `~/.mongodb`). An absolute path is used as given. A missing **default** file is not an error. An explicit `var optionsFile` or overlay `optionsFile` that is missing or fails to parse is an error (`warnings[]` code `optionsFile`). `parseScriptArgv` reads `--config` after `--` if those args appear on `process.argv`; mongosh 2.12 rejects unknown flags before the script runs.
+
+Strip JSONC in-process (BOM, `//` and `/* */` outside strings, trailing commas) then `JSON.parse`. Deep-merge plain objects; arrays and scalars replace. JSON has no RegExp — dbstats revives `filter.db` / `filter.collection` from `"^app$"` or `"/pat/i"`. A regex literal does not belong in the file. `--eval` stays a thin `var` overlay after the file and must still not be declared in the script. Fuzzer’s `--eval` overlay is unwired; its JSONC file is the overlay.
+
+```javascript
+// dbstats-options.jsonc (comments and trailing commas are fine)
+{
+  "output": { "format": "json" },
+  "filter": { "db": "^admin$" }, // revived to / ^admin$ /
+}
+
+// mongosh --quiet --eval 'var optionsFile = "/path/to/dbstats-options.jsonc"' -f dbstats.js
+// mongosh --quiet --eval 'var options = { output: { format: "json" } };' -f dbstats.js
+
+const overlay = (typeof options !== 'undefined' && options) ? options : null;
+const explicit = (typeof optionsFile !== 'undefined') ? optionsFile : null;
+const resolved = resolveOptions({
+   defaults: optionsDefaults,
+   file: 'dbstats-options.jsonc',
+   optionsFile: explicit,
+   overlay,
+   revive: { 'filter.db': 'regex', 'filter.collection': 'regex' },
+   aliases: { 'output.format': { table: 'tabular' } }
+});
+```
+
+json/html must resolve **before** loader banners so a file-only `output.format` stays a single document. autoCompact keeps the eval name `autoCompactOptions` and aborts on an explicit file error. Module callers pass the overlay object; they do not set a global.
 
 ### Version strings
 
@@ -487,7 +509,7 @@ child.close();
 | `db.adminCommand({ hello: 1 })` with no `maxAwaitTimeMS` | Awaitable hello (`topologyVersion` / `maxAwaitTimeMS`) on a quiet node |
 | `db.getMongo().getURI()` for the parent string | `mongo._uri` (private; can lag) |
 | Probe `--eval` globals inside an IIFE with **no** parameter of that name | `(async (options) => {})()` (parameter hides the global) |
-| Overlay defaults from a JSONC file (fuzzer search path, deep-merge objects) | `require('jsonc-require')` for options, or a regex literal inside JSON |
+| Overlay defaults from a JSONC file (`mdblib.resolveOptions`, deep-merge objects) | `require('jsonc-require')` for options, or a regex literal inside JSON |
 | `await load('dbstats.js')` when argv does not name that file | Scrape the interactive report, or expect `load()` to be rewriter-awaited |
 | `load()` for helpers that use `db` | `module.exports` (different context; `db` is missing) |
 | Throw on hard failure | `quit(1)` and trust `mongosh --file` to surface the status |
