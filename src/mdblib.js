@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.29.0"
+ *  Version: "0.30.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,7 +17,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.29.0"
+      "version": "0.30.0"
 });
 
 /*  Notes:
@@ -59,10 +59,14 @@ if (typeof __lib === 'undefined') (
  *    listCatalogSnapshot selects auto|legacy|listCatalog|listClusterCatalog;
  *    on authz/failure the caller falls back to getCollectionInfos.
  *    $listClusterCatalog is an optional mongos fast path, never the only path.
+ *    shards:true is added only when the caller will consume owners; those
+ *    ids stay on the entry. The caller skips the stage when connectionStatus
+ *    already lacks clusterMonitor.
  *    Name policy is systemCollectionFilter. The getAllNonSystem* /
  *    getAllSystemNamespaces stubs are gone.
- *  - statsIncomplete compares returned $collStats shards to owning shards
- *    (config.chunks / db primary), not cluster-wide listShards.
+ *  - statsIncomplete compares returned $collStats shards to owning shards.
+ *    Expanded mongos catalog owners win; otherwise config.chunks / db primary.
+ *    Not cluster-wide listShards.
  *  - parseDbStats / parseCollStats / parseIndexStats turn normalised $stats /
  *    $collStats output into DTOs. parseDbStats stores the index count as
  *    nindexes only (db.stats() names that field indexes). Collection
@@ -853,13 +857,20 @@ class CollectionStats extends StorageMetrics {
          "configurable": true
       });
    }
-   static catalogEntry({ name = '', type = 'collection', dbName = '' } = {}) {
-      return new CollectionStats({
+   static catalogEntry({ name = '', type = 'collection', dbName = '', shards = null } = {}) {
+      const collection = new CollectionStats({
          "name": name || '',
          "type": type != null && type !== '' ? type : 'collection',
          "dbName": dbName || '',
          "statsLoaded": false
       });
+      if (Array.isArray(shards) && shards.length) {
+         Object.defineProperty(collection, 'catalogShards', {
+            "value": shards.filter(id => typeof id === 'string' && id.length),
+            "enumerable": false
+         });
+      }
+      return collection;
    }
    static from(raw, nameFallback = '') {
       const dto = parseCollStats(raw || {});
@@ -905,6 +916,10 @@ class CollectionStats extends StorageMetrics {
          || ((typeof db !== 'undefined' && db && typeof db.getName === 'function')
             ? db.getName()
             : '');
+      if (owningShardCache instanceof Map && Array.isArray(this.catalogShards) && this.catalogShards.length) {
+         const ns = `${nsDb}.${collName}`;
+         if (!owningShardCache.has(ns)) owningShardCache.set(ns, this.catalogShards.slice());
+      }
       this._statsPromise = (async () => {
          try {
             const raw = await $collStats(nsDb, collName, owningShardCache) || { "name": collName };
@@ -3069,7 +3084,8 @@ async function shardsFromConfigNs(ns) {
 
 async function collectionOwningShardIds(dbName, collName, cache) {
    /*
-    *  Shards that own this NS: config.chunks (uuid/ns), timeseries buckets,
+    *  Shards that own this NS. A non-empty catalogShards seed already in
+    *  the cache wins. Otherwise config.chunks (uuid/ns), timeseries buckets,
     *  then the database primary. cache is the gather Map (one materialize
     *  or one fetchAllStats). No cache means no remembered owners.
     *  null ids = unknown placement (skip the incomplete mark).
@@ -3194,15 +3210,34 @@ function catalogEntryType(doc = {}) {
    return 'collection';
 }
 
+function catalogOwnerShards(doc = {}) {
+   /*
+    *  $listClusterCatalog shards:true returns string shard ids.
+    *  Absent field stays off the entry. An array is kept, including empty.
+    */
+   if (!Array.isArray(doc.shards)) return null;
+   const ids = [];
+   const seen = new Set();
+   for (const id of doc.shards) {
+      if (typeof id !== 'string' || !id.length || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+   }
+   return ids;
+}
+
 function normalizeCatalogEntry(doc = {}) {
    const dbName = catalogEntryDb(doc);
    const name = catalogEntryName(doc);
    if (!dbName || !name) return null;
-   return {
+   const entry = {
       "db": dbName,
       "name": name,
       "type": catalogEntryType(doc)
    };
+   const shards = catalogOwnerShards(doc);
+   if (shards) entry.shards = shards;
+   return entry;
 }
 
 function dedupeCatalogEntries(entries = []) {
@@ -3270,22 +3305,27 @@ async function $listCatalog() {
    return dedupeCatalogEntries(docs.map(normalizeCatalogEntry).filter(Boolean));
 }
 
-async function $listClusterCatalog() {
+async function $listClusterCatalog({ shards = false } = {}) {
    /*
     *  $listClusterCatalog on admin (8.0.10+). Unsupported/unstable; optional
     *  cluster-wide fast path. First stage; admin = all collections.
+    *  shards:true adds the per-namespace owner list. Omit it otherwise.
     */
+   const spec = {};
+   if (shards) spec.shards = true;
+   const project = {
+      "ns": 1,
+      "db": 1,
+      "type": 1,
+      "name": 1,
+      "viewOn": 1,
+      "options.timeseries": 1,
+      "options.viewOn": 1
+   };
+   if (shards) project.shards = 1;
    const pipeline = [
-      { "$listClusterCatalog": {} },
-      { "$project": {
-         "ns": 1,
-         "db": 1,
-         "type": 1,
-         "name": 1,
-         "viewOn": 1,
-         "options.timeseries": 1,
-         "options.viewOn": 1
-      } }
+      { "$listClusterCatalog": spec },
+      { "$project": project }
    ];
    const docs = await drainAggCursor(
       db.getSiblingDB('admin').aggregate(pipeline, catalogAggOptions(
@@ -3295,27 +3335,37 @@ async function $listClusterCatalog() {
    return dedupeCatalogEntries(docs.map(normalizeCatalogEntry).filter(Boolean));
 }
 
-async function listCatalogSnapshot(mode = 'auto') {
+async function listCatalogSnapshot(mode = 'auto', opts = {}) {
    /*
     *  Whole-cluster namespace listing.
     *  mode: auto | legacy | listCatalog | listClusterCatalog.
     *  auto: mongos && 8.0.10+ → $listClusterCatalog; else 6.0+ → $listCatalog;
     *  else legacy. On stage failure / authz, builder is legacy and entries empty
     *  (caller lists per DB with getCollectionInfos).
+    *  opts.shards asks $listClusterCatalog for owners. The caller sets it
+    *  only when those ids will be consumed. opts.skipCluster skips the stage
+    *  when connectionStatus already lacks clusterMonitor.
     */
    const requested = normalizeCatalogMode(mode);
+   const wantShards = !!(opts && opts.shards);
+   const skipCluster = !!(opts && opts.skipCluster);
    if (requested === 'legacy') {
       return catalogSnapshotResult('legacy', [], false);
    }
+   if (skipCluster && requested === 'listClusterCatalog') {
+      return catalogSnapshotResult('legacy', [], true, 'connectionStatus lacks clusterMonitor');
+   }
 
-   const tryCluster = requested === 'listClusterCatalog'
-      || (requested === 'auto' && isSharded() && serverVer('8.0.10'));
+   const tryCluster = !skipCluster && (
+      requested === 'listClusterCatalog'
+      || (requested === 'auto' && isSharded() && serverVer('8.0.10'))
+   );
    const tryList = requested === 'listCatalog' || requested === 'auto';
 
    if (tryCluster) {
       try {
          if (!serverVer('8.0.10')) throw new Error('requires MongoDB 8.0.10+');
-         const entries = await $listClusterCatalog();
+         const entries = await $listClusterCatalog({ "shards": wantShards });
          return catalogSnapshotResult('listClusterCatalog', entries, false);
       } catch(e) {
          if (requested === 'listClusterCatalog') {

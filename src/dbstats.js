@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.27.0"
+ *  Version: "0.28.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -149,7 +149,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.27.0" };
+   const __script = { "name": "dbstats.js", "version": "0.28.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -335,6 +335,7 @@
    const isUnauthenticated = authenticatedUsers.length === 0; // localhost exception / auth off
    const hasMonitorAndRead = hasMonitorRole && hasReadAnyRole;
    const authzAdequate = isUnauthenticated || hasAdminRole || hasMonitorAndRead;
+   __dbstatsLacksClusterMonitor = !isUnauthenticated && !hasMonitorRole && !hasAdminRole;
    const jsonCli = (typeof __dbstatsJsonCli !== 'undefined' && __dbstatsJsonCli);
    __dbstatsAuthzInadequate = !authzAdequate;
 
@@ -566,7 +567,12 @@
       }
 
       paint(`${prefix}[cyan]catalog[/]  listing`, { "force": true });
-      const catalogSnapshot = await listCatalogSnapshot(catalogMode);
+      // Expanded only (summary returned above). Mongos consumes the owner
+      // list in markPartialShardStats; other sessions leave shards off.
+      const catalogSnapshot = await listCatalogSnapshot(catalogMode, {
+         "shards": isSharded(),
+         "skipCluster": typeof __dbstatsLacksClusterMonitor !== 'undefined' && __dbstatsLacksClusterMonitor
+      });
       mark('catalogSnapshot', {
          "builder": catalogSnapshot.builder || null,
          "fallback": catalogSnapshot.fallback === true,
@@ -662,7 +668,8 @@
       return CollectionStats.catalogEntry({
          "name": info.name,
          "type": info.type,
-         "dbName": database.name
+         "dbName": database.name,
+         "shards": info.shards
       });
    }
 
@@ -1534,7 +1541,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.27.0',
+         "version": '0.28.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
