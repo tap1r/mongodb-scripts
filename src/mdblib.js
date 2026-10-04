@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.26.0"
+ *  Version: "0.27.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,14 +9,14 @@
  *
  *  Dual-shell snapshot: legacy/mongo-shell (tag legacy-mongo-shell, v0.15.10).
  *  This file is mongosh-only. TopologySnapshot.fromSession() lists cluster
- *  identity; materializeNodes() gathers remotes via child Mongo() (no
- *  load of discovery.js). for(db) still TBA.
+ *  identity; materializeNodes({ depth }) gathers remotes via child Mongo()
+ *  (no load of discovery.js). for(db) still TBA.
  */
 
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.26.0"
+      "version": "0.27.0"
 });
 
 /*  Notes:
@@ -67,10 +67,12 @@ if (typeof __lib === 'undefined') (
  *    TopologySnapshot.fromSession() lists cluster identity (kind, setName,
  *    shard ids, advertised replica members / shard seeds) from the
  *    connecting session. Shared-tier / serverless stay one connecting node.
- *    TopologySnapshot.materializeNodes() connects with discovery-style
+ *    TopologySnapshot.materializeNodes({ depth }) connects with discovery-style
  *    child mongodb:// URIs (do not load discovery.js) and runs a gather
- *    callback on each remote. Serial global-db swap; not for(db). Do not
- *    gather mongos local.* from the router. There is no MetaStats façade.
+ *    callback on each remote. depth summary|$stats vs expanded catalog+$collStats;
+ *    cluster.kind selects the walk (replica/sharded keys alias depth). Serial
+ *    global-db swap; not for(db). Do not gather mongos local.* from the router.
+ *    There is no MetaStats façade.
  *  - Catalog identity first, stats on demand: collection.fetchStats(),
  *    database.fetchAllStats({ concurrency }), dbPath.materialize({ concurrency }).
  *    Cache _statsPromise per collection. Callers materialise then serialise.
@@ -885,10 +887,22 @@ class HostNode {
    }
 }
 
+function resolveTopologyDepth({ depth, replica, sharded } = {}) {
+   /*
+    *  One gather depth. Cluster kind selects the walk.
+    *  replica / sharded remain aliases of depth.
+    */
+   const vals = [depth, replica, sharded];
+   for (let i = 0; i < vals.length; i++) {
+      if (String(vals[i] || '').toLowerCase() === 'expanded') return 'expanded';
+   }
+   return 'summary';
+}
+
 class TopologySnapshot {
    /*
     *  Cluster identity from the connecting session; per-node stats via
-    *  materializeNodes() (discovery-style child Mongo(), not load()).
+    *  materializeNodes({ depth }) (discovery-style child Mongo(), not load()).
     *  Do not gather mongos local.* from the router.
     */
    constructor({
@@ -992,7 +1006,7 @@ class TopologySnapshot {
    expandShardedMembers() {
       /*
        *  Replace listShards seed-list nodes with one HostNode per seed host.
-       *  Connecting mongos stays. Used when topology.sharded is expanded.
+       *  Connecting mongos stays. Used when sharded depth is expanded.
        */
       const connecting = this.connecting;
       const out = connecting ? [connecting] : [];
@@ -1022,14 +1036,14 @@ class TopologySnapshot {
       this.nodes = out;
       return this;
    }
-   async materializeNodes({ replica = 'summary', sharded = 'summary', gather, onProgress } = {}) {
+   async materializeNodes({ depth, replica, sharded, gather, onProgress } = {}) {
       /*
        *  Connect to advertised remotes and run gather(node) on each child
        *  session. Serial (global db). Shared-tier / serverless / standalone
        *  are a no-op. Connecting node is skipped (already topology.aggregate).
-       *  replica/sharded summary = $stats-depth gather; expanded = full
-       *  catalog + $collStats (gather callback decides). Sharded expanded
-       *  fans out seed hosts.
+       *  depth summary = $stats-depth gather; expanded = full catalog +
+       *  $collStats (gather callback decides). Cluster kind selects the walk.
+       *  replica / sharded alias depth. Sharded expanded fans out seed hosts.
        */
       const kind = (this.cluster && this.cluster.kind) || '';
       if (kind === 'sharedTier' || kind === 'serverless' || kind === 'standalone') {
@@ -1038,9 +1052,7 @@ class TopologySnapshot {
       if (typeof gather !== 'function') {
          throw new Error('TopologySnapshot.materializeNodes requires gather');
       }
-      const depth = (kind === 'sharded')
-         ? ((sharded === 'expanded') ? 'expanded' : 'summary')
-         : ((replica === 'expanded') ? 'expanded' : 'summary');
+      depth = resolveTopologyDepth({ depth, replica, sharded });
       if (kind === 'sharded' && depth === 'expanded') this.expandShardedMembers();
 
       let parent;

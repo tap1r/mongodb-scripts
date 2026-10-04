@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.23.1"
+ *  Version: "0.24.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -76,13 +76,11 @@
  *     output: {
  *        format: <'tabular'|'table'|'nsTable'|'json'|'html'>, // 'table' aliases 'tabular'
  *        concurrency: <int>, // 0 = auto (8 mongod / 4 mongos); $collStats pool per DB
- *        topology: <'summary'|'expanded'>, // printer: summary = connecting catalog + member footer; expanded = one catalog table per materialized node
  *        verbosity: <'full'|'summary'|'summaryIdx'|'compactOnly'> // printer: full = collections+indexes+views; summary = DB rollup; summaryIdx = collections+indexes; compactOnly = compact/rebuild/wait/resync rows
  *     },
  *     topology: {
  *        discover: <true|false>, // default true; shared-tier / serverless stay one node
- *        replica: <'summary'|'expanded'>, // summary = $stats rollup per member; expanded = catalog+$collStats
- *        sharded: <'summary'|'expanded'> // summary = one snapshot per shard primary; expanded = each shard member
+ *        depth: <'summary'|'expanded'> // summary = $stats remotes + connecting catalog + member footer; expanded = catalog+$collStats per member, one table per node
  *     },
  *     catalog: <'auto'|'legacy'|'listCatalog'|'listClusterCatalog'> // default auto
  *  }
@@ -123,9 +121,7 @@
  *  Examples of topology fan-out:
  *
  *    mongosh --quiet --eval 'var options = { topology: { discover: false } };' -f dbstats.js
- *    mongosh --quiet --eval 'var options = { topology: { replica: "expanded" } };' -f dbstats.js
- *    mongosh --quiet --eval 'var options = { topology: { sharded: "expanded" } };' -f dbstats.js
- *    mongosh --quiet --eval 'var options = { output: { topology: "expanded" }, topology: { replica: "expanded" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { topology: { depth: "expanded" } };' -f dbstats.js
  */
 
 /*
@@ -135,7 +131,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.23.1" };
+   const __script = { "name": "dbstats.js", "version": "0.24.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -305,13 +301,11 @@
       "output": {
          "format": "tabular", // ['tabular'|'table'|'nsTable'|'json'|'html'] ('table' → 'tabular')
          "concurrency": 0, // 0 = auto (8 mongod / 4 mongos); per-DB $collStats pool
-         "topology": "summary", // ['summary'|'expanded'] printer; gather stays topology.replica / topology.sharded
          "verbosity": "full" // ['full'|'summary'|'summaryIdx'|'compactOnly'] printer; JSON stays the full contract
       },
       "topology": {
          "discover": true, // [true|false]
-         "replica": "summary", // ['summary'|'expanded']
-         "sharded": "summary" // ['summary'|'expanded']
+         "depth": "summary" // ['summary'|'expanded']; replica / sharded / output.topology alias depth
       },
       "catalog": "auto" // ['auto'|'legacy'|'listCatalog'|'listClusterCatalog']
    };
@@ -395,8 +389,7 @@
 
          if (topologyOptions.discover !== false) {
             await topology.materializeNodes({
-               "replica": topologyOptions.replica,
-               "sharded": topologyOptions.sharded,
+               "depth": topologyDepth(),
                "gather": (node, { depth } = {}) => gatherDbPath({
                   "host": node,
                   hud,
@@ -1113,12 +1106,11 @@
 
    function printExpandedNodes(dbStats, printBody) {
       /*
-       *  output.topology expanded: one catalog table per materialized node.
-       *  Gather depth stays topology.replica / topology.sharded.
+       *  topology.depth expanded: one catalog table per materialized node.
        */
       const topology = dbStats.topology;
       const nodes = (topology && topology.nodes) || [];
-      if (!outputTopologyExpanded()) return false;
+      if (!topologyDepthExpanded()) return false;
       if (!nodes.some(n => n && n.connecting !== true && n.stats)) return false;
       const widths = nodeIdentityWidths(nodes);
       nodes.forEach(node => {
@@ -1273,7 +1265,7 @@
       if (!topology || typeof topology !== 'object') return null;
       const cluster = topology.cluster || {};
       const kind = cluster.kind || null;
-      const expanded = topologyDepthExpanded(topology);
+      const expanded = topologyDepthExpanded();
       return {
          "kind": kind,
          "setName": cluster.setName || null,
@@ -1412,7 +1404,7 @@
       return {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.23.1',
+         "version": '0.24.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1789,7 +1781,7 @@
       const payload = toJsonContract(dbStats);
       const ui = {
          "verbosity": outputVerbosity(),
-         "topologyExpanded": outputTopologyExpanded()
+         "topologyExpanded": topologyDepthExpanded()
       };
       process.stdout.write(htmlDocument(payload, ui) + '\n');
       return payload;
@@ -2214,14 +2206,17 @@
       }
    }
 
-   function topologyDepthExpanded(topology) {
-      const kind = topology && topology.cluster && topology.cluster.kind;
-      if (kind === 'sharded') return topologyOptions.sharded === 'expanded';
-      return topologyOptions.replica === 'expanded';
+   function topologyDepth() {
+      /*
+       *  One gather+printer depth. Cluster kind selects the walk.
+       *  replica / sharded / output.topology alias topology.depth.
+       */
+      if (String(outputOptions.topology || '').toLowerCase() === 'expanded') return 'expanded';
+      return resolveTopologyDepth(topologyOptions);
    }
 
-   function outputTopologyExpanded() {
-      return String(outputOptions.topology || 'summary').toLowerCase() === 'expanded';
+   function topologyDepthExpanded() {
+      return topologyDepth() === 'expanded';
    }
 
    function outputVerbosity() {
