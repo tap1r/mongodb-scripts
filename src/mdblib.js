@@ -1600,6 +1600,7 @@ function isSharded() {
 function getDBNames(dbFilter = /^.+/) {
    /*
     *  getDBNames substitute for Mongo.getDBNames()
+    *  Compass privilege-inferred admin/config/local ghosts are TABLED.
     */
    const atlasHide = hidesDbStatsFreeStorage();
    let command = {

@@ -311,6 +311,7 @@
    const adminRoles = ['atlasAdmin', 'clusterAdmin', 'backup', 'root', '__system'];
    const dbRoles = ['dbAdminAnyDatabase', 'readAnyDatabase', 'readWriteAnyDatabase'];
 
+   // Privilege-inferred Compass ghosts (showPrivileges merge) are TABLED.
    const { 'authInfo': { authenticatedUsers, authenticatedUserRoles } }
       = db.adminCommand({ "connectionStatus": 1 });
 
