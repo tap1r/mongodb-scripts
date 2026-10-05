@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.0"
+ *  Version: "1.2.1"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -151,7 +151,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.0" };
+   const __script = { "name": "dbstats.js", "version": "1.2.1" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -1511,7 +1511,7 @@
       const fsFreeSize = (fsUsedSize != null && fsTotalSize != null)
          ? jsonNumber(fsTotalSize - fsUsedSize)
          : null;
-      return {
+      const out = {
          dataSize, storageSize, freeStorageSize,
          "reuse": jsonReuse(freeStorageSize, storageSize),
          "objects": jsonNumber(dbStats.objects),
@@ -1533,6 +1533,10 @@
          "compaction": jsonCompaction('dbPath', storageSize, freeStorageSize, { "incomplete": freeIncomplete }),
          "idxCompaction": jsonCompaction('index', totalIndexSize, totalIndexBytesReusable, { "incomplete": idxIncomplete })
       };
+      if (dbStats.fsVolumeCount != null && Number.isFinite(+dbStats.fsVolumeCount)) {
+         out.fsVolumeCount = Math.floor(+dbStats.fsVolumeCount);
+      }
+      return out;
    }
 
    function jsonWarnings(dbStats = {}) {
@@ -1630,7 +1634,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.0',
+         "version": '1.2.1',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -2194,10 +2198,15 @@
             : ['', 'Node', 'Role', 'Type', 'dbPath', 'Size on disk', 'Free │ reuse', 'Error'];
          let html = tableHtml(head, cols, rows);
          if (consumption && consumption.fsTotalSize != null && +consumption.fsTotalSize > 0) {
+            const mongodN = (topo.nodes || []).filter(n => n && n.proc === 'mongod' && n.stats).length;
+            const vols = consumption.fsVolumeCount;
+            const fsTitle = (vols > 0 && vols !== mongodN)
+               ? `Filesystem volumes (${vols} unique)`
+               : 'Filesystem volumes';
             html += fsBar(
                consumption.fsUsedSize, consumption.fsTotalSize, consumption.fsFreeSize,
-               'Filesystem volumes',
-               'Sum of each mongod db.stats() volume (fsUsedSize / fsTotalSize). Members that share a disk are counted once each.'
+               fsTitle,
+               'Unique volumes: same host and db.stats() capacity counted once (hostname strips :port). Dedicated storage per host is the usual case; co-located members sharing a disk collapse.'
             );
          }
          (topo.errors || []).forEach(err => {
@@ -3119,10 +3128,32 @@
       return +stats.freeStorageSize + +stats.totalIndexBytesReusable;
    }
 
+   function filesystemVolumeKey(node = {}) {
+      /*
+       *  Unique volume: host + db.stats() fsTotalSize. Dedicated storage per
+       *  host stays one key each. Co-located members on one disk collapse.
+       *  Strip :port — hostname may be hostInfo (bare) or serverStatus.host /
+       *  hello.me (host:port). Omit used bytes — sequential gathers drift.
+       */
+      const stats = node.stats || {};
+      const used = jsonNumber(stats.fsUsedSize);
+      const total = jsonNumber(stats.fsTotalSize);
+      if (used == null || total == null || !(total > 0)) return null;
+      const host = String(
+         hostNameFromHostPort(node.hostname)
+            || hostNameFromHostPort(node.instance)
+            || ''
+      ).trim().toLowerCase();
+      if (!host || host === 'unknown') return `instance:${node.instance}\0${total}`;
+      return `${host}\0${total}`;
+   }
+
    function clusterConsumptionStats(topology) {
       /*
        *  Sum mongod dbPaths (shard replica copies, CSRS members). Skip mongos
        *  so the router cluster-data aggregate is not added on top.
+       *  Filesystem used/capacity is unique host+fsTotalSize (shared disk
+       *  counted once). Size on disk still sums every dbPath.
        */
       const nodes = mongodStatsNodes(topology);
       if (nodes.length < 2) return null;
@@ -3139,11 +3170,13 @@
          "totalIndexBytesReusable": 0,
          "fsUsedSize": 0,
          "fsTotalSize": 0,
+         "fsVolumeCount": 0,
          "freeStorageComplete": true,
          "totalIndexBytesReusableComplete": true,
          "catalogCoverageComplete": true
       };
       let freeKnown = true, idxFreeKnown = true, fsKnown = true;
+      const seenVol = new Set();
       nodes.forEach(node => {
          const stats = node.stats;
          acc.dataSize += +stats.dataSize || 0;
@@ -3163,14 +3196,15 @@
             acc.totalIndexBytesReusableComplete = false;
          }
          if (stats.catalogCoverageComplete === false) acc.catalogCoverageComplete = false;
-         const used = jsonNumber(stats.fsUsedSize);
-         const total = jsonNumber(stats.fsTotalSize);
-         if (used == null || total == null) fsKnown = false;
-         else {
-            acc.fsUsedSize += used;
-            acc.fsTotalSize += total;
+         const key = filesystemVolumeKey(node);
+         if (key == null) fsKnown = false;
+         else if (!seenVol.has(key)) {
+            seenVol.add(key);
+            acc.fsUsedSize += jsonNumber(stats.fsUsedSize);
+            acc.fsTotalSize += jsonNumber(stats.fsTotalSize);
          }
       });
+      acc.fsVolumeCount = seenVol.size;
       if (!freeKnown) {
          acc.freeStorageSize = null;
          acc.freeStorageComplete = false;
@@ -3182,6 +3216,7 @@
       if (!fsKnown) {
          acc.fsUsedSize = null;
          acc.fsTotalSize = null;
+         acc.fsVolumeCount = 0;
       }
       acc.freeStorageSizeSource = freeKnown ? 'dbStats' : 'unknown';
       acc.totalIndexBytesReusableSource = idxFreeKnown ? 'dbStats' : 'unknown';
@@ -3219,7 +3254,11 @@
       const n = mongodStatsNodes(topology).length;
       console.log('');
       printTotalConsumption(stats, `Cluster consumption (${n} dbPaths)`);
-      printFilesystemLine(stats, 'Filesystem volumes');
+      const vols = stats.fsVolumeCount;
+      const fsLabel = (vols > 0 && vols !== n)
+         ? `Filesystem volumes (${vols} unique)`
+         : 'Filesystem volumes';
+      printFilesystemLine(stats, fsLabel);
       return true;
    }
 
