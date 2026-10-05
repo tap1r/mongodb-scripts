@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.29.0"
+ *  Version: "0.30.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -150,7 +150,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.29.0" };
+   const __script = { "name": "dbstats.js", "version": "0.30.0" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -165,7 +165,6 @@
    let __comment = `#### Running script ${__script.name} v${__script.version}`;
    __comment += ` with ${__lib.name} v${__lib.version}`;
    __comment += ` on shell v${version()}`;
-   // console.clear();
    function isDbstatsCliFile() {
       /*
        *  mongosh --file/-f (or positional *.js) targeting this script.
@@ -176,7 +175,7 @@
       for (let i = 2; i < argv.length; i++) {
          const a = String(argv[i]);
          if (a === '-f' || a === '--file') {
-            if (i + 1 < argv.length) files.push(argv[++i]);
+            if (i + 1 < argv.length) files.push(argv[i++]);
             continue;
          }
          if (a.startsWith('--file=')) {
@@ -287,7 +286,7 @@
       if (typeof __mdblibShellIncompatible !== 'undefined' && __mdblibShellIncompatible) {
          console.log(`\n[red][WARN] Possible incompatible non-GA shell version detected: ${__mdblibShellIncompatible}[/]`);
       }
-      console.log(`\n\n[yellow]${__comment}[/]`);
+      console.log(`\n[yellow]${__comment}[/]\n`);
       if (__dbstatsResolved && Array.isArray(__dbstatsResolved.warnings)) {
          __dbstatsResolved.warnings.forEach(w => {
             console.log(`[red][WARN] ${w.message}[/]`);
@@ -1162,7 +1161,23 @@
       dbPath.totalIndexSize = databases.reduce((s, d) => s + d.totalIndexSize, 0);
       dbPath.freeStorageSize = sumNullable(databases.map(d => d.freeStorageSize));
       dbPath.totalIndexBytesReusable = sumNullable(databases.map(d => d.totalIndexBytesReusable));
+      const fs = pickDbPathFilesystem(databases);
+      dbPath.fsUsedSize = fs.used;
+      dbPath.fsTotalSize = fs.total;
       return dbPath;
+   }
+
+   function pickDbPathFilesystem(databases = []) {
+      /*
+       *  db.stats() fsUsedSize/fsTotalSize are the mongod volume, repeated
+       *  on every database. Take the first complete pair. Do not sum.
+       */
+      for (const database of databases) {
+         const used = toNullableBytes(database && database.fsUsedSize);
+         const total = toNullableBytes(database && database.fsTotalSize);
+         if (used != null && total != null && total > 0) return { used, total };
+      }
+      return { "used": null, "total": null };
    }
 
    function tableOut(dbStats = {}) {
@@ -1290,6 +1305,7 @@
       if (nodes.length > 1) {
          printRule('heavy');
          printTopologyMembers(topology, widths);
+         printClusterConsumption(topology);
          printRule('heavy');
          console.log('');
       }
@@ -1329,7 +1345,7 @@
 
    function jsonCompaction(kind, storageSize, freeStorageSize, extra = {}) {
       const label = formatCompaction(kind, storageSize, freeStorageSize, extra);
-      if (!label || label === 'n/a ' || label === '———— ') return null;
+      if (!label || label === 'N/A ' || label === '———— ') return null;
       return label;
    }
 
@@ -1433,7 +1449,8 @@
       const cluster = topology.cluster || {};
       const kind = cluster.kind || null;
       const expanded = topologyDepthExpanded();
-      return {
+      const consumption = clusterConsumptionStats(topology);
+      const out = {
          "kind": kind,
          "setName": cluster.setName || null,
          "shardIds": Array.isArray(cluster.shardIds) ? cluster.shardIds : [],
@@ -1456,6 +1473,8 @@
          }),
          "errors": Array.isArray(topology.errors) ? topology.errors : []
       };
+      if (consumption) out.consumption = jsonTotals(consumption);
+      return out;
    }
 
    function jsonTotals(dbStats = {}) {
@@ -1466,6 +1485,18 @@
       const totalIndexBytesReusable = jsonFree(dbStats.totalIndexBytesReusable);
       const freeIncomplete = dbStats.freeStorageComplete === false;
       const idxIncomplete = dbStats.totalIndexBytesReusableComplete === false;
+      const totalSize = (storageSize != null || totalIndexSize != null)
+         ? (storageSize || 0) + (totalIndexSize || 0)
+         : null;
+      const totalFreeStorageSize = (freeStorageKnown(freeStorageSize)
+            && freeStorageKnown(totalIndexBytesReusable))
+         ? jsonNumber(+freeStorageSize + +totalIndexBytesReusable)
+         : null;
+      const fsUsedSize = jsonNumber(dbStats.fsUsedSize);
+      const fsTotalSize = jsonNumber(dbStats.fsTotalSize);
+      const fsFreeSize = (fsUsedSize != null && fsTotalSize != null)
+         ? jsonNumber(fsTotalSize - fsUsedSize)
+         : null;
       return {
          dataSize, storageSize, freeStorageSize,
          "reuse": jsonReuse(freeStorageSize, storageSize),
@@ -1476,6 +1507,9 @@
          "nindexes": jsonCount(dbStats.nindexes),
          totalIndexSize, totalIndexBytesReusable,
          "idxReuse": jsonReuse(totalIndexBytesReusable, totalIndexSize),
+         totalSize, totalFreeStorageSize,
+         "totalReuse": jsonReuse(totalFreeStorageSize, totalSize),
+         fsUsedSize, fsTotalSize, fsFreeSize,
          "compression": jsonCompression(dataSize, storageSize, freeStorageSize),
          "freeStorageSizeSource": dbStats.freeStorageSizeSource || 'unknown',
          "freeStorageComplete": dbStats.freeStorageComplete === true,
@@ -1582,7 +1616,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.29.0',
+         "version": '0.30.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1651,7 +1685,7 @@
       }
 
       function fmtBytes(n) {
-         if (n == null || n === '' || !Number.isFinite(+n)) return 'n/a';
+         if (n == null || n === '' || !Number.isFinite(+n)) return 'N/A';
          const sign = +n < 0 ? '-' : '';
          let v = Math.abs(+n);
          const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
@@ -1662,24 +1696,24 @@
       }
 
       function fmtPct(n) {
-         if (n == null || !Number.isFinite(+n)) return 'n/a';
+         if (n == null || !Number.isFinite(+n)) return 'N/A';
          return (100 * +n).toFixed(1) + '%';
       }
 
       function fmtRatio(n) {
-         if (n == null || !Number.isFinite(+n)) return 'n/a';
+         if (n == null || !Number.isFinite(+n)) return 'N/A';
          return Number(+n).toFixed(2) + ':1';
       }
 
       function fmtNum(n) {
-         if (n == null || n === '' || !Number.isFinite(+n)) return 'n/a';
+         if (n == null || n === '' || !Number.isFinite(+n)) return 'N/A';
          return String(n);
       }
 
       function fmtCount(n) {
          if (!Array.isArray(n)) return fmtNum(n);
          const shards = data.shards || [];
-         return n.map((v, i) => (shards[i] != null ? shards[i] : i) + ': ' + (v == null ? 'n/a' : v)).join(', ');
+         return n.map((v, i) => (shards[i] != null ? shards[i] : i) + ': ' + (v == null ? 'N/A' : v)).join(', ');
       }
 
       function fmtCompaction(label) {
@@ -1918,13 +1952,16 @@
          const storage = row.storageSize;
          const compact = row.compaction;
          const compactCls = compact ? 'act' : '';
-         let cells = bytesTd(row.dataSize)
-            + td(fmtRatio(row.compression) + (row.compressor ? ' ' + row.compressor : ''), row.compression)
+         const logical = kind !== 'total';
+         let cells = (logical ? bytesTd(row.dataSize) : td('', '', ''))
+            + (logical
+               ? td(fmtRatio(row.compression) + (row.compressor ? ' ' + row.compressor : ''), row.compression)
+               : td('', '', ''))
             + bytesTd(storage)
             + freeTd(free, reuse)
             + td(fmtNum(row.objects), row.objects)
             + td(fmtCompaction(compact), compactionRank(compact), compactCls);
-         if (kind === 'db') {
+         if (kind === 'db' || kind === 'total') {
             cells += td(fmtCount(row.ncollections), Array.isArray(row.ncollections) ? '' : row.ncollections)
                + td(fmtCount(row.nindexes), Array.isArray(row.nindexes) ? '' : row.nindexes)
                + td(fmtCompaction(row.idxCompaction), compactionRank(row.idxCompaction), row.idxCompaction ? 'act' : '');
@@ -1932,8 +1969,8 @@
          return cells;
       }
 
-      function totalsRow(row, label) {
-         return '<tr>' + td(label, label, 'name') + metricsCells(row || {}, 'db') + '</tr>';
+      function totalsRow(row, label, kind = 'db') {
+         return '<tr>' + td(label, label, 'name') + metricsCells(row || {}, kind) + '</tr>';
       }
 
       function dbRow(db) {
@@ -2019,7 +2056,7 @@
             : (topo.kind === 'sharded')
                ? ('Sharded cluster — ' + nodes.length + ' nodes' + ((topo.shardIds || []).length ? ' — shards ' + JSON.stringify(topo.shardIds) : ''))
                : ('Topology ' + (topo.kind || '') + ' — ' + nodes.length + ' nodes');
-         const rows = nodes.map(node => {
+         let rows = nodes.map(node => {
             const host = node.instance || node.hostname || '';
             const mark = node.connecting ? '*' : '';
             const stats = node.stats || {};
@@ -2029,12 +2066,33 @@
                + td(node.role || '', node.role || '', 'name')
                + td(node.proc || '', node.proc || '', 'name')
                + td(node.dbPath || '', node.dbPath || '', 'name')
-               + bytesTd(stats.storageSize)
-               + freeTd(stats.freeStorageSize, stats.reuse)
+               + bytesTd(stats.totalSize != null ? stats.totalSize : stats.storageSize)
+               + freeTd(
+                  stats.totalFreeStorageSize != null ? stats.totalFreeStorageSize : stats.freeStorageSize,
+                  stats.totalReuse != null ? stats.totalReuse : stats.reuse
+               )
                + td(node.error || '', node.error || '', node.error ? 'err' : '')
                + '</tr>';
          }).join('');
+         const consumption = topo.consumption;
+         if (consumption && consumption.totalSize != null) {
+            rows += '<tr>'
+               + td('', '', 'name')
+               + td('Cluster consumption', 'Cluster consumption', 'name')
+               + td('', '', 'name')
+               + td('', '', 'name')
+               + td('', '', 'name')
+               + bytesTd(consumption.totalSize)
+               + freeTd(consumption.totalFreeStorageSize, consumption.totalReuse)
+               + td('', '', '')
+               + '</tr>';
+         }
          let html = tableHtml(head, ['', 'Node', 'Role', 'Type', 'dbPath', 'Size on disk', 'Free │ reuse', 'Error'], rows, 5);
+         if (consumption && consumption.fsTotalSize != null && +consumption.fsTotalSize > 0) {
+            html += '<p>Filesystems ' + esc(fmtBytes(consumption.fsUsedSize)) + ' used / '
+               + esc(fmtBytes(consumption.fsTotalSize)) + ' ('
+               + esc(fmtBytes(consumption.fsFreeSize)) + ' free)</p>';
+         }
          (topo.errors || []).forEach(err => {
             html += '<p class="warn">' + esc((err && (err.message || err.step)) || err) + '</p>';
          });
@@ -2048,9 +2106,27 @@
             html += '<p class="warn">[' + esc(w.code || 'NOTE') + '] ' + esc(w.message || '') + '</p>';
          });
          html += renderTopology();
+         const totalRow = Object.assign({}, totals, {
+            "storageSize": totals.totalSize,
+            "freeStorageSize": totals.totalFreeStorageSize,
+            "reuse": totals.totalReuse,
+            "compaction": null
+         });
          html += tableHtml('dbPath totals',
             ['', 'Data size', 'Compression', 'Size on disk', 'Free │ reuse', 'Objects', 'Compaction', 'Collections', 'Indexes', 'Idx compaction'],
-            totalsRow(totals, 'All namespaces'));
+            totalsRow(totals, 'All namespaces')
+               + totalsRow({
+                  "storageSize": totals.totalIndexSize,
+                  "freeStorageSize": totals.totalIndexBytesReusable,
+                  "reuse": totals.idxReuse,
+                  "compaction": totals.idxCompaction
+               }, 'All indexes')
+               + totalsRow(totalRow, 'Total', 'total'));
+         if (totals.fsTotalSize != null && Number.isFinite(+totals.fsTotalSize) && +totals.fsTotalSize > 0) {
+            html += '<p>Filesystem ' + esc(fmtBytes(totals.fsUsedSize)) + ' used / '
+               + esc(fmtBytes(totals.fsTotalSize)) + ' ('
+               + esc(fmtBytes(totals.fsFreeSize)) + ' free)</p>';
+         }
          catalogs().forEach(block => { html += renderBlock(block); });
          root.innerHTML = html;
          root.querySelectorAll('table.sortable').forEach(makeSortable);
@@ -2173,7 +2249,7 @@
       /*
        *  Resolve options.sort[type] → comparator (first non-zero key wins).
        *  reuse / idxReuse are free/storage ratios. compaction is the
-       *  compact/rebuild/resync/wait rank (n/a last).
+       *  compact/rebuild/resync/wait rank (N/A last).
        */
       const sortByType = sortOptions[type] || {};
       const sortKey = Object.keys(sortByType).find(key => sortByType[key] !== 0) || 'name';
@@ -2227,10 +2303,10 @@
 
    function formatPct(numerator = 0, denominator = 1) {
       /*
-       *  Pretty format percentage. Zero/null/NaN denominator → n/a (not Infinity%/NaN%).
+       *  Pretty format percentage. Zero/null/NaN denominator → N/A (not Infinity%/NaN%).
        */
       const num = +numerator, den = +denominator;
-      if (!Number.isFinite(num) || !Number.isFinite(den) || den === 0) return 'n/a ';
+      if (!Number.isFinite(num) || !Number.isFinite(den) || den === 0) return 'N/A ';
       return `${Number.parseFloat(((num / den) * 100).toFixed(1))}%`;
    }
 
@@ -2240,38 +2316,38 @@
 
    function formatFree(bytes, storageSize, { lowerBound = false } = {}) {
       /*
-       *  Free blocks │ reuse. Hidden WT free-space (Atlas M0/Flex) → n/a, not 0.
+       *  Free blocks │ reuse. Hidden WT free-space (Atlas M0/Flex) → N/A, not 0.
        *  lowerBound: collStats rollup may omit unauthorized/filtered NS (*).
        */
       if (!freeStorageKnown(bytes)) {
-         return (`n/a │${'n/a '.padStart(6)}`).padStart(columnWidth + 8);
+         return (`N/A │${'N/A '.padStart(6)}`).padStart(columnWidth + 8);
       }
       const unit = formatUnit(bytes) + (lowerBound ? '*' : '');
       return (unit + ' │' + formatPct(bytes, storageSize).padStart(6)).padStart(columnWidth + 8);
    }
 
    function formatCompaction(kind, storageSize, freeStorageSize, { oplog = false, idIndex = false, incomplete = false } = {}) {
-      if (!freeStorageKnown(freeStorageSize)) return 'n/a ';
+      if (!freeStorageKnown(freeStorageSize)) return 'N/A ';
       if (kind === 'collection') {
          if (oplog && compactionHelper('collection', storageSize, freeStorageSize)) return 'wait';
          if (compactionHelper('collection', storageSize, freeStorageSize)) return 'compact';
-         return incomplete ? 'n/a ' : '———— ';
+         return incomplete ? 'N/A ' : '———— ';
       }
       if (kind === 'index') {
          if (idIndex && compactionHelper('index', storageSize, freeStorageSize)) return 'compact';
          if (compactionHelper('index', storageSize, freeStorageSize)) return 'rebuild';
-         return incomplete ? 'n/a ' : '———— ';
+         return incomplete ? 'N/A ' : '———— ';
       }
       if (kind === 'dbPath') {
          if (compactionHelper('dbPath', storageSize, freeStorageSize)) return 'resync';
-         return incomplete ? 'n/a ' : '———— ';
+         return incomplete ? 'N/A ' : '———— ';
       }
-      return incomplete ? 'n/a ' : '———— ';
+      return incomplete ? 'N/A ' : '———— ';
    }
 
    function rankCompactionLabel(label) {
       /*
-       *  Higher = stronger recommendation. n/a and unknown sort last.
+       *  Higher = stronger recommendation. N/A and unknown sort last.
        */
       if (label === 'resync') return 4;
       if (label === 'rebuild') return 3;
@@ -2306,10 +2382,10 @@
 
    function formatRatio(metric) {
       /*
-       *  Pretty format compression ratio. Non-finite (÷0 from StorageMetrics.compression) → n/a.
+       *  Pretty format compression ratio. Non-finite (÷0 from StorageMetrics.compression) → N/A.
        */
       const value = +metric;
-      if (!Number.isFinite(value)) return 'n/a ';
+      if (!Number.isFinite(value)) return 'N/A ';
       return `${Number.parseFloat(value.toFixed(2))}:1`;
    }
 
@@ -2409,6 +2485,10 @@
       }
       if (mode === 'indexRollup') {
          return `${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)} [cyan]${compact}[/]`;
+      }
+      if (mode === 'totalRow') {
+         const obj = (objects == null ? '' : objects.toString()).padStart(columnWidth);
+         return `${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj} [cyan]${compact}[/]`;
       }
       const obj = (objects == null ? '' : objects.toString()).padStart(columnWidth);
       return `${formatUnit(dataSize).padStart(columnWidth)} ${formatCompressionCell(compression, compressor)} ${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj} [cyan]${compact}[/]`;
@@ -2767,6 +2847,130 @@
       console.log(`[bold][green]Node:[/] ${formatNodeIdentity(node, widths)}`);
    }
 
+   function isMongosNode(node = {}) {
+      return node.proc === 'mongos' || node.role === 'mongos';
+   }
+
+   function mongodStatsNodes(topology) {
+      return ((topology && topology.nodes) || []).filter(
+         node => node && node.stats && !isMongosNode(node)
+      );
+   }
+
+   function combinedStorageSize(stats = {}) {
+      return (+stats.storageSize || 0) + (+stats.totalIndexSize || 0);
+   }
+
+   function combinedFreeStorageSize(stats = {}) {
+      if (!freeStorageKnown(stats.freeStorageSize)
+            || !freeStorageKnown(stats.totalIndexBytesReusable)) return null;
+      return +stats.freeStorageSize + +stats.totalIndexBytesReusable;
+   }
+
+   function clusterConsumptionStats(topology) {
+      /*
+       *  Sum mongod dbPaths (replica copies and shard volumes). Skip mongos
+       *  so a sharded router aggregate is not added on top of shard mongods.
+       */
+      const nodes = mongodStatsNodes(topology);
+      if (nodes.length < 2) return null;
+      const acc = {
+         "dataSize": 0,
+         "storageSize": 0,
+         "objects": 0,
+         "ncollections": 0,
+         "nviews": 0,
+         "namespaces": 0,
+         "nindexes": 0,
+         "totalIndexSize": 0,
+         "freeStorageSize": 0,
+         "totalIndexBytesReusable": 0,
+         "fsUsedSize": 0,
+         "fsTotalSize": 0,
+         "freeStorageComplete": true,
+         "totalIndexBytesReusableComplete": true,
+         "catalogCoverageComplete": true
+      };
+      let freeKnown = true, idxFreeKnown = true, fsKnown = true;
+      nodes.forEach(node => {
+         const stats = node.stats;
+         acc.dataSize += +stats.dataSize || 0;
+         acc.storageSize += +stats.storageSize || 0;
+         acc.objects += +stats.objects || 0;
+         acc.ncollections += countTotal(stats.ncollections);
+         acc.nviews += countTotal(stats.nviews);
+         acc.namespaces += countTotal(stats.namespaces);
+         acc.nindexes += countTotal(stats.nindexes);
+         acc.totalIndexSize += +stats.totalIndexSize || 0;
+         if (!freeStorageKnown(stats.freeStorageSize)) freeKnown = false;
+         else acc.freeStorageSize += +stats.freeStorageSize;
+         if (!freeStorageKnown(stats.totalIndexBytesReusable)) idxFreeKnown = false;
+         else acc.totalIndexBytesReusable += +stats.totalIndexBytesReusable;
+         if (stats.freeStorageComplete === false) acc.freeStorageComplete = false;
+         if (stats.totalIndexBytesReusableComplete === false) {
+            acc.totalIndexBytesReusableComplete = false;
+         }
+         if (stats.catalogCoverageComplete === false) acc.catalogCoverageComplete = false;
+         const used = jsonNumber(stats.fsUsedSize);
+         const total = jsonNumber(stats.fsTotalSize);
+         if (used == null || total == null) fsKnown = false;
+         else {
+            acc.fsUsedSize += used;
+            acc.fsTotalSize += total;
+         }
+      });
+      if (!freeKnown) {
+         acc.freeStorageSize = null;
+         acc.freeStorageComplete = false;
+      }
+      if (!idxFreeKnown) {
+         acc.totalIndexBytesReusable = null;
+         acc.totalIndexBytesReusableComplete = false;
+      }
+      if (!fsKnown) {
+         acc.fsUsedSize = null;
+         acc.fsTotalSize = null;
+      }
+      acc.freeStorageSizeSource = freeKnown ? 'dbStats' : 'unknown';
+      acc.totalIndexBytesReusableSource = idxFreeKnown ? 'dbStats' : 'unknown';
+      return acc;
+   }
+
+   function printTotalConsumption(stats = {}, label = 'Total') {
+      const storageSize = combinedStorageSize(stats);
+      const freeStorageSize = combinedFreeStorageSize(stats);
+      const incomplete = stats.freeStorageComplete === false
+         || stats.totalIndexBytesReusableComplete === false;
+      console.log(`[bold][green]${padVisible(`${label}:`, rowHeader)}[/] ${metricsCols({
+         storageSize,
+         freeStorageSize,
+         "objects": stats.objects,
+         "compaction": '———— ',
+         "mode": 'totalRow',
+         "lowerBound": incomplete
+      })}`);
+   }
+
+   function printFilesystemLine(stats = {}, label = 'Filesystem') {
+      const used = jsonNumber(stats.fsUsedSize);
+      const total = jsonNumber(stats.fsTotalSize);
+      if (used == null || total == null || !(total > 0)) return false;
+      const free = total - used;
+      const pct = formatPct(used, total).trim();
+      console.log(`[bold][green]${label}:[/] [cyan]${formatUnit(used)}[/] used / [cyan]${formatUnit(total)}[/] (${pct})   [cyan]${formatUnit(free)}[/] free`);
+      return true;
+   }
+
+   function printClusterConsumption(topology) {
+      const stats = clusterConsumptionStats(topology);
+      if (!stats) return false;
+      const n = mongodStatsNodes(topology).length;
+      console.log('');
+      printTotalConsumption(stats, `Cluster consumption (${n} dbPaths)`);
+      printFilesystemLine(stats, 'Filesystems');
+      return true;
+   }
+
    function printTopologyMembers(topology, widths) {
       const nodes = (topology && Array.isArray(topology.nodes)) ? topology.nodes : [];
       if (!nodes.length) return false;
@@ -2810,12 +3014,15 @@
          "freeIncomplete": freeStorageComplete === false,
          "idxIncomplete": totalIndexBytesReusableComplete === false
       });
+      printTotalConsumption(dbStats);
       printRule('heavy');
+      printFilesystemLine(dbStats);
       const topology = dbStats.topology;
       const nodeCount = (topology && Array.isArray(topology.nodes)) ? topology.nodes.length : 0;
       if (hostLine) {
          if (nodeCount > 1) {
             printTopologyMembers(topology);
+            printClusterConsumption(topology);
          } else {
             console.log(`[bold][green]Hostname:[/] [cyan]${hostname}[/]   [bold][green]Type:[/] [cyan]${proc}[/]   [bold][green]Version:[/] [cyan]${mongodVersionLabel()}[/]   [bold][green]dbPath:[/] [cyan]${dbPath}[/]`);
             if (shards.length > 0) {

@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.31.0"
+ *  Version: "0.32.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,7 +17,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.31.0"
+      "version": "0.32.0"
 });
 
 /*  Notes:
@@ -774,6 +774,8 @@ function parseDbStats(raw = {}) {
       "totalIndexBytesReusable": toNullableBytes(
          src.totalIndexBytesReusable != null ? src.totalIndexBytesReusable : src.indexFreeStorageSize
       ),
+      "fsUsedSize": toNullableBytes(src.fsUsedSize),
+      "fsTotalSize": toNullableBytes(src.fsTotalSize),
       "statsError": src.statsError || null,
       "unauthorized": src.unauthorized === true
    };
@@ -952,6 +954,8 @@ class DatabaseStats extends StorageMetrics {
       this.namespaces = dto.namespaces != null ? dto.namespaces : 0;
       this.nindexes = dto.nindexes != null ? dto.nindexes : 0;
       this.shards = Array.isArray(dto.shards) ? dto.shards : [];
+      this.fsUsedSize = dto.fsUsedSize != null ? dto.fsUsedSize : null;
+      this.fsTotalSize = dto.fsTotalSize != null ? dto.fsTotalSize : null;
       this.statsError = dto.statsError || null;
       this.unauthorized = dto.unauthorized === true;
    }
@@ -978,6 +982,8 @@ class DatabaseStats extends StorageMetrics {
       this.nindexes = dto.nindexes;
       this.totalIndexSize = dto.totalIndexSize;
       this.totalIndexBytesReusable = dto.totalIndexBytesReusable;
+      this.fsUsedSize = dto.fsUsedSize != null ? dto.fsUsedSize : null;
+      this.fsTotalSize = dto.fsTotalSize != null ? dto.fsTotalSize : null;
       this.statsError = dto.statsError || null;
       this.unauthorized = dto.unauthorized === true;
       return this;
@@ -1482,6 +1488,8 @@ class DbPathStats extends StorageMetrics {
       this.nviews = dto.nviews != null ? dto.nviews : 0;
       this.namespaces = dto.namespaces != null ? dto.namespaces : 0;
       this.nindexes = dto.nindexes != null ? dto.nindexes : 0;
+      this.fsUsedSize = dto.fsUsedSize != null ? dto.fsUsedSize : null;
+      this.fsTotalSize = dto.fsTotalSize != null ? dto.fsTotalSize : null;
       this.host = (dto.host instanceof HostNode)
          ? dto.host
          : new HostNode(dto.host || {
@@ -3084,6 +3092,8 @@ function dbStatsErrorStub(dbName, e) {
       "indexFreeStorageSize": null,
       "totalIndexBytesReusable": null,
       "scaleFactor": 1,
+      "fsUsedSize": null,
+      "fsTotalSize": null,
       "statsError": commandErrorMessage(e),
       "unauthorized": isUnauthorizedError(e)
    };
@@ -3143,6 +3153,9 @@ function normalizeDbStatsDoc(stats, dbName) {
       }
       stats.freeStorageSize = hideFree ? null : (sawFree ? freeSum : 0);
       stats.indexFreeStorageSize = hideFree ? null : (sawIdxFree ? idxFreeSum : 0);
+      // Volume capacity is per mongod dbPath; mongos raw is not one filesystem.
+      stats.fsUsedSize = null;
+      stats.fsTotalSize = null;
    } else { // detect unsharded db.stats()
       stats.collections = +stats.collections;
       stats.indexes = +stats.indexes;
@@ -3165,6 +3178,10 @@ function normalizeDbStatsDoc(stats, dbName) {
    stats.indexSize = +stats.indexSize;
    stats.totalIndexBytesReusable = stats.indexFreeStorageSize;
    stats.scaleFactor = +stats.scaleFactor;
+   if (!stats.hasOwnProperty('raw')) {
+      stats.fsUsedSize = toNullableBytes(stats.fsUsedSize);
+      stats.fsTotalSize = toNullableBytes(stats.fsTotalSize);
+   }
    delete stats.fileSize;
    delete stats.totalSize;
    delete stats.totalFreeStorageSize;
