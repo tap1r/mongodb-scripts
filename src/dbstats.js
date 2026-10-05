@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.0.0"
+ *  Version: "1.1.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -150,7 +150,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.0.0" };
+   const __script = { "name": "dbstats.js", "version": "1.1.0" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -1188,6 +1188,7 @@
       if (printExpandedNodes(dbStats, printDatabaseTables)) return;
       printDatabaseTables(dbStats);
       printDbPath(dbStats);
+      printCompactionLegend();
    }
 
    function nsTableOut(dbStats = {}) {
@@ -1197,6 +1198,7 @@
       if (printExpandedNodes(dbStats, printNamespaceTables)) return;
       printNamespaceTables(dbStats);
       printDbPath(dbStats);
+      printCompactionLegend();
    }
 
    function printDatabaseTables(dbStats = {}, { leadBlank = true } = {}) {
@@ -1310,8 +1312,8 @@
          printTopologyMembers(topology, widths);
          printClusterConsumption(topology);
          printRule('heavy');
-         console.log('');
       }
+      printCompactionLegend();
       return true;
    }
 
@@ -1619,7 +1621,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.0.0',
+         "version": '1.1.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1710,7 +1712,7 @@
 
       function fmtNum(n) {
          if (n == null || n === '' || !Number.isFinite(+n)) return 'N/A';
-         return String(n);
+         return Number(n).toLocaleString('en-US');
       }
 
       function fmtCount(n) {
@@ -1856,22 +1858,28 @@
          return filtered.slice().sort(specCmp(sortSpec(kind), kind)).slice(0, htmlLimitN());
       }
 
-      function td(text, sortVal, cls, unit) {
+      function td(text, sortVal, cls, unit, title) {
          const v = (sortVal === undefined || sortVal === null || sortVal === '') ? '' : sortVal;
+         const tip = (title != null && title !== '') ? title : '';
          return '<td data-v="' + esc(v) + '"'
             + (cls ? ' class="' + cls + '"' : '')
             + (unit ? ' data-unit="' + esc(unit) + '"' : '')
+            + (tip ? ' title="' + esc(tip) + '"' : '')
             + '>' + esc(text) + '</td>';
+      }
+
+      function emptyTd(cls) {
+         return td('', '', cls || 'num');
       }
 
       function bytesTd(n) {
          const v = (n == null || n === '' || !Number.isFinite(+n)) ? '' : +n;
-         return td(fmtBytes(n), v, '', 'bytes');
+         return td(fmtBytes(n), v, 'num bytes', 'bytes');
       }
 
       function freeTd(free, reuse) {
          const v = (free == null || free === '' || !Number.isFinite(+free)) ? '' : +free;
-         return td(fmtBytes(free) + ' │ ' + fmtPct(reuse), v, '', 'bytes');
+         return td(fmtBytes(free) + ' │ ' + fmtPct(reuse), v, 'num free', 'bytes');
       }
 
       function parseIecBytes(text) {
@@ -1926,12 +1934,68 @@
          }
       }
 
-      function tableHtml(caption, headers, rowHtml, leftCols) {
+      function headerClass(h) {
+         switch (h) {
+            case '': return 'mark';
+            case 'Node':
+            case 'Database':
+            case 'Namespace':
+            case 'Rollup':
+            case 'View':
+            case 'Name':
+               return 'name ident';
+            case 'Index': return 'name idx';
+            case 'Role':
+            case 'Type':
+            case 'Error':
+               return 'name';
+            case 'dbPath': return 'name path';
+            case 'Data size':
+            case 'Size on disk': return 'num bytes';
+            case 'Compression': return 'num ratio';
+            case 'Free │ reuse': return 'num free';
+            case 'Objects':
+            case 'Collections':
+            case 'Indexes': return 'num count';
+            case 'Compaction':
+            case 'Idx compaction': return 'act';
+            default: return 'num';
+         }
+      }
+
+      function catalogHeaders(nameHeader) {
+         return [nameHeader, 'Index', 'Data size', 'Compression', 'Size on disk', 'Free │ reuse',
+            'Objects', 'Compaction', 'Collections', 'Indexes', 'Idx compaction'];
+      }
+
+      function tableHtml(caption, headers, rowHtml) {
          if (!rowHtml) return '';
-         leftCols = leftCols == null ? 1 : leftCols;
-         return '<table class="sortable"><caption>' + esc(caption) + '</caption><thead><tr>'
-            + headers.map((h, i) => '<th' + (i < leftCols ? ' class="name"' : '') + '>' + esc(h) + '</th>').join('')
-            + '</tr></thead><tbody>' + rowHtml + '</tbody></table>';
+         const cols = headers.map(h => '<col class="' + headerClass(h) + '">').join('');
+         return '<div class="table-wrap"><table class="sortable"><colgroup>' + cols + '</colgroup>'
+            + '<caption>' + esc(caption) + '</caption><thead><tr>'
+            + headers.map(h => '<th class="' + headerClass(h) + '">' + esc(h) + '</th>').join('')
+            + '</tr></thead><tbody>' + rowHtml + '</tbody></table></div>';
+      }
+
+      function fsBar(used, total, free, title, note) {
+         if (total == null || !Number.isFinite(+total) || !(+total > 0)) return '';
+         const u = Number.isFinite(+used) ? +used : 0;
+         const t = +total;
+         const f = Number.isFinite(+free) ? +free : (t - u);
+         const pct = Math.max(0, Math.min(100, (100 * u) / t));
+         const hot = pct >= 90 ? ' fs-hot' : (pct >= 75 ? ' fs-warm' : '');
+         const head = title || 'Filesystem volume';
+         return '<div class="fs' + hot + '">'
+            + '<div class="fs-head">' + esc(head) + '</div>'
+            + '<div class="fs-track" title="' + esc(pct.toFixed(1) + '% of volume used') + '">'
+            + '<div class="fs-fill" style="width:' + pct.toFixed(1) + '%"></div>'
+            + '<span class="fs-pct">' + esc(pct.toFixed(1) + '% used') + '</span></div>'
+            + '<div class="fs-meta">'
+            + '<span><b>Used</b> ' + esc(fmtBytes(u)) + '</span>'
+            + '<span><b>Free</b> ' + esc(fmtBytes(f)) + '</span>'
+            + '<span><b>Capacity</b> ' + esc(fmtBytes(t)) + '</span></div>'
+            + (note ? '<p class="fs-note">' + esc(note) + '</p>' : '')
+            + '</div>';
       }
 
       function collectionVisible(c) {
@@ -1949,51 +2013,64 @@
          return (db.collections || []).some(collectionVisible);
       }
 
+      function actClass(label) {
+         const s = String(label || '');
+         if (s === 'compact' || s === 'rebuild' || s === 'resync' || s === 'wait') return 'act ' + s;
+         return 'act';
+      }
+
       function metricsCells(row, kind) {
-         const reuse = row.reuse;
-         const free = row.freeStorageSize;
-         const storage = row.storageSize;
          const compact = row.compaction;
-         const compactCls = compact ? 'act' : '';
-         const logical = kind !== 'total';
-         let cells = (logical ? bytesTd(row.dataSize) : td('', '', ''))
+         const compactCls = actClass(compact);
+         const logical = (kind === 'db' || kind === 'ns');
+         const showObjects = (kind !== 'index');
+         let cells = (logical ? bytesTd(row.dataSize) : emptyTd('num bytes'))
             + (logical
-               ? td(fmtRatio(row.compression) + (row.compressor ? ' ' + row.compressor : ''), row.compression)
-               : td('', '', ''))
-            + bytesTd(storage)
-            + freeTd(free, reuse)
-            + td(fmtNum(row.objects), row.objects)
+               ? td(fmtRatio(row.compression) + (row.compressor ? ' ' + row.compressor : ''), row.compression, 'num ratio')
+               : emptyTd('num ratio'))
+            + bytesTd(row.storageSize)
+            + freeTd(row.freeStorageSize, row.reuse)
+            + (showObjects ? td(fmtNum(row.objects), row.objects, 'num count') : emptyTd('num count'))
             + td(fmtCompaction(compact), compactionRank(compact), compactCls);
-         if (kind === 'db' || kind === 'total') {
-            cells += td(fmtCount(row.ncollections), Array.isArray(row.ncollections) ? '' : row.ncollections)
-               + td(fmtCount(row.nindexes), Array.isArray(row.nindexes) ? '' : row.nindexes)
-               + td(fmtCompaction(row.idxCompaction), compactionRank(row.idxCompaction), row.idxCompaction ? 'act' : '');
+         if (kind === 'index') {
+            cells += emptyTd('num count') + emptyTd('num count') + emptyTd('act');
+         } else if (kind === 'ns') {
+            cells += emptyTd('num count')
+               + td(fmtNum(row.nindexes), row.nindexes, 'num count')
+               + emptyTd('act');
+         } else {
+            cells += td(fmtCount(row.ncollections), Array.isArray(row.ncollections) ? '' : row.ncollections, 'num count')
+               + td(fmtCount(row.nindexes), Array.isArray(row.nindexes) ? '' : row.nindexes, 'num count')
+               + td(fmtCompaction(row.idxCompaction), compactionRank(row.idxCompaction), actClass(row.idxCompaction));
          }
          return cells;
       }
 
-      function totalsRow(row, label, kind = 'db') {
-         return '<tr>' + td(label, label, 'name') + metricsCells(row || {}, kind) + '</tr>';
+      function identCells(name, indexName, nameSort) {
+         return td(name, nameSort != null ? nameSort : name, 'name ident', '', name)
+            + td(indexName || '', indexName || '', 'name idx', '', indexName || '');
+      }
+
+      function totalsRow(row, label, kind = 'db', trCls) {
+         return '<tr' + (trCls ? ' class="' + esc(trCls) + '"' : '') + '>'
+            + identCells(label) + metricsCells(row || {}, kind) + '</tr>';
       }
 
       function dbRow(db) {
          const name = db.name || '';
-         return '<tr>' + td(name, name, 'name') + metricsCells(db, 'db') + '</tr>';
+         return '<tr>' + identCells(name) + metricsCells(db, 'db') + '</tr>';
       }
 
       function nsRow(c) {
          const ns = c.ns || ((c.db ? c.db + '.' : '') + (c.name || ''));
          const mark = c.unauthorized ? ' (unauthorized)' : (c.unavailable ? ' (unavailable)' : '');
-         return '<tr>' + td(ns + mark, ns, 'name') + metricsCells(c, 'ns') + td(fmtNum(c.nindexes), c.nindexes) + '</tr>';
+         return '<tr>' + identCells(ns + mark, '', ns) + metricsCells(c, 'ns') + '</tr>';
       }
 
       function idxRow(c, idx) {
          const ns = c.ns || ((c.db ? c.db + '.' : '') + (c.name || ''));
          const name = idx.name || '';
-         return '<tr>' + td(ns, ns, 'name') + td(name, name, 'name') + bytesTd(idx.storageSize)
-            + freeTd(idx.freeStorageSize, idx.reuse)
-            + td(fmtCompaction(idx.compaction), compactionRank(idx.compaction), idx.compaction ? 'act' : '')
-            + '</tr>';
+         return '<tr>' + identCells(ns, name) + metricsCells(idx, 'index') + '</tr>';
       }
 
       function catalogs() {
@@ -2005,7 +2082,7 @@
          return nodes.map(node => {
             const dbs = node.connecting ? (data.databases || []) : (node.databases || []);
             return {
-               "title": (node.connecting ? '* ' : '') + (node.instance || node.hostname || ''),
+               "title": (node.instance || node.hostname || ''),
                "node": node,
                "databases": dbs,
                "namespaces": dbs.flatMap(d => d.collections || [])
@@ -2015,14 +2092,19 @@
 
       function renderBlock(block) {
          const v = verb();
-         let html = '';
-         if (block.title) html += '<h2>' + esc(block.title) + '</h2>';
+         const node = block.node || {};
+         let html = '<section class="panel">';
+         if (block.title || block.node) {
+            const sub = [node.role, node.proc, node.dbPath].filter(Boolean).join(' · ');
+            html += '<h2>' + esc(block.title || '')
+               + (sub ? '<span class="sub">' + esc(sub) + '</span>' : '') + '</h2>';
+            if (node.error) html += '<p class="warn">' + esc(node.error) + '</p>';
+         }
          let dbs = (block.databases || []).filter(dbVisible);
          if (v === 'summary') {
             dbs = applyTop(dbs, 'db');
-            html += tableHtml('Databases',
-               ['Database', 'Data size', 'Compression', 'Size on disk', 'Free │ reuse', 'Objects', 'Compaction', 'Collections', 'Indexes', 'Idx compaction'],
-               dbs.map(dbRow).join(''));
+            html += tableHtml('Databases', catalogHeaders('Database'), dbs.map(dbRow).join(''));
+            html += '</section>';
             return html;
          }
          let nss = dbs.flatMap(d => d.collections || []).filter(collectionVisible);
@@ -2030,23 +2112,18 @@
          const keep = {};
          nss.forEach(c => { keep[c.db || ''] = true; });
          dbs = dbs.filter(d => keep[d.name || '']);
-         html += tableHtml('Databases',
-            ['Database', 'Data size', 'Compression', 'Size on disk', 'Free │ reuse', 'Objects', 'Compaction', 'Collections', 'Indexes', 'Idx compaction'],
-            dbs.map(dbRow).join(''));
-         html += tableHtml('Namespaces',
-            ['Namespace', 'Data size', 'Compression', 'Size on disk', 'Free │ reuse', 'Objects', 'Compaction', 'Indexes'],
-            nss.map(nsRow).join(''));
+         html += tableHtml('Databases', catalogHeaders('Database'), dbs.map(dbRow).join(''));
+         html += tableHtml('Namespaces', catalogHeaders('Namespace'), nss.map(nsRow).join(''));
          const idxHtml = nss.flatMap(c => (c.indexes || []).filter(indexVisible).filter(idx => meetsLimit(idx, 'index')).map(idx => idxRow(c, idx))).join('');
-         html += tableHtml('Indexes',
-            ['Namespace', 'Index', 'Size on disk', 'Free │ reuse', 'Compaction'],
-            idxHtml, 2);
+         html += tableHtml('Indexes', catalogHeaders('Namespace'), idxHtml);
          if (v === 'full' && !htmlLimitActive()) {
             const views = dbs.flatMap(d => (d.views || []).map(x => {
                const ns = x.ns || ((d.name ? d.name + '.' : '') + (x.name || ''));
-               return '<tr>' + td(ns, ns, 'name') + '</tr>';
+               return '<tr>' + td(ns, ns, 'name ident') + '</tr>';
             })).join('');
             html += tableHtml('Views', ['View'], views);
          }
+         html += '</section>';
          return html;
       }
 
@@ -2063,38 +2140,41 @@
             const host = node.instance || node.hostname || '';
             const mark = node.connecting ? '*' : '';
             const stats = node.stats || {};
-            return '<tr>'
-               + td(mark, mark, 'name')
-               + td(host, host, 'name')
-               + td(node.role || '', node.role || '', 'name')
+            const role = node.role || '';
+            return '<tr' + (node.connecting ? ' class="connecting"' : '') + '>'
+               + td(mark, mark, 'name mark-cell')
+               + td(host, host, 'name ident', '', host)
+               + td(role, role, 'name role-' + role.replace(/[^A-Za-z0-9_-]/g, ''))
                + td(node.proc || '', node.proc || '', 'name')
-               + td(node.dbPath || '', node.dbPath || '', 'name')
+               + td(node.dbPath || '', node.dbPath || '', 'name path', '', node.dbPath || '')
                + bytesTd(stats.totalSize != null ? stats.totalSize : stats.storageSize)
                + freeTd(
                   stats.totalFreeStorageSize != null ? stats.totalFreeStorageSize : stats.freeStorageSize,
                   stats.totalReuse != null ? stats.totalReuse : stats.reuse
                )
-               + td(node.error || '', node.error || '', node.error ? 'err' : '')
+               + td(node.error || '', node.error || '', node.error ? 'err name' : 'name', '', node.error || '')
                + '</tr>';
          }).join('');
          const consumption = topo.consumption;
          if (consumption && consumption.totalSize != null) {
-            rows += '<tr>'
+            rows += '<tr class="total-row">'
+               + td('', '', 'name mark-cell')
+               + td('Cluster consumption', 'Cluster consumption', 'name ident')
                + td('', '', 'name')
-               + td('Cluster consumption', 'Cluster consumption', 'name')
                + td('', '', 'name')
-               + td('', '', 'name')
-               + td('', '', 'name')
+               + td('', '', 'name path')
                + bytesTd(consumption.totalSize)
                + freeTd(consumption.totalFreeStorageSize, consumption.totalReuse)
-               + td('', '', '')
+               + td('', '', 'name')
                + '</tr>';
          }
-         let html = tableHtml(head, ['', 'Node', 'Role', 'Type', 'dbPath', 'Size on disk', 'Free │ reuse', 'Error'], rows, 5);
+         let html = tableHtml(head, ['', 'Node', 'Role', 'Type', 'dbPath', 'Size on disk', 'Free │ reuse', 'Error'], rows);
          if (consumption && consumption.fsTotalSize != null && +consumption.fsTotalSize > 0) {
-            html += '<p>Filesystems ' + esc(fmtBytes(consumption.fsUsedSize)) + ' used / '
-               + esc(fmtBytes(consumption.fsTotalSize)) + ' ('
-               + esc(fmtBytes(consumption.fsFreeSize)) + ' free)</p>';
+            html += fsBar(
+               consumption.fsUsedSize, consumption.fsTotalSize, consumption.fsFreeSize,
+               'Filesystem volumes',
+               'Sum of each mongod db.stats() volume (fsUsedSize / fsTotalSize). Members that share a disk are counted once each.'
+            );
          }
          (topo.errors || []).forEach(err => {
             html += '<p class="warn">' + esc((err && (err.message || err.step)) || err) + '</p>';
@@ -2108,28 +2188,32 @@
          (data.warnings || []).forEach(w => {
             html += '<p class="warn">[' + esc(w.code || 'NOTE') + '] ' + esc(w.message || '') + '</p>';
          });
-         html += renderTopology();
+         const topoHtml = renderTopology();
+         if (topoHtml) html += '<section class="panel">' + topoHtml + '</section>';
          const totalRow = Object.assign({}, totals, {
             "storageSize": totals.totalSize,
             "freeStorageSize": totals.totalFreeStorageSize,
             "reuse": totals.totalReuse,
             "compaction": null
          });
-         html += tableHtml('dbPath totals',
-            ['', 'Data size', 'Compression', 'Size on disk', 'Free │ reuse', 'Objects', 'Compaction', 'Collections', 'Indexes', 'Idx compaction'],
+         html += '<section class="panel">';
+         html += tableHtml('dbPath totals', catalogHeaders('Rollup'),
             totalsRow(totals, 'All namespaces')
                + totalsRow({
                   "storageSize": totals.totalIndexSize,
                   "freeStorageSize": totals.totalIndexBytesReusable,
                   "reuse": totals.idxReuse,
                   "compaction": totals.idxCompaction
-               }, 'All indexes')
-               + totalsRow(totalRow, 'Total', 'total'));
+               }, 'All indexes', 'index')
+               + totalsRow(totalRow, 'Total', 'total', 'total-row'));
          if (totals.fsTotalSize != null && Number.isFinite(+totals.fsTotalSize) && +totals.fsTotalSize > 0) {
-            html += '<p>Filesystem ' + esc(fmtBytes(totals.fsUsedSize)) + ' used / '
-               + esc(fmtBytes(totals.fsTotalSize)) + ' ('
-               + esc(fmtBytes(totals.fsFreeSize)) + ' free)</p>';
+            html += fsBar(
+               totals.fsUsedSize, totals.fsTotalSize, totals.fsFreeSize,
+               'Filesystem volume',
+               'Host disk occupancy from db.stats() fsUsedSize / fsTotalSize. Free │ reuse in the table is WiredTiger reusable bytes.'
+            );
          }
+         html += '</section>';
          catalogs().forEach(block => { html += renderBlock(block); });
          root.innerHTML = html;
          root.querySelectorAll('table.sortable').forEach(makeSortable);
@@ -2150,36 +2234,86 @@
       const title = 'dbstats.js ' + (payload.version || '') + ' — ' + host;
       const boot = Function.prototype.toString.call(htmlReportBoot)
          .replace(/<\/script/gi, '<\\/script');
-      const css = 'html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}'
-         + ':root{--bg:#121212;--fg:#e8e8e8;--muted:#9aa0a6;--acc:#7dce7a;--cyan:#6ec8d4;--warn:#d4c06e;--err:#e07070;--line:#2a2a2a;--th:#1c1c1c}'
-         + 'header{padding:1rem 1.25rem;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:.75rem 1.5rem;align-items:baseline}'
-         + 'h1{font-size:1.1rem;margin:0;color:var(--acc)}'
-         + 'h2{font-size:1rem;margin:1.5rem 0 .5rem;color:var(--acc)}'
-         + '.meta{color:var(--muted)} .meta b{color:var(--cyan);font-weight:600}'
-         + '.controls{margin-left:auto;display:flex;gap:1rem;align-items:center}'
-         + 'label{color:var(--muted)} select{background:var(--th);color:var(--fg);border:1px solid var(--line);padding:.2rem .4rem}'
-         + 'main{padding:1rem 1.25rem 3rem}'
-         + 'table{border-collapse:collapse;width:100%;margin:0 0 1.5rem;font-size:13px}'
-         + 'caption{text-align:left;color:var(--acc);font-weight:600;padding:.4rem 0}'
-         + 'th,td{border-bottom:1px solid var(--line);padding:.28rem .55rem;text-align:right;white-space:nowrap}'
-         + 'th.name,td.name{text-align:left}'
-         + 'th{background:var(--th);color:var(--acc);cursor:pointer;position:sticky;top:0;user-select:none}'
-         + 'th.sort-asc:after{content:" \\25b2";font-size:.7em} th.sort-desc:after{content:" \\25bc";font-size:.7em}'
-         + 'tr:hover td{background:#1a1a1a} td.act{color:var(--warn)} td.err{color:var(--err)}'
-         + '.warn{color:var(--warn);margin:.35rem 0}';
+      const css = [
+         ':root{--bg:#0f1419;--bg-elev:#161c24;--fg:#e7ecf1;--muted:#8b98a5;--acc:#7dce7a;--cyan:#6ec8d4;--warn:#e0c36a;--err:#e07070;--fs:#e8a04a;--fs-warm:#e07a32;--fs-hot:#e07070;--line:#243040;--th:#1a222c;--hover:#1e2833;--zebra:#131a21}',
+         'html{color-scheme:dark}',
+         'html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}',
+         'header{padding:1.05rem 1.4rem;border-bottom:1px solid var(--line);background:var(--bg-elev);display:flex;flex-wrap:wrap;gap:.85rem 1.5rem;align-items:flex-start}',
+         '.brand{display:flex;align-items:baseline;gap:.5rem}',
+         '.brand h1{font-size:1.28rem;margin:0;color:var(--acc);letter-spacing:.02em}',
+         '.brand .ver{color:var(--muted);font-size:.85rem}',
+         '.ident{display:flex;flex-wrap:wrap;gap:.5rem 1.15rem;flex:1;min-width:14rem;margin:0}',
+         '.ident .chip{display:flex;flex-direction:column;gap:.12rem}',
+         '.ident dt{font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}',
+         '.ident dd{margin:0;font:600 .92rem/1.3 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}',
+         '.ident dd.host{color:var(--cyan)}',
+         '.controls{margin-left:auto;display:flex;gap:1rem;align-items:center}',
+         'label{color:var(--muted);font-size:.9rem}',
+         'select{background:var(--th);color:var(--fg);border:1px solid var(--line);padding:.28rem .45rem;border-radius:6px;font:inherit}',
+         'main{padding:1.15rem 1.4rem 1.25rem}',
+         'footer{padding:0 1.4rem 1.6rem}',
+         '.legend{background:var(--bg-elev);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem .75rem;margin:0 0 .85rem}',
+         '.legend h2{font-size:.92rem;margin:0 0 .55rem;color:var(--fg);font-weight:600}',
+         '.legend dl{margin:0;display:grid;gap:.45rem}',
+         '.legend .row{display:grid;grid-template-columns:7.2rem 1fr;gap:.65rem;align-items:start}',
+         '.legend dt{margin:0;font:600 .85rem/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}',
+         '.legend dd{margin:0;color:var(--muted);font-size:.88rem;line-height:1.4}',
+         '.hint{color:var(--muted);font-size:.8rem;margin:0}',
+         '.panel{background:var(--bg-elev);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem .35rem;margin:0 0 1rem}',
+         '.panel h2{font-size:1.05rem;margin:0 0 .7rem;color:var(--fg);font-weight:600}',
+         '.panel h2 .sub{color:var(--muted);font-weight:400;font-size:.82em;margin-left:.7rem}',
+         'td.mark-cell{color:var(--acc);font-weight:700;width:1.25rem;text-align:center}',
+         '.warn{color:var(--warn);background:rgba(224,195,106,.08);border:1px solid rgba(224,195,106,.28);border-radius:6px;padding:.5rem .7rem;margin:0 0 .75rem}',
+         '.table-wrap{overflow-x:auto;margin:0 0 1rem;-webkit-overflow-scrolling:touch}',
+         'table{border-collapse:collapse;width:max-content;max-width:none;margin:0;table-layout:auto;font:13px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}',
+         'caption{text-align:left;color:var(--acc);font:600 .92rem/1.3 system-ui,-apple-system,"Segoe UI",sans-serif;padding:.15rem 0 .45rem}',
+         'th,td{border-bottom:1px solid var(--line);padding:.32rem .55rem;text-align:right;white-space:nowrap;box-sizing:border-box}',
+         'th.name,td.name,th.ident,td.ident,th.path,td.path{text-align:left}',
+         'th.mark,td.mark-cell,th.act,td.act{text-align:center}',
+         'th.ident,td.ident{max-width:22rem;overflow:hidden;text-overflow:ellipsis}',
+         'th.idx,td.idx{max-width:11rem;overflow:hidden;text-overflow:ellipsis}',
+         'th.path,td.path{max-width:16rem;overflow:hidden;text-overflow:ellipsis}',
+         'th.bytes,td.bytes{min-width:6.75rem} th.ratio,td.ratio{min-width:7rem} th.free,td.free{min-width:11.5rem}',
+         'th.count,td.count{min-width:4.75rem} th.act,td.act{min-width:6.75rem} th.mark,td.mark-cell{width:1.4rem;padding-left:.2rem;padding-right:.2rem}',
+         'th{background:var(--th);color:var(--acc);cursor:pointer;position:sticky;top:0;z-index:2;user-select:none;font:600 .75rem/1.2 system-ui,-apple-system,"Segoe UI",sans-serif;text-transform:uppercase;letter-spacing:.02em}',
+         'th.sort-asc:after{content:" \\25b2";font-size:.7em} th.sort-desc:after{content:" \\25bc";font-size:.7em}',
+         'tbody tr:nth-child(even) td{background:var(--zebra)}',
+         'tbody tr:hover td{background:var(--hover)}',
+         'tbody tr.total-row td{background:var(--th);font-weight:600;color:var(--fg)}',
+         'td.path{color:var(--muted);font-size:.92em}',
+         '.act.compact{color:var(--acc)} .act.rebuild{color:var(--warn)} .act.resync{color:var(--err)} .act.wait{color:var(--muted)}',
+         'td.err{color:var(--err)}',
+         'td.role-PRIMARY{color:var(--acc)} td.role-SECONDARY{color:var(--cyan)} td.role-ARBITER{color:var(--muted)}',
+         '.fs{display:flex;flex-direction:column;gap:.4rem;margin:.2rem 0 .95rem}',
+         '.fs-head{font:600 .82rem/1.2 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--fg)}',
+         '.fs-track{position:relative;height:1.25rem;min-width:12rem;background:var(--line);border-radius:6px;overflow:hidden}',
+         '.fs-fill{height:100%;background:var(--fs);border-radius:inherit}',
+         '.fs-warm .fs-fill{background:var(--fs-warm)} .fs-hot .fs-fill{background:var(--fs-hot)}',
+         '.fs-pct{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--fg);text-shadow:0 0 4px #000,0 1px 2px #000}',
+         '.fs-meta{display:flex;flex-wrap:wrap;gap:.35rem 1.15rem;font-size:.85rem}',
+         '.fs-meta b{color:var(--muted);font-weight:600;margin-right:.3rem;font-size:.68rem;letter-spacing:.06em;text-transform:uppercase}',
+         '.fs-note{margin:0;color:var(--muted);font-size:.8rem}',
+         '@media (max-width:720px){header{flex-direction:column}.ident{flex-direction:column}.controls{margin-left:0}main,header,footer{padding-left:.85rem;padding-right:.85rem}th,td{padding:.26rem .4rem}table{font-size:12px}}'
+      ].join('');
+      function chip(label, value, extra) {
+         if (value == null || value === '') return '';
+         return '<div class="chip"><dt>' + htmlEsc(label) + '</dt><dd'
+            + (extra ? ' class="' + extra + '"' : '') + '>' + htmlEsc(value) + '</dd></div>';
+      }
       return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
          + '<meta name="viewport" content="width=device-width, initial-scale=1">'
          + '<title>' + htmlEsc(title) + '</title>'
          + '<style>' + css + '</style></head><body>'
-         + '<header><h1>dbstats.js v' + htmlEsc(payload.version || '') + '</h1>'
-         + '<div class="meta">'
-         + '<b>' + htmlEsc(host) + '</b>'
-         + ' · ' + htmlEsc(payload.proc || '')
-         + ' · ' + htmlEsc(payload.mongod || '')
-         + (payload.dbPath ? ' · ' + htmlEsc(payload.dbPath) : '')
-         + (generated ? ' · ' + htmlEsc(generated) : '')
-         + (payload.catalog && payload.catalog.builder ? ' · catalog ' + htmlEsc(payload.catalog.builder) : '')
-         + '</div>'
+         + '<header><div class="brand"><h1>dbstats.js</h1><span class="ver">v'
+         + htmlEsc(payload.version || '') + '</span></div>'
+         + '<dl class="ident">'
+         + chip('Host', host, 'host')
+         + chip('Process', payload.proc)
+         + chip('Server', payload.mongod)
+         + chip('dbPath', payload.dbPath)
+         + chip('Catalog', payload.catalog && payload.catalog.builder)
+         + chip('Generated', generated)
+         + '</dl>'
          + '<div class="controls"><label>verbosity <select id="verbosity">'
          + '<option value="full">full</option>'
          + '<option value="summary">summary</option>'
@@ -2187,6 +2321,16 @@
          + '<option value="compactonly">compactOnly</option>'
          + '</select></label></div></header>'
          + '<main id="report"></main>'
+         + '<footer><section class="legend"><h2>Compaction helper recommendations</h2><dl>'
+         + compactionLegendItems().map(item => {
+            const cls = (item.key === 'compact' || item.key === 'rebuild'
+               || item.key === 'resync' || item.key === 'wait')
+               ? (' class="act ' + item.key + '"') : '';
+            return '<div class="row"><dt' + cls + '>' + htmlEsc(item.key) + '</dt><dd>'
+               + htmlEsc(item.text) + '</dd></div>';
+         }).join('')
+         + '</dl></section>'
+         + '<p class="hint">Click a column header to sort. Verbosity filters this page.</p></footer>'
          + '<script>window.__DBSTATS=' + jsonForScript({ "payload": payload, "ui": ui }) + ';</script>'
          + '<script>(' + boot + ')();</script>'
          + '</body></html>';
@@ -2327,6 +2471,54 @@
       }
       const unit = formatUnit(bytes) + (lowerBound ? '*' : '');
       return (unit + ' │' + formatPct(bytes, storageSize).padStart(6)).padStart(columnWidth + 8);
+   }
+
+   function compactionLegendItems() {
+      /*
+       *  Footer copy for tabular and HTML. Matches formatCompaction.
+       */
+      return [
+         {
+            "key": "compact",
+            "text": "Collection or _id_ index: run compact() when reusable bytes exceed 20% of the collection (50% for _id_) and WiredTiger's reclaim floor (1 MiB on 8.0+)."
+         },
+         {
+            "key": "rebuild",
+            "text": "Secondary index: drop and rebuild. compact() does not reclaim non-_id_ indexes; reusable bytes above 50% and the same reclaim floor."
+         },
+         {
+            "key": "wait",
+            "text": "local.oplog.rs meets the compact threshold. Leave the oplog; wait for capped reuse."
+         },
+         {
+            "key": "resync",
+            "text": "dbPath collection storage is more than 50% reusable. Initial sync / resync is the practical reclaim at that scale."
+         },
+         {
+            "key": "————",
+            "text": "Below those thresholds, or not a compactable object. N/A means WiredTiger free-space is unknown."
+         }
+      ];
+   }
+
+   function compactionColour(label) {
+      const key = String(label || '').trim();
+      if (key === 'compact') return 'green';
+      if (key === 'rebuild') return 'yellow';
+      if (key === 'wait') return 'cyan';
+      if (key === 'resync') return 'red';
+      return 'yellow';
+   }
+
+   function printCompactionLegend() {
+      console.log('');
+      printRule('light');
+      console.log('[bold][green]Compaction helper recommendations[/]');
+      compactionLegendItems().forEach(({ key, text }) => {
+         console.log(`  [${compactionColour(key)}]${padVisible(key, 8)}[/]  ${text}`);
+      });
+      printRule('light');
+      console.log('');
    }
 
    function formatCompaction(kind, storageSize, freeStorageSize, { oplog = false, idIndex = false, incomplete = false } = {}) {
@@ -2482,19 +2674,19 @@
        *  Shared metric columns: full NS row | index rollup | index detail row
        *  Leaf storage (collection/index file) may display the WT min alloc; rollups do not.
        */
-      const compact = String(compaction).padStart(columnWidth - 2);
+      const compactCell = `[${compactionColour(compaction)}]${String(compaction).padStart(columnWidth - 2)}[/]`;
       if (mode === 'indexRow') {
-         return `${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)} [cyan]${compact}[/]`;
+         return `${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)} ${compactCell}`;
       }
       if (mode === 'indexRollup') {
-         return `${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)} [cyan]${compact}[/]`;
+         return `${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)} ${compactCell}`;
       }
       if (mode === 'totalRow') {
          const obj = (objects == null ? '' : objects.toString()).padStart(columnWidth);
-         return `${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj} [cyan]${compact}[/]`;
+         return `${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj} ${compactCell}`;
       }
       const obj = (objects == null ? '' : objects.toString()).padStart(columnWidth);
-      return `${formatUnit(dataSize).padStart(columnWidth)} ${formatCompressionCell(compression, compressor)} ${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj} [cyan]${compact}[/]`;
+      return `${formatUnit(dataSize).padStart(columnWidth)} ${formatCompressionCell(compression, compressor)} ${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj} ${compactCell}`;
    }
 
    function printRollupRows({
@@ -2954,13 +3146,13 @@
       })}`);
    }
 
-   function printFilesystemLine(stats = {}, label = 'Filesystem') {
+   function printFilesystemLine(stats = {}, label = 'Filesystem volume') {
       const used = jsonNumber(stats.fsUsedSize);
       const total = jsonNumber(stats.fsTotalSize);
       if (used == null || total == null || !(total > 0)) return false;
       const free = total - used;
       const pct = formatPct(used, total).trim();
-      console.log(`[bold][green]${label}:[/] [cyan]${formatUnit(used)}[/] used / [cyan]${formatUnit(total)}[/] (${pct})   [cyan]${formatUnit(free)}[/] free`);
+      console.log(`[bold][green]${label}:[/] [cyan]${formatUnit(used)}[/] used / [cyan]${formatUnit(total)}[/] capacity (${pct} used)   [cyan]${formatUnit(free)}[/] free`);
       return true;
    }
 
@@ -2970,7 +3162,7 @@
       const n = mongodStatsNodes(topology).length;
       console.log('');
       printTotalConsumption(stats, `Cluster consumption (${n} dbPaths)`);
-      printFilesystemLine(stats, 'Filesystems');
+      printFilesystemLine(stats, 'Filesystem volumes');
       return true;
    }
 
