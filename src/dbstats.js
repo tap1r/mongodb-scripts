@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.30.0"
+ *  Version: "0.30.1"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -150,7 +150,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.30.0" };
+   const __script = { "name": "dbstats.js", "version": "0.30.1" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -175,7 +175,7 @@
       for (let i = 2; i < argv.length; i++) {
          const a = String(argv[i]);
          if (a === '-f' || a === '--file') {
-            if (i + 1 < argv.length) files.push(argv[i++]);
+            if (i + 1 < argv.length) files.push(argv[++i]);
             continue;
          }
          if (a.startsWith('--file=')) {
@@ -1198,17 +1198,19 @@
       printDbPath(dbStats);
    }
 
-   function printDatabaseTables(dbStats = {}) {
+   function printDatabaseTables(dbStats = {}, { leadBlank = true } = {}) {
       const verb = outputVerbosity();
       if (verb === 'summary') {
          projectDatabases(dbStats.databases || []).forEach(database => {
-            printDbHeader(database);
+            printDbHeader(database, { leadBlank });
+            leadBlank = true;
             printDb(database);
          });
          return;
       }
       projectCollectionsByDatabase(dbStats).forEach(({ database, collections }) => {
-         printDbHeader(database);
+         printDbHeader(database, { leadBlank });
+         leadBlank = true;
          printCollHeader(collections.length);
          collections.forEach(collection => {
             printCollection(collection);
@@ -1223,7 +1225,7 @@
       });
    }
 
-   function printNamespaceTables(dbStats = {}) {
+   function printNamespaceTables(dbStats = {}, { leadBlank = true } = {}) {
       /*
        *  Copy rows — do not mutate live collection objects.
        */
@@ -1252,7 +1254,7 @@
          ? stableSort(namespaces, printerRank('namespace')).slice(0, limitN())
          : stableSort(namespaces, sortBy('namespace'));
 
-      printNSHeader(ranked.length);
+      printNSHeader(ranked.length, { leadBlank });
       ranked.forEach(namespace => {
          printNamespace(namespace);
          if (verb === 'summary') return;
@@ -1299,7 +1301,7 @@
          if (!node || (!node.stats && !node.error)) return;
          printNodeBanner(node, widths);
          if (!node.stats) return;
-         printBody(node.stats);
+         printBody(node.stats, { "leadBlank": false });
          printDbPath(node.stats, { "hostLine": false });
       });
       if (nodes.length > 1) {
@@ -1616,7 +1618,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.30.0',
+         "version": '0.30.1',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -2533,8 +2535,8 @@
       return;
    }
 
-   function printNSHeader(nsTotal = 0) {
-      console.log('');
+   function printNSHeader(nsTotal = 0, { leadBlank = true } = {}) {
+      if (leadBlank) console.log('');
       printRule('heavy');
       console.log(`[bold][green]${padVisible(`Namespaces: ${nsTotal}`, rowHeader)}[/] [bold][green]${columnHeaders()}[/]`);
       return;
@@ -2582,8 +2584,8 @@
       return;
    }
 
-   function printDbHeader({ name } = {}) {
-      console.log('');
+   function printDbHeader({ name } = {}, { leadBlank = true } = {}) {
+      if (leadBlank) console.log('');
       printRule('heavy');
       console.log(`[bold][green]Database:[/] [cyan]${padVisible(String(name || ''), Math.max(0, rowHeader - 10))}[/] [bold][green]${columnHeaders()}[/]`);
       return;
