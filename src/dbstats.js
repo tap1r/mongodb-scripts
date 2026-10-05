@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.30.1"
+ *  Version: "0.30.2"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -84,7 +84,7 @@
  *     },
  *     topology: {
  *        discover: <true|false>, // default true; shared-tier / serverless stay one node
- *        depth: <'summary'|'expanded'> // summary = $stats remotes + connecting catalog + member footer; expanded = catalog+$collStats per member, one table per node
+ *        depth: <'summary'|'expanded'> // default expanded = catalog+$collStats per member, one table per node; summary = $stats remotes + connecting catalog + member footer
  *     },
  *     catalog: <'auto'|'legacy'|'listCatalog'|'listClusterCatalog'> // default auto
  *  }
@@ -127,7 +127,7 @@
  *  Examples of topology fan-out:
  *
  *    mongosh --quiet --eval 'var options = { topology: { discover: false } };' -f dbstats.js
- *    mongosh --quiet --eval 'var options = { topology: { depth: "expanded" } };' -f dbstats.js
+ *    mongosh --quiet --eval 'var options = { topology: { depth: "summary" } };' -f dbstats.js
  *
  *  Gather profiling (tuning; default off). Tabular prints a PROFILE block; json/html
  *  add a `profile` key (phases, $collStats min/p50/p95/max, overlap, slowest NS,
@@ -150,7 +150,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.30.1" };
+   const __script = { "name": "dbstats.js", "version": "0.30.2" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -259,7 +259,7 @@
       },
       "topology": {
          "discover": true, // [true|false]
-         "depth": "summary" // ['summary'|'expanded']; replica / sharded / output.topology alias depth
+         "depth": "expanded" // ['summary'|'expanded']; replica / sharded / output.topology alias depth
       },
       "catalog": "auto" // ['auto'|'legacy'|'listCatalog'|'listClusterCatalog']
    };
@@ -1618,7 +1618,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.30.1',
+         "version": '0.30.2',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
