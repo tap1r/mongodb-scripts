@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "0.32.0"
+ *  Version: "1.0.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,13 +11,13 @@
  *  This file is mongosh-only. TopologySnapshot.fromSession() lists cluster
  *  identity; materializeNodes({ depth }) gathers remotes via child Mongo()
  *  (no load of discovery.js). resolveOptions overlays JSONC then --eval.
- *  for(db) still TBA.
+ *  for(db) still TBA. Overlapping topology fan-out is TABLED.
  */
 
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "0.32.0"
+      "version": "1.0.0"
 });
 
 /*  Notes:
@@ -1407,9 +1407,11 @@ class TopologySnapshot {
    async materializeNodes({ depth, replica, sharded, gather, onProgress } = {}) {
       /*
        *  Connect to advertised remotes and run gather(node) on each child
-       *  session. Serial (global db). Shared-tier / serverless / standalone
-       *  are a no-op (M0/Flex compact/autoCompact cannot run; serverless has
-       *  no replica seeds). Connecting node is skipped (already topology.aggregate).
+       *  session. Serial (global db). Overlapping child gathers are TABLED
+       *  (needs for(db) so each child has its own session). Shared-tier /
+       *  serverless / standalone are a no-op (M0/Flex compact/autoCompact
+       *  cannot run; serverless has no replica seeds). Connecting node is
+       *  skipped (already topology.aggregate).
        *  depth summary = $stats-depth gather; expanded = full catalog +
        *  $collStats (gather callback decides). Cluster kind selects the walk.
        *  replica / sharded alias depth. Sharded expanded fans out seed hosts.

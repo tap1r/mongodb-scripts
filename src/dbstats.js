@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "0.30.2"
+ *  Version: "1.0.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -150,7 +150,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "0.30.2" };
+   const __script = { "name": "dbstats.js", "version": "1.0.0" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -525,6 +525,7 @@
          if (topology.connecting) topology.connecting.stats = dbPath;
 
          if (topologyOptions.discover !== false) {
+            // Overlapping topology fan-out is TABLED (serial withChildSession).
             await topology.materializeNodes({
                "depth": topologyDepth(),
                "gather": (node, { depth } = {}) => gatherDbPath({
@@ -1618,7 +1619,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '0.30.2',
+         "version": '1.0.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
