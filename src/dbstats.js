@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.1"
+ *  Version: "1.2.2"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -86,6 +86,7 @@
  *        discover: <true|false>, // default true; shared-tier / serverless stay one node (compact/autoCompact cannot run)
  *        depth: <'summary'|'expanded'> // default expanded = catalog+$collStats per member, one table per node; summary = $stats remotes + connecting catalog + member footer
  *        // sharded: CSRS members are listed; mongos row is cluster data (no config/local) when they are
+        // MongoDB 8+: shard-local directShardOperations is granted for the walk and revoked after
  *     },
  *     catalog: <'auto'|'legacy'|'listCatalog'|'listClusterCatalog'> // default auto
  *  }
@@ -151,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.1" };
+   const __script = { "name": "dbstats.js", "version": "1.2.2" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -528,22 +529,35 @@
 
          if (topologyOptions.discover !== false) {
             // Overlapping topology fan-out is TABLED (serial withChildSession).
-            await topology.materializeNodes({
-               "depth": topologyDepth(),
-               "gather": (node, { depth } = {}) => gatherDbPath({
-                  "host": node,
-                  hud,
-                  "depth": depth || 'summary',
-                  "hudLabel": node && node.instance,
-                  profile
-               }),
-               "onProgress": ({ node, index, total }) => {
-                  hud.render(
-                     `[cyan]topology[/]  ${index + 1}/${total}  ${node && node.instance || ''}`,
-                     { "force": true }
-                  );
+            // MongoDB 8+ user-database dbStats on a shard needs the
+            // shard-local directShardOperations role (mongos grant is not enough).
+            const shardRole = await acquireDirectShardRoleLeases(topology);
+            if (shardRole.warnings.length) {
+               dbPath.gatherWarnings = (dbPath.gatherWarnings || []).concat(shardRole.warnings);
+            }
+            try {
+               await topology.materializeNodes({
+                  "depth": topologyDepth(),
+                  "gather": (node, { depth } = {}) => gatherDbPath({
+                     "host": node,
+                     hud,
+                     "depth": depth || 'summary',
+                     "hudLabel": node && node.instance,
+                     profile
+                  }),
+                  "onProgress": ({ node, index, total }) => {
+                     hud.render(
+                        `[cyan]topology[/]  ${index + 1}/${total}  ${node && node.instance || ''}`,
+                        { "force": true }
+                     );
+                  }
+               });
+            } finally {
+               const released = await releaseDirectShardRoleLeases(shardRole.leases);
+               if (released.length) {
+                  dbPath.gatherWarnings = (dbPath.gatherWarnings || []).concat(released);
                }
-            });
+            }
             profile.phase('remoteGather', {
                "nodes": Array.isArray(topology.nodes) ? topology.nodes.length : 0,
                "kind": (topology.cluster && topology.cluster.kind) || null
@@ -1318,6 +1332,7 @@
          printRule('heavy');
          printTopologyMembers(topology, widths);
          printClusterConsumption(topology);
+         printDirectShardNotes(dbStats);
          printRule('heavy');
       }
       printCompactionLegend();
@@ -1634,7 +1649,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.1',
+         "version": '1.2.2',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -2900,6 +2915,144 @@
       connecting.dbPath = 'cluster data';
    }
 
+   function currentAuthUser() {
+      try {
+         const cs = db.adminCommand({ "connectionStatus": 1 });
+         const users = (cs && cs.authInfo && cs.authInfo.authenticatedUsers) || [];
+         const u = users[0];
+         if (!u || !u.user) return null;
+         return { "user": u.user, "db": u.db || 'admin' };
+      } catch (_) {
+         return null;
+      }
+   }
+
+   function hasDirectShardOperationsRole(roles = []) {
+      return (roles || []).some(r => r && r.role === 'directShardOperations');
+   }
+
+   async function withDirectShardSession(instance, parent, fn) {
+      let mongo;
+      try {
+         mongo = openChildMongo(childMongoUri(instance, { parent }));
+         return await withChildSession(mongo, fn);
+      } finally {
+         closeChildMongo(mongo);
+      }
+   }
+
+   async function tryDirectShardRoleGrant(instance, user, parent) {
+      /*
+       *  MongoDB 8+ blocks user-database dbStats on a direct shard
+       *  connection unless the shard-local user has directShardOperations.
+       *  Cluster-wide grantRolesToUser on mongos does not update that user.
+       */
+      try {
+         return await withDirectShardSession(instance, parent, () => {
+            const cs = db.adminCommand({ "connectionStatus": 1 }) || {};
+            const roles = (cs.authInfo && cs.authInfo.authenticatedUserRoles) || [];
+            if (hasDirectShardOperationsRole(roles)) return 'already';
+            const helloDoc = hello() || {};
+            if (!helloDoc.isWritablePrimary) return 'not_primary';
+            const res = db.getSiblingDB(user.db).runCommand({
+               "grantRolesToUser": user.user,
+               "roles": [{ "role": 'directShardOperations', "db": 'admin' }],
+               "writeConcern": { "w": 'majority', "wtimeout": 10000 }
+            });
+            return (res && res.ok) ? 'granted' : 'failed';
+         });
+      } catch (e) {
+         const msg = (e && (e.errmsg || e.message)) || String(e);
+         if (/not writable primary|not master|not primary/i.test(msg)) return 'not_primary';
+         return 'failed';
+      }
+   }
+
+   async function tryDirectShardRoleRevoke(instance, user, parent) {
+      try {
+         return await withDirectShardSession(instance, parent, () => {
+            const res = db.getSiblingDB(user.db).runCommand({
+               "revokeRolesFromUser": user.user,
+               "roles": [{ "role": 'directShardOperations', "db": 'admin' }],
+               "writeConcern": { "w": 'majority', "wtimeout": 10000 }
+            });
+            return !!(res && res.ok);
+         });
+      } catch (_) {
+         return false;
+      }
+   }
+
+   async function acquireDirectShardRoleLeases(topology) {
+      const out = { "leases": [], "warnings": [] };
+      if (!topology || (topology.cluster && topology.cluster.kind) !== 'sharded') return out;
+      if (typeof serverVer === 'function' && !serverVer('8.0')) return out;
+      const user = currentAuthUser();
+      if (!user) return out;
+      let parent;
+      try {
+         parent = decomposeParentUri(db.getMongo().getURI());
+      } catch (_) {
+         return out;
+      }
+      const remotes = (topology.nodes || []).filter(
+         node => node && node.connecting !== true && node.proc !== 'mongos' && node.instance
+      );
+      let granted = 0;
+      let failed = 0;
+      for (const node of remotes) {
+         const status = await tryDirectShardRoleGrant(node.instance, user, parent);
+         if (status === 'already') continue;
+         if (status === 'granted') {
+            out.leases.push({ "instance": node.instance, user, parent });
+            granted++;
+            continue;
+         }
+         if (status === 'not_primary') continue;
+         failed++;
+      }
+      if (granted) {
+         out.warnings.push({
+            "code": 'directShardOperationsAssumed',
+            "message": 'Temporarily granted the directShardOperations role on shard-local users so MongoDB 8+ allows user-database dbStats on direct shard connections. The role is revoked after the walk.'
+         });
+      } else if (failed) {
+         out.warnings.push({
+            "code": 'directShardOperationsRequired',
+            "message": 'MongoDB 8+ rejected user-database dbStats on direct shard connections. Grant the built-in directShardOperations role on each shard-local user, or shard-local userAdmin was unable to grant it for this walk.'
+         });
+      }
+      return out;
+   }
+
+   async function releaseDirectShardRoleLeases(leases = []) {
+      const warnings = [];
+      for (const lease of leases) {
+         if (!lease || !lease.instance || !lease.user) continue;
+         const ok = await tryDirectShardRoleRevoke(lease.instance, lease.user, lease.parent);
+         if (!ok) {
+            warnings.push({
+               "code": 'directShardOperationsRevokeFailed',
+               "message": `Failed to revoke the directShardOperations role on ${lease.instance} after the walk. Revoke it on that shard-local user.`
+            });
+         }
+      }
+      return warnings;
+   }
+
+   function printDirectShardNotes(dbStats = {}) {
+      const warnings = dbStats.gatherWarnings || [];
+      warnings.forEach(w => {
+         if (!w || !w.code) return;
+         if (w.code === 'directShardOperationsAssumed') {
+            console.log(`[yellow][NOTE] ${w.message}[/]`);
+         } else if (w.code === 'directShardOperationsRequired'
+               || w.code === 'directShardOperationsRevokeFailed') {
+            console.log(`[red][WARN] ${w.message}[/]`);
+         }
+      });
+   }
+
    function topologyDepthExpanded() {
       return topologyDepth() === 'expanded';
    }
@@ -3328,6 +3481,7 @@
       if (dbStats.catalogFallback === true) {
          console.log('[yellow][NOTE] Catalog listing used listCollections; $listCatalog/$listClusterCatalog was unavailable or unauthorized.[/]');
       }
+      if (hostLine) printDirectShardNotes(dbStats);
       printRule('heavy');
       console.log('');
       return;
