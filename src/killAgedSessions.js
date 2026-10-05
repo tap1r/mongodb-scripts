@@ -48,11 +48,11 @@
     *
     *  Example: terminates all user sessions older than 1 minute
     *
-    *    mongosh --host "replset/localhost" --eval 'let filter = { "allUsers": true }, age = 60000;' killAgedSessions.js
+    *    mongosh --host "replset/localhost" --eval 'var filter = { "allUsers": true }, age = 60000;' killAgedSessions.js
     *
     *  Example: terminates user dba's sessions older than 500ms
     *
-    *    mongosh --host "replset/localhost" --eval 'let filter = { "users": [{ "user": "dba", "db": "admin" }] }, age = 500;' killAgedSessions.js
+    *    mongosh --host "replset/localhost" --eval 'var filter = { "users": [{ "user": "dba", "db": "admin" }] }, age = 500;' killAgedSessions.js
     */
 
    const __script = { "name": "killAgedSessions.js", "version": "0.2.2" };
