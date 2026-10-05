@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "1.0.0"
+ *  Version: "1.1.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,7 +17,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "1.0.0"
+      "version": "1.1.0"
 });
 
 /*  Notes:
@@ -81,13 +81,14 @@ if (typeof __lib === 'undefined') (
  *  - CollectionStats / DatabaseStats / DbPathStats construct from those
  *    DTOs. HostNode owns connecting-host identity; DbPathStats composes it.
  *    TopologySnapshot.fromSession() lists cluster identity (kind, setName,
- *    shard ids, advertised replica members / shard seeds) from the
- *    connecting session. Shared-tier / serverless stay one connecting node.
- *    TopologySnapshot.materializeNodes({ depth }) connects with discovery-style
- *    child mongodb:// URIs (do not load discovery.js) and runs a gather
- *    callback on each remote. depth summary|$stats vs expanded catalog+$collStats;
- *    cluster.kind selects the walk (replica/sharded keys alias depth). Serial
- *    global-db swap; not for(db). Do not gather mongos local.* from the router.
+ *    shard ids, advertised replica members / shard seeds, config replica set)
+ *    from the connecting session. Shared-tier / serverless stay one connecting
+ *    node. TopologySnapshot.materializeNodes({ depth }) connects with
+ *    discovery-style child mongodb:// URIs (do not load discovery.js) and
+ *    runs a gather callback on each remote. depth summary|$stats vs expanded
+ *    catalog+$collStats; cluster.kind selects the walk (replica/sharded keys
+ *    alias depth). Serial global-db swap; not for(db). Do not gather mongos
+ *    local.* or config (CSRS) from the router when config members are listed.
  *    There is no MetaStats façade.
  *  - Catalog identity first, stats on demand: collection.fetchStats(),
  *    database.fetchAllStats({ concurrency }), dbPath.materialize({ concurrency }).
@@ -1048,6 +1049,41 @@ function replicaSeedHosts(host) {
    return [s];
 }
 
+function discoverConfigConnectionString(errors = []) {
+   /*
+    *  mongos / shard-advertised config replica set seed (setName/host,host).
+    *  getShardMap first; getCmdLineOpts sharding.configDB fallback.
+    *  Do not load discovery.js. Do not query config.mongos.
+    */
+   const attempts = [];
+   const trySpec = (step, read) => {
+      try {
+         const spec = read();
+         if (typeof spec === 'string' && spec.trim()) return spec.trim();
+      } catch (e) {
+         attempts.push({
+            "step": step,
+            "message": (e && (e.errmsg || e.message)) || String(e)
+         });
+      }
+      return null;
+   };
+   const spec = trySpec('getShardMap', () => {
+      const map = db.adminCommand({ "getShardMap": 1 });
+      return (map && map.map && map.map.config)
+         || (map && map.connStrings && map.connStrings.config);
+   }) || trySpec('configDB', () => {
+      const opts = db.adminCommand({ "getCmdLineOpts": 1 });
+      return opts && opts.parsed && opts.parsed.sharding && opts.parsed.sharding.configDB;
+   });
+   if (!spec) {
+      errors.push(attempts.length
+         ? attempts[attempts.length - 1]
+         : { "step": "configReplSet", "message": "config replica set not advertised" });
+   }
+   return spec || null;
+}
+
 function decomposeParentUri(rawUri) {
    /*
     *  Parent session URI → parts for rebuilding legacy mongodb:// child URIs.
@@ -1208,7 +1244,8 @@ class HostNode {
     *  TopologySnapshot.materializeNodes() connects.
     */
    constructor({
-         instance, hostname, proc, dbPath, shards = [], role, connecting, stats = null
+         instance, hostname, proc, dbPath, shards = [], role, connecting,
+         stats = null, configsvr = false
       } = {}) {
       this.instance = instance;
       this.hostname = hostname;
@@ -1218,6 +1255,7 @@ class HostNode {
       this.role = role;
       this.connecting = connecting === true;
       this.stats = stats || null;
+      this.configsvr = configsvr === true;
       this.error = null;
    }
    init({ connecting = true, preserveInstance = false } = {}) {
@@ -1233,7 +1271,7 @@ class HostNode {
       this.dbPath = (snap.atlasPlatform === 'serverless') ? 'serverless'
                   : (snap.atlasPlatform === 'sharedTier') ? 'sharedTier'
                   : (this.proc === 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
-                  : (this.proc === 'mongos') ? 'sharded'
+                  : (this.proc === 'mongos') ? 'sharded' // dbstats relabels to cluster data when CSRS is listed
                   : 'unknown';
       if (this.proc === 'mongos') {
          this.shards = Array.isArray(snap.shardIds)
@@ -1266,7 +1304,9 @@ class TopologySnapshot {
    /*
     *  Cluster identity from the connecting session; per-node stats via
     *  materializeNodes({ depth }) (discovery-style child Mongo(), not load()).
-    *  Do not gather mongos local.* from the router.
+    *  Sharded walks listShards plus the config replica set (getShardMap /
+    *  sharding.configDB). Do not gather mongos local.* or config from the
+    *  router when CSRS members are listed.
     */
    constructor({
          cluster = {}, connecting = null, nodes = [], aggregate = null, errors = []
@@ -1306,7 +1346,8 @@ class TopologySnapshot {
       const cluster = {
          "kind": kind,
          "setName": helloDoc.setName || null,
-         "shardIds": Array.isArray(snap.shardIds) ? snap.shardIds.slice() : []
+         "shardIds": Array.isArray(snap.shardIds) ? snap.shardIds.slice() : [],
+         "configSetName": null
       };
 
       const nodes = [connecting];
@@ -1364,6 +1405,23 @@ class TopologySnapshot {
                }));
             });
          }
+         const configSpec = discoverConfigConnectionString(errors);
+         if (configSpec) {
+            let setName = 'config';
+            if (String(configSpec).includes('/')) {
+               try { setName = parseReplSetHosts(configSpec).setName || setName; }
+               catch (_) { /* keep config */ }
+            }
+            cluster.configSetName = setName;
+            pushNode(new HostNode({
+               "instance": configSpec,
+               "hostname": setName,
+               "proc": 'mongod',
+               "shards": ['config'],
+               "configsvr": true,
+               "connecting": false
+            }));
+         }
       }
 
       return new TopologySnapshot({ cluster, connecting, nodes, errors });
@@ -1373,8 +1431,8 @@ class TopologySnapshot {
    }
    expandShardedMembers() {
       /*
-       *  Replace listShards seed-list nodes with one HostNode per seed host.
-       *  Connecting mongos stays. Used when sharded depth is expanded.
+       *  Replace listShards / config seed-list nodes with one HostNode per
+       *  seed host. Connecting mongos stays. Used when sharded depth is expanded.
        */
       const connecting = this.connecting;
       const out = connecting ? [connecting] : [];
@@ -1397,6 +1455,7 @@ class TopologySnapshot {
                "hostname": hostNameFromHostPort(host),
                "proc": 'mongod',
                "shards": Array.isArray(node.shards) ? node.shards.slice() : [],
+               "configsvr": node.configsvr === true,
                "connecting": false
             }));
          });
@@ -1467,6 +1526,10 @@ class TopologySnapshot {
             if (node.proc === 'mongos') node.role = 'mongos';
             else if (helloDoc.isWritablePrimary) node.role = 'PRIMARY';
             else if (helloDoc.secondary) node.role = 'SECONDARY';
+            if (helloDoc.configsvr) node.configsvr = true;
+            if (node.configsvr && (!Array.isArray(node.shards) || !node.shards.length)) {
+               node.shards = ['config'];
+            }
             node.stats = await gather(node, { depth });
             node.error = null;
          });

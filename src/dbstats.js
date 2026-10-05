@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.1.0"
+ *  Version: "1.2.0"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -85,6 +85,7 @@
  *     topology: {
  *        discover: <true|false>, // default true; shared-tier / serverless stay one node (compact/autoCompact cannot run)
  *        depth: <'summary'|'expanded'> // default expanded = catalog+$collStats per member, one table per node; summary = $stats remotes + connecting catalog + member footer
+ *        // sharded: CSRS members are listed; mongos row is cluster data (no config/local) when they are
  *     },
  *     catalog: <'auto'|'legacy'|'listCatalog'|'listClusterCatalog'> // default auto
  *  }
@@ -150,7 +151,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.1.0" };
+   const __script = { "name": "dbstats.js", "version": "1.2.0" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -486,6 +487,7 @@
        */
       const profile = createGatherProfile(outputOptions.profile === true);
       const topology = TopologySnapshot.fromSession();
+      markMongosClusterData(topology);
       const jsonCli = outputOptions.format === 'json' || outputOptions.format === 'html';
       if (__dbstatsCliFile && !jsonCli
             && typeof __mdblibServerUnsupported !== 'undefined' && __mdblibServerUnsupported) {
@@ -590,7 +592,12 @@
          if (profile && typeof profile.touch === 'function') profile.touch();
       };
 
-      const dbNames = stableSort(getDBNames(dbFilter), compareBy(v => v, 1));
+      let dbNames = stableSort(getDBNames(dbFilter), compareBy(v => v, 1));
+      if (host && host.omitConfigDb === true) {
+         // mongos cluster data: user (+ admin) databases. CSRS holds config;
+         // local.* is not gathered from the router.
+         dbNames = dbNames.filter(name => name !== 'config' && name !== 'local');
+      }
       mark('listDatabases', { "count": dbNames.length });
       const dbTotal = dbNames.length;
       dbPath.databases = dbNames.map(name => new DatabaseStats({
@@ -1459,6 +1466,7 @@
          "kind": kind,
          "setName": cluster.setName || null,
          "shardIds": Array.isArray(cluster.shardIds) ? cluster.shardIds : [],
+         "configSetName": cluster.configSetName || null,
          "nodes": (topology.nodes || []).map(node => {
             const row = {
                "instance": node.instance || null,
@@ -1467,6 +1475,7 @@
                "role": node.role || null,
                "connecting": node.connecting === true,
                "shards": Array.isArray(node.shards) ? node.shards : [],
+               "configsvr": node.configsvr === true,
                "dbPath": node.dbPath || null,
                "stats": node.stats ? jsonTotals(node.stats) : null,
                "error": node.error || null
@@ -1621,7 +1630,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.1.0',
+         "version": '1.2.0',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -2127,25 +2136,36 @@
          return html;
       }
 
+      function nodeShard(node) {
+         if (node && node.configsvr) return 'config';
+         if (Array.isArray(node.shards) && node.shards.length === 1) return String(node.shards[0]);
+         return '';
+      }
+
       function renderTopology() {
          const topo = data.topology || {};
          const nodes = topo.nodes || [];
          if (!nodes.length) return '';
+         const showShard = topo.kind === 'sharded' && nodes.some(n => nodeShard(n));
          const head = (topo.kind === 'replSet')
             ? ('Replica set ' + (topo.setName || '') + ' — ' + nodes.length + ' members')
             : (topo.kind === 'sharded')
-               ? ('Sharded cluster — ' + nodes.length + ' nodes' + ((topo.shardIds || []).length ? ' — shards ' + JSON.stringify(topo.shardIds) : ''))
+               ? ('Sharded cluster — ' + nodes.length + ' nodes'
+                  + ((topo.shardIds || []).length ? ' — shards ' + JSON.stringify(topo.shardIds) : '')
+                  + (topo.configSetName ? ' — config ' + JSON.stringify(topo.configSetName) : ''))
                : ('Topology ' + (topo.kind || '') + ' — ' + nodes.length + ' nodes');
          let rows = nodes.map(node => {
             const host = node.instance || node.hostname || '';
             const mark = node.connecting ? '*' : '';
             const stats = node.stats || {};
             const role = node.role || '';
+            const shard = nodeShard(node);
             return '<tr' + (node.connecting ? ' class="connecting"' : '') + '>'
                + td(mark, mark, 'name mark-cell')
                + td(host, host, 'name ident', '', host)
                + td(role, role, 'name role-' + role.replace(/[^A-Za-z0-9_-]/g, ''))
                + td(node.proc || '', node.proc || '', 'name')
+               + (showShard ? td(shard, shard, 'name') : '')
                + td(node.dbPath || '', node.dbPath || '', 'name path', '', node.dbPath || '')
                + bytesTd(stats.totalSize != null ? stats.totalSize : stats.storageSize)
                + freeTd(
@@ -2162,13 +2182,17 @@
                + td('Cluster consumption', 'Cluster consumption', 'name ident')
                + td('', '', 'name')
                + td('', '', 'name')
+               + (showShard ? td('', '', 'name') : '')
                + td('', '', 'name path')
                + bytesTd(consumption.totalSize)
                + freeTd(consumption.totalFreeStorageSize, consumption.totalReuse)
                + td('', '', 'name')
                + '</tr>';
          }
-         let html = tableHtml(head, ['', 'Node', 'Role', 'Type', 'dbPath', 'Size on disk', 'Free │ reuse', 'Error'], rows);
+         const cols = showShard
+            ? ['', 'Node', 'Role', 'Type', 'Shard', 'dbPath', 'Size on disk', 'Free │ reuse', 'Error']
+            : ['', 'Node', 'Role', 'Type', 'dbPath', 'Size on disk', 'Free │ reuse', 'Error'];
+         let html = tableHtml(head, cols, rows);
          if (consumption && consumption.fsTotalSize != null && +consumption.fsTotalSize > 0) {
             html += fsBar(
                consumption.fsUsedSize, consumption.fsTotalSize, consumption.fsFreeSize,
@@ -2846,6 +2870,27 @@
       return resolveTopologyDepth(topologyOptions);
    }
 
+   function isConfigSvrNode(node = {}) {
+      return node.configsvr === true
+         || (Array.isArray(node.shards) && node.shards.length === 1 && node.shards[0] === 'config');
+   }
+
+   function markMongosClusterData(topology) {
+      /*
+       *  When CSRS members are in the walk, mongos totals are cluster data
+       *  (no config, no local). discover:false keeps config on the router row.
+       */
+      if (!topology || topologyOptions.discover === false) return;
+      const connecting = topology.connecting;
+      if (!connecting || connecting.proc !== 'mongos') return;
+      const hasCsrs = ((topology.nodes || []).some(node =>
+         node && isConfigSvrNode(node) && node.connecting !== true
+      ));
+      if (!hasCsrs) return;
+      connecting.omitConfigDb = true;
+      connecting.dbPath = 'cluster data';
+   }
+
    function topologyDepthExpanded() {
       return topologyDepth() === 'expanded';
    }
@@ -3003,11 +3048,18 @@
       return (node && node.dbPath) || '';
    }
 
+   function nodeShardLabel(node = {}) {
+      if (isConfigSvrNode(node)) return 'config';
+      if (Array.isArray(node.shards) && node.shards.length === 1) return String(node.shards[0]);
+      return '';
+   }
+
    function nodeIdentityFields(node = {}) {
       return {
          "host": String(node.instance || node.hostname || 'unknown'),
          "role": String(node.role || ''),
          "proc": String(node.proc || ''),
+         "shard": nodeShardLabel(node),
          "path": String(nodeDbPath(node) || ''),
          "connecting": node.connecting === true,
          "error": node.error || ''
@@ -3021,6 +3073,7 @@
          "host": maxLen('host'),
          "role": maxLen('role'),
          "proc": maxLen('proc'),
+         "shard": maxLen('shard'),
          "path": maxLen('path')
       };
    }
@@ -3030,10 +3083,14 @@
       const hostW = widths.host || visibleWidth(f.host);
       const roleW = widths.role || visibleWidth(f.role);
       const procW = widths.proc || visibleWidth(f.proc);
+      const shardW = widths.shard || visibleWidth(f.shard);
       const pathW = widths.path || visibleWidth(f.path);
       const mark = f.connecting ? '[green]*[/] ' : '  ';
       const err = f.error ? `   [red]${f.error}[/]` : '';
-      return `${indent}${mark}[cyan]${padVisible(f.host, hostW)}[/]   [bold][green]Role:[/] [cyan]${padVisible(f.role, roleW)}[/]   [bold][green]Type:[/] [cyan]${padVisible(f.proc, procW)}[/]   [bold][green]dbPath:[/] [cyan]${padVisible(f.path, pathW)}[/]${err}`;
+      const shardBit = shardW
+         ? `   [bold][green]Shard:[/] [cyan]${padVisible(f.shard, shardW)}[/]`
+         : '';
+      return `${indent}${mark}[cyan]${padVisible(f.host, hostW)}[/]   [bold][green]Role:[/] [cyan]${padVisible(f.role, roleW)}[/]   [bold][green]Type:[/] [cyan]${padVisible(f.proc, procW)}[/]${shardBit}   [bold][green]dbPath:[/] [cyan]${padVisible(f.path, pathW)}[/]${err}`;
    }
 
    function printNodeBanner(node = {}, widths) {
@@ -3064,8 +3121,8 @@
 
    function clusterConsumptionStats(topology) {
       /*
-       *  Sum mongod dbPaths (replica copies and shard volumes). Skip mongos
-       *  so a sharded router aggregate is not added on top of shard mongods.
+       *  Sum mongod dbPaths (shard replica copies, CSRS members). Skip mongos
+       *  so the router cluster-data aggregate is not added on top.
        */
       const nodes = mongodStatsNodes(topology);
       if (nodes.length < 2) return null;
@@ -3179,7 +3236,10 @@
       } else if (kind === 'sharded') {
          const shardIds = Array.isArray(cluster.shardIds) ? cluster.shardIds : [];
          const shardsBit = shardIds.length ? `   [bold][green]Shards:[/] ${JSON.stringify(shardIds)}` : '';
-         console.log(`[bold][green]Sharded cluster[/]   [bold][green]Nodes:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${mongodVersionLabel()}[/]${shardsBit}`);
+         const configBit = cluster.configSetName
+            ? `   [bold][green]Config:[/] [cyan]${cluster.configSetName}[/]`
+            : '';
+         console.log(`[bold][green]Sharded cluster[/]   [bold][green]Nodes:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${mongodVersionLabel()}[/]${shardsBit}${configBit}`);
       } else if (kind) {
          console.log(`[bold][green]Topology:[/] [cyan]${kind}[/]   [bold][green]Nodes:[/] [cyan]${nodes.length}[/]   [bold][green]Version:[/] [cyan]${mongodVersionLabel()}[/]`);
       } else {
