@@ -1318,6 +1318,9 @@ class TopologySnapshot {
       };
 
       if (kind === 'sharedTier' || kind === 'serverless') {
+         // One connecting node: Atlas M0/Flex advertise a replica set, but
+         // compact / autoCompact cannot run on these tiers. Serverless has
+         // no replica seed list.
          return new TopologySnapshot({ cluster, connecting, nodes, errors });
       }
 
@@ -1405,7 +1408,8 @@ class TopologySnapshot {
       /*
        *  Connect to advertised remotes and run gather(node) on each child
        *  session. Serial (global db). Shared-tier / serverless / standalone
-       *  are a no-op. Connecting node is skipped (already topology.aggregate).
+       *  are a no-op (M0/Flex compact/autoCompact cannot run; serverless has
+       *  no replica seeds). Connecting node is skipped (already topology.aggregate).
        *  depth summary = $stats-depth gather; expanded = full catalog +
        *  $collStats (gather callback decides). Cluster kind selects the walk.
        *  replica / sharded alias depth. Sharded expanded fans out seed hosts.

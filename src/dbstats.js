@@ -83,7 +83,7 @@
  *        profile: <true|false> // default false; gather phase timings + $collStats histogram (JSON additive `profile`; preGatherMs / sinceScriptMs)
  *     },
  *     topology: {
- *        discover: <true|false>, // default true; shared-tier / serverless stay one node
+ *        discover: <true|false>, // default true; shared-tier / serverless stay one node (compact/autoCompact cannot run)
  *        depth: <'summary'|'expanded'> // default expanded = catalog+$collStats per member, one table per node; summary = $stats remotes + connecting catalog + member footer
  *     },
  *     catalog: <'auto'|'legacy'|'listCatalog'|'listClusterCatalog'> // default auto
