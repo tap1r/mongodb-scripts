@@ -318,8 +318,7 @@
       authenticatedUserRoles = Array.isArray(authInfo.authenticatedUserRoles)
          ? authInfo.authenticatedUserRoles : [];
    } catch (e) {
-      if (e.codeName == 'Unauthorized' || +e.code === 13
-            || /not authorized|unauthorized/i.test(e.errmsg || e.message || '')) {
+      if (e.codeName == 'Unauthorized' || +e.code === 13 || /not authorized|unauthorized/i.test(e.errmsg || e.message || '')) {
          __dbstatsAuthRequired = true;
          const jsonCli = (typeof __dbstatsJsonCli !== 'undefined' && __dbstatsJsonCli);
          if (__dbstatsCliFile && !jsonCli) console.log('[red][ERR] MongoServerError: Unauthorized user requires authentication[/]');
@@ -351,7 +350,7 @@
    }
 })();
 
-(async() => {
+(async () => {
    /*
     *  User defined parameters
     */
@@ -491,7 +490,7 @@
       markMongosClusterData(topology);
       const jsonCli = outputOptions.format === 'json' || outputOptions.format === 'html';
       if (__dbstatsCliFile && !jsonCli
-            && typeof __mdblibServerUnsupported !== 'undefined' && __mdblibServerUnsupported) {
+         && typeof __mdblibServerUnsupported !== 'undefined' && __mdblibServerUnsupported) {
          console.log(`\n[red][ERROR] Unsupported mongod/s version detected: ${__mdblibServerUnsupported}[/]`);
       }
       profile.phase('topology', {
@@ -505,7 +504,7 @@
 
       const origFetch = CollectionStats.prototype.fetchStats;
       if (profile.enabled) {
-         CollectionStats.prototype.fetchStats = async function(dbName, cache) {
+         CollectionStats.prototype.fetchStats = async function (dbName, cache) {
             const t0 = Date.now();
             try {
                return await origFetch.call(this, dbName, cache);
@@ -801,7 +800,7 @@
          database.collections = stableSort([...byColl.values()], compareBy('name', 1));
          database.listedCollectionCount = countListedCollections(database.collections);
          database.views = stableSort([...byView.values()], sortBy('view'));
-      } catch(_) { /* keep snapshot collections */ }
+      } catch (_) { /* keep snapshot collections */ }
    }
 
    async function listDatabaseCatalogLegacy(database, collFilter, acceptCollName) {
@@ -1161,7 +1160,7 @@
       }
       const shardCounts = nShards > 0 && databases.every(d =>
          Array.isArray(d.ncollections) && Array.isArray(d.nviews) && Array.isArray(d.namespaces)
-            && Array.isArray(d.nindexes)
+         && Array.isArray(d.nindexes)
       );
       if (shardCounts) {
          dbPath.ncollections = sumPerShard(databases.map(d => d.ncollections), nShards);
@@ -1518,7 +1517,7 @@
          ? (storageSize || 0) + (totalIndexSize || 0)
          : null;
       const totalFreeStorageSize = (freeStorageKnown(freeStorageSize)
-            && freeStorageKnown(totalIndexBytesReusable))
+         && freeStorageKnown(totalIndexBytesReusable))
          ? jsonNumber(+freeStorageSize + +totalIndexBytesReusable)
          : null;
       const fsUsedSize = jsonNumber(dbStats.fsUsedSize);
@@ -1588,11 +1587,11 @@
       }
       const hide = hidesDbStatsFreeStorage();
       const rolled = dbStats.freeStorageSizeSource === 'collStatsRollup'
-                  || dbStats.totalIndexBytesReusableSource === 'collStatsRollup';
+         || dbStats.totalIndexBytesReusableSource === 'collStatsRollup';
       const incomplete = dbStats.freeStorageComplete === false
-                      || dbStats.totalIndexBytesReusableComplete === false;
+         || dbStats.totalIndexBytesReusableComplete === false;
       const unknown = !freeStorageKnown(dbStats.freeStorageSize)
-                   || !freeStorageKnown(dbStats.totalIndexBytesReusable);
+         || !freeStorageKnown(dbStats.totalIndexBytesReusable);
       const listingIncomplete = dbStats.catalogCoverageComplete === false
          || (dbStats.databases || []).some(d => d.catalogCoverageComplete === false);
       if (hide && rolled && incomplete) {
@@ -2326,13 +2325,13 @@
          const rollupCols = { "compaction": true, "idxCompaction": true };
          html += tableHtml('dbPath totals', catalogHeaders('Rollup', rollupCols),
             totalsRow(totals, 'All namespaces', 'db', '', rollupCols)
-               + totalsRow({
-                  "storageSize": totals.totalIndexSize,
-                  "freeStorageSize": totals.totalIndexBytesReusable,
-                  "reuse": totals.idxReuse,
-                  "compaction": totals.idxCompaction
-               }, 'All indexes', 'idxRollup', '', rollupCols)
-               + totalsRow(totalRow, 'Total', 'total', 'total-row', rollupCols));
+            + totalsRow({
+               "storageSize": totals.totalIndexSize,
+               "freeStorageSize": totals.totalIndexBytesReusable,
+               "reuse": totals.idxReuse,
+               "compaction": totals.idxCompaction
+            }, 'All indexes', 'idxRollup', '', rollupCols)
+            + totalsRow(totalRow, 'Total', 'total', 'total-row', rollupCols));
          if (totals.fsTotalSize != null && Number.isFinite(+totals.fsTotalSize) && +totals.fsTotalSize > 0) {
             html += fsBar(
                totals.fsUsedSize, totals.fsTotalSize, totals.fsFreeSize,
@@ -2803,10 +2802,10 @@
    }
 
    function metricsCols({
-         dataSize = 0, compression = 0, compressor, storageSize = 0, freeStorageSize = 0,
-         objects, compaction = '———— ', mode = 'full', lowerBound = false,
-         stub = false, allocUnit, showCompaction = true
-      } = {}) {
+      dataSize = 0, compression = 0, compressor, storageSize = 0, freeStorageSize = 0,
+      objects, compaction = '———— ', mode = 'full', lowerBound = false,
+      stub = false, allocUnit, showCompaction = true
+   } = {}) {
       /*
        *  Shared metric columns: full NS row | index rollup | index detail row
        *  Leaf storage (collection/index file) may display the WT min alloc; rollups do not.
@@ -2831,11 +2830,11 @@
    }
 
    function printRollupRows({
-         shards = [], dataSize, compression, storageSize, freeStorageSize, objects,
-         namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
-         nsLabel, idxLabel, nsCompactionKind = 'collection',
-         freeIncomplete = false, idxIncomplete = false, showCompaction = true
-      } = {}) {
+      shards = [], dataSize, compression, storageSize, freeStorageSize, objects,
+      namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
+      nsLabel, idxLabel, nsCompactionKind = 'collection',
+      freeIncomplete = false, idxIncomplete = false, showCompaction = true
+   } = {}) {
       /*
        *  Shared DB / dbPath namespace + index subtotal rows (sharded or not)
        */
@@ -2927,9 +2926,9 @@
    }
 
    function printDb({
-         shards, dataSize, compression, storageSize, freeStorageSize, objects, namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
-         freeStorageComplete, totalIndexBytesReusableComplete
-      } = {}) {
+      shards, dataSize, compression, storageSize, freeStorageSize, objects, namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
+      freeStorageComplete, totalIndexBytesReusableComplete
+   } = {}) {
       printRule('light');
       printRollupRows({
          shards, dataSize, compression, storageSize, freeStorageSize, objects,
@@ -2946,14 +2945,14 @@
    }
 
    function printFreeStorageFootnote({
-         freeStorageSize, totalIndexBytesReusable,
-         freeStorageSizeSource, totalIndexBytesReusableSource,
-         freeStorageComplete, totalIndexBytesReusableComplete,
-         catalogCoverageComplete, databases
-      } = {}) {
+      freeStorageSize, totalIndexBytesReusable,
+      freeStorageSizeSource, totalIndexBytesReusableSource,
+      freeStorageComplete, totalIndexBytesReusableComplete,
+      catalogCoverageComplete, databases
+   } = {}) {
       const hide = hidesDbStatsFreeStorage();
       const rolled = freeStorageSizeSource === 'collStatsRollup'
-                  || totalIndexBytesReusableSource === 'collStatsRollup';
+         || totalIndexBytesReusableSource === 'collStatsRollup';
       const incomplete = freeStorageComplete === false || totalIndexBytesReusableComplete === false;
       const unknown = !freeStorageKnown(freeStorageSize) || !freeStorageKnown(totalIndexBytesReusable);
       const listingIncomplete = catalogCoverageComplete === false
@@ -3008,7 +3007,7 @@
       ));
       if (!hasCsrs) return;
       connecting.omitConfigDb = true;
-      connecting.dbPath = 'cluster data (no local/metadata)';
+      connecting.dbPath = 'cluster data';
    }
 
    function currentAuthUser() {
@@ -3143,7 +3142,7 @@
          if (w.code === 'directShardOperationsAssumed') {
             console.log(`[yellow][NOTE] ${w.message}[/]`);
          } else if (w.code === 'directShardOperationsRequired'
-               || w.code === 'directShardOperationsRevokeFailed') {
+            || w.code === 'directShardOperationsRevokeFailed') {
             console.log(`[red][WARN] ${w.message}[/]`);
          }
       });
@@ -3390,7 +3389,7 @@
 
    function combinedFreeStorageSize(stats = {}) {
       if (!freeStorageKnown(stats.freeStorageSize)
-            || !freeStorageKnown(stats.totalIndexBytesReusable)) return null;
+         || !freeStorageKnown(stats.totalIndexBytesReusable)) return null;
       return +stats.freeStorageSize + +stats.totalIndexBytesReusable;
    }
 
@@ -3407,8 +3406,8 @@
       if (used == null || total == null || !(total > 0)) return null;
       const host = String(
          hostNameFromHostPort(node.hostname)
-            || hostNameFromHostPort(node.instance)
-            || ''
+         || hostNameFromHostPort(node.instance)
+         || ''
       ).trim().toLowerCase();
       if (!host || host === 'unknown') return `instance:${node.instance}\0${total}`;
       return `${host}\0${total}`;
