@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.5"
+ *  Version: "1.2.6"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.5" };
+   const __script = { "name": "dbstats.js", "version": "1.2.6" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -1648,7 +1648,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.5',
+         "version": '1.2.6',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -2363,7 +2363,7 @@
       const css = [
          ':root{--bg:#0f1419;--bg-elev:#161c24;--fg:#e7ecf1;--muted:#8b98a5;--acc:#7dce7a;--cyan:#6ec8d4;--warn:#e0c36a;--err:#e07070;--fs:#e8a04a;--fs-warm:#e07a32;--fs-hot:#e07070;--line:#243040;--th:#1a222c;--hover:#1e2833;--zebra:#131a21}',
          'html{color-scheme:dark}',
-         'html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}',
+         'html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}',
          'header{padding:1.05rem 1.4rem;border-bottom:1px solid var(--line);background:var(--bg-elev);display:flex;flex-wrap:wrap;gap:.85rem 1.5rem;align-items:flex-start}',
          '.brand{display:flex;align-items:baseline;gap:.5rem}',
          '.brand h1{font-size:1.28rem;margin:0;color:var(--acc);letter-spacing:.02em}',
@@ -2392,7 +2392,7 @@
          'td.mark-cell{color:var(--acc);font-weight:700;width:1.25rem;text-align:center}',
          '.warn{color:var(--warn);background:rgba(224,195,106,.08);border:1px solid rgba(224,195,106,.28);border-radius:6px;padding:.5rem .7rem;margin:0 0 .75rem}',
          '.table-wrap{overflow-x:auto;margin:0 0 1rem;-webkit-overflow-scrolling:touch}',
-         'table{border-collapse:collapse;width:max-content;max-width:none;margin:0;table-layout:auto;font:13px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}',
+         'table{border-collapse:collapse;width:max-content;max-width:none;margin:0;table-layout:auto;font:14px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}',
          'caption{text-align:left;color:var(--acc);font:600 .92rem/1.3 system-ui,-apple-system,"Segoe UI",sans-serif;padding:.15rem 0 .45rem}',
          'th,td{border-bottom:1px solid var(--line);padding:.32rem .55rem;text-align:right;white-space:nowrap;box-sizing:border-box}',
          'th.name,td.name,th.ident,td.ident,th.path,td.path{text-align:left}',
@@ -2421,7 +2421,7 @@
          '.fs-meta{display:flex;flex-wrap:wrap;gap:.35rem 1.15rem;font-size:.85rem}',
          '.fs-meta b{color:var(--muted);font-weight:600;margin-right:.3rem;font-size:.68rem;letter-spacing:.06em;text-transform:uppercase}',
          '.fs-note{margin:0;color:var(--muted);font-size:.8rem}',
-         '@media (max-width:720px){header{flex-direction:column}.ident{flex-direction:column}.controls{margin-left:0}main,header,footer{padding-left:.85rem;padding-right:.85rem}th,td{padding:.26rem .4rem}table{font-size:12px}}'
+         '@media (max-width:720px){header{flex-direction:column}.ident{flex-direction:column}.controls{margin-left:0}main,header,footer{padding-left:.85rem;padding-right:.85rem}th,td{padding:.26rem .4rem}table{font-size:13px}}'
       ].join('');
       function chip(label, value, extra) {
          if (value == null || value === '') return '';
