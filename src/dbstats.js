@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.2"
+ *  Version: "1.2.3"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -85,7 +85,7 @@
  *     topology: {
  *        discover: <true|false>, // default true; shared-tier / serverless stay one node (compact/autoCompact cannot run)
  *        depth: <'summary'|'expanded'> // default expanded = catalog+$collStats per member, one table per node; summary = $stats remotes + connecting catalog + member footer
- *        // sharded: CSRS members are listed; mongos row is cluster data (no config/local) when they are
+ *        // sharded: CSRS members are listed; mongos row is cluster data (no local/metadata) when they are
         // MongoDB 8+: shard-local directShardOperations is granted for the walk and revoked after
  *     },
  *     catalog: <'auto'|'legacy'|'listCatalog'|'listClusterCatalog'> // default auto
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.2" };
+   const __script = { "name": "dbstats.js", "version": "1.2.3" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -608,8 +608,8 @@
 
       let dbNames = stableSort(getDBNames(dbFilter), compareBy(v => v, 1));
       if (host && host.omitConfigDb === true) {
-         // mongos cluster data: user (+ admin) databases. CSRS holds config;
-         // local.* is not gathered from the router.
+         // mongos cluster data (no local/metadata): user (+ admin) databases.
+         // CSRS holds config; local.* is not gathered from the router.
          dbNames = dbNames.filter(name => name !== 'config' && name !== 'local');
       }
       mark('listDatabases', { "count": dbNames.length });
@@ -1649,7 +1649,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.2',
+         "version": '1.2.3',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1730,7 +1730,10 @@
 
       function fmtPct(n) {
          if (n == null || !Number.isFinite(+n)) return 'N/A';
-         return (100 * +n).toFixed(1) + '%';
+         const pct = 100 * +n;
+         const sign = pct < 0 ? '-' : '';
+         const [ints, frac] = Math.abs(pct).toFixed(1).split('.');
+         return sign + ints.padStart(2, ' ') + '.' + frac + '%';
       }
 
       function fmtRatio(n) {
@@ -1907,7 +1910,7 @@
 
       function freeTd(free, reuse) {
          const v = (free == null || free === '' || !Number.isFinite(+free)) ? '' : +free;
-         return td(fmtBytes(free) + ' │ ' + fmtPct(reuse), v, 'num free', 'bytes');
+         return td(fmtBytes(free) + ' / ' + fmtPct(reuse), v, 'num free', 'bytes');
       }
 
       function parseIecBytes(text) {
@@ -1981,7 +1984,7 @@
             case 'Data size':
             case 'Size on disk': return 'num bytes';
             case 'Compression': return 'num ratio';
-            case 'Free │ reuse': return 'num free';
+            case 'Free / reuse': return 'num free';
             case 'Objects':
             case 'Collections':
             case 'Indexes': return 'num count';
@@ -1991,9 +1994,16 @@
          }
       }
 
-      function catalogHeaders(nameHeader) {
-         return [nameHeader, 'Index', 'Data size', 'Compression', 'Size on disk', 'Free │ reuse',
-            'Objects', 'Compaction', 'Collections', 'Indexes', 'Idx compaction'];
+      function catalogHeaders(nameHeader, { compaction = true, idxCompaction = compaction } = {}) {
+         /*
+          *  Rollup tables keep Compaction and Idx compaction. Namespace and
+          *  index tables omit both except compactOnly, which adds Compaction.
+          */
+         const cols = [nameHeader, 'Index', 'Data size', 'Compression', 'Size on disk', 'Free / reuse',
+            'Objects', 'Collections', 'Indexes'];
+         if (compaction) cols.push('Compaction');
+         if (idxCompaction) cols.push('Idx compaction');
+         return cols;
       }
 
       function tableHtml(caption, headers, rowHtml) {
@@ -2047,29 +2057,35 @@
          return 'act';
       }
 
-      function metricsCells(row, kind) {
+      function metricsCells(row, kind, cols = { compaction: true, idxCompaction: true }) {
          const compact = row.compaction;
          const compactCls = actClass(compact);
-         const logical = (kind === 'db' || kind === 'ns');
-         const showObjects = (kind !== 'index');
+         const logical = (kind === 'db' || kind === 'ns' || kind === 'total');
+         const showObjects = (kind !== 'index' && kind !== 'idxRollup');
          let cells = (logical ? bytesTd(row.dataSize) : emptyTd('num bytes'))
             + (logical
                ? td(fmtRatio(row.compression) + (row.compressor ? ' ' + row.compressor : ''), row.compression, 'num ratio')
                : emptyTd('num ratio'))
             + bytesTd(row.storageSize)
             + freeTd(row.freeStorageSize, row.reuse)
-            + (showObjects ? td(fmtNum(row.objects), row.objects, 'num count') : emptyTd('num count'))
-            + td(fmtCompaction(compact), compactionRank(compact), compactCls);
-         if (kind === 'index') {
-            cells += emptyTd('num count') + emptyTd('num count') + emptyTd('act');
+            + (showObjects ? td(fmtNum(row.objects), row.objects, 'num count') : emptyTd('num count'));
+         if (kind === 'index' || kind === 'idxRollup') {
+            cells += emptyTd('num count') + emptyTd('num count');
          } else if (kind === 'ns') {
             cells += emptyTd('num count')
-               + td(fmtNum(row.nindexes), row.nindexes, 'num count')
-               + emptyTd('act');
+               + td(fmtNum(row.nindexes), row.nindexes, 'num count');
          } else {
             cells += td(fmtCount(row.ncollections), Array.isArray(row.ncollections) ? '' : row.ncollections, 'num count')
-               + td(fmtCount(row.nindexes), Array.isArray(row.nindexes) ? '' : row.nindexes, 'num count')
-               + td(fmtCompaction(row.idxCompaction), compactionRank(row.idxCompaction), actClass(row.idxCompaction));
+               + td(fmtCount(row.nindexes), Array.isArray(row.nindexes) ? '' : row.nindexes, 'num count');
+         }
+         if (cols.compaction) {
+            cells += td(fmtCompaction(compact), compactionRank(compact), compactCls);
+         }
+         if (cols.idxCompaction) {
+            const idxLabel = (kind === 'index' || kind === 'idxRollup' || kind === 'total')
+               ? null
+               : row.idxCompaction;
+            cells += td(fmtCompaction(idxLabel), compactionRank(idxLabel), actClass(idxLabel));
          }
          return cells;
       }
@@ -2079,26 +2095,26 @@
             + td(indexName || '', indexName || '', 'name idx', '', indexName || '');
       }
 
-      function totalsRow(row, label, kind = 'db', trCls) {
+      function totalsRow(row, label, kind = 'db', trCls, cols) {
          return '<tr' + (trCls ? ' class="' + esc(trCls) + '"' : '') + '>'
-            + identCells(label) + metricsCells(row || {}, kind) + '</tr>';
+            + identCells(label) + metricsCells(row || {}, kind, cols) + '</tr>';
       }
 
-      function dbRow(db) {
+      function dbRow(db, cols) {
          const name = db.name || '';
-         return '<tr>' + identCells(name) + metricsCells(db, 'db') + '</tr>';
+         return '<tr>' + identCells(name) + metricsCells(db, 'db', cols) + '</tr>';
       }
 
-      function nsRow(c) {
+      function nsRow(c, cols) {
          const ns = c.ns || ((c.db ? c.db + '.' : '') + (c.name || ''));
          const mark = c.unauthorized ? ' (unauthorized)' : (c.unavailable ? ' (unavailable)' : '');
-         return '<tr>' + identCells(ns + mark, '', ns) + metricsCells(c, 'ns') + '</tr>';
+         return '<tr>' + identCells(ns + mark, '', ns) + metricsCells(c, 'ns', cols) + '</tr>';
       }
 
-      function idxRow(c, idx) {
+      function idxRow(c, idx, cols) {
          const ns = c.ns || ((c.db ? c.db + '.' : '') + (c.name || ''));
          const name = idx.name || '';
-         return '<tr>' + identCells(ns, name) + metricsCells(idx, 'index') + '</tr>';
+         return '<tr>' + identCells(ns, name) + metricsCells(idx, 'index', cols) + '</tr>';
       }
 
       function catalogs() {
@@ -2121,6 +2137,8 @@
       function renderBlock(block) {
          const v = verb();
          const node = block.node || {};
+         const rollupCols = { "compaction": true, "idxCompaction": true };
+         const leafCols = { "compaction": v === 'compactonly', "idxCompaction": false };
          let html = '<section class="panel">';
          if (block.title || block.node) {
             const sub = [node.role, node.proc, node.dbPath].filter(Boolean).join(' · ');
@@ -2131,7 +2149,7 @@
          let dbs = (block.databases || []).filter(dbVisible);
          if (v === 'summary') {
             dbs = applyTop(dbs, 'db');
-            html += tableHtml('Databases', catalogHeaders('Database'), dbs.map(dbRow).join(''));
+            html += tableHtml('Databases', catalogHeaders('Database', rollupCols), dbs.map(db => dbRow(db, rollupCols)).join(''));
             html += '</section>';
             return html;
          }
@@ -2140,10 +2158,10 @@
          const keep = {};
          nss.forEach(c => { keep[c.db || ''] = true; });
          dbs = dbs.filter(d => keep[d.name || '']);
-         html += tableHtml('Databases', catalogHeaders('Database'), dbs.map(dbRow).join(''));
-         html += tableHtml('Namespaces', catalogHeaders('Namespace'), nss.map(nsRow).join(''));
-         const idxHtml = nss.flatMap(c => (c.indexes || []).filter(indexVisible).filter(idx => meetsLimit(idx, 'index')).map(idx => idxRow(c, idx))).join('');
-         html += tableHtml('Indexes', catalogHeaders('Namespace'), idxHtml);
+         html += tableHtml('Databases', catalogHeaders('Database', rollupCols), dbs.map(db => dbRow(db, rollupCols)).join(''));
+         html += tableHtml('Namespaces', catalogHeaders('Namespace', leafCols), nss.map(c => nsRow(c, leafCols)).join(''));
+         const idxHtml = nss.flatMap(c => (c.indexes || []).filter(indexVisible).filter(idx => meetsLimit(idx, 'index')).map(idx => idxRow(c, idx, leafCols))).join('');
+         html += tableHtml('Indexes', catalogHeaders('Namespace', leafCols), idxHtml);
          if (v === 'full' && !htmlLimitActive()) {
             const views = dbs.flatMap(d => (d.views || []).map(x => {
                const ns = x.ns || ((d.name ? d.name + '.' : '') + (x.name || ''));
@@ -2198,7 +2216,7 @@
          if (consumption && consumption.totalSize != null) {
             rows += '<tr class="total-row">'
                + td('', '', 'name mark-cell')
-               + td('Cluster consumption', 'Cluster consumption', 'name ident')
+               + td('Cluster consumption (total)', 'Cluster consumption (total)', 'name ident')
                + td('', '', 'name')
                + td('', '', 'name')
                + (showShard ? td('', '', 'name') : '')
@@ -2209,9 +2227,13 @@
                + '</tr>';
          }
          const cols = showShard
-            ? ['', 'Node', 'Role', 'Type', 'Shard', 'dbPath', 'Size on disk', 'Free │ reuse', 'Error']
-            : ['', 'Node', 'Role', 'Type', 'dbPath', 'Size on disk', 'Free │ reuse', 'Error'];
+            ? ['', 'Node', 'Role', 'Type', 'Shard', 'dbPath', 'Size on disk', 'Free / reuse', 'Error']
+            : ['', 'Node', 'Role', 'Type', 'dbPath', 'Size on disk', 'Free / reuse', 'Error'];
          let html = tableHtml(head, cols, rows);
+         if (consumption && consumption.totalSize != null) {
+            const note = ui.clusterStorageNote || '';
+            if (note) html += '<p class="hint scope-note">' + esc(note) + '</p>';
+         }
          if (consumption && consumption.fsTotalSize != null && +consumption.fsTotalSize > 0) {
             const mongodN = (topo.nodes || []).filter(n => n && n.proc === 'mongod' && n.stats).length;
             const vols = consumption.fsVolumeCount;
@@ -2245,20 +2267,21 @@
             "compaction": null
          });
          html += '<section class="panel">';
-         html += tableHtml('dbPath totals', catalogHeaders('Rollup'),
-            totalsRow(totals, 'All namespaces')
+         const rollupCols = { "compaction": true, "idxCompaction": true };
+         html += tableHtml('dbPath totals', catalogHeaders('Rollup', rollupCols),
+            totalsRow(totals, 'All namespaces', 'db', '', rollupCols)
                + totalsRow({
                   "storageSize": totals.totalIndexSize,
                   "freeStorageSize": totals.totalIndexBytesReusable,
                   "reuse": totals.idxReuse,
                   "compaction": totals.idxCompaction
-               }, 'All indexes', 'index')
-               + totalsRow(totalRow, 'Total', 'total', 'total-row'));
+               }, 'All indexes', 'idxRollup', '', rollupCols)
+               + totalsRow(totalRow, 'Total', 'total', 'total-row', rollupCols));
          if (totals.fsTotalSize != null && Number.isFinite(+totals.fsTotalSize) && +totals.fsTotalSize > 0) {
             html += fsBar(
                totals.fsUsedSize, totals.fsTotalSize, totals.fsFreeSize,
                'Filesystem volume',
-               'Host disk occupancy from db.stats() fsUsedSize / fsTotalSize. Free │ reuse in the table is WiredTiger reusable bytes.'
+               'Host disk occupancy from db.stats() fsUsedSize / fsTotalSize. Free / reuse in the table is WiredTiger reusable bytes.'
             );
          }
          html += '</section>';
@@ -2307,6 +2330,7 @@
          '.legend dt{margin:0;font:600 .85rem/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}',
          '.legend dd{margin:0;color:var(--muted);font-size:.88rem;line-height:1.4}',
          '.hint{color:var(--muted);font-size:.8rem;margin:0}',
+         '.scope-note{margin:.2rem 0 .85rem;line-height:1.4}',
          '.panel{background:var(--bg-elev);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem .35rem;margin:0 0 1rem}',
          '.panel h2{font-size:1.05rem;margin:0 0 .7rem;color:var(--fg);font-weight:600}',
          '.panel h2 .sub{color:var(--muted);font-weight:400;font-size:.82em;margin-left:.7rem}',
@@ -2320,8 +2344,8 @@
          'th.mark,td.mark-cell,th.act,td.act{text-align:center}',
          'th.ident,td.ident{max-width:22rem;overflow:hidden;text-overflow:ellipsis}',
          'th.idx,td.idx{max-width:11rem;overflow:hidden;text-overflow:ellipsis}',
-         'th.path,td.path{max-width:16rem;overflow:hidden;text-overflow:ellipsis}',
-         'th.bytes,td.bytes{min-width:6.75rem} th.ratio,td.ratio{min-width:7rem} th.free,td.free{min-width:11.5rem}',
+         'th.path,td.path{max-width:24rem;overflow:hidden;text-overflow:ellipsis}',
+         'th.bytes,td.bytes{min-width:6.75rem} th.ratio,td.ratio{min-width:7rem} th.free,td.free{min-width:11.5rem;white-space:pre}',
          'th.count,td.count{min-width:4.75rem} th.act,td.act{min-width:6.75rem} th.mark,td.mark-cell{width:1.4rem;padding-left:.2rem;padding-right:.2rem}',
          'th{background:var(--th);color:var(--acc);cursor:pointer;position:sticky;top:0;z-index:2;user-select:none;font:600 .75rem/1.2 system-ui,-apple-system,"Segoe UI",sans-serif;text-transform:uppercase;letter-spacing:.02em}',
          'th.sort-asc:after{content:" \\25b2";font-size:.7em} th.sort-desc:after{content:" \\25bc";font-size:.7em}',
@@ -2388,7 +2412,7 @@
       /*
        *  HTML from the JSON contract (embed + click-to-sort).
        *  Verbosity / topology expanded / limit top-N filter that payload in the page.
-       *  Size columns click-sort by bytes (IEC units); Free │ reuse uses free bytes.
+       *  Size columns click-sort by bytes (IEC units); Free / reuse uses free bytes.
        *  Colour is the inline stylesheet (not an option; later a pluggable CSS).
        *  stdout.write so mdblib console.log colour tags cannot rewrite the document.
        */
@@ -2396,6 +2420,7 @@
       const ui = {
          "verbosity": outputVerbosity(),
          "topologyExpanded": topologyDepthExpanded(),
+         "clusterStorageNote": clusterStorageScopeNote(),
          "limit": {
             "n": limitN(),
             "dataSize": limitFloor('dataSize'),
@@ -2498,11 +2523,17 @@
 
    function formatPct(numerator = 0, denominator = 1) {
       /*
-       *  Pretty format percentage. Zero/null/NaN denominator → N/A (not Infinity%/NaN%).
+       *  One decimal. Integer part is two digits with a space, not a
+       *  leading zero: 5.0% → " 5.0%", 50.0% → "50.0%".
+       *  Zero/null/NaN denominator → N/A (not Infinity%/NaN%).
        */
       const num = +numerator, den = +denominator;
-      if (!Number.isFinite(num) || !Number.isFinite(den) || den === 0) return 'N/A ';
-      return `${Number.parseFloat(((num / den) * 100).toFixed(1))}%`;
+      if (!Number.isFinite(num) || !Number.isFinite(den) || den === 0) return 'N/A';
+      const pct = (num / den) * 100;
+      if (!Number.isFinite(pct)) return 'N/A';
+      const sign = pct < 0 ? '-' : '';
+      const [ints, frac] = Math.abs(pct).toFixed(1).split('.');
+      return `${sign}${ints.padStart(2, ' ')}.${frac}%`;
    }
 
    function freeStorageKnown(bytes) {
@@ -2511,14 +2542,14 @@
 
    function formatFree(bytes, storageSize, { lowerBound = false } = {}) {
       /*
-       *  Free blocks │ reuse. Hidden WT free-space (Atlas M0/Flex) → N/A, not 0.
+       *  Free blocks / reuse. Hidden WT free-space (Atlas M0/Flex) → N/A, not 0.
        *  lowerBound: collStats rollup may omit unauthorized/filtered NS (*).
        */
       if (!freeStorageKnown(bytes)) {
-         return (`N/A │${'N/A '.padStart(6)}`).padStart(columnWidth + 8);
+         return ('N/A / N/A').padStart(columnWidth + 8);
       }
       const unit = formatUnit(bytes) + (lowerBound ? '*' : '');
-      return (unit + ' │' + formatPct(bytes, storageSize).padStart(6)).padStart(columnWidth + 8);
+      return (unit + ' / ' + formatPct(bytes, storageSize)).padStart(columnWidth + 8);
    }
 
    function compactionLegendItems() {
@@ -2637,8 +2668,9 @@
       console.log(`[yellow]${ch.repeat(width)}[/]`);
    }
 
-   function columnHeaders() {
-      return `${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks │ reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}${'Compaction'.padStart(columnWidth - 1)}`;
+   function columnHeaders({ compaction = true } = {}) {
+      const head = `${'Data size'.padStart(columnWidth)} ${'Compression'.padStart(columnWidth + 1)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks / reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}`;
+      return compaction ? `${head}${'Compaction'.padStart(columnWidth - 1)}` : head;
    }
 
    function formatShardCounts(shards, counts) {
@@ -2716,32 +2748,36 @@
    function metricsCols({
          dataSize = 0, compression = 0, compressor, storageSize = 0, freeStorageSize = 0,
          objects, compaction = '———— ', mode = 'full', lowerBound = false,
-         stub = false, allocUnit
+         stub = false, allocUnit, showCompaction = true
       } = {}) {
       /*
        *  Shared metric columns: full NS row | index rollup | index detail row
        *  Leaf storage (collection/index file) may display the WT min alloc; rollups do not.
+       *  Compaction is a rollup column; collection/index/namespace rows omit it
+       *  unless compactOnly.
        */
-      const compactCell = `[${compactionColour(compaction)}]${String(compaction).padStart(columnWidth - 2)}[/]`;
+      const compactBit = showCompaction
+         ? ` [${compactionColour(compaction)}]${String(compaction).padStart(columnWidth - 2)}[/]`
+         : '';
       if (mode === 'indexRow') {
-         return `${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)} ${compactCell}`;
+         return `${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)}${compactBit}`;
       }
       if (mode === 'indexRollup') {
-         return `${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)} ${compactCell}`;
+         return `${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)}${compactBit}`;
       }
       if (mode === 'totalRow') {
          const obj = (objects == null ? '' : objects.toString()).padStart(columnWidth);
-         return `${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj} ${compactCell}`;
+         return `${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj}${compactBit}`;
       }
       const obj = (objects == null ? '' : objects.toString()).padStart(columnWidth);
-      return `${formatUnit(dataSize).padStart(columnWidth)} ${formatCompressionCell(compression, compressor)} ${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj} ${compactCell}`;
+      return `${formatUnit(dataSize).padStart(columnWidth)} ${formatCompressionCell(compression, compressor)} ${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj}${compactBit}`;
    }
 
    function printRollupRows({
          shards = [], dataSize, compression, storageSize, freeStorageSize, objects,
          namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
          nsLabel, idxLabel, nsCompactionKind = 'collection',
-         freeIncomplete = false, idxIncomplete = false
+         freeIncomplete = false, idxIncomplete = false, showCompaction = true
       } = {}) {
       /*
        *  Shared DB / dbPath namespace + index subtotal rows (sharded or not)
@@ -2750,14 +2786,15 @@
       const idxCompaction = formatCompaction('index', totalIndexSize, totalIndexBytesReusable, { "incomplete": idxIncomplete });
       const nsMetrics = metricsCols({
          dataSize, compression, storageSize, freeStorageSize, objects, "compaction": nsCompaction,
-         "lowerBound": freeIncomplete
+         "lowerBound": freeIncomplete, showCompaction
       });
       const idxMetrics = metricsCols({
          "storageSize": totalIndexSize,
          "freeStorageSize": totalIndexBytesReusable,
          "compaction": idxCompaction,
          "mode": 'indexRollup',
-         "lowerBound": idxIncomplete
+         "lowerBound": idxIncomplete,
+         showCompaction
       });
       if (shards.length > 0 && Array.isArray(namespaces) && Array.isArray(nindexes)) {
          console.log(`[bold][green]${padVisible(`${nsLabel}:`, rowHeader)}[/] ${nsMetrics}`);
@@ -2779,7 +2816,7 @@
    function printNSHeader(nsTotal = 0, { leadBlank = true } = {}) {
       if (leadBlank) console.log('');
       printRule('heavy');
-      console.log(`[bold][green]${padVisible(`Namespaces: ${nsTotal}`, rowHeader)}[/] [bold][green]${columnHeaders()}[/]`);
+      console.log(`[bold][green]${padVisible(`Namespaces: ${nsTotal}`, rowHeader)}[/] [bold][green]${columnHeaders({ "compaction": leafCompactionColumns() })}[/]`);
       return;
    }
 
@@ -2789,7 +2826,7 @@
       const compaction = formatCompaction('collection', storageSize, freeStorageSize, { "oplog": name == 'oplog.rs', incomplete });
       printRule('light');
       name = truncateLabel(name, 45, rowHeader - 4);
-      console.log(`╰>[cyan]${padVisible(' ' + name, rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize, "lowerBound": incomplete })}`);
+      console.log(`╰>[cyan]${padVisible(' ' + name, rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize, "lowerBound": incomplete, "showCompaction": leafCompactionColumns() })}`);
       return;
    }
 
@@ -2799,7 +2836,7 @@
       const compaction = formatCompaction('collection', storageSize, freeStorageSize, { "oplog": namespace == 'local.oplog.rs', incomplete });
       printRule('light');
       namespace = truncateLabel(namespace, 45, rowHeader - 4);
-      console.log(`╰>[cyan]${padVisible(' ' + namespace, rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize, "lowerBound": incomplete })}`);
+      console.log(`╰>[cyan]${padVisible(' ' + namespace, rowHeader - 2)}[/] ${metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize, "lowerBound": incomplete, "showCompaction": leafCompactionColumns() })}`);
       return;
    }
 
@@ -2821,14 +2858,14 @@
       const compaction = formatCompaction('index', storageSize, freeStorageSize, { "idIndex": name == '_id_', incomplete });
       console.log(`  [yellow]${'━'.repeat(termWidth - 2)}[/]`);
       name = truncateLabel(name, 64, indexWidth);
-      console.log(`  ╰» [red]${padVisible(name, indexWidth - 2)}[/] ${metricsCols({ storageSize, freeStorageSize, compaction, "mode": 'indexRow', "lowerBound": incomplete })}`);
+      console.log(`  ╰» [red]${padVisible(name, indexWidth - 2)}[/] ${metricsCols({ storageSize, freeStorageSize, compaction, "mode": 'indexRow', "lowerBound": incomplete, "showCompaction": leafCompactionColumns() })}`);
       return;
    }
 
    function printDbHeader({ name } = {}, { leadBlank = true } = {}) {
       if (leadBlank) console.log('');
       printRule('heavy');
-      console.log(`[bold][green]Database:[/] [cyan]${padVisible(String(name || ''), Math.max(0, rowHeader - 10))}[/] [bold][green]${columnHeaders()}[/]`);
+      console.log(`[bold][green]Database:[/] [cyan]${padVisible(String(name || ''), Math.max(0, rowHeader - 10))}[/] [bold][green]${columnHeaders({ "compaction": dbTableCompactionColumns() })}[/]`);
       return;
    }
 
@@ -2844,7 +2881,8 @@
          "idxLabel": 'Indexes subtotal',
          "nsCompactionKind": 'collection',
          "freeIncomplete": freeStorageComplete === false,
-         "idxIncomplete": totalIndexBytesReusableComplete === false
+         "idxIncomplete": totalIndexBytesReusableComplete === false,
+         "showCompaction": dbTableCompactionColumns()
       });
       printRule('heavy');
       return;
@@ -2873,7 +2911,7 @@
          return;
       }
       if (hide && unknown) {
-         console.log('[yellow][WARN] Free blocks │ reuse unavailable (WiredTiger free-space stats hidden on this tier)[/]');
+         console.log('[yellow][WARN] Free blocks / reuse unavailable (WiredTiger free-space stats hidden on this tier)[/]');
          return;
       }
       if (incomplete) {
@@ -2901,8 +2939,9 @@
 
    function markMongosClusterData(topology) {
       /*
-       *  When CSRS members are in the walk, mongos totals are cluster data
-       *  (no config, no local). discover:false keeps config on the router row.
+       *  When CSRS members are in the walk, mongos totals are
+       *  cluster data (no local/metadata). discover:false keeps config
+       *  on the router row.
        */
       if (!topology || topologyOptions.discover === false) return;
       const connecting = topology.connecting;
@@ -2912,7 +2951,7 @@
       ));
       if (!hasCsrs) return;
       connecting.omitConfigDb = true;
-      connecting.dbPath = 'cluster data';
+      connecting.dbPath = 'cluster data (no local/metadata)';
    }
 
    function currentAuthUser() {
@@ -3061,6 +3100,23 @@
       const v = String(outputOptions.verbosity || 'full').toLowerCase();
       if (v === 'summary' || v === 'summaryidx' || v === 'compactonly') return v;
       return 'full';
+   }
+
+   function leafCompactionColumns() {
+      /*
+       *  Compaction on collection/index/namespace rows is compactOnly-only.
+       */
+      return outputVerbosity() === 'compactonly';
+   }
+
+   function dbTableCompactionColumns() {
+      /*
+       *  Database-header tables keep Compaction in summary (rollup-only) and
+       *  compactOnly. Full / summaryIdx mix leaf rows under the same header,
+       *  so that column stays off there; dbPath totals still print it.
+       */
+      const v = outputVerbosity();
+      return v === 'summary' || v === 'compactonly';
    }
 
    function limitN() {
@@ -3401,12 +3457,21 @@
       return true;
    }
 
+   function clusterStorageScopeNote() {
+      /*
+       *  Footer copy for the cluster consumption rollup (tabular + HTML).
+       *  Size on disk / totalSize is WiredTiger collection+index files.
+       */
+      return 'These totals are WiredTiger collection and index storage. Logs, binaries, journals, and FTDC add further disk use.';
+   }
+
    function printClusterConsumption(topology) {
       const stats = clusterConsumptionStats(topology);
       if (!stats) return false;
       const n = mongodStatsNodes(topology).length;
       console.log('');
-      printTotalConsumption(stats, `Cluster consumption (${n} dbPaths)`);
+      printTotalConsumption(stats, `Cluster consumption (total, ${n} dbPaths)`);
+      console.log(`[yellow][NOTE] ${clusterStorageScopeNote()}[/]`);
       const vols = stats.fsVolumeCount;
       const fsLabel = (vols > 0 && vols !== n)
          ? `Filesystem volumes (${vols} unique)`

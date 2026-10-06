@@ -1271,7 +1271,7 @@ class HostNode {
       this.dbPath = (snap.atlasPlatform === 'serverless') ? 'serverless'
                   : (snap.atlasPlatform === 'sharedTier') ? 'sharedTier'
                   : (this.proc === 'mongod') ? serverCmdLineOpts().parsed.storage.dbPath
-                  : (this.proc === 'mongos') ? 'sharded' // dbstats relabels to cluster data when CSRS is listed
+                  : (this.proc === 'mongos') ? 'sharded' // dbstats relabels to cluster data (no local/metadata) when CSRS is listed
                   : 'unknown';
       if (this.proc === 'mongos') {
          this.shards = Array.isArray(snap.shardIds)
