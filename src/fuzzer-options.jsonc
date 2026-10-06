@@ -40,15 +40,14 @@
       // "backwards": false
    },
    "writeConcern": {
-      // "w": "majority",
-      // "wtimeout": 10000,
+      "w": "majority",
+      "wtimeout": 10000,
       "j": false
    },
    "indexPrefs": {
       "build": true,
-      "order": "post"
-      // ["pre"|"post"] collection population
-      // "commitQuorum": "majority"
+      "order": "post", // ["pre"|"post"] collection population
+      "commitQuorum": "majority"
    },
    "timeSeries": false,
    // Schemas that do not store a Date at timeField are omitted from the draw.
@@ -70,14 +69,11 @@
    },
    "expireAfterSeconds": 0,
    "fuzzer": {
-      "id": "ts",
-      // ["ts"|"oid"]
+      "id": "ts", // ["ts"|"oid"]
       "range": 365.2422,
       "offset": -300,
       "interval": 7,
-      "distribution": "uniform",
-      // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
-      // bimodal, pareto, and exponential still draw uniform
+      "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
       // "polymorphic": {
       //    "enabled": false,
       //    "varyTypes": false,
@@ -87,11 +83,7 @@
       //    "sparsity": 0,
       //    "weighting": 50
       // },
-      "schemas": [
-         "schema-a.jsonc",
-         "schema-b.jsonc",
-         "schema-c.jsonc"
-      ],
+      "schemas": ["schema-a.jsonc", "schema-b.jsonc", "schema-c.jsonc"],
       // an empty schemas array skips the sample files
       // weights may be fractional; a non-array is treated as [1]; weight 0 omits that schema
       "ratios": [7, 2, 1]
@@ -102,12 +94,11 @@
          "date": 1
          // "string": "hashed"
       },
-      "unique": false,
-      // resharding a collection that has a uniqueness constraint is not supported
+      "unique": false, // resharding a collection that has a uniqueness constraint is not supported
       "numInitialChunksPerShard": 2,
       // "collation": { "locale": "simple" },
       // "timeseries": { "timeField": "timestamp", "metaField": "data", "granularity": "hours" },
-      "reShard": true
+      "reShard": false
    },
    "indexes": [
       { "date": -1 },
@@ -133,9 +124,7 @@
       // "hidden": false
       // "collation" follows collation unless set here
    },
-   "hashedIndexes": [
-      { "language": "hashed" }
-   ],
+   "hashedIndexes": [{ "language": "hashed" }],
    "hashedIndexOptions": {
       // hashed accepts simple collation only
       // "background": true,
@@ -146,9 +135,7 @@
       // "hidden": false,
       "collation": { "locale": "simple" }
    },
-   "indexes2d": [
-      { "location.coordinates": "2d" }
-   ],
+   "indexes2d": [{ "location.coordinates": "2d" }],
    "indexes2dOptions": {
       // 2d rejects a collation field.
       // "default_language" follows idioma unless set here.
@@ -161,9 +148,7 @@
       // "expireAfterSeconds": 0,
       // "hidden": false
    },
-   "textIndexes": [
-      { "quote.txt": "text" }
-   ],
+   "textIndexes": [{ "quote.txt": "text" }],
    "textIndexOptions": {
       // text rejects a collation field.
       // "default_language" follows idioma unless set here.
