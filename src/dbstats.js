@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.3"
+ *  Version: "1.2.4"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.3" };
+   const __script = { "name": "dbstats.js", "version": "1.2.4" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -1649,7 +1649,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.3',
+         "version": '1.2.4',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1994,15 +1994,35 @@
          }
       }
 
-      function catalogHeaders(nameHeader, { compaction = true, idxCompaction = compaction } = {}) {
+      function catalogSpec(spec = {}) {
+         return {
+            "index": spec.index === true,
+            "dataSize": spec.dataSize !== false,
+            "compression": spec.compression !== false,
+            "objects": spec.objects !== false,
+            "collections": spec.collections !== false,
+            "indexes": spec.indexes !== false,
+            "compaction": spec.compaction === true,
+            "idxCompaction": spec.idxCompaction === true
+         };
+      }
+
+      function catalogHeaders(nameHeader, spec = {}) {
          /*
-          *  Rollup tables keep Compaction and Idx compaction. Namespace and
-          *  index tables omit both except compactOnly, which adds Compaction.
+          *  Per-table columns: omit cells that are always blank on that
+          *  table. Size on disk and Free / reuse stay on every catalog table.
           */
-         const cols = [nameHeader, 'Index', 'Data size', 'Compression', 'Size on disk', 'Free / reuse',
-            'Objects', 'Collections', 'Indexes'];
-         if (compaction) cols.push('Compaction');
-         if (idxCompaction) cols.push('Idx compaction');
+         const s = catalogSpec(spec);
+         const cols = [nameHeader];
+         if (s.index) cols.push('Index');
+         if (s.dataSize) cols.push('Data size');
+         if (s.compression) cols.push('Compression');
+         cols.push('Size on disk', 'Free / reuse');
+         if (s.objects) cols.push('Objects');
+         if (s.collections) cols.push('Collections');
+         if (s.indexes) cols.push('Indexes');
+         if (s.compaction) cols.push('Compaction');
+         if (s.idxCompaction) cols.push('Idx compaction');
          return cols;
       }
 
@@ -2057,31 +2077,45 @@
          return 'act';
       }
 
-      function metricsCells(row, kind, cols = { compaction: true, idxCompaction: true }) {
+      function metricsCells(row, kind, spec = {}) {
+         const s = catalogSpec(spec);
          const compact = row.compaction;
          const compactCls = actClass(compact);
-         const logical = (kind === 'db' || kind === 'ns' || kind === 'total');
-         const showObjects = (kind !== 'index' && kind !== 'idxRollup');
-         let cells = (logical ? bytesTd(row.dataSize) : emptyTd('num bytes'))
-            + (logical
-               ? td(fmtRatio(row.compression) + (row.compressor ? ' ' + row.compressor : ''), row.compression, 'num ratio')
-               : emptyTd('num ratio'))
-            + bytesTd(row.storageSize)
-            + freeTd(row.freeStorageSize, row.reuse)
-            + (showObjects ? td(fmtNum(row.objects), row.objects, 'num count') : emptyTd('num count'));
-         if (kind === 'index' || kind === 'idxRollup') {
-            cells += emptyTd('num count') + emptyTd('num count');
-         } else if (kind === 'ns') {
-            cells += emptyTd('num count')
-               + td(fmtNum(row.nindexes), row.nindexes, 'num count');
-         } else {
-            cells += td(fmtCount(row.ncollections), Array.isArray(row.ncollections) ? '' : row.ncollections, 'num count')
-               + td(fmtCount(row.nindexes), Array.isArray(row.nindexes) ? '' : row.nindexes, 'num count');
+         const showLogical = (kind === 'db' || kind === 'ns');
+         let cells = '';
+         if (s.dataSize) {
+            cells += showLogical ? bytesTd(row.dataSize) : emptyTd('num bytes');
          }
-         if (cols.compaction) {
+         if (s.compression) {
+            cells += showLogical
+               ? td(fmtRatio(row.compression) + (row.compressor ? ' ' + row.compressor : ''), row.compression, 'num ratio')
+               : emptyTd('num ratio');
+         }
+         cells += bytesTd(row.storageSize);
+         cells += freeTd(row.freeStorageSize, row.reuse);
+         if (s.objects) {
+            const show = (kind !== 'index' && kind !== 'idxRollup');
+            cells += show ? td(fmtNum(row.objects), row.objects, 'num count') : emptyTd('num count');
+         }
+         if (s.collections) {
+            if (kind === 'index' || kind === 'idxRollup' || kind === 'ns') {
+               cells += emptyTd('num count');
+            } else {
+               cells += td(fmtCount(row.ncollections), Array.isArray(row.ncollections) ? '' : row.ncollections, 'num count');
+            }
+         }
+         if (s.indexes) {
+            if (kind === 'index' || kind === 'idxRollup') {
+               cells += emptyTd('num count');
+            } else {
+               const nidx = row.nindexes;
+               cells += td(kind === 'ns' ? fmtNum(nidx) : fmtCount(nidx), Array.isArray(nidx) ? '' : nidx, 'num count');
+            }
+         }
+         if (s.compaction) {
             cells += td(fmtCompaction(compact), compactionRank(compact), compactCls);
          }
-         if (cols.idxCompaction) {
+         if (s.idxCompaction) {
             const idxLabel = (kind === 'index' || kind === 'idxRollup' || kind === 'total')
                ? null
                : row.idxCompaction;
@@ -2090,31 +2124,35 @@
          return cells;
       }
 
-      function identCells(name, indexName, nameSort) {
-         return td(name, nameSort != null ? nameSort : name, 'name ident', '', name)
-            + td(indexName || '', indexName || '', 'name idx', '', indexName || '');
+      function identCells(name, indexName, nameSort, spec = {}) {
+         const s = catalogSpec(spec);
+         let cells = td(name, nameSort != null ? nameSort : name, 'name ident', '', name);
+         if (s.index) {
+            cells += td(indexName || '', indexName || '', 'name idx', '', indexName || '');
+         }
+         return cells;
       }
 
-      function totalsRow(row, label, kind = 'db', trCls, cols) {
+      function totalsRow(row, label, kind = 'db', trCls, spec) {
          return '<tr' + (trCls ? ' class="' + esc(trCls) + '"' : '') + '>'
-            + identCells(label) + metricsCells(row || {}, kind, cols) + '</tr>';
+            + identCells(label, '', label, spec) + metricsCells(row || {}, kind, spec) + '</tr>';
       }
 
-      function dbRow(db, cols) {
+      function dbRow(db, spec) {
          const name = db.name || '';
-         return '<tr>' + identCells(name) + metricsCells(db, 'db', cols) + '</tr>';
+         return '<tr>' + identCells(name, '', name, spec) + metricsCells(db, 'db', spec) + '</tr>';
       }
 
-      function nsRow(c, cols) {
+      function nsRow(c, spec) {
          const ns = c.ns || ((c.db ? c.db + '.' : '') + (c.name || ''));
          const mark = c.unauthorized ? ' (unauthorized)' : (c.unavailable ? ' (unavailable)' : '');
-         return '<tr>' + identCells(ns + mark, '', ns) + metricsCells(c, 'ns', cols) + '</tr>';
+         return '<tr>' + identCells(ns + mark, '', ns, spec) + metricsCells(c, 'ns', spec) + '</tr>';
       }
 
-      function idxRow(c, idx, cols) {
+      function idxRow(c, idx, spec) {
          const ns = c.ns || ((c.db ? c.db + '.' : '') + (c.name || ''));
          const name = idx.name || '';
-         return '<tr>' + identCells(ns, name) + metricsCells(idx, 'index', cols) + '</tr>';
+         return '<tr>' + identCells(ns, name, ns, spec) + metricsCells(idx, 'index', spec) + '</tr>';
       }
 
       function catalogs() {
@@ -2137,8 +2175,22 @@
       function renderBlock(block) {
          const v = verb();
          const node = block.node || {};
-         const rollupCols = { "compaction": true, "idxCompaction": true };
-         const leafCols = { "compaction": v === 'compactonly', "idxCompaction": false };
+         const dbCols = { "compaction": true, "idxCompaction": true };
+         const nsCols = {
+            "collections": false,
+            "compaction": v === 'compactonly',
+            "idxCompaction": false
+         };
+         const idxCols = {
+            "index": true,
+            "dataSize": false,
+            "compression": false,
+            "objects": false,
+            "collections": false,
+            "indexes": false,
+            "compaction": v === 'compactonly',
+            "idxCompaction": false
+         };
          let html = '<section class="panel">';
          if (block.title || block.node) {
             const sub = [node.role, node.proc, node.dbPath].filter(Boolean).join(' · ');
@@ -2149,7 +2201,7 @@
          let dbs = (block.databases || []).filter(dbVisible);
          if (v === 'summary') {
             dbs = applyTop(dbs, 'db');
-            html += tableHtml('Databases', catalogHeaders('Database', rollupCols), dbs.map(db => dbRow(db, rollupCols)).join(''));
+            html += tableHtml('Databases', catalogHeaders('Database', dbCols), dbs.map(db => dbRow(db, dbCols)).join(''));
             html += '</section>';
             return html;
          }
@@ -2158,10 +2210,10 @@
          const keep = {};
          nss.forEach(c => { keep[c.db || ''] = true; });
          dbs = dbs.filter(d => keep[d.name || '']);
-         html += tableHtml('Databases', catalogHeaders('Database', rollupCols), dbs.map(db => dbRow(db, rollupCols)).join(''));
-         html += tableHtml('Namespaces', catalogHeaders('Namespace', leafCols), nss.map(c => nsRow(c, leafCols)).join(''));
-         const idxHtml = nss.flatMap(c => (c.indexes || []).filter(indexVisible).filter(idx => meetsLimit(idx, 'index')).map(idx => idxRow(c, idx, leafCols))).join('');
-         html += tableHtml('Indexes', catalogHeaders('Namespace', leafCols), idxHtml);
+         html += tableHtml('Databases', catalogHeaders('Database', dbCols), dbs.map(db => dbRow(db, dbCols)).join(''));
+         html += tableHtml('Namespaces', catalogHeaders('Namespace', nsCols), nss.map(c => nsRow(c, nsCols)).join(''));
+         const idxHtml = nss.flatMap(c => (c.indexes || []).filter(indexVisible).filter(idx => meetsLimit(idx, 'index')).map(idx => idxRow(c, idx, idxCols))).join('');
+         html += tableHtml('Indexes', catalogHeaders('Namespace', idxCols), idxHtml);
          if (v === 'full' && !htmlLimitActive()) {
             const views = dbs.flatMap(d => (d.views || []).map(x => {
                const ns = x.ns || ((d.name ? d.name + '.' : '') + (x.name || ''));
@@ -2348,7 +2400,9 @@
          'th.bytes,td.bytes{min-width:6.75rem} th.ratio,td.ratio{min-width:7rem} th.free,td.free{min-width:11.5rem;white-space:pre}',
          'th.count,td.count{min-width:4.75rem} th.act,td.act{min-width:6.75rem} th.mark,td.mark-cell{width:1.4rem;padding-left:.2rem;padding-right:.2rem}',
          'th{background:var(--th);color:var(--acc);cursor:pointer;position:sticky;top:0;z-index:2;user-select:none;font:600 .75rem/1.2 system-ui,-apple-system,"Segoe UI",sans-serif;text-transform:uppercase;letter-spacing:.02em}',
-         'th.sort-asc:after{content:" \\25b2";font-size:.7em} th.sort-desc:after{content:" \\25bc";font-size:.7em}',
+         'table.sortable th:not(.mark)::after{content:"⇅";margin-left:.28em;font-size:.72em;color:var(--muted);opacity:.45;font-weight:400}',
+         'table.sortable th.sort-asc::after{content:"▲";color:var(--acc);opacity:1}',
+         'table.sortable th.sort-desc::after{content:"▼";color:var(--acc);opacity:1}',
          'tbody tr:nth-child(even) td{background:var(--zebra)}',
          'tbody tr:hover td{background:var(--hover)}',
          'tbody tr.total-row td{background:var(--th);font-weight:600;color:var(--fg)}',
