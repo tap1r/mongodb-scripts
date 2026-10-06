@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.4"
+ *  Version: "1.2.5"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.4" };
+   const __script = { "name": "dbstats.js", "version": "1.2.5" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -1649,7 +1649,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.4',
+         "version": '1.2.5',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -2178,7 +2178,7 @@
          const dbCols = { "compaction": true, "idxCompaction": true };
          const nsCols = {
             "collections": false,
-            "compaction": v === 'compactonly',
+            "compaction": true,
             "idxCompaction": false
          };
          const idxCols = {
@@ -2188,7 +2188,7 @@
             "objects": false,
             "collections": false,
             "indexes": false,
-            "compaction": v === 'compactonly',
+            "compaction": true,
             "idxCompaction": false
          };
          let html = '<section class="panel">';
@@ -2211,7 +2211,7 @@
          nss.forEach(c => { keep[c.db || ''] = true; });
          dbs = dbs.filter(d => keep[d.name || '']);
          html += tableHtml('Databases', catalogHeaders('Database', dbCols), dbs.map(db => dbRow(db, dbCols)).join(''));
-         html += tableHtml('Namespaces', catalogHeaders('Namespace', nsCols), nss.map(c => nsRow(c, nsCols)).join(''));
+         html += tableHtml('Namespaces (collections)', catalogHeaders('Namespace', nsCols), nss.map(c => nsRow(c, nsCols)).join(''));
          const idxHtml = nss.flatMap(c => (c.indexes || []).filter(indexVisible).filter(idx => meetsLimit(idx, 'index')).map(idx => idxRow(c, idx, idxCols))).join('');
          html += tableHtml('Indexes', catalogHeaders('Namespace', idxCols), idxHtml);
          if (v === 'full' && !htmlLimitActive()) {
@@ -2261,6 +2261,8 @@
                   stats.totalFreeStorageSize != null ? stats.totalFreeStorageSize : stats.freeStorageSize,
                   stats.totalReuse != null ? stats.totalReuse : stats.reuse
                )
+               + td(fmtCompaction(stats.compaction), compactionRank(stats.compaction), actClass(stats.compaction))
+               + td(fmtCompaction(stats.idxCompaction), compactionRank(stats.idxCompaction), actClass(stats.idxCompaction))
                + td(node.error || '', node.error || '', node.error ? 'err name' : 'name', '', node.error || '')
                + '</tr>';
          }).join('');
@@ -2275,12 +2277,14 @@
                + td('', '', 'name path')
                + bytesTd(consumption.totalSize)
                + freeTd(consumption.totalFreeStorageSize, consumption.totalReuse)
+               + td(fmtCompaction(null), '', 'act')
+               + td(fmtCompaction(null), '', 'act')
                + td('', '', 'name')
                + '</tr>';
          }
          const cols = showShard
-            ? ['', 'Node', 'Role', 'Type', 'Shard', 'dbPath', 'Size on disk', 'Free / reuse', 'Error']
-            : ['', 'Node', 'Role', 'Type', 'dbPath', 'Size on disk', 'Free / reuse', 'Error'];
+            ? ['', 'Node', 'Role', 'Type', 'Shard', 'dbPath', 'Size on disk', 'Free / reuse', 'Compaction', 'Idx compaction', 'Error']
+            : ['', 'Node', 'Role', 'Type', 'dbPath', 'Size on disk', 'Free / reuse', 'Compaction', 'Idx compaction', 'Error'];
          let html = tableHtml(head, cols, rows);
          if (consumption && consumption.totalSize != null) {
             const note = ui.clusterStorageNote || '';
@@ -2394,7 +2398,6 @@
          'th,td{border-bottom:1px solid var(--line);padding:.32rem .55rem;text-align:right;white-space:nowrap;box-sizing:border-box}',
          'th.name,td.name,th.ident,td.ident,th.path,td.path{text-align:left}',
          'th.mark,td.mark-cell,th.act,td.act{text-align:center}',
-         'th.ident,td.ident{max-width:22rem;overflow:hidden;text-overflow:ellipsis}',
          'th.idx,td.idx{max-width:11rem;overflow:hidden;text-overflow:ellipsis}',
          'th.path,td.path{max-width:24rem;overflow:hidden;text-overflow:ellipsis}',
          'th.bytes,td.bytes{min-width:6.75rem} th.ratio,td.ratio{min-width:7rem} th.free,td.free{min-width:11.5rem;white-space:pre}',
@@ -2870,7 +2873,7 @@
    function printNSHeader(nsTotal = 0, { leadBlank = true } = {}) {
       if (leadBlank) console.log('');
       printRule('heavy');
-      console.log(`[bold][green]${padVisible(`Namespaces: ${nsTotal}`, rowHeader)}[/] [bold][green]${columnHeaders({ "compaction": leafCompactionColumns() })}[/]`);
+      console.log(`[bold][green]${padVisible(`Namespaces (collections): ${nsTotal}`, rowHeader)}[/] [bold][green]${columnHeaders({ "compaction": leafCompactionColumns() })}[/]`);
       return;
    }
 

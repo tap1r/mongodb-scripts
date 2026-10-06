@@ -3627,6 +3627,9 @@ async function $collStats(dbName = db.getName(), collName = '', owningShardCache
     *  $collStats wrapper. Always a Promise — await the call.
     *  Live aggregate cursors are thenable; awaiting the cursor drains it.
     *  Drain via drainAggCursor (driver _cursor.toArray()).
+    *  Per-index shard merge: the first row is renamed to storageSize /
+    *  freeStorageSize; later shards must sum those renamed fields. Summing
+    *  "file size in bytes" on the accumulator keeps only the last shard.
     */
    const namespace = db.getSiblingDB(dbName).getCollection(collName);
    const options = {
@@ -3864,7 +3867,17 @@ async function $collStats(dbName = db.getName(), collName = '', owningShardCache
                            ] },
                            [{
                               "name": "$$this.name",
-                              "storageSize": { "$sum": [{ "$arrayElemAt": ["$$value.file size in bytes", -1] }, "$$this.file size in bytes"] },
+                              // Accumulated rows are renamed to storageSize; looking up
+                              // "file size in bytes" here kept only the last shard's size.
+                              "storageSize": {
+                                 "$sum": [
+                                    { "$ifNull": [
+                                       { "$arrayElemAt": ["$$value.storageSize", -1] },
+                                       { "$arrayElemAt": ["$$value.file size in bytes", -1] }
+                                    ] },
+                                    { "$ifNull": ["$$this.file size in bytes", "$$this.storageSize"] }
+                                 ]
+                              },
                               "freeStorageSize": {
                                  "$let": {
                                     "vars": {
