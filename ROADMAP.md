@@ -87,7 +87,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `fuzzer.js` | 0.6.43 | **1.6.0** |
 | `oplogchurn.js` | 0.5.22 | **0.6.0** |
 | `latency.js` | 0.4.9 | **0.4.10** |
-| `schema-sampler.js` | 0.2.16 | **0.3.0** |
+| `schema-sampler.js` | 0.2.16 | **0.4.0** |
 | `sleepy.js` | 0.2.6 | **0.2.7** |
 | `docSizes.js` | 0.1.34 | **0.1.35** |
 | `niceDeleteMany.js` | 0.4.11 | **1.0.0** |
@@ -641,13 +641,13 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `schema-sampler.js`
 
-**Live: v0.3.0.** **Archive: v0.2.16.** Mongosh-only. Do not restore `setReadPref`. Per-command RP on `$sample` and on `listDatabases` (`admin.runCommand`, not `adminCommand`). `filter.db` / `filter.collection` drive `listDatabases` / `getCollectionInfos` (RegExp, string, or array of names) and are re-checked client-side. In-file `const userOptions` is not an `--eval` overlay. Header tags this file as requiring this roadmap.
+**Live: v0.4.0.** **Archive: v0.2.16.** Mongosh-only. Do not restore `setReadPref`. Per-command RP on `$sample` and on `listDatabases` (`admin.runCommand`, not `adminCommand`). `filter.db` / `filter.collection` drive `listDatabases` / `getCollectionInfos` (RegExp, string, or array of names) and are re-checked client-side. `--eval` `var options` overlays in-file `optionDefaults` (filter keys merge). Do not declare `options` / `userOptions` in this file. Header tags this file as requiring this roadmap.
 
-**Shipped:** **0.3.0** applies `userOptions.filter` to the catalog walk.
+**Shipped:** **0.3.0** applies `filter` to the catalog walk. **0.4.0** `--eval` `var options` overlay.
 
 Remaining mongosh-line work (do not block the archive):
 
-- Optional mdblib load; `--eval var` overlay requires dropping the in-file `const userOptions`.
+- Optional mdblib load for colour tags / version helpers.
 
 ### `schema-import.js`
 
