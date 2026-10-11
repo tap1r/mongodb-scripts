@@ -317,7 +317,7 @@ const userOptions = typeof autoCompactOptions === 'undefined' ? {} : autoCompact
 
 An async IIFE **parameter** of the same name is also a shadow. `(async (options) => { … })()` binds `options` to `undefined` and hides the `--eval` global. Probe the global inside an IIFE that takes no parameters (`killAgedSessions.js`, `onlineDefrag.js`). `dbstats.js` leaves `(async (db, options) => …)` commented for this reason.
 
-`--eval` examples must use `var`. On mongosh 2.10, `let` / `const` in `--eval` also leak into `--file`, and a second run then redeclares. `killAgedSessions.js` examples still show `let`.
+`--eval` examples must use `var`. On mongosh 2.10, `let` / `const` in `--eval` also leak into `--file`, and a second run then redeclares. `killAgedSessions.js` Syntax and examples use `var`.
 
 ### JSONC options file
 

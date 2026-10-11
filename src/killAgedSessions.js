@@ -1,16 +1,13 @@
 (async() => {
    /*
     *  Name: "killAgedSessions.js"
-    *  Version: "0.2.2"
+    *  Version: "0.2.3"
     *  Description: "kill aged sessions (and associated operations) by user"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *  Roadmap: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/ROADMAP.md" (required context)
     *
-    *  Legacy archive line: v0.2.2 is the snapshot for this script. mongosh-only
-    *  (incompatible with legacy mongo); still the demarked version for the
-    *  whole-tree freeze. Further feature work targets mongosh; see ROADMAP.md
-    *  → Legacy mongo shell retirement.
+    *  Dual-shell snapshot: legacy/mongo-shell (v0.2.2). This file is mongosh-only.
     *
     *  Notes:
     *  - customise $listSessions filter to match your needs
@@ -20,7 +17,7 @@
     *    fixed-size batches and fan out individual killSessions concurrently
     */
 
-   // Syntax: mongosh [connection options] [--quiet] [--eval 'let filter = {}, age = 300000, batchSize = 64, sortByAge = false;'] [-f|--file] </path/to/>killAgedSessions.js
+   // Syntax: mongosh [connection options] [--quiet] [--eval 'var filter = {}, age = 300000, batchSize = 64, sortByAge = false;'] [-f|--file] </path/to/>killAgedSessions.js
 
    /*
     *  Parameters (--eval globals):
@@ -55,7 +52,7 @@
     *    mongosh --host "replset/localhost" --eval 'var filter = { "users": [{ "user": "dba", "db": "admin" }] }, age = 500;' killAgedSessions.js
     */
 
-   const __script = { "name": "killAgedSessions.js", "version": "0.2.2" };
+   const __script = { "name": "killAgedSessions.js", "version": "0.2.3" };
    // Resolve --eval globals (do not shadow with IIFE params — ()() would ignore them)
    const sessionFilter = typeof filter !== 'undefined' ? filter : {};
    const maxIdleMs = (() => {

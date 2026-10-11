@@ -94,10 +94,11 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `congestionMonitor.js` | 0.2.13 | **0.4.0** |
 | `onlineDefrag.js` | 0.1.4 | **1.7.0** |
 | `indexCacheUtil.js` | 0.1.5 | **1.2.0** |
+| `killAgedSessions.js` | 0.2.2 | **0.2.3** |
 | `compact.js` | 0.2.15 | **removed** (archive only) |
 | `batchUpdater.js` | 0.1.6 | **removed** (archive only) |
 
-Unchanged vs freeze (still in live `src/`): `explainHisto` 0.1.4, `schema-import` 0.1.8, `connStats` 0.1.14, `discovery` 0.2.1, `killAgedSessions` 0.2.2, `rtt` 0.3.0, `oidGenerator` 0.2.7, `oidFunction` 0.1.5, `ctxDemo` 0.1.0, `modifiedCountDocumentsByKey` 0.1.7.
+Unchanged vs freeze (still in live `src/`): `explainHisto` 0.1.4, `schema-import` 0.1.8, `connStats` 0.1.14, `discovery` 0.2.1, `rtt` 0.3.0, `oidGenerator` 0.2.7, `oidFunction` 0.1.5, `ctxDemo` 0.1.0, `modifiedCountDocumentsByKey` 0.1.7.
 
 #### 3. After the cut — strip and streamline (next general architecture)
 
@@ -660,9 +661,7 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `killAgedSessions.js`
 
-**Legacy archive line: v0.2.2** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Post-freeze feature work proceeds on the mongosh line only.
-
-**Apply (shell):** usage examples already use `var`. The Syntax comment still has `let filter` — switch that comment to `var`. Do not add IIFE parameters named `filter` / `age` / `batchSize` / `sortByAge` (a parameter hides the global). Keep the failure **throw**; `quit()` is not a reliable `mongosh --file` status. See the scripting guide. Header tags this file as requiring this roadmap.
+**Live: v0.2.3.** **Archive: v0.2.2.** Mongosh-only. Do not top-level-await. `--eval` Syntax and examples use `var`. Do not add IIFE parameters named `filter` / `age` / `batchSize` / `sortByAge` (a parameter hides the global). Keep the failure **throw**; `quit()` is not a reliable `mongosh --file` status. See the scripting guide. Header tags this file as requiring this roadmap.
 
 ### `rtt.js`
 
