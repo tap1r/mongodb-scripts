@@ -242,7 +242,7 @@ Work per iteration is bounded by the **high-pass on free space**, not by listing
 
 New monolithic script (working name `autoTrim.js`), not a preflight inside `autoCompact.js`. Coupling:
 
-- **Plan** from a dbstats-style snapshot. Prefer consuming `dbstats.js` `output.format: json` once that path is a **stable, versioned** ranked list (see `dbstats.js` → Output formats). `sort` by `freeStorageSize` / `idxFreeStorageSize` hooks exist; `output.verbosity` `compactOnly` is the tabular/html printer as of 0.22.0 / 0.23.0. Printers project `limit.n` (0.25.0); JSON stays the full contract. Do not scrape tabular banners.
+- **Plan** from a dbstats-style snapshot. Consume `dbstats.js` `output.format: json` — the **shipped, versioned** contract (live **1.2.6**; see `dbstats.js` → Output formats). `sort` by `freeStorageSize` / `idxFreeStorageSize` hooks exist; `output.verbosity` `compactOnly` is the tabular/html printer as of 0.22.0 / 0.23.0. Printers project `limit.n` (0.25.0); JSON stays the full contract. Do not scrape tabular banners.
 - **Execute** by driving `autoCompact.js` (`--eval` options + `--file`), same process or a wrapper. Do not `load()` either until the library story settles. Bounce `autoCompact` command errors. Script-only keys (`maxWaitMs`, output format) live on auto-trim, not in the `autoCompact` command document. Cap waits, `quit(1)` on hard errors, and emit a JSON summary (`ok`, recovered bytes, visits, `T_j`) so cron does not scrape colour banners.
 - **Oplog (opt-in only):** MongoDB 8.0+ [`compact`](https://www.mongodb.com/docs/manual/reference/command/compact/) accepts `freeSpaceTargetMB`, so auto-trim can issue a targeted `{ compact: "oplog.rs", freeSpaceTargetMB: T }` on `local` to cover the namespace autoCompact never walks. Pre-v8 has no `freeSpaceTargetMB` on `compact`; do not add an oplog path there. Compacting the oplog is **generally risky and discouraged** (capped collection, replication, lag, cache pressure). Default **off**; require an explicit flag. Prefer a secondary, `force` only if the operator really wants a primary. Same Atlas M0/Flex deny list as autoCompact — no fallback.
 
@@ -357,7 +357,7 @@ Orthogonal to `filter.db` / `filter.collection` regexes. “System” means coll
 
 #### Output formats
 
-- **`json` (near-term contract).** `output.format: json` prints a **versioned object** (`ok`, `name`, `version`, `catalog`, `topology`, `totals`, `databases[]`, `namespaces[]`, `warnings[]`) — same payload `main()` returns for load() / module callers. `catalog` is `{ builder, fallback }` (`legacy` | `listCatalog` | `listClusterCatalog`). `topology` is `kind`, `setName`, `shardIds`, additive `configSetName`, `nodes[]` (identity plus per-node `stats` totals, additive `configsvr`; `databases` on remotes when replica/sharded is `expanded`), `errors[]`. Consumers: `autoTrim.js` (rank reclaimable), `discovery.js` (per-node job payloads), later `autoCompact` / `compact` / `onlineDefrag` targeting. Ranked flat list *and* hierarchical rollup (db → collection → index); namespace rows are `{ ns, kind, dataSize, storageSize, freeStorageSize, objects, compaction, … }`. Keep `n/a` free-space as `null`, not `0` (Atlas M0/Flex). Additive `totals.totalSize` is collection `storageSize` plus `totalIndexSize` (the dbPath **Total** line). Additive `fsUsedSize` / `fsTotalSize` / `fsFreeSize` are the mongod volume from `db.stats()` (same on every database; omitted on Atlas shared-tier and on a mongos `raw` aggregate). `topology.consumption` sums mongod dbPaths when two or more members have stats (skip the mongos router; include CSRS). When db/dbPath totals come from collection WT instead of `db.stats()`, include `freeStorageSizeSource` (`'dbStats'|'collStatsRollup'|'unknown'`) and `freeStorageComplete` (and the index equivalents); incomplete collStats free is a lower bound — auto-trim must not use it as `G()` mass. Dedicated `$stats` sizes stay on the DB/dbPath rows even when `catalogCoverageComplete` is false. Peel the contract to stable keys; do not leak printer-only fields.
+- **`json` (shipped contract, live 1.2.6).** `output.format: json` prints a **versioned object** (`ok`, `name`, `version`, `catalog`, `topology`, `totals`, `databases[]`, `namespaces[]`, `warnings[]`) — same payload `main()` returns for load() / module callers. `catalog` is `{ builder, fallback }` (`legacy` | `listCatalog` | `listClusterCatalog`). `topology` is `kind`, `setName`, `shardIds`, additive `configSetName`, `nodes[]` (identity plus per-node `stats` totals, additive `configsvr`; `databases` on remotes when replica/sharded is `expanded`), `errors[]`. Consumers: `autoTrim.js` (rank reclaimable), `discovery.js` (per-node job payloads), later `autoCompact` / `compact` / `onlineDefrag` targeting. Ranked flat list *and* hierarchical rollup (db → collection → index); namespace rows are `{ ns, kind, dataSize, storageSize, freeStorageSize, objects, compaction, … }`. Keep `n/a` free-space as `null`, not `0` (Atlas M0/Flex). Additive `totals.totalSize` is collection `storageSize` plus `totalIndexSize` (the dbPath **Total** line). Additive `fsUsedSize` / `fsTotalSize` / `fsFreeSize` are the mongod volume from `db.stats()` (same on every database; omitted on Atlas shared-tier and on a mongos `raw` aggregate). `topology.consumption` sums mongod dbPaths when two or more members have stats (skip the mongos router; include CSRS). When db/dbPath totals come from collection WT instead of `db.stats()`, include `freeStorageSizeSource` (`'dbStats'|'collStatsRollup'|'unknown'`) and `freeStorageComplete` (and the index equivalents); incomplete collStats free is a lower bound — auto-trim must not use it as `G()` mass. Dedicated `$stats` sizes stay on the DB/dbPath rows even when `catalogCoverageComplete` is false. Peel the contract to stable keys; do not leak printer-only fields.
 - **`html`.** **Shipped 0.23.0.** `htmlOut` embeds the JSON contract in a self-contained page (click-to-sort tables). Size columns sort by byte magnitude (IEC units on the cell, `data-unit=bytes`); **Free / reuse** sorts by free bytes. Verbosity / `topology.depth` expanded / `limit.*` top-N filter that payload in the browser. Colour is the inline stylesheet (not configurable; later a pluggable CSS). Redirect stdout to a `.html` file. Aspirational live refresh still waits.
 - **Aspirational — live HTML.** HTML page calls script-side / local API hooks for refresh (re-snapshot without a full page reload). Depends on a durable run mode or companion listener; do not block the static JSON→HTML path on it.
 - **0.25.0 printer projection:** `limit.*` (`n` = hot top-N after verbosity; metric floors AND, 0 = off). Rank by the first non-zero `sort` key, else reclaimable bytes then compaction. JSON/module stay the full contract. `sort.compaction` / `sort.reuse` / `sort.idxFreeStorageSize` and format aliases (`tabular` / `table`) are shipped. `output.verbosity` (`full` / `summary` / `summaryIdx` / `compactOnly`) is the tabular printer as of 0.22.0 and the HTML initial view as of 0.23.0. Piped tabular colour is mdblib ANSI strip; there is no `output.colour`.
@@ -440,12 +440,11 @@ Remaining mongosh-line work (do not block the archive):
 
 **Live: v0.4.0.** **Legacy archive line: v0.2.13** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Known `.finally(process.stdout.write(…))` (write runs immediately) is **wontfix on this line**. Live wraps `.finally(() => process.stdout.write(…))`. Post-freeze feature work proceeds on the mongosh line only.
 
+**Shipped** on the live mongosh line (archive freeze stays v0.2.13): per-shard WT fold (collection-owning or all shard primaries; child `mongodb://` matches niceDeleteMany, no `load()`); MongoDB 8 execution-control on the snapshot + EQ (`executionControlDeprioritizationGate`, `usesThroughputProbing`, normal and low-priority `queues.execution.{read,write}.queueLength`, interval wait from `totalTimeQueuedMicros`); `bytes_dirty_intl` / `bytes_dirty_leaf` mapped from `tracked dirty internal/leaf page bytes in the cache`. Monitor-only — niceDeleteMany AIMD does not trip on execution-control. `lowPriorityAdmissionBypassThreshold` is dropped.
+
 Remaining mongosh-line work (do not block the archive):
 
-- Sharding (per-shard WT vitals; same need as niceDeleteMany). Live mongosh line folds collection-owning (or all) shard primaries; child `mongodb://` construction matches niceDeleteMany (local discovery-style helpers, not `load()`). Archive freeze stays v0.2.13.
-- MongoDB 8 execution-control: live snapshot + EQ for `executionControlDeprioritizationGate`, `usesThroughputProbing`, normal and low-priority `queues.execution.{read,write}.queueLength`, and interval wait from `totalTimeQueuedMicros` (per-shard `_queuedPrev`, MAX wait-ms / RANK wait status on fold). Monitor-only — niceDeleteMany AIMD does not trip on these. `lowPriorityAdmissionBypassThreshold` is dropped (fairness knob, not a pressure signal).
-- `bytes_dirty_intl` / `bytes_dirty_leaf` when the server exposes them. Live mongosh line already maps `tracked dirty internal/leaf page bytes in the cache`.
-- Pause / closed signal for auto-trim: backup cursor, repl-lag settle, WT dirty/updates (already has `backupCursorOpen`). Auto-trim is a consumer of these vitals, not a second monitor implementation if inlining is still required.
+- Auto-trim admission: backup cursor, repl-lag settle, WT dirty/updates (already has `backupCursorOpen`). Auto-trim **inlines** that sample; do not `load()` this file. Held: auto-trim as a vitals *consumer* of this IIFE.
 
 ### `niceDeleteMany.js`
 
@@ -610,11 +609,11 @@ Options overlay is **`fuzzer-options.jsonc`** via mdblib `loadJsoncFile` / `pars
 
 **Apply (shell):** do not restore `Bulk.execute(writeConcern)` — the argument is ignored. `insertMany(..., { writeConcern })` is the path. `createIndexes` returns names and throws. `insertedIds` is an object (count keys, including on a partial bulk error). The loader banner prints only when `process.argv` names this file (`isFuzzerCliFile`). `load()` stays quiet; mdblib still loads.
 
+**Shipped:** reshard wait holds the command Promise and races an awaited timer (`sleep()` would stall the response); majority `wtimeout` defaults to 10000 ms when `w` waits past the primary (`0` waits with no limit); shared-tier `fCV()` → `serverVer()` is by design (see mdblib).
+
 Remaining mongosh-line work (do not block the archive):
 
-- Reshard wait holds the user Promise so mongosh does not exit early. The poll races that promise with an awaited timer; `sleep()` would block the thread and stall the response.
-- `w: "majority"` with no `wtimeout` can stall `createCollection` / bulk on PSA or a lagging secondary.
-- Shared-tier `fCV()` → `serverVer()` is by design (see mdblib).
+- `--eval` overlay stays unwired (JSONC only; no second options channel).
 
 **TABLED:** further GeoJSON point classes. Subselect a point onto land, ocean, a major city, a port, a regional city, or leave it random. It may share that pick with other fields if cardinality is opened. Cardinality stays tabled. Shipped `$genPoint`, `$genLine`, and `$genPolygon` stay uniform inside the GeoJSON range until Luke opens this.
 
@@ -624,9 +623,10 @@ Remaining mongosh-line work (do not block the archive):
 
 **Live: v0.6.0.** **Archive: v0.5.22.** Mongosh-only. Do not restore `slaveOk(readPref)`. Per-command `options.readPreference = { mode: readPref }`. Keep `--eval var intervalHrs`. `Timestamp({ t, i })` only. Header tags this file as requiring this roadmap.
 
+**Shipped:** `console.clear()` runs only on a TTY CLI invocation. The loader banner prints only when `process.argv` names this file (`isOplogchurnCliFile`). `load()` stays quiet; mdblib still loads.
+
 Remaining mongosh-line work (do not block the archive):
 
-- `console.clear()` runs only on a TTY CLI invocation. The loader banner prints only when `process.argv` names this file (`isOplogchurnCliFile`). `load()` stays quiet; mdblib still loads.
 - Atlas M0/Flex: `local.oplog.rs` / `hostInfo` / free-space may be hidden or denied — same n/a story as dbstats.
 - `$collStats` / `hostInfo` / `serverCmdLineOpts` stay on the connected member (not covered by the aggregate RP).
 
@@ -664,7 +664,7 @@ Remaining mongosh-line work (do not block the archive):
 
 **Legacy archive line: v0.2.2** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Post-freeze feature work proceeds on the mongosh line only.
 
-**Apply (shell):** usage examples still pass `let` in `--eval`. Switch those examples to `var`. Do not add IIFE parameters named `filter` / `age` / `batchSize` / `sortByAge` (a parameter hides the global). Keep the failure **throw**; `quit()` is not a reliable `mongosh --file` status. See the scripting guide. Header tags this file as requiring this roadmap.
+**Apply (shell):** usage examples already use `var`. The Syntax comment still has `let filter` — switch that comment to `var`. Do not add IIFE parameters named `filter` / `age` / `batchSize` / `sortByAge` (a parameter hides the global). Keep the failure **throw**; `quit()` is not a reliable `mongosh --file` status. See the scripting guide. Header tags this file as requiring this roadmap.
 
 ### `rtt.js`
 
