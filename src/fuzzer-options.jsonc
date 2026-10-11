@@ -1,6 +1,7 @@
 // fuzzer.js options overlay (JSONC).
 // Omitted keys keep the defaults in fuzzer.js.
 // Search order: the working directory, beside fuzzer.js, $MDBLIB, ~/.mongodb.
+// Then --eval 'var options = { ... }' overlays this file. Explicit path: var optionsFile.
 // Schema paths are relative to this file's directory first.
 //
 // totalDocs stays $getRandExp(totalDocsExp) unless totalDocs is set.

@@ -325,7 +325,7 @@ An async IIFE **parameter** of the same name is also a shadow. `(async (options)
 
 Canonical names: `dbstats-options.jsonc`, `autoCompact-options.jsonc`, `fuzzer-options.jsonc`. Search a relative name in this order: explicit path, then `configSearchDirs` (anchor, working directory, `__dirname` for `--file`, `$MDBLIB`, `~/.mongodb`). An absolute path is used as given. A missing **default** file is not an error. An explicit `var optionsFile` or overlay `optionsFile` that is missing or fails to parse is an error (`warnings[]` code `optionsFile`). `parseScriptArgv` reads `--config` after `--` if those args appear on `process.argv`; mongosh 2.12 rejects unknown flags before the script runs.
 
-Strip JSONC in-process (BOM, `//` and `/* */` outside strings, trailing commas) then `JSON.parse`. Deep-merge plain objects; arrays and scalars replace. JSON has no RegExp — dbstats revives `filter.db` / `filter.collection` from `"^app$"` or `"/pat/i"`. A regex literal does not belong in the file. `--eval` stays a thin `var` overlay after the file and must still not be declared in the script. Fuzzer’s `--eval` overlay is unwired; its JSONC file is the overlay.
+Strip JSONC in-process (BOM, `//` and `/* */` outside strings, trailing commas) then `JSON.parse`. Deep-merge plain objects; arrays and scalars replace. JSON has no RegExp — dbstats revives `filter.db` / `filter.collection` from `"^app$"` or `"/pat/i"`. A regex literal does not belong in the file. `--eval` stays a thin `var` overlay after the file and must still not be declared in the script. Fuzzer uses the same helper (`fuzzer-options.jsonc` then `var options` / `var optionsFile`).
 
 ```javascript
 // dbstats-options.jsonc (comments and trailing commas are fine)
@@ -336,6 +336,7 @@ Strip JSONC in-process (BOM, `//` and `/* */` outside strings, trailing commas) 
 
 // mongosh --quiet --eval 'var optionsFile = "/path/to/dbstats-options.jsonc"' -f dbstats.js
 // mongosh --quiet --eval 'var options = { output: { format: "json" } };' -f dbstats.js
+// mongosh --quiet --eval 'var options = { totalDocs: 1000 };' -f fuzzer.js
 
 const overlay = (typeof options !== 'undefined' && options) ? options : null;
 const explicit = (typeof optionsFile !== 'undefined') ? optionsFile : null;

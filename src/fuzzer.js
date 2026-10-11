@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.5.0"
+ *  Version: "1.6.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -9,10 +9,14 @@
  *  Dual-shell snapshot: legacy/mongo-shell (v0.6.43). This file is mongosh-only.
  */
 
-// Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>fuzzer.js
-// Overlay: fuzzer-options.jsonc in the working directory, beside this script, under $MDBLIB, or ~/.mongodb
-// JSONC parse/search lives in mdblib. --eval overlay stays unwired.
+// Usage: mongosh [connection options] [--quiet] [--eval 'var options = {...};'] [-f|--file] </path/to/>fuzzer.js
+// Overlay: fuzzer-options.jsonc (cwd, --file dir, $MDBLIB, ~/.mongodb) then var options. Missing default is silent.
+// Explicit path: var optionsFile = "PATH". --eval var options overlays the file.
+// JSONC parse/search lives in mdblib resolveOptions.
 // Sample schemas: schema-a.jsonc, schema-b.jsonc, schema-c.jsonc
+//
+//    mongosh --quiet --eval 'var options = { "totalDocs": 1000, "dropNamespace": true };' -f fuzzer.js
+//    mongosh --quiet --eval 'var optionsFile = "/path/to/fuzzer-options.jsonc"' -f fuzzer.js
 
 /*
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
@@ -20,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.5.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.6.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -61,11 +65,11 @@
 
 (async() => {
    /*
-    *  Config files. fuzzer-options.jsonc overlays the defaults below.
-    *  parseJsonc / resolveConfigFile / loadJsoncFile live in mdblib.
-    *  Search order for a relative path: the options file's directory,
-    *  the working directory, this script's directory, $MDBLIB, ~/.mongodb.
-    *  --eval overlay stays unwired.
+    *  Config files. resolveOptions overlays defaults → fuzzer-options.jsonc
+    *  → var options. Search order for a relative path: the options file's
+    *  directory, the working directory, this script's directory, $MDBLIB,
+    *  ~/.mongodb. Caller: var options / var optionsFile. Do not declare
+    *  those names in this file.
     */
 
    const OPTIONS_FILE = 'fuzzer-options.jsonc';
@@ -120,7 +124,7 @@
 
    /*
     *  User defined parameters.
-    *  fuzzer-options.jsonc overlays these defaults.
+    *  fuzzer-options.jsonc then var options overlay these defaults.
     *  fuzzer.schemas points at the sample plug-ins genDocument realises.
     */
 
@@ -274,12 +278,21 @@
       }
    };
 
-   const optionsFile = loadJsoncFile(OPTIONS_FILE);
-   const loaded = optionsFile.value;
-   const opt = deepMergeOptions(optionDefaults, loaded);
+   // Caller: var options = { ... } (--eval or REPL). Optional var optionsFile.
+   // Do not declare or assign those names in this file.
+   const overlay = (typeof options !== 'undefined' && options) ? options : null;
+   const explicitFile = (typeof optionsFile !== 'undefined') ? optionsFile : null;
+   const resolved = resolveOptions({
+      "defaults": optionDefaults,
+      "file": OPTIONS_FILE,
+      "optionsFile": explicitFile,
+      overlay
+   });
+   const opt = resolved.options;
+   const wc = isPlainObject(opt.writeConcern) ? opt.writeConcern : {};
    const dbName = opt.dbName,
       collName = opt.collName,
-      totalDocs = hasOwn(loaded, 'totalDocs') ? loaded.totalDocs : $getRandExp(opt.totalDocsExp),
+      totalDocs = hasOwn(opt, 'totalDocs') ? opt.totalDocs : $getRandExp(opt.totalDocsExp),
       dropNamespace = opt.dropNamespace,
       dropIndexes = opt.dropIndexes,
       compressor = opt.compressor,
@@ -287,10 +300,10 @@
       idioma = opt.idioma,
       collation = opt.collation,
       writeConcern = {
-         "w": (hasOwn(loaded, 'writeConcern') && hasOwn(loaded.writeConcern, 'w'))
-            ? loaded.writeConcern.w
+         "w": hasOwn(wc, 'w')
+            ? wc.w
             : ((isReplSet() || isSharded()) ? "majority" : 1),
-         "j": hasOwn(opt.writeConcern, 'j') ? opt.writeConcern.j : false
+         "j": hasOwn(wc, 'j') ? wc.j : false
       },
       indexPrefs = opt.indexPrefs,
       timeSeries = opt.timeSeries,
@@ -310,25 +323,21 @@
       textIndexes = opt.textIndexes,
       textIndexOptions = opt.textIndexOptions;
    const WRITE_CONCERN_WTIMEOUT_MS = 10000;
-   if (!(hasOwn(loaded, 'writeConcern') && hasOwn(loaded.writeConcern, 'wtimeout'))) {
+   if (!hasOwn(wc, 'wtimeout')) {
       const wtimeout = defaultWriteConcernTimeout(writeConcern.w);
       if (wtimeout != null)
          writeConcern.wtimeout = wtimeout;
    } else
-      writeConcern.wtimeout = loaded.writeConcern.wtimeout;
+      writeConcern.wtimeout = wc.wtimeout;
    if (isPlainObject(fuzzer) && !Array.isArray(fuzzer.ratios))
       fuzzer.ratios = [1];
-   if (isPlainObject(indexPrefs)
-      && !(hasOwn(loaded, 'indexPrefs') && hasOwn(loaded.indexPrefs, 'commitQuorum')))
+   if (isPlainObject(indexPrefs) && !hasOwn(indexPrefs, 'commitQuorum'))
       indexPrefs.commitQuorum = (writeConcern.w == 0) ? 1 : writeConcern.w;
-   if (isPlainObject(indexOptions)
-      && !(hasOwn(loaded, 'indexOptions') && hasOwn(loaded.indexOptions, 'collation')))
+   if (isPlainObject(indexOptions) && !hasOwn(indexOptions, 'collation'))
       indexOptions.collation = collation;
-   if (isPlainObject(indexes2dOptions)
-      && !(hasOwn(loaded, 'indexes2dOptions') && hasOwn(loaded.indexes2dOptions, 'default_language')))
+   if (isPlainObject(indexes2dOptions) && !hasOwn(indexes2dOptions, 'default_language'))
       indexes2dOptions.default_language = idioma;
-   if (isPlainObject(textIndexOptions)
-      && !(hasOwn(loaded, 'textIndexOptions') && hasOwn(loaded.textIndexOptions, 'default_language')))
+   if (isPlainObject(textIndexOptions) && !hasOwn(textIndexOptions, 'default_language'))
       textIndexOptions.default_language = idioma;
    if (idxCompressor != 'default') {
       const configString = `block_compressor=${parseCompressor(idxCompressor)[0]}`;
@@ -341,10 +350,10 @@
       if (isPlainObject(textIndexOptions))
          textIndexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
    }
-   const schemaAnchor = optionsFile.path ? optionsDirOf(optionsFile.path) : null;
-   const schemaLoad = optionsFile.error
-      ? { "samples": [], "errors": [] }
-      : loadSchemaSamples(isPlainObject(fuzzer) ? fuzzer.schemas : null, schemaAnchor);
+   const schemaAnchor = resolved.source.file ? optionsDirOf(resolved.source.file) : null;
+   const schemaLoad = resolved.ok
+      ? loadSchemaSamples(isPlainObject(fuzzer) ? fuzzer.schemas : null, schemaAnchor)
+      : { "samples": [], "errors": [] };
    const schemaSamples = schemaLoad.samples;
    const schemaFileErrors = schemaLoad.errors;
 
@@ -376,12 +385,15 @@
        */
       // Do not Mongo.setReadPref(): mongosh reconnects and the next
       // DB call (exists/drop/create) hangs or rejects on a local RS.
-      if (optionsFile.error) {
-         console.log(`\n[red][ERROR][/] Options file "${optionsFile.path}": ${optionsFile.error}`);
+      if (!resolved.ok) {
+         const msg = (resolved.warnings[0] && resolved.warnings[0].message)
+            || resolved.error
+            || 'options file failed';
+         console.log(`\n[red][ERROR][/] ${msg}`);
          return;
       }
-      if (optionsFile.path)
-         console.log(`\nOptions file "${optionsFile.path}"`);
+      if (resolved.source.file)
+         console.log(`\nOptions file "${resolved.source.file}"`);
       if (schemaFileErrors.length > 0) {
          schemaFileErrors.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
          return;

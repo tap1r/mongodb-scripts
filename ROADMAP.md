@@ -84,7 +84,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `mdblib.js` | 0.15.10 | **1.1.1** |
 | `dbstats.js` | 0.12.19 | **1.2.6** |
 | `autoCompact.js` | 0.4.36 | **1.3.0** |
-| `fuzzer.js` | 0.6.43 | **1.5.0** |
+| `fuzzer.js` | 0.6.43 | **1.6.0** |
 | `oplogchurn.js` | 0.5.22 | **0.6.0** |
 | `latency.js` | 0.4.9 | **0.4.10** |
 | `schema-sampler.js` | 0.2.16 | **0.2.17** |
@@ -163,7 +163,7 @@ module mode:      gather → return contract   (emit only if caller asks)
 
 Do **not** block feature work on a full `mdblib.for(db)` redesign; a convention (`options.output.mode: 'interactive' | 'module'`, or `collect*()` vs `main()`) can land first inside each script, then homogenise emit helpers when the library path settles.
 
-**Shipped:** `dbstats.js` detects CLI `--file` from `process.argv` (`isDbstatsCliFile`). `await load('dbstats.js')` is quiet and the async IIFE returns the JSON contract. `load()` is not rewriter-awaited. The same argv test gates the loader banner in `autoCompact.js` (`isAutoCompactCliFile`, v1.3.0), `onlineDefrag.js` (`isOnlineDefragCliFile`, v1.7.0), `fuzzer.js` (`isFuzzerCliFile`, v1.5.0), and `oplogchurn.js` (`isOplogchurnCliFile`, v0.6.0). `load()` of those files stays quiet; mdblib still loads where the script requires it. `oplogchurn.js` clears the screen only on a TTY CLI run. `onlineDefrag.js` does not `load()` dbstats; a snapshot is the awaited contract, not a scraped table and not three interactive loads.
+**Shipped:** `dbstats.js` detects CLI `--file` from `process.argv` (`isDbstatsCliFile`). `await load('dbstats.js')` is quiet and the async IIFE returns the JSON contract. `load()` is not rewriter-awaited. The same argv test gates the loader banner in `autoCompact.js` (`isAutoCompactCliFile`, v1.3.0), `onlineDefrag.js` (`isOnlineDefragCliFile`, v1.7.0), `fuzzer.js` (`isFuzzerCliFile`, v1.6.0), and `oplogchurn.js` (`isOplogchurnCliFile`, v0.6.0). `load()` of those files stays quiet; mdblib still loads where the script requires it. `oplogchurn.js` clears the screen only on a TTY CLI run. `onlineDefrag.js` does not `load()` dbstats; a snapshot is the awaited contract, not a scraped table and not three interactive loads.
 
 ### User options UX (streamline past `--eval` globals)
 
@@ -216,7 +216,7 @@ defaults  →  config file (JSON/EJSON)  →  env (few keys)  →  CLI flags  �
 - Requiring Node/`import` modules before the library story settles — file + `load()`-friendly helpers first.
 - Blocking script features on wrappers; wrappers are sugar over the same resolver.
 
-**Shipped (0.26.0 / 0.28.0 / 1.3.0 / 1.5.0):** shared `mdblib.resolveOptions` — defaults → JSONC file → `--eval` overlay. `parseJsonc` lives in mdblib (BOM, `//` and `/* */` outside strings, trailing commas, then `JSON.parse`). Search: explicit path, else basename via `configSearchDirs` (anchor, cwd, `__dirname`, `$MDBLIB`, `~/.mongodb`). Missing default file is silent. Explicit `var optionsFile` / overlay `optionsFile` missing or parse-fail is an error (`warnings[]` code `optionsFile`). `parseScriptArgv` still reads `--config` after `--` if those args appear on `process.argv`; mongosh 2.12 rejects unknown flags before the script runs, so the working explicit path is `var optionsFile`. Plain objects deep-merge; arrays and scalars replace. dbstats revives `filter.db` / `filter.collection` from strings (`"^app$"` or `"/pat/i"`). `output.format` `table` aliases `tabular`. Canonical default names `dbstats-options.jsonc` / `autoCompact-options.jsonc` are searched, not shipped in `src/` (a `{}` there would overlay every cwd run). autoCompact keeps the `autoCompactOptions` eval name. Fuzzer uses the shared parser/search/merge; `--eval` stays unwired (no second options channel). Env keys and a 1:1 POSIX flag surface are still later. **explainHisto.js** can drop `jsonc-require` for `pipeline.jsonc` now that the stripper is a helper. The scripting guide pins the canonical example.
+**Shipped (0.26.0 / 0.28.0 / 1.3.0 / 1.6.0):** shared `mdblib.resolveOptions` — defaults → JSONC file → `--eval` overlay. `parseJsonc` lives in mdblib (BOM, `//` and `/* */` outside strings, trailing commas, then `JSON.parse`). Search: explicit path, else basename via `configSearchDirs` (anchor, cwd, `__dirname`, `$MDBLIB`, `~/.mongodb`). Missing default file is silent. Explicit `var optionsFile` / overlay `optionsFile` missing or parse-fail is an error (`warnings[]` code `optionsFile`). `parseScriptArgv` still reads `--config` after `--` if those args appear on `process.argv`; mongosh 2.12 rejects unknown flags before the script runs, so the working explicit path is `var optionsFile`. Plain objects deep-merge; arrays and scalars replace. dbstats revives `filter.db` / `filter.collection` from strings (`"^app$"` or `"/pat/i"`). `output.format` `table` aliases `tabular`. Canonical default names `dbstats-options.jsonc` / `autoCompact-options.jsonc` are searched, not shipped in `src/` (a `{}` there would overlay every cwd run). autoCompact keeps the `autoCompactOptions` eval name. Fuzzer uses `resolveOptions` (`fuzzer-options.jsonc` then `var options` / `var optionsFile`; `fuzzer-options.jsonc` is shipped beside the script as the sample overlay). Env keys and a 1:1 POSIX flag surface are still later. **explainHisto.js** can drop `jsonc-require` for `pipeline.jsonc` now that the stripper is a helper. The scripting guide pins the canonical example.
 
 ---
 
@@ -603,17 +603,15 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `fuzzer.js`
 
-**Live: v1.5.0.** **Archive: v0.6.43.** Mongosh-only. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()`. Compact is archive-only. Schema C random geometries are mdblib `$genPoint`, `$genLine`, and `$genPolygon`. Header tags this file as requiring this roadmap.
+**Live: v1.6.0.** **Archive: v0.6.43.** Mongosh-only. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()`. Compact is archive-only. Schema C random geometries are mdblib `$genPoint`, `$genLine`, and `$genPolygon`. Header tags this file as requiring this roadmap.
 
-Options overlay is **`fuzzer-options.jsonc`** via mdblib `loadJsoncFile` / `parseJsonc` / `deepMergeOptions` (search path, in-shell JSONC strip, deep-merge). `--eval` stays unwired; do not add a second options channel, and do not declare `const dbName` if an eval overlay is ever added. In-file defaults stay the defaults.
+Options overlay is **`resolveOptions`**: in-file defaults → **`fuzzer-options.jsonc`** → `--eval` `var options`. Explicit path is `var optionsFile`. Search path, in-shell JSONC strip, and deep-merge live in mdblib. Do not declare `options` / `optionsFile` in this file. Namespace keys (`dbName`, `collName`, `totalDocs`, …) come from the resolved document, not from `--eval` scalars. In-file defaults stay the defaults. `fuzzer-options.jsonc` is shipped beside the script as the sample overlay.
 
 **Apply (shell):** do not restore `Bulk.execute(writeConcern)` — the argument is ignored. `insertMany(..., { writeConcern })` is the path. `createIndexes` returns names and throws. `insertedIds` is an object (count keys, including on a partial bulk error). The loader banner prints only when `process.argv` names this file (`isFuzzerCliFile`). `load()` stays quiet; mdblib still loads.
 
-**Shipped:** reshard wait holds the command Promise and races an awaited timer (`sleep()` would stall the response); majority `wtimeout` defaults to 10000 ms when `w` waits past the primary (`0` waits with no limit); shared-tier `fCV()` → `serverVer()` is by design (see mdblib).
+**Shipped:** reshard wait holds the command Promise and races an awaited timer (`sleep()` would stall the response); majority `wtimeout` defaults to 10000 ms when `w` waits past the primary (`0` waits with no limit); shared-tier `fCV()` → `serverVer()` is by design (see mdblib); **1.6.0** `--eval` `var options` overlays the JSONC file via `resolveOptions`.
 
-Remaining mongosh-line work (do not block the archive):
-
-- `--eval` overlay stays unwired (JSONC only; no second options channel).
+Remaining mongosh-line work (do not block the archive): none.
 
 **TABLED:** further GeoJSON point classes. Subselect a point onto land, ocean, a major city, a port, a regional city, or leave it random. It may share that pick with other fields if cardinality is opened. Cardinality stays tabled. Shipped `$genPoint`, `$genLine`, and `$genPolygon` stay uniform inside the GeoJSON range until Luke opens this.
 
