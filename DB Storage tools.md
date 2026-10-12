@@ -15,8 +15,6 @@ These scripts evaluate WiredTiger disk use (including reclaimable free space) fo
 * Sharded namespace and index statistics
 * Compaction helper recommendations (`compact`, `rebuild`, `wait`, `resync`)
 
-Live versions: dbstats **1.2.7**, mdblib **1.1.1**.
-
 ### Installing _dbstats.js_
 
 Retrieve fresh copies of both scripts:
