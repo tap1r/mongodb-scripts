@@ -31,9 +31,7 @@ Place `mdblib.js` on `cwd`, `$MDBLIB`, or another mongosh `load()` search path.
 mongosh [connection options] --quiet [--eval 'var options = {...};'] -f dbstats.js
 ```
 
-`--file` / `-f` prints the interactive report. `load('dbstats.js')` gathers quietly and returns the JSON contract — `await` that Promise. Do not declare `options` or `optionsFile` inside the script; `--eval` must use `var` (not `let`/`const`).
-
-Options overlay is `dbstats-options.jsonc` (cwd, `--file` dir, `$MDBLIB`, `~/.mongodb`) then `--eval var options`. A missing default file is silent. Explicit path: `var optionsFile = "PATH"`.
+Options file is `dbstats-options.jsonc`, use with: `var optionsFile = "PATH"`.
 
 ```bash
 mongosh --quiet --eval 'var options = { filter: { db: "^database$" } };' -f dbstats.js
