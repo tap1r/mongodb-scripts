@@ -95,10 +95,11 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `onlineDefrag.js` | 0.1.4 | **1.7.0** |
 | `indexCacheUtil.js` | 0.1.5 | **1.2.0** |
 | `killAgedSessions.js` | 0.2.2 | **0.2.3** |
+| `schema-import.js` | 0.1.8 | **0.2.0** |
 | `compact.js` | 0.2.15 | **removed** (archive only) |
 | `batchUpdater.js` | 0.1.6 | **removed** (archive only) |
 
-Unchanged vs freeze (still in live `src/`): `explainHisto` 0.1.4, `schema-import` 0.1.8, `connStats` 0.1.14, `discovery` 0.2.1, `rtt` 0.3.0, `oidGenerator` 0.2.7, `oidFunction` 0.1.5, `ctxDemo` 0.1.0, `modifiedCountDocumentsByKey` 0.1.7.
+Unchanged vs freeze (still in live `src/`): `explainHisto` 0.1.4, `connStats` 0.1.14, `discovery` 0.2.1, `rtt` 0.3.0, `oidGenerator` 0.2.7, `oidFunction` 0.1.5, `ctxDemo` 0.1.0, `modifiedCountDocumentsByKey` 0.1.7.
 
 #### 3. After the cut — strip and streamline (next general architecture)
 
@@ -651,13 +652,11 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `schema-import.js`
 
-**Legacy archive line: v0.1.8** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not restore `db.getMongo().setReadPref(readPreference)` — writes already target primary. In-file `const userOptions` is not an `--eval` overlay. Create collection/index/view from sampler JSON stays stubbed on this line. Post-freeze feature work proceeds on the mongosh line only.
+**Live: v0.2.0.** **Archive: v0.1.8.** Mongosh-only. Do not restore `db.getMongo().setReadPref(readPreference)` — writes already target primary. `--eval` `var options` overlays in-file `optionDefaults` (`schemaFile`, `drop`). Do not declare `options` / `userOptions` in this file. Parse-and-create reads JSON/EJSON of the schema-sampler array: collections (`createCollection`, `insertMany` of `$sample`, `createIndexes` minus `_id_`), then views (`createView` when `options.viewOn` / `options.pipeline` are present). `listDBs()` returns the `db` names. `createIndexes` returns names and throws. `insertMany` `insertedIds` is an object; count keys, including a partial bulk error. Parenthesize `(await write(...)).field`. Existing namespaces are skipped unless `drop: true`. See the scripting guide. Header tags this file as requiring this roadmap.
 
-Remaining mongosh-line work (do not block the archive):
+**Shipped:** **0.2.0** parse-and-create from sampler JSON, `listDBs()` names, `--eval` overlay.
 
-- Implement parse-and-create for DBs, collections + sampled docs, indexes, views. `createIndexes` returns names and throws (not `{ ok: 1 }`). `insertMany` `insertedIds` is an object; count keys, including a partial bulk error. Parenthesize `(await write(...)).field`. See the scripting guide. Header tags this file as requiring this roadmap.
-- `listDBs()` logs names but never fills `dbNames`.
-- `--eval var` overlay requires dropping the in-file `const userOptions`.
+Remaining mongosh-line work (do not block the archive): none.
 
 ### `killAgedSessions.js`
 

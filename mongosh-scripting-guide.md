@@ -338,6 +338,7 @@ Strip JSONC in-process (BOM, `//` and `/* */` outside strings, trailing commas) 
 // mongosh --quiet --eval 'var options = { output: { format: "json" } };' -f dbstats.js
 // mongosh --quiet --eval 'var options = { totalDocs: 1000 };' -f fuzzer.js
 // mongosh --quiet --eval 'var options = { sampleSize: 100, filter: { db: "app" } };' -f schema-sampler.js
+// mongosh --quiet --eval 'var options = { schemaFile: "schema.json", drop: true };' -f schema-import.js
 
 const overlay = (typeof options !== 'undefined' && options) ? options : null;
 const explicit = (typeof optionsFile !== 'undefined') ? optionsFile : null;
@@ -398,7 +399,7 @@ Loader IIFEs in `autoCompact.js`, `onlineDefrag.js`, `fuzzer.js`, and `oplogchur
 
 `Bulk.execute(writeConcern)` **ignores** that argument. Put `writeConcern` on `insertMany(docs, { ordered: false, writeConcern })`. Do not bring `Bulk.execute(writeConcern)` back.
 
-`insertMany`’s `insertedIds` is an **object** (index → id), not a count and not an array. A thrown bulk error may still carry a partial `insertedIds`, sometimes nested on `.result`. Count with `Object.keys`. `schema-import.js` will hit both of these when the create path is implemented.
+`insertMany`’s `insertedIds` is an **object** (index → id), not a count and not an array. A thrown bulk error may still carry a partial `insertedIds`, sometimes nested on `.result`. Count with `Object.keys`. `schema-import.js` counts `insertedIds` on success and on a partial bulk error (`e` / `e.result`).
 
 `db.stats(scale)` as a bare number misses `freeStorage` on some shells. mongosh 1.2+ together with mongod 5.0.6+ want a document `{ freeStorage: 1, scale: 1 }` ([MONGOSH-1108](https://jira.mongodb.org/browse/MONGOSH-1108), [SERVER-62277](https://jira.mongodb.org/browse/SERVER-62277); scale `1` keeps byte precision, [SERVER-69036](https://jira.mongodb.org/browse/SERVER-69036)). `$stats` in `mdblib.js` passes the document only when `serverVer('5.0.6') && shellVer(1.2)`.
 
