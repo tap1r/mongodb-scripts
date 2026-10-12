@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.6"
+ *  Version: "1.2.7"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -86,7 +86,7 @@
  *        discover: <true|false>, // default true; shared-tier / serverless stay one node (compact/autoCompact cannot run)
  *        depth: <'summary'|'expanded'> // default expanded = catalog+$collStats per member, one table per node; summary = $stats remotes + connecting catalog + member footer
  *        // sharded: CSRS members are listed; mongos row is cluster data (no local/metadata) when they are
-        // MongoDB 8+: shard-local directShardOperations is granted for the walk and revoked after
+ *        // MongoDB 8+: shard-local directShardOperations is granted for the walk and revoked after
  *     },
  *     catalog: <'auto'|'legacy'|'listCatalog'|'listClusterCatalog'> // default auto
  *  }
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.6" };
+   const __script = { "name": "dbstats.js", "version": "1.2.7" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -1648,7 +1648,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.6',
+         "version": '1.2.7',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -3160,19 +3160,18 @@
 
    function leafCompactionColumns() {
       /*
-       *  Compaction on collection/index/namespace rows is compactOnly-only.
+       *  Compaction on collection/index/namespace rows (matches HTML).
+       *  compactOnly still filters which rows print.
        */
-      return outputVerbosity() === 'compactonly';
+      return true;
    }
 
    function dbTableCompactionColumns() {
       /*
-       *  Database-header tables keep Compaction in summary (rollup-only) and
-       *  compactOnly. Full / summaryIdx mix leaf rows under the same header,
-       *  so that column stays off there; dbPath totals still print it.
+       *  Database-header tables keep Compaction aligned with leaf rows.
+       *  dbPath totals always print it via columnHeaders() default.
        */
-      const v = outputVerbosity();
-      return v === 'summary' || v === 'compactonly';
+      return true;
    }
 
    function limitN() {
