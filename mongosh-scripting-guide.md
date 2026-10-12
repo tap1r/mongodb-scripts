@@ -464,6 +464,8 @@ To sample a shard primary from a router session:
 
 Do not log the rebuilt URI (credentials). If any required shard is unreachable, keep mongos-only fallback rather than half-metrics from `shardingStatistics`.
 
+`connect(db.getMongo().getURI())` is only a second client. Server selection can land on the same member, so matching `hello.me` does not prove the clients are distinct. A targeted context replaces the host with one `hello.hosts` entry (or `hello.primary`), sets `directConnection=true`, and drops `replicaSet`. `ctxDemo.js` does that for each advertised member and checks `hello.me` against the host it asked for. Do not log that URI.
+
 ```javascript
 // Parent may be mongodb+srv://user:pass@cluster.mongodb.net/?authSource=admin
 // listShards host: "shard0/s0a:27017,s0b:27017"
