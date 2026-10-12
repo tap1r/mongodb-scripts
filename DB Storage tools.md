@@ -121,7 +121,7 @@ Compaction helper recommendations
 
 ## Other storage scripts
 
-* [autoCompact.js](src/autoCompact.js) **1.3.0** — enable, monitor, or disable the MongoDB 8.0+ `autoCompact` thread on a **mongod** (not mongos). Atlas M0/Flex fails fast. Direct-host connection. Options: `autoCompact-options.jsonc` then `var autoCompactOptions`.
+* [autoCompact.js](src/autoCompact.js) **1.4.0** — enable, monitor, or disable the MongoDB 8.0+ `autoCompact` thread on a **mongod** (not mongos). Atlas M0/Flex fails fast. Direct-host connection. Options: `autoCompact-options.jsonc` then `var options`.
 * [onlineDefrag.js](src/onlineDefrag.js) **1.8.0** — mongosh-only online defrag (first-fit packing; strategies `naturalReplay`, `naturalWindow`, `quantile`, `shapeQuantile`). Needs mdblib. `--eval` uses `var` for `dbName`, `collName`, `defragOptions`.
 * [indexCacheUtil.js](src/indexCacheUtil.js) **1.2.0** — WiredTiger index cache residency on the connected mongod. Does not load mdblib. A mongos session has no WT cache.
 

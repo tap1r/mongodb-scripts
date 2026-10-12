@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "autoCompact.js"
-    *  Version: "1.3.0"
+    *  Version: "1.4.0"
     *  Description: "auto/background compaction (autoCompact command) with thread monitoring"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,10 +18,10 @@
     *  - freeSpaceTargetMB passthrough (server default 20); runOnce defaults to true (opposite of the server)
     *  - ident map finishes before autoCompact. Naming a file needs the internal action (collectionless $listCatalog) or, on that namespace, listIndexes (targeted $listCatalog) or collStats (wiredTiger.uri, indexDetails.*.uri). With that, the line prints as ns or ns.index; without it, the line stays collection-*.wt / index-*.wt. Built-in roles have neither listIndexes nor collStats on local.replset.* or on system.views, system.rollback.id, system.keys, system.preimages, and system.indexBuilds. Idents created during the pass refresh in the background
     *  - First-pass TTY bar: distinct catalog namespaces seen in WTCMPCT logs, over the initial catalog namespace count. Ramlog loss marks the count fuzzy (~). The bar is not a latch. Piped runs stay on the log lines.
-    *  - Options: autoCompact-options.jsonc (cwd, --file dir, $MDBLIB, ~/.mongodb) then var autoCompactOptions. Missing default is silent. Explicit var optionsFile. mdblib supplies resolveOptions, the ANSI console.log patch, MiniHud, hostNameFromHostPort, AutoFactor, serverStatus, and atlasDeployment.
+    *  - Options: autoCompact-options.jsonc (cwd, --file dir, $MDBLIB, ~/.mongodb) then var options. Missing default is silent. Explicit var optionsFile. Do not declare options / optionsFile in this file. mdblib supplies resolveOptions, the ANSI console.log patch, MiniHud, hostNameFromHostPort, AutoFactor, serverStatus, and atlasDeployment.
     */
 
-   // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var autoCompactOptions = { "autoCompact": true };'] [-f|--file] </path/to/>autoCompact.js
+   // Usage: mongosh [direct host connection options] [--quiet] [--eval 'var options = { "autoCompact": true };'] [-f|--file] </path/to/>autoCompact.js
 
    /*
     *  Example of basic direct localhost usage (autoCompact: true, runOnce: true):
@@ -30,15 +30,15 @@
     *
     *  Example to enable with custom command options:
     *
-    *    mongosh "localhost:27017" --quiet --eval 'var autoCompactOptions = { "autoCompact": true, "freeSpaceTargetMB": 64, "runOnce": true };' -f autoCompact.js
+    *    mongosh "localhost:27017" --quiet --eval 'var options = { "autoCompact": true, "freeSpaceTargetMB": 64, "runOnce": true };' -f autoCompact.js
     *
     *  Example to enable continuous compaction:
     *
-    *    mongosh "localhost:27017" --quiet --eval 'var autoCompactOptions = { "autoCompact": true, "runOnce": false };' -f autoCompact.js
+    *    mongosh "localhost:27017" --quiet --eval 'var options = { "autoCompact": true, "runOnce": false };' -f autoCompact.js
     *
     *  Example to disable the background compact thread:
     *
-    *    mongosh "localhost:27017" --quiet --eval 'var autoCompactOptions = { "autoCompact": false };' -f autoCompact.js
+    *    mongosh "localhost:27017" --quiet --eval 'var options = { "autoCompact": false };' -f autoCompact.js
     *
     *  Example with an options file (autoCompact-options.jsonc). Missing default is silent.
     *
@@ -47,7 +47,7 @@
     *  We use 'var' to interoperate with mongosh's sloppy mode
     */
 
-   const __script = { "name": "autoCompact.js", "version": "1.3.0" };
+   const __script = { "name": "autoCompact.js", "version": "1.4.0" };
 
    if (typeof __lib === 'undefined') {
       /*
@@ -797,14 +797,14 @@
       reportRecoveredBytes(startBytes);
    };
 
-   // Caller: var autoCompactOptions = { ... } (--eval or REPL). Do not declare or assign it in this file.
+   // Caller: var options = { ... } (--eval or REPL). Do not declare or assign it in this file.
    // Optional var optionsFile. Default autoCompact-options.jsonc (missing is silent).
    // Passthrough user fields as-is; default autoCompact: true and runOnce: true on enable, stamp comment.
    const __autoCompactResolved = resolveOptions({
       "defaults": {},
       "file": 'autoCompact-options.jsonc',
       "optionsFile": (typeof optionsFile !== 'undefined') ? optionsFile : null,
-      "overlay": (typeof autoCompactOptions === 'undefined') ? null : autoCompactOptions
+      "overlay": (typeof options !== 'undefined' && options) ? options : null
    });
    if (!__autoCompactResolved.ok) {
       const msg = (__autoCompactResolved.warnings[0] && __autoCompactResolved.warnings[0].message)

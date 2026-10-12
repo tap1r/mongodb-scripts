@@ -83,7 +83,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 |--------|----------------|-------------|
 | `mdblib.js` | 0.15.10 | **1.1.1** |
 | `dbstats.js` | 0.12.19 | **1.2.7** |
-| `autoCompact.js` | 0.4.36 | **1.3.0** |
+| `autoCompact.js` | 0.4.36 | **1.4.0** |
 | `fuzzer.js` | 0.6.43 | **1.6.0** |
 | `oplogchurn.js` | 0.5.22 | **0.6.2** |
 | `latency.js` | 0.4.9 | **0.4.10** |
@@ -172,7 +172,7 @@ Do **not** block feature work on a full `mdblib.for(db)` redesign; a convention 
 Passing knobs today is janky and inconsistent, mostly because of **mongosh** — not because a document of options is wrong:
 
 - **`--eval 'var options = {…}'` + `--file`** is the documented pattern ([mongosh scripting guide](mongosh-scripting-guide.md)): `--eval` must use `var`, the script must **not** declare the same binding, probe `typeof … === 'undefined'`, then merge. Easy to get wrong (`let`/`const` redeclaration, nested shallow merge, different global names per script).
-- Global name drift: `options` vs `autoCompactOptions` vs bare scalars (`intervalHrs` in oplogchurn).
+- Global name drift: `options` vs bare scalars (`intervalHrs` in oplogchurn). autoCompact uses `var options`.
 - Nested defaults are shallow-merged in places (dbstats `sort.*`), so a partial override can wipe sibling keys.
 - Shell quoting of inline JS objects is hostile (regex literals, nested quotes, Windows).
 - mongosh owns `argv` / connection flags; scripts do not get a clean POSIX flags surface after `-f` without careful parsing of leftovers or an outer wrapper.
@@ -204,7 +204,7 @@ defaults  →  config file (JSON/EJSON)  →  env (few keys)  →  CLI flags  �
 
 - Keep working forever for REPL and quick experiments: `var options = { output: { format: 'json' } }`.
 - Shared **`resolveOptions({ defaults, names, file, argv, evalGlobal })`**: deep-merge, normalise aliases (`table`→`tabular`), validate, return `{ ok, options, warnings, source }`.
-- Standardise on **one eval global name per script** (prefer `options`, with a documented alias for existing `autoCompactOptions` during transition).
+- Standardise on **one eval global name per script** (`options`; autoCompact alias removed).
 - Deep merge by section so partial `{ sort: { collection: { dataSize: -1 } } }` does not clobber other sort keys.
 
 #### 4. Module / discovery path
@@ -218,7 +218,7 @@ defaults  →  config file (JSON/EJSON)  →  env (few keys)  →  CLI flags  �
 - Requiring Node/`import` modules before the library story settles — file + `load()`-friendly helpers first.
 - Blocking script features on wrappers; wrappers are sugar over the same resolver.
 
-**Shipped (0.26.0 / 0.28.0 / 1.3.0 / 1.6.0):** shared `mdblib.resolveOptions` — defaults → JSONC file → `--eval` overlay. `parseJsonc` lives in mdblib (BOM, `//` and `/* */` outside strings, trailing commas, then `JSON.parse`). Search: explicit path, else basename via `configSearchDirs` (anchor, cwd, `__dirname`, `$MDBLIB`, `~/.mongodb`). Missing default file is silent. Explicit `var optionsFile` / overlay `optionsFile` missing or parse-fail is an error (`warnings[]` code `optionsFile`). `parseScriptArgv` still reads `--config` after `--` if those args appear on `process.argv`; mongosh 2.12 rejects unknown flags before the script runs, so the working explicit path is `var optionsFile`. Plain objects deep-merge; arrays and scalars replace. dbstats revives `filter.db` / `filter.collection` from strings (`"^app$"` or `"/pat/i"`). `output.format` `table` aliases `tabular`. Canonical default names `dbstats-options.jsonc` / `autoCompact-options.jsonc` are searched, not shipped in `src/` (a `{}` there would overlay every cwd run). autoCompact keeps the `autoCompactOptions` eval name. Fuzzer uses `resolveOptions` (`fuzzer-options.jsonc` then `var options` / `var optionsFile`; `fuzzer-options.jsonc` is shipped beside the script as the sample overlay). Env keys and a 1:1 POSIX flag surface are still later. **explainHisto.js** can drop `jsonc-require` for `pipeline.jsonc` now that the stripper is a helper. The scripting guide pins the canonical example.
+**Shipped (0.26.0 / 0.28.0 / 1.3.0 / 1.6.0):** shared `mdblib.resolveOptions` — defaults → JSONC file → `--eval` overlay. `parseJsonc` lives in mdblib (BOM, `//` and `/* */` outside strings, trailing commas, then `JSON.parse`). Search: explicit path, else basename via `configSearchDirs` (anchor, cwd, `__dirname`, `$MDBLIB`, `~/.mongodb`). Missing default file is silent. Explicit `var optionsFile` / overlay `optionsFile` missing or parse-fail is an error (`warnings[]` code `optionsFile`). `parseScriptArgv` still reads `--config` after `--` if those args appear on `process.argv`; mongosh 2.12 rejects unknown flags before the script runs, so the working explicit path is `var optionsFile`. Plain objects deep-merge; arrays and scalars replace. dbstats revives `filter.db` / `filter.collection` from strings (`"^app$"` or `"/pat/i"`). `output.format` `table` aliases `tabular`. Canonical default names `dbstats-options.jsonc` / `autoCompact-options.jsonc` are searched, not shipped in `src/` (a `{}` there would overlay every cwd run). autoCompact uses `var options`. Fuzzer uses `resolveOptions` (`fuzzer-options.jsonc` then `var options` / `var optionsFile`; `fuzzer-options.jsonc` is shipped beside the script as the sample overlay). Env keys and a 1:1 POSIX flag surface are still later. **explainHisto.js** can drop `jsonc-require` for `pipeline.jsonc` now that the stripper is a helper. The scripting guide pins the canonical example.
 
 ---
 
@@ -303,7 +303,7 @@ Pin down in the implementation:
 
 ### `autoCompact.js`
 
-Keep the file standalone. **Live: v1.3.0.** **Archive: v0.4.36.** Direct-to-member targeting belongs in `discovery.js`. Cron/JSON/wait caps belong in aspirational `autoTrim.js` (TABLED). The first-pass namespace bar is output only. Auto-trim coupling stays tabled with that script. `resolveOptions` overlays `autoCompact-options.jsonc` then `autoCompactOptions`. The eval name stays until the alias transition.
+Keep the file standalone. **Live: v1.4.0.** **Archive: v0.4.36.** Direct-to-member targeting belongs in `discovery.js`. Cron/JSON/wait caps belong in aspirational `autoTrim.js` (TABLED). The first-pass namespace bar is output only. Auto-trim coupling stays tabled with that script. `resolveOptions` overlays `autoCompact-options.jsonc` then `var options`. **1.4.0:** `autoCompactOptions` eval alias removed.
 
 **Shipped**
 

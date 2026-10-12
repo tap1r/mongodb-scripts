@@ -308,11 +308,11 @@ So generators should keep **one** shell cursor, iterate it, and `close()` it. Th
 
 ### Passing options with `--eval`
 
-Scripts that take a user document (`autoCompactOptions`, `options`) must **not** declare that binding in the file. `--eval` runs first; `--file` then sees it as a global. Probe with `typeof autoCompactOptions === 'undefined'` and merge. Prefer `var` in `--eval` so a second `load()` or re-run does not hit `let`/`const` redeclaration (mongosh sloppy mode). On mongosh 2.10, `let` / `const` in `--eval` also leak into `--file`, but `var` remains the least surprising.
+Scripts that take a user document (`options`) must **not** declare that binding in the file. `--eval` runs first; `--file` then sees it as a global. Probe with `typeof options === 'undefined'` and merge. Prefer `var` in `--eval` so a second `load()` or re-run does not hit `let`/`const` redeclaration (mongosh sloppy mode). On mongosh 2.10, `let` / `const` in `--eval` also leak into `--file`, but `var` remains the least surprising.
 
 ```javascript
-// CLI: mongosh --eval 'var autoCompactOptions = { runOnce: false };' -f autoCompact.js
-const userOptions = typeof autoCompactOptions === 'undefined' ? {} : autoCompactOptions;
+// CLI: mongosh --eval 'var options = { runOnce: false };' -f autoCompact.js
+const overlay = (typeof options !== 'undefined' && options) ? options : null;
 ```
 
 An async IIFE **parameter** of the same name is also a shadow. `(async (options) => { … })()` binds `options` to `undefined` and hides the `--eval` global. Probe the global inside an IIFE that takes no parameters (`killAgedSessions.js`, `onlineDefrag.js`). `dbstats.js` leaves `(async (db, options) => …)` commented for this reason.
@@ -321,7 +321,7 @@ An async IIFE **parameter** of the same name is also a shadow. `(async (options)
 
 ### JSONC options file
 
-`mdblib.js` `resolveOptions` overlays defaults from a JSONC file then `--eval`. Callers probe `typeof options === 'undefined'` (or `autoCompactOptions`, `optionsFile`) and pass `overlay` / `optionsFile`; the helper does not eval identifier names. Do not paste `parseJsonc` into each script. Do not `require('jsonc-require')` for options (`explainHisto.js` still uses that module for an operator `pipeline.jsonc`).
+`mdblib.js` `resolveOptions` overlays defaults from a JSONC file then `--eval`. Callers probe `typeof options === 'undefined'` (and `optionsFile`) and pass `overlay` / `optionsFile`; the helper does not eval identifier names. Do not paste `parseJsonc` into each script. Do not `require('jsonc-require')` for options (`explainHisto.js` still uses that module for an operator `pipeline.jsonc`).
 
 Canonical names: `dbstats-options.jsonc`, `autoCompact-options.jsonc`, `fuzzer-options.jsonc`. Search a relative name in this order: explicit path, then `configSearchDirs` (anchor, working directory, `__dirname` for `--file`, `$MDBLIB`, `~/.mongodb`). An absolute path is used as given. A missing **default** file is not an error. An explicit `var optionsFile` or overlay `optionsFile` that is missing or fails to parse is an error (`warnings[]` code `optionsFile`). `parseScriptArgv` reads `--config` after `--` if those args appear on `process.argv`; mongosh 2.12 rejects unknown flags before the script runs.
 
@@ -337,6 +337,7 @@ Strip JSONC in-process (BOM, `//` and `/* */` outside strings, trailing commas) 
 // mongosh --quiet --eval 'var optionsFile = "/path/to/dbstats-options.jsonc"' -f dbstats.js
 // mongosh --quiet --eval 'var options = { output: { format: "json" } };' -f dbstats.js
 // mongosh --quiet --eval 'var options = { totalDocs: 1000 };' -f fuzzer.js
+// mongosh --quiet --eval 'var options = { autoCompact: true, runOnce: false };' -f autoCompact.js
 // mongosh --quiet --eval 'var options = { sampleSize: 100, filter: { db: "app" } };' -f schema-sampler.js
 // mongosh --quiet --eval 'var options = { schemaFile: "schema.json", drop: true };' -f schema-import.js
 
@@ -352,7 +353,7 @@ const resolved = resolveOptions({
 });
 ```
 
-json/html must resolve **before** loader banners so a file-only `output.format` stays a single document. autoCompact keeps the eval name `autoCompactOptions` and aborts on an explicit file error. Module callers pass the overlay object; they do not set a global.
+json/html must resolve **before** loader banners so a file-only `output.format` stays a single document. autoCompact uses `var options` and aborts on an explicit file error. Module callers pass the overlay object; they do not set a global.
 
 ### Version strings
 
