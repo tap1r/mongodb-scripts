@@ -1,16 +1,15 @@
 (async() => {
    /*
     *  Name: "ctxDemo.js"
-    *  Version: "0.1.0"
+    *  Version: "0.2.0"
     *  Description: "demonstrates db injection after load() — lexical scope vs mdblib.for(db)"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *  Roadmap: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/ROADMAP.md" (required context)
     *
     *  Legacy archive line: v0.1.0 in legacy/mongo-shell is the frozen sketch
-    *  (it still falls back to isMaster). This live file continues that sketch
-    *  on the mongosh line. The version string stays 0.1.0 until a bump is
-    *  requested. See ROADMAP.md → ctxDemo.js.
+    *  (it still falls back to isMaster). This live file is v0.2.0 on the
+    *  mongosh line. See ROADMAP.md → ctxDemo.js.
     *
     *  Notes:
     *  - mongosh only
@@ -20,6 +19,9 @@
     *  - a targeted context is a directConnection client to one hello.hosts
     *    member (primary and the other members). connect(parent URI) is not
     *    that: server selection can land on the same member again
+    *  - snapshot() awaits the driver client's command({ hello: 1 }). Shell
+    *    hello() and runCommand() return on the current turn, so Promise.all
+    *    of those does not overlap. The WeakMap stores that promise
     *  - never prints a URI
     *
     *  Usage:
@@ -54,6 +56,35 @@
    }
 
    const snapshotByMongo = new WeakMap();
+   const flight = { "started": 0, "returned": 0, "maxInFlight": 0 };
+   const clockOrigin = process.hrtime.bigint();
+
+   function elapsedMs() {
+      return Math.round(Number(process.hrtime.bigint() - clockOrigin) / 1e4) / 100;
+   }
+
+   function isThenable(value) {
+      return !!(value && typeof value.then === 'function' && typeof value.close !== 'function');
+   }
+
+   async function awaitPlain(value) {
+      if (isThenable(value)) return await value;
+      return value;
+   }
+
+   /*
+    *  Shell Database.runCommand() / hello() return the document on this turn.
+    *  The driver MongoClient.command() returns a Promise, which is what lets
+    *  Promise.all keep one hello in flight per member.
+    */
+   function commandAsync(handle, command) {
+      const mongo = handle.getMongo();
+      const client = mongo && mongo._serviceProvider && mongo._serviceProvider.mongoClient;
+      if (client && typeof client.db === 'function') {
+         return client.db(handle.getName()).command(command);
+      }
+      return handle.runCommand(command);
+   }
 
    function readHello(handle) {
       const doc = handle.hello();
@@ -66,28 +97,62 @@
       };
    }
 
-   function snapshotOf(handle) {
+   async function readHelloAsync(handle) {
       /*
-       *  Per Mongo client. The first caller on that client fills it.
+       *  One-shot hello. No topologyVersion and no maxAwaitTimeMS.
+       */
+      const startedMs = elapsedMs();
+      const pending = commandAsync(handle, { "hello": 1 });
+      const asyncCommand = isThenable(pending);
+      if (asyncCommand) {
+         flight.started++;
+         const inFlight = flight.started - flight.returned;
+         if (inFlight > flight.maxInFlight) flight.maxInFlight = inFlight;
+      }
+      let doc;
+      try {
+         doc = await awaitPlain(pending) || {};
+      } finally {
+         if (asyncCommand) flight.returned++;
+      }
+      return {
+         "me": doc.me ?? null,
+         "msg": doc.msg ?? null,
+         "setName": doc.setName ?? null,
+         "writable": doc.isWritablePrimary === true,
+         "secondary": doc.secondary === true,
+         "startedMs": startedMs,
+         "returnedMs": elapsedMs(),
+         "asyncCommand": asyncCommand
+      };
+   }
+
+   async function snapshotOf(handle) {
+      /*
+       *  Per Mongo client. Store the promise before awaiting so a second
+       *  caller on this client shares the command already in flight.
        *  A sibling database hits. A direct client to another member misses.
        */
       const mongo = handle.getMongo();
-      let entry = snapshotByMongo.get(mongo);
-      const hit = !!entry;
-      if (!entry) {
-         const hello = readHello(handle);
-         entry = { "mongo": mongo, ...hello };
-         snapshotByMongo.set(mongo, entry);
+      let pending = snapshotByMongo.get(mongo);
+      const hit = !!pending;
+      if (!pending) {
+         pending = readHelloAsync(handle);
+         snapshotByMongo.set(mongo, pending);
       }
+      const hello = await pending;
       return {
          "cache": "weakmap",
          "hit": hit,
          "dbName": handle.getName(),
-         "me": entry.me,
-         "setName": entry.setName,
-         "writable": entry.writable,
-         "secondary": entry.secondary,
-         "cachedMongoIsHandle": entry.mongo === mongo
+         "me": hello.me,
+         "setName": hello.setName,
+         "writable": hello.writable,
+         "secondary": hello.secondary,
+         "cachedMongoIsHandle": true,
+         "startedMs": hello.startedMs,
+         "returnedMs": hello.returnedMs,
+         "asyncCommand": hello.asyncCommand === true
       };
    }
 
@@ -273,8 +338,8 @@
    show('mdblib.for(admin).identity()  ← nested hello() uses admin, not global db', mAdmin.identity());
    console.log(`\nmAdmin.name() => ${mAdmin.name()}`);
    console.log('Same client, so for(admin).snapshot() hits the snapshot for(parent) just filled.');
-   show('mdblib.for(parent).snapshot()', mParent.snapshot());
-   show('mdblib.for(admin).snapshot()', mAdmin.snapshot());
+   show('mdblib.for(parent).snapshot()', await mParent.snapshot());
+   show('mdblib.for(admin).snapshot()', await mAdmin.snapshot());
 
    const savedDb = db;
    try {
@@ -326,8 +391,16 @@
          console.log('\nCould not pin both a primary and a secondary. Later sections stay on the shell client.');
       } else {
          banner('5. Parallel facades each read their own member snapshot');
+         console.log(`
+   snapshot() awaits driver command({ hello: 1 }) and stores that promise
+   on the Mongo client before the await. maxInFlight counts commands whose
+   start happened before an earlier command returned.
+   `);
+         flight.started = 0;
+         flight.returned = 0;
+         flight.maxInFlight = 0;
          const parallel = await Promise.all(members.map(async member => {
-            const snap = mdblib.for(member.handle).snapshot();
+            const snap = await mdblib.for(member.handle).snapshot();
             return {
                "askedHost": member.host,
                "role": member.role,
@@ -335,11 +408,18 @@
                "me": snap.me,
                "writable": snap.writable,
                "secondary": snap.secondary,
-               "hit": snap.hit
+               "hit": snap.hit,
+               "asyncCommand": snap.asyncCommand,
+               "startedMs": snap.startedMs,
+               "returnedMs": snap.returnedMs
             };
          }));
          show('Promise.all of mdblib.for(member).snapshot()', parallel);
-         console.log('\nExpected: one row per host, me matches askedHost, one writable and the rest secondary.');
+         const overlapped = parallel.length > 1
+            && parallel.every(row => row.asyncCommand)
+            && flight.maxInFlight === parallel.length;
+         console.log(`\nmaxInFlight ${flight.maxInFlight} of ${parallel.length}. overlapped=${overlapped}.`);
+         console.log('Expected: one row per host, me matches askedHost, one writable and the rest secondary.');
 
          banner('6. One module-level snapshot vs a WeakMap, and db scope on one client');
          console.log(`

@@ -245,7 +245,7 @@ A single sequential `aggregate(...).toArray()[0]` (`onlineDefrag.js` packed-temp
 
 ### Sync shell calls do not overlap by themselves
 
-`db.adminCommand()`, `db.stats()`, and most helpers run to completion on the current turn. `Promise.all` of those calls still runs them one after another. `mapPool` in `mdblib.js` `await Promise.resolve()` before and after each item so other workers start and a HUD can paint **between** sync commands. Overlap of real I/O still requires a native Promise (driver `toArray`, or `Promise.resolve().then(() => adminCommand(...))` only coalesces — it does not make one `adminCommand` async).
+`db.adminCommand()`, `db.runCommand()`, `db.hello()`, `db.stats()`, and most helpers run to completion on the current turn. `Promise.all` of those calls still runs them one after another. Confirmed on mongosh 2.12: `db.runCommand({ ping: 1 })` has no `then`. `mapPool` in `mdblib.js` `await Promise.resolve()` before and after each item so other workers start and a HUD can paint **between** sync commands. Overlap of real I/O still requires a native Promise (driver `toArray`, or `MongoClient.db().command()`). `Promise.resolve().then(() => adminCommand(...))` only coalesces — it does not make one `adminCommand` async. `ctxDemo.js` section 5 stores the driver `command({ hello: 1 })` promise on a `WeakMap` before awaiting it, one command per direct member client.
 
 ### `finally` takes a function
 

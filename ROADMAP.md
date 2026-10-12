@@ -96,11 +96,12 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `onlineDefrag.js` | 0.1.4 | **1.8.0** |
 | `indexCacheUtil.js` | 0.1.5 | **1.2.0** |
 | `killAgedSessions.js` | 0.2.2 | **0.2.3** |
+| `ctxDemo.js` | 0.1.0 | **0.2.0** |
 | `schema-import.js` | 0.1.8 | **0.2.0** |
 | `compact.js` | 0.2.15 | **removed** (archive only) |
 | `batchUpdater.js` | 0.1.6 | **removed** (archive only) |
 
-Unchanged vs freeze (still in live `src/`): `explainHisto` 0.1.4, `connStats` 0.1.14, `discovery` 0.2.1, `rtt` 0.3.0, `oidGenerator` 0.2.7, `oidFunction` 0.1.5, `ctxDemo` 0.1.0, `modifiedCountDocumentsByKey` 0.1.7.
+Unchanged vs freeze (still in live `src/`): `explainHisto` 0.1.4, `connStats` 0.1.14, `discovery` 0.2.1, `rtt` 0.3.0, `oidGenerator` 0.2.7, `oidFunction` 0.1.5, `modifiedCountDocumentsByKey` 0.1.7.
 
 #### 3. After the cut — strip and streamline (next general architecture)
 
@@ -687,9 +688,9 @@ Remaining mongosh-line work (do not block the archive): none.
 
 ### `ctxDemo.js`
 
-**Live sketch: v0.1.0** (version string unchanged until a bump is requested). **Archive: v0.1.0** at `legacy/mongo-shell/src/ctxDemo.js` — that copy is the frozen sketch and still falls back to `isMaster()`. Do not edit the archive.
+**Live sketch: v0.2.0.** **Archive: v0.1.0** at `legacy/mongo-shell/src/ctxDemo.js` — that copy is the frozen sketch and still falls back to `isMaster()`. Do not edit the archive.
 
-The live file continues the sketch on the mongosh line. Stand-in library, no `load('mdblib.js')`. `hello()` only (SERVER-49989; replies differ). Sibling databases show the lexical-`db` trap and `mdblib.for(db)`. A targeted context is a `directConnection` client to one `hello.hosts` member (the primary, then each other host), not `connect(parent URI)`. Each facade reads its own snapshot under `Promise.all`. A module-level snapshot filled by the direct primary still returns that primary when asked for a secondary; a `WeakMap` keyed by `getMongo()` stores the secondary. `admin` on the primary client shares that snapshot, and `scope()` keeps `dbName`. A global `db` swap of those member handles collapses every reader onto the last member. Do not log the rebuilt URI. Do not land `for(db)` in `mdblib.js` from this sketch. See the scripting guide. Header tags this file as requiring this roadmap.
+The live file continues the sketch on the mongosh line. Stand-in library, no `load('mdblib.js')`. `hello()` only (SERVER-49989; replies differ). Sibling databases show the lexical-`db` trap and `mdblib.for(db)`. A targeted context is a `directConnection` client to one `hello.hosts` member (the primary, then each other host), not `connect(parent URI)`. Each facade reads its own snapshot under `Promise.all`. `snapshot()` awaits the driver client's `command({ hello: 1 })` and stores that promise on a `WeakMap` before the await, so one hello per member can be in flight together. Shell `hello()` / `runCommand()` stay synchronous and do not overlap. A module-level snapshot filled by the direct primary still returns that primary when asked for a secondary; a `WeakMap` keyed by `getMongo()` stores the secondary. `admin` on the primary client shares that snapshot, and `scope()` keeps `dbName`. A global `db` swap of those member handles collapses every reader onto the last member. Do not log the rebuilt URI. Do not land `for(db)` in `mdblib.js` from this sketch. See the scripting guide. Header tags this file as requiring this roadmap.
 
 ### `modifiedCountDocumentsByKey.js`
 
