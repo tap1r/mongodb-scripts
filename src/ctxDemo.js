@@ -1,14 +1,14 @@
 (async() => {
    /*
     *  Name: "ctxDemo.js"
-    *  Version: "0.2.0"
+    *  Version: "0.2.1"
     *  Description: "demonstrates db injection after load() — lexical scope vs mdblib.for(db)"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *  Roadmap: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/ROADMAP.md" (required context)
     *
     *  Legacy archive line: v0.1.0 in legacy/mongo-shell is the frozen sketch
-    *  (it still falls back to isMaster). This live file is v0.2.0 on the
+    *  (it still falls back to isMaster). This live file is v0.2.1 on the
     *  mongosh line. See ROADMAP.md → ctxDemo.js.
     *
     *  Notes:
@@ -19,9 +19,11 @@
     *  - a targeted context is a directConnection client to one hello.hosts
     *    member (primary and the other members). connect(parent URI) is not
     *    that: server selection can land on the same member again
-    *  - snapshot() awaits the driver client's command({ hello: 1 }). Shell
-    *    hello() and runCommand() return on the current turn, so Promise.all
-    *    of those does not overlap. The WeakMap stores that promise
+    *  - identity(), hello(), snapshot(), and scope() await the driver
+    *    client's command(). Shell hello(), runCommand(), and stats() return
+    *    on the current turn, so Promise.all of those does not overlap.
+    *    snapshot() stores the in-flight hello promise on the Mongo client.
+    *    Section 6 still awaits, but it stores the resolved hello in one let
     *  - never prints a URI
     *
     *  Usage:
@@ -41,14 +43,15 @@
     *  members do not.
     */
 
-   function identityFromGlobalDb() {
+   async function identityFromGlobalDb() {
       /*
        *  How mdblib helpers look today: free `db`, no parameter.
+       *  The read is awaited. The handle is still the shell's current db.
        */
       return describe('globalThis.db', db);
    }
 
-   function identityFrom(db) {
+   async function identityFrom(db) {
       /*
        *  Internal helper: Database is always an argument.
        */
@@ -86,17 +89,6 @@
       return handle.runCommand(command);
    }
 
-   function readHello(handle) {
-      const doc = handle.hello();
-      return {
-         "me": doc.me ?? null,
-         "msg": doc.msg ?? null,
-         "setName": doc.setName ?? null,
-         "writable": doc.isWritablePrimary === true,
-         "secondary": doc.secondary === true
-      };
-   }
-
    async function readHelloAsync(handle) {
       /*
        *  One-shot hello. No topologyVersion and no maxAwaitTimeMS.
@@ -121,6 +113,8 @@
          "setName": doc.setName ?? null,
          "writable": doc.isWritablePrimary === true,
          "secondary": doc.secondary === true,
+         "hosts": Array.isArray(doc.hosts) ? doc.hosts.filter(Boolean) : [],
+         "primary": doc.primary || doc.me || null,
          "startedMs": startedMs,
          "returnedMs": elapsedMs(),
          "asyncCommand": asyncCommand
@@ -156,12 +150,13 @@
       };
    }
 
-   function dbScope(handle) {
+   async function dbScope(handle) {
       /*
        *  Database-scoped. Not stored on the Mongo snapshot.
+       *  Same async command path as fetchDbStats. scale 1 keeps the reply small.
        */
       try {
-         const stats = handle.stats();
+         const stats = await awaitPlain(commandAsync(handle, { "dbStats": 1, "scale": 1 })) || {};
          return {
             "dbName": handle.getName(),
             "collections": stats.collections,
@@ -175,11 +170,12 @@
    function createLib(db) {
       /*
        *  Bound facade. Nested calls close over THIS db, not the shell current db.
+       *  name() is local. The commands return promises.
        */
       return {
          db,
          identity: () => identityFrom(db),
-         hello: () => db.hello(),
+         hello: () => readHelloAsync(db),
          name: () => db.getName(),
          snapshot: () => snapshotOf(db),
          scope: () => dbScope(db)
@@ -191,10 +187,10 @@
       identity: identityFrom
    };
 
-   function describe(label, handle) {
+   async function describe(label, handle) {
       let hello = {};
       try {
-         hello = readHello(handle);
+         hello = await readHelloAsync(handle);
       } catch(e) {
          hello = { "ok": 0, "error": scrub(e.errmsg ?? e.message ?? e) };
       }
@@ -302,9 +298,9 @@
    const configDb = db.getSiblingDB('config');
 
    banner('0. Shell current db (baseline)');
-   show('parent (global db)', describe('parent', parent));
-   show('admin sibling', describe('admin sibling', admin));
-   show('config sibling', describe('config sibling', configDb));
+   show('parent (global db)', await describe('parent', parent));
+   show('admin sibling', await describe('admin sibling', admin));
+   show('config sibling', await describe('config sibling', configDb));
    console.log('\nSibling handles share the Mongo client with the parent.');
    console.log('If injection works, dbName changes; me / sameMongoAsParent stay put.');
 
@@ -315,27 +311,27 @@
    const db = admin;       // local, shadows nothing inside the helper
    identityFromGlobalDb(); // still reads globalThis.db
    `);
-   (function callSiteShadow() {
+   await (async function callSiteShadow() {
       const db = admin;
       void db; // deliberately unused: this is the trap
       show(
          'called with local `const db = admin` in the caller — helper still sees parent',
-         identityFromGlobalDb()
+         await identityFromGlobalDb()
       );
    })();
    console.log('\nExpected: dbName is still the parent, not "admin".');
    console.log('Lexical scope is fixed where the function was defined (the global file).');
 
    banner('2. Explicit parameter');
-   show('mdblib.identity(parent)', mdblib.identity(parent));
-   show('mdblib.identity(admin)  ← dbName should be "admin"', mdblib.identity(admin));
-   show('mdblib.identity(configDb) ← dbName should be "config"', mdblib.identity(configDb));
+   show('mdblib.identity(parent)', await mdblib.identity(parent));
+   show('mdblib.identity(admin)  ← dbName should be "admin"', await mdblib.identity(admin));
+   show('mdblib.identity(configDb) ← dbName should be "config"', await mdblib.identity(configDb));
 
    banner('3. mdblib.for(db) — contextualise once per scope');
    const mParent = mdblib.for(parent);
    const mAdmin = mdblib.for(admin);
-   show('mdblib.for(parent).identity()', mParent.identity());
-   show('mdblib.for(admin).identity()  ← nested hello() uses admin, not global db', mAdmin.identity());
+   show('mdblib.for(parent).identity()', await mParent.identity());
+   show('mdblib.for(admin).identity()  ← nested hello() uses admin, not global db', await mAdmin.identity());
    console.log(`\nmAdmin.name() => ${mAdmin.name()}`);
    console.log('Same client, so for(admin).snapshot() hits the snapshot for(parent) just filled.');
    show('mdblib.for(parent).snapshot()', await mParent.snapshot());
@@ -349,10 +345,9 @@
    A targeted context replaces the host and sets directConnection=true.
    pinned is hello.me === the host that context asked for.
    `);
-      const topo = readHello(parent);
-      const helloDoc = parent.hello();
-      const hosts = Array.isArray(helloDoc.hosts) ? helloDoc.hosts.filter(Boolean) : [];
-      const primaryHost = helloDoc.primary || helloDoc.me || null;
+      const topo = await readHelloAsync(parent);
+      const hosts = topo.hosts;
+      const primaryHost = topo.primary;
       show('parent topology', {
          "me": topo.me,
          "setName": topo.setName,
@@ -370,7 +365,7 @@
          for (const host of ordered) {
             const handle = openDirect(host);
             if (!handle) continue;
-            const live = describe(host, handle);
+            const live = await describe(host, handle);
             members.push({
                "host": host,
                "handle": handle,
@@ -426,20 +421,27 @@
    Fill the module-level snapshot from the direct primary.
    Asking it for a secondary must still return the primary me.
    A fresh WeakMap misses on that secondary and stores that member.
-   admin on the primary client hits the primary snapshot; scope().dbName is admin.
+   These reads are awaited one at a time. The proof is the single slot,
+   not a synchronous hello(). admin on the primary client hits that snapshot.
    `);
 
          let moduleSnap = null;
-         function snapshotViaModuleLet(handle) {
+         async function snapshotViaModuleLet(handle) {
             const mongo = handle.getMongo();
             const hit = moduleSnap !== null;
+            const hello = await readHelloAsync(handle);
             if (!moduleSnap) {
-               moduleSnap = { "mongo": mongo, ...readHello(handle) };
+               moduleSnap = {
+                  "mongo": mongo,
+                  "me": hello.me,
+                  "writable": hello.writable,
+                  "secondary": hello.secondary
+               };
             }
             return {
                "cache": "module-let",
                "hit": hit,
-               "askedHost": handle.hello().me ?? null,
+               "askedHost": hello.me,
                "me": moduleSnap.me,
                "writable": moduleSnap.writable,
                "secondary": moduleSnap.secondary,
@@ -448,12 +450,18 @@
          }
 
          const freshByMongo = new WeakMap();
-         function snapshotViaFreshWeakMap(handle) {
+         async function snapshotViaFreshWeakMap(handle) {
             const mongo = handle.getMongo();
             let entry = freshByMongo.get(mongo);
             const hit = !!entry;
             if (!entry) {
-               entry = { "mongo": mongo, ...readHello(handle) };
+               const hello = await readHelloAsync(handle);
+               entry = {
+                  "mongo": mongo,
+                  "me": hello.me,
+                  "writable": hello.writable,
+                  "secondary": hello.secondary
+               };
                freshByMongo.set(mongo, entry);
             }
             return {
@@ -467,46 +475,49 @@
             };
          }
 
-         show('module-let filled by direct primary', snapshotViaModuleLet(primaryMember.handle));
-         show('fresh WeakMap filled by direct primary', snapshotViaFreshWeakMap(primaryMember.handle));
+         show('module-let filled by direct primary', await snapshotViaModuleLet(primaryMember.handle));
+         show('fresh WeakMap filled by direct primary', await snapshotViaFreshWeakMap(primaryMember.handle));
          for (const member of secondaries) {
             show(
                `module-let asked for ${member.host} — hit, me stays the primary, cachedMongoIsHandle false`,
-               snapshotViaModuleLet(member.handle)
+               await snapshotViaModuleLet(member.handle)
             );
             show(
                `fresh WeakMap asked for ${member.host} — miss, me is that host`,
-               snapshotViaFreshWeakMap(member.handle)
+               await snapshotViaFreshWeakMap(member.handle)
             );
          }
          const primaryAdmin = primaryMember.handle.getSiblingDB('admin');
          show(
             'fresh WeakMap asked for admin on the primary client — hit, me stays the primary, dbName is admin',
-            snapshotViaFreshWeakMap(primaryAdmin)
+            await snapshotViaFreshWeakMap(primaryAdmin)
          );
-         show('for(primary).scope()', mdblib.for(primaryMember.handle).scope());
-         show('for(primary admin).scope()  ← dbName is admin, same Mongo snapshot', mdblib.for(primaryAdmin).scope());
+         show('for(primary).scope()', await mdblib.for(primaryMember.handle).scope());
+         show('for(primary admin).scope()  ← dbName is admin, same Mongo snapshot', await mdblib.for(primaryAdmin).scope());
          show('for(primary admin).name()', mdblib.for(primaryAdmin).name());
 
          banner('7. Assigning the global db collapses the member; for() does not');
          console.log(`
-   Each task records its own hello.me, assigns the global db, then waits
-   until every assignment has happened. The last assignment wins for every reader.
+   Each task records its own hello.me before anyone assigns the global db,
+   then assigns, then waits until every assignment has happened.
+   The read after that wait is awaited. The last assignment wins for every reader.
    Section 5 kept every member because each facade closed over its handle.
    `);
+         for (const member of members) {
+            member.askedMe = (await readHelloAsync(member.handle)).me ?? null;
+         }
          let arrived = 0;
          let release;
          const bothAssigned = new Promise(resolve => { release = resolve; });
          const raced = await Promise.all(members.map(async member => {
-            const askedMe = member.handle.hello().me ?? null;
             db = member.handle;
             arrived++;
             if (arrived === members.length) release();
             await bothAssigned;
-            const seen = identityFromGlobalDb();
+            const seen = await identityFromGlobalDb();
             return {
                "askedHost": member.host,
-               "askedMe": askedMe,
+               "askedMe": member.askedMe,
                "seenMe": seen.me,
                "seenDb": seen.dbName
             };
