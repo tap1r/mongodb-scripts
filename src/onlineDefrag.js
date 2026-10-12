@@ -1,6 +1,6 @@
 /*
  *  Name: "onlineDefrag.js"
- *  Version: "1.7.0"
+ *  Version: "1.8.0"
  *  Description: "online compaction"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,10 +13,11 @@
  *  - strategy: naturalReplay (default) | naturalWindow | quantile | shapeQuantile
  *  - replay: 'onExtend' (default) | 'never' | 'always'
  *  - reclaim: 'tail' (default) | 'none'
- *  - Knobs: writeConcurrency (default 8), generationRatio (default 0.2),
- *    reuseFloor (default 0.2), pageFillRatio, passes, naturalDir (1 | -1),
- *    updateDelayMs, updatesSoft, updatesHard, tfrOverride, shuffleSampleSize,
- *    maxLagSeconds, checkpointTimeoutMs.
+ *  - Knobs: writeConcurrency (default 8), dirtyBudgetRatio / generationRatio
+ *    (default 0.2, AIMD from settled density), reuseFloor (default 0.2),
+ *    pageFillRatio, passes, naturalDir (1 | -1), updateDelayMs, updatesSoft,
+ *    updatesHard, tfrOverride, shuffleSampleSize, maxLagSeconds,
+ *    checkpointTimeoutMs.
  */
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>onlineDefrag.js
@@ -39,7 +40,7 @@
  */
 
 (() => { // User-facing comments are in the header. Mechanics live on the functions below. mongosh only; top-level await on this IIFE is a rewriter SyntaxError.
-   const __script = { "name": "onlineDefrag.js", "version": "1.7.0" };
+   const __script = { "name": "onlineDefrag.js", "version": "1.8.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -108,6 +109,7 @@
          && Number(o.pageFillRatio) > 0;
       const tfrOverride = Number(o.tfrOverride) > 0 ? Math.ceil(o.tfrOverride) : 0;
       const generationRatio = Number(o.generationRatio) > 0 ? +o.generationRatio : 0.2;
+      const dirtyBudgetRatio = Number(o.dirtyBudgetRatio) > 0 ? +o.dirtyBudgetRatio : generationRatio;
       const reuseFloor = Number(o.reuseFloor) > 0 ? +o.reuseFloor : 0.2;
       const reclaimIn = o.reclaim;
       if (reclaimIn === 'compact') {
@@ -125,6 +127,7 @@
          "pageFillExplicit": pageFillExplicit,
          "tfrOverride": tfrOverride,
          "generationRatio": generationRatio,
+         "dirtyBudgetRatio": dirtyBudgetRatio,
          "reuseFloor": reuseFloor,
          "reclaim": reclaim
       });
@@ -138,6 +141,7 @@
       "updatesSoft": updatesSoft,
       "updatesHard": updatesHard,
       "generationRatio": generationRatio,
+      "dirtyBudgetRatio": dirtyBudgetRatioInit,
       "reuseFloor": reuseFloor,
       "reclaim": reclaim,
       "writeConcurrency": writeConcurrency,
@@ -149,6 +153,14 @@
       "coverPassesOpt": coverPassesOpt,
       "updateDelayMs": updateDelayMs = 0
    } = normalizeOptions(userOptions);
+
+   let dirtyBudgetRatio = dirtyBudgetRatioInit;
+   const dirtyBudgetMin = 0.05;
+   const dirtyBudgetMax = 1;
+   const dirtyBudgetAdd = 0.02;
+   const dirtyBudgetMd = 0.5;
+   const densityPlateauEps = 0.005;
+   const densityPlateauN = 2;
 
    function coverPassCount(defaultN = 1) {
       return coverPassesOpt > 0 ? coverPassesOpt : defaultN;
@@ -325,6 +337,22 @@
       }
    }
 
+   function aimdIncrease(reason) {
+      const prev = dirtyBudgetRatio;
+      dirtyBudgetRatio = Math.min(dirtyBudgetMax, dirtyBudgetRatio + dirtyBudgetAdd);
+      if (dirtyBudgetRatio !== prev) {
+         console.log(`dirtyBudgetRatio ${prev.toFixed(3)} -> ${dirtyBudgetRatio.toFixed(3)} (+AIMD ${reason})`);
+      }
+   }
+
+   function aimdDecrease(reason) {
+      const prev = dirtyBudgetRatio;
+      dirtyBudgetRatio = Math.max(dirtyBudgetMin, dirtyBudgetRatio * dirtyBudgetMd);
+      if (dirtyBudgetRatio !== prev) {
+         console.log(`dirtyBudgetRatio ${prev.toFixed(3)} -> ${dirtyBudgetRatio.toFixed(3)} (*AIMD ${reason})`);
+      }
+   }
+
    // waitForDirtyUnder / writeGate: --- waits ---
 
    function estimateRewriteBytes(nDocs, packed) {
@@ -338,9 +366,9 @@
 
    // --- generation ---
    function generationCap(snap, cal, allowExtend = false) {
-      // Density: generationRatio × R, never > R. Reclaim tail (allowExtend):
+      // Density: dirtyBudgetRatio × R, never > R. Reclaim tail (allowExtend):
       // R + one dest leaf so WT must allocate at EOF, then replay.
-      const fractional = Number(generationRatio) > 0 ? +generationRatio : 0.05;
+      const fractional = Number(dirtyBudgetRatio) > 0 ? +dirtyBudgetRatio : 0.2;
       const Rraw = +snap?.freeStorageSize;
       const R = Number.isFinite(Rraw) && Rraw > 0 ? Rraw : 0;
       const sz = +snap?.storageSize;
@@ -1457,7 +1485,7 @@
       const account = makeGeneration(await collSnapshot(), cal, allowExtend);
       const packedPctR = account.R > 0 ? 100 * packedCover / account.R : 0;
       const batch = tfrOverride > 0 ? tfrOverride : cal.tfr;
-      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} C=${compression.toFixed(3)} docs=${nDocs} generationRatio=${account.fractional} ${formatGeneration(account)} packedCover≈${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) writeConcurrency=${conc} replay=${policy} freezeWindow=${freezeWindow}`);
+      console.log(`strategy: ${label} TFR=${cal.tfr} packedBudget=${packedBudget} pageFillRatio=${fillRatio} leaf=${leaf} C=${compression.toFixed(3)} docs=${nDocs} dirtyBudgetRatio=${account.fractional} ${formatGeneration(account)} packedCover≈${Math.round(packedCover)} (${packedPctR.toFixed(1)}% of R) writeConcurrency=${conc} replay=${policy} freezeWindow=${freezeWindow}`);
 
       const { drain: drainWrites, enqueue: enqueueWrite } = makeWritePool();
       const gen = typeof batchSource[Symbol.asyncIterator] === 'function'
@@ -1481,17 +1509,85 @@
       const allocFn = b => allocOf(b, cal, fillRatio, leaf, compression, batch);
 
       let pass = 0, packedDone = 0, prevSz = account.storageSize;
+      let lastSettledG = account.G, plateauStreak = 0, coverStop = null;
+
+      function applyAimd({ extended, G }) {
+         // Reclaim EOF-extend is intentional; do not AIMD or stop that path here.
+         if (allowExtend) return { "stop": false };
+         if (G <= reuseFloor) {
+            return {
+               "stop": true,
+               "reason": `G=${(100 * G).toFixed(1)}% <= reuseFloor ${reuseFloor}`
+            };
+         }
+         if (lastSettledG != null && Math.abs(G - lastSettledG) < densityPlateauEps) {
+            plateauStreak++;
+            if (plateauStreak >= densityPlateauN) {
+               return {
+                  "stop": true,
+                  "reason": `density plateau G=${(100 * G).toFixed(1)}%`
+               };
+            }
+         } else {
+            plateauStreak = 0;
+         }
+         lastSettledG = G;
+         if (extended) aimdDecrease('storageSize extend');
+         else aimdIncrease('settled no extend');
+         return { "stop": false };
+      }
+
+      if (!allowExtend && account.G <= reuseFloor) {
+         console.log(`${label}: skip cover ${formatGeneration(account)} (G<=reuseFloor ${reuseFloor})`);
+         return { "stopped": true, "reason": `G<=reuseFloor ${reuseFloor}` };
+      }
+
       for (;;) {
          await writeGate(tune, async(waited) => {
             if (waited.completed) {
                await drainWrites();
+               const beforeSz = account.storageSize;
                await account.refresh();
                console.log(`checkpoint: settled stats ${formatGeneration(account)}`);
+               if (!allowExtend && !freezeWindow) {
+                  const decision = applyAimd({
+                     "extended": account.storageSize > beforeSz,
+                     "G": account.G
+                  });
+                  if (account.storageSize > beforeSz) prevSz = account.storageSize;
+                  if (decision.stop) coverStop = decision;
+               }
             }
          });
+         if (coverStop) {
+            console.log(`${label}: cover stopped (${coverStop.reason})`);
+            break;
+         }
+         if (!allowExtend && account.G <= reuseFloor) {
+            coverStop = {
+               "stop": true,
+               "reason": `G=${(100 * account.G).toFixed(1)}% <= reuseFloor ${reuseFloor}`
+            };
+            console.log(`${label}: cover stopped (${coverStop.reason})`);
+            break;
+         }
          if (account.cap > 0 && account.used > 0 && account.remaining() < account.minPage) {
             await drainWrites();
+            const beforeSz = account.storageSize;
             await account.settle();
+            if (!allowExtend && !freezeWindow) {
+               const decision = applyAimd({
+                  "extended": account.storageSize > beforeSz,
+                  "G": account.G
+               });
+               if (account.storageSize > beforeSz) prevSz = account.storageSize;
+               if (decision.stop) {
+                  coverStop = decision;
+                  console.log(`${label}: cover stopped (${coverStop.reason})`);
+                  break;
+               }
+               await account.refresh();
+            }
          }
          const maxBatches = freezeWindow ? Infinity : 1;
          const win = await takeWindow(takeBatch, account, allocFn, maxBatches);
@@ -1499,7 +1595,21 @@
          if (!win.batches.length) break;
          if (!freezeWindow && account.wouldExceed(win.alloc)) {
             await drainWrites();
+            const beforeSz = account.storageSize;
             await account.settle();
+            if (!allowExtend) {
+               const decision = applyAimd({
+                  "extended": account.storageSize > beforeSz,
+                  "G": account.G
+               });
+               if (account.storageSize > beforeSz) prevSz = account.storageSize;
+               if (decision.stop) {
+                  coverStop = decision;
+                  console.log(`${label}: cover stopped (${coverStop.reason})`);
+                  break;
+               }
+               await account.refresh();
+            }
          }
          account.debit(win.alloc);
          pass++;
@@ -1515,6 +1625,16 @@
             const dSz = (snap2.storageSize || 0) - (prevSz || 0);
             console.log(`${label} cycle ${pass} packedDone=${Math.round(packedDone)}/${Math.round(packedCover)} alloc=${Math.round(win.alloc)} ${formatGeneration(account)} used=${Math.round(account.used)} dStorageSize=${dSz}${dSz > 0 ? ' EXTEND' : ''}`);
             if ((snap2.storageSize || 0) > (prevSz || 0)) prevSz = snap2.storageSize;
+            if (!allowExtend) {
+               const g2 = generationCap(snap2, cal);
+               const decision = applyAimd({ "extended": dSz > 0, "G": g2.G });
+               if (decision.stop) {
+                  coverStop = decision;
+                  console.log(`${label}: cover stopped (${coverStop.reason})`);
+                  break;
+               }
+               await account.refresh(snap2);
+            }
          } else {
             await writeBatches(win.batches, enqueueWrite, conc, tune, tag, false);
          }
@@ -1523,6 +1643,9 @@
       await drainWrites();
       console.log(`${label} done batches=${pass} packedDone=${Math.round(packedDone)} txnFailed=${txnFailed}`);
       console.log(EJSON.stringify({ "state": "settled storage", ...await collSnapshot() }));
+      return coverStop
+         ? { "stopped": true, "reason": coverStop.reason }
+         : { "stopped": false };
    }
 
    // --- reclaim ---
@@ -1619,19 +1742,27 @@
       console.log(EJSON.stringify({ "state": "initial storage", ...srcSnap }));
       const cal = await calibrateTFR();
       const nDocs0 = nDocsFrom(srcSnap);
+      let coverHalt = null;
       await eachCoverPass(1, async(pass, n) => {
+         if (coverHalt) return;
          const snap = pass === 1 ? srcSnap : await collSnapshot();
          const nDocs = pass === 1 ? nDocs0 : nDocsFrom(snap);
          const tag = n > 1 ? `${strategy} ${pass}/${n}` : strategy;
          if (n > 1) {
             console.log(`${strategy}: pass ${pass}/${n} nDocs=${nDocs} freezeWindow=${plan.freezeWindow}`);
          }
-         await writeCover(tag, cal, plan.curator(cal, nDocs), nDocs, {
+         const result = await writeCover(tag, cal, plan.curator(cal, nDocs), nDocs, {
             "freezeWindow": plan.freezeWindow,
             "replay": plan.replay
          });
+         if (result && result.stopped) {
+            coverHalt = result;
+            return;
+         }
          if (pass < n) await waitForCheckpoint({ "settle": true });
       });
+      if (coverHalt)
+         console.log(`${strategy}: cover stopped (${coverHalt.reason})`);
       await reclaimAfter(strategy, cal);
    }
 
