@@ -1,6 +1,6 @@
 /*
  *  Name: "oplogchurn.js"
- *  Version: "0.6.1"
+ *  Version: "0.6.2"
  *  Description: "measure current oplog churn rate"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -21,7 +21,7 @@
     *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
     *  Save libs to the $MDBLIB or valid search path
     */
-   const __script = { "name": "oplogchurn.js", "version": "0.6.1" };
+   const __script = { "name": "oplogchurn.js", "version": "0.6.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -79,8 +79,8 @@
    // connection preferences
    if (typeof readPref === 'undefined') {
       readPref = (hello().secondary === false)
-               ? 'primaryPreferred'
-               : 'secondaryPreferred';
+         ? 'primaryPreferred'
+         : 'secondaryPreferred';
    }
 
    function tsSeconds(ts) {
@@ -102,15 +102,15 @@
    }
 
    function oplogCompression(stats) {
-      // Unknown free is n/a, not an empty free list (dbstats StorageMetrics).
+      // Unknown free is N/A, not an empty free list (dbstats StorageMetrics).
       // Denom still subtracts internal page size; mixed/missing page size is 4KiB.
       const size = +stats.dataSize;
       const storageSize = +stats.storageSize;
       const free = stats.freeStorageSize;
       if (free == null || Number.isNaN(+free)) return NaN;
       const page = (typeof stats.internalPageSize === 'number' && stats.internalPageSize > 0)
-                 ? stats.internalPageSize
-                 : 4096;
+         ? stats.internalPageSize
+         : 4096;
       const denom = storageSize - +free - page;
       if (!(denom > 0) || !Number.isFinite(size)) return NaN;
       return +(size / denom).toFixed(2);
@@ -127,11 +127,14 @@
          d2 = date.toISOString(), // end datetime
          t1 = Math.floor(date.setHours(date.getHours() - intervalHrs) / 1000), // start timestamp
          d1 = date.toISOString(), // start datetime
-         $match = { "$match": {
-                     "ts": {
-                        "$gt": Timestamp({ "t": t1, "i": 0 }),
-                        "$lte": Timestamp({ "t": t2, "i": 0 })
-                  } } },
+         $match = {
+            "$match": {
+               "ts": {
+                  "$gt": Timestamp({ "t": t1, "i": 0 }),
+                  "$lte": Timestamp({ "t": t2, "i": 0 })
+               }
+            }
+         },
          $group = {
             "$group": {
                "_id": null,
@@ -139,12 +142,13 @@
                "_documentCount": { "$sum": 1 },
                "_firstTs": { "$min": "$ts" },
                "_lastTs": { "$max": "$ts" }
-         } },
+            }
+         },
          // strip synthetic $group _id server-side before returning to the client
          $project = { "$unset": "_id" };
       const pipeline = serverVer(4.4)
-                     ? [$match, $group, $project]
-                     : [$match];
+         ? [$match, $group, $project]
+         : [$match];
       const options = {
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
@@ -189,8 +193,8 @@
       const firstSec = tsSeconds(firstTs);
       const lastSec = tsSeconds(lastTs);
       const observedSecs = (sampleOk && docs > 0 && firstSec != null && lastSec != null)
-                         ? Math.max(lastSec - firstSec, 1) // same-second batches still count as 1s
-                         : 0;
+         ? Math.max(lastSec - firstSec, 1) // same-second batches still count as 1s
+         : 0;
       const observedHrs = observedSecs / 3600;
       const churnHrs = observedHrs > 0 ? observedHrs : intervalHrs;
 
@@ -199,14 +203,14 @@
       const { 'parsed': { 'storage': { dbPath = 'unknown' } = {} } = {} } = serverCmdLineOpts();
       const stats = await $collStats('local', 'oplog.rs') || {};
       const ratio = oplogCompression(stats);
-      const ratioLabel = Number.isFinite(ratio) ? `${ratio}:1` : 'n/a';
-      const intervalDataSize = sampleOk ? scaled.format(opSize) : 'n/a';
+      const ratioLabel = Number.isFinite(ratio) ? `${ratio}:1` : 'N/A';
+      const intervalDataSize = sampleOk ? scaled.format(opSize) : 'N/A';
       const intervalStorageSize = (sampleOk && Number.isFinite(ratio))
-                                ? scaled.format(opSize / ratio)
-                                : 'n/a';
+         ? scaled.format(opSize / ratio)
+         : 'N/A';
       const oplogChurn = (sampleOk && Number.isFinite(ratio))
-                       ? `${scaled.format(opSize / ratio / churnHrs)}/hr`
-                       : 'n/a';
+         ? `${scaled.format(opSize / ratio / churnHrs)}/hr`
+         : 'N/A';
 
       // Print results
       console.log('\n');
@@ -217,9 +221,9 @@
       console.log(`[g]${'Start time:'.padEnd(rowHeader)}[/] ${d1.padStart(columnWidth)}`);
       console.log(`[g]${'End time:'.padEnd(rowHeader)}[/] ${d2.padStart(columnWidth)}`);
       console.log(`[g]${'Requested interval:'.padEnd(rowHeader)}[/] ${formatHrs(intervalHrs).padStart(columnWidth)}`);
-      console.log(`[g]${'Observed interval:'.padEnd(rowHeader)}[/] ${padCol(sampleOk ? formatHrs(observedHrs) : 'n/a')}`);
+      console.log(`[g]${'Observed interval:'.padEnd(rowHeader)}[/] ${padCol(sampleOk ? formatHrs(observedHrs) : 'N/A')}`);
       console.log(`[g]${'Average oplog compression ratio:'.padEnd(rowHeader)}[/] ${padCol(ratioLabel)}`);
-      console.log(`[g]${'Interval document count:'.padEnd(rowHeader)}[/] ${padCol(sampleOk ? docs : 'n/a')}`);
+      console.log(`[g]${'Interval document count:'.padEnd(rowHeader)}[/] ${padCol(sampleOk ? docs : 'N/A')}`);
       console.log(`[g]${'Interval data size:'.padEnd(rowHeader)}[/] ${padCol(intervalDataSize)}`);
       console.log(`[g]${'Estimated interval storage size:'.padEnd(rowHeader)}[/] ${padCol(intervalStorageSize)}`);
       console.log(`[y]${'━'.repeat(termWidth)}[/]`);
