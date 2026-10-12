@@ -85,7 +85,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `dbstats.js` | 0.12.19 | **1.2.7** |
 | `autoCompact.js` | 0.4.36 | **1.3.0** |
 | `fuzzer.js` | 0.6.43 | **1.6.0** |
-| `oplogchurn.js` | 0.5.22 | **0.6.1** |
+| `oplogchurn.js` | 0.5.22 | **0.6.2** |
 | `latency.js` | 0.4.9 | **0.4.10** |
 | `schema-sampler.js` | 0.2.16 | **0.4.0** |
 | `sleepy.js` | 0.2.6 | **0.2.7** |
@@ -614,9 +614,9 @@ Remaining mongosh-line work (do not block the archive): none.
 
 ### `oplogchurn.js`
 
-**Live: v0.6.1.** **Archive: v0.5.22.** Mongosh-only. Do not restore `slaveOk(readPref)`. Per-command `options.readPreference = { mode: readPref }`. Keep `--eval var intervalHrs`. `Timestamp({ t, i })` only. Header tags this file as requiring this roadmap.
+**Live: v0.6.2.** **Archive: v0.5.22.** Mongosh-only. Do not restore `slaveOk(readPref)`. Per-command `options.readPreference = { mode: readPref }`. Keep `--eval var intervalHrs`. `Timestamp({ t, i })` only. Header tags this file as requiring this roadmap.
 
-**Shipped:** `console.clear()` runs only on a TTY CLI invocation. The loader banner prints only when `process.argv` names this file (`isOplogchurnCliFile`). `load()` stays quiet; mdblib still loads. **0.6.1:** mdblib `serverCmdLineOpts()` (denied `getCmdLineOpts` → `dbPath` unknown); unknown `$collStats` free is n/a compression (StorageMetrics rule, still subtracts internal page size); oplog aggregate catch prints identity and n/a sample/churn. `hostInfo()` already falls back on M0. `$collStats` already uses the global `readPref`. Identity commands stay on the connected member.
+**Shipped:** `console.clear()` runs only on a TTY CLI invocation. The loader banner prints only when `process.argv` names this file (`isOplogchurnCliFile`). `load()` stays quiet; mdblib still loads. **0.6.1:** mdblib `serverCmdLineOpts()` (denied `getCmdLineOpts` → `dbPath` unknown); unknown `$collStats` free is n/a compression (StorageMetrics rule, still subtracts internal page size); oplog aggregate catch prints identity and n/a sample/churn. `hostInfo()` already falls back on M0. `$collStats` already uses the global `readPref`. Identity commands stay on the connected member. **0.6.2:** report labels print `N/A`; aggregate `comment` tracks `__script.version`.
 
 Remaining mongosh-line work (do not block the archive): none.
 
@@ -662,7 +662,11 @@ Remaining mongosh-line work (do not block the archive): none.
 
 ### `docSizes.js`
 
-**Live: v0.1.35.** **Archive: v0.1.34.** Per-command RP on `$sample`. In-file `const options` is not an `--eval` overlay.
+**Live: v0.1.35.** **Archive: v0.1.34.** Per-command RP on `$sample`. `--eval` `var options` overlays in-file `optionDefaults` (`dbName`, `collName`, `sampleSize`). Do not declare `options` in this file. Does not load mdblib.
+
+**Shipped:** `--eval` `var options` overlay (no version bump).
+
+Remaining mongosh-line work (do not block the archive): none.
 
 ### `batchUpdater.js`
 

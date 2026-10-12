@@ -153,7 +153,7 @@
          "allowDiskUse": true,
          "cursor": { "batchSize": 0 },
          "readConcern": { "level": "local" },
-         "comment": "Calculating oplog size via oplogchurn.js v0.6.1"
+         "comment": "Calculating oplog size via oplogchurn.js v0.6.2"
       };
       // Per-command RP only — setReadPref reconnects mongosh and is denied on Atlas shared tiers.
       options.readPreference = { "mode": readPref };

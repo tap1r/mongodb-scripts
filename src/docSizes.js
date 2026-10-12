@@ -6,26 +6,39 @@
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
  *  Dual-shell snapshot: legacy/mongo-shell (v0.1.34). This file is mongosh-only.
+ *
+ *  Notes:
+ *  - --eval var options overlays optionDefaults. Do not declare options in this file.
  */
 
-// Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>docSizes.js
+// Usage: mongosh [connection options] [--quiet] [--eval 'var options = {...};'] [-f|--file] </path/to/>docSizes.js
+// Overlay: in-file optionDefaults then var options. Do not declare options in this file.
+//
+//    mongosh --quiet --eval 'var options = { "dbName": "database", "collName": "collection", "sampleSize": 1000 };' -f docSizes.js
 
 /*
- *  User defined parameters
+ *  In-file defaults. --eval var options overlays these.
  */
 
-const options = {
+const optionDefaults = {
    "dbName": "database",
    "collName": "collection",
    "sampleSize": 1000 // parameter to $sample
 };
 
-(({ dbName, collName, sampleSize = 1000 } = options) => {
+(() => {
    /*
     *  main
     */
    const __script = { "name": "docSizes.js", "version": "0.1.35" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
+
+   // Caller: var options = { ... } (--eval or REPL). Do not declare or assign it in this file.
+   const overlay = (typeof options !== 'undefined' && options) ? options : null;
+   const dbName = (overlay && overlay.dbName != null) ? overlay.dbName : optionDefaults.dbName;
+   const collName = (overlay && overlay.collName != null) ? overlay.collName : optionDefaults.collName;
+   const sampleSize = (overlay && overlay.sampleSize != null) ? overlay.sampleSize : optionDefaults.sampleSize;
+
    const hello = db.hello();
    if (typeof readPref === 'undefined')
       (readPref = (hello.secondary === false) ? 'primaryPreferred' : 'secondaryPreferred');
