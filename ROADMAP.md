@@ -222,7 +222,9 @@ defaults  →  config file (JSON/EJSON)  →  env (few keys)  →  CLI flags  �
 
 ---
 
-## Auto-trim (planned orchestrator)
+## Auto-trim (`autoTrim.js`)
+
+**TABLED (aspirational):** Working name `autoTrim.js`. The design notes below stay for when Luke opens this. Do not re-propose as the next leftover.
 
 A one-shot `$collStats` / `collStats` check inside `autoCompact.js` is the wrong place: autoCompact already skips files below `freeSpaceTargetMB`, and a catalog-wide stats pull is as expensive as the walk you moved off the enable path.
 
@@ -242,7 +244,7 @@ Work per iteration is bounded by the **high-pass on free space**, not by listing
 
 ### Placement
 
-New monolithic script (working name `autoTrim.js`), not a preflight inside `autoCompact.js`. Coupling:
+New monolithic script (working name `autoTrim.js`), not a preflight inside `autoCompact.js`. TABLED (aspirational). Coupling:
 
 - **Plan** from a dbstats-style snapshot. Consume `dbstats.js` `output.format: json` — the **shipped, versioned** contract (live **1.2.7**; see `dbstats.js` → Output formats). `sort` by `freeStorageSize` / `idxFreeStorageSize` hooks exist; `output.verbosity` `compactOnly` is the tabular/html printer as of 0.22.0 / 0.23.0. Printers project `limit.n` (0.25.0); JSON stays the full contract. Do not scrape tabular banners.
 - **Execute** by driving `autoCompact.js` (`--eval` options + `--file`), same process or a wrapper. Do not `load()` either until the library story settles. Bounce `autoCompact` command errors. Script-only keys (`maxWaitMs`, output format) live on auto-trim, not in the `autoCompact` command document. Cap waits, `quit(1)` on hard errors, and emit a JSON summary (`ok`, recovered bytes, visits, `T_j`) so cron does not scrape colour banners.
@@ -301,7 +303,7 @@ Pin down in the implementation:
 
 ### `autoCompact.js`
 
-Executor auto-trim will call. Keep the file standalone. **Live: v1.3.0.** **Archive: v0.4.36.** Direct-to-member targeting belongs in `discovery.js`; cron/JSON/wait caps belong in `autoTrim.js`. The first-pass namespace bar is output only. Further feature work (auto-trim coupling) is mongosh-line only. `resolveOptions` overlays `autoCompact-options.jsonc` then `autoCompactOptions`. The eval name stays until the alias transition.
+Keep the file standalone. **Live: v1.3.0.** **Archive: v0.4.36.** Direct-to-member targeting belongs in `discovery.js`. Cron/JSON/wait caps belong in aspirational `autoTrim.js` (TABLED). The first-pass namespace bar is output only. Auto-trim coupling stays tabled with that script. `resolveOptions` overlays `autoCompact-options.jsonc` then `autoCompactOptions`. The eval name stays until the alias transition.
 
 **Shipped**
 
@@ -359,7 +361,7 @@ Orthogonal to `filter.db` / `filter.collection` regexes. “System” means coll
 
 #### Output formats
 
-- **`json` (shipped contract, live 1.2.7).** `output.format: json` prints a **versioned object** (`ok`, `name`, `version`, `catalog`, `topology`, `totals`, `databases[]`, `namespaces[]`, `warnings[]`) — same payload `main()` returns for load() / module callers. `catalog` is `{ builder, fallback }` (`legacy` | `listCatalog` | `listClusterCatalog`). `topology` is `kind`, `setName`, `shardIds`, additive `configSetName`, `nodes[]` (identity plus per-node `stats` totals, additive `configsvr`; `databases` on remotes when replica/sharded is `expanded`), `errors[]`. Consumers: `autoTrim.js` (rank reclaimable), `discovery.js` (per-node job payloads), later `autoCompact` / `compact` / `onlineDefrag` targeting. Ranked flat list *and* hierarchical rollup (db → collection → index); namespace rows are `{ ns, kind, dataSize, storageSize, freeStorageSize, objects, compaction, … }`. Keep `n/a` free-space as `null`, not `0` (Atlas M0/Flex). Additive `totals.totalSize` is collection `storageSize` plus `totalIndexSize` (the dbPath **Total** line). Additive `fsUsedSize` / `fsTotalSize` / `fsFreeSize` are the mongod volume from `db.stats()` (same on every database; omitted on Atlas shared-tier and on a mongos `raw` aggregate). `topology.consumption` sums mongod dbPaths when two or more members have stats (skip the mongos router; include CSRS). When db/dbPath totals come from collection WT instead of `db.stats()`, include `freeStorageSizeSource` (`'dbStats'|'collStatsRollup'|'unknown'`) and `freeStorageComplete` (and the index equivalents); incomplete collStats free is a lower bound — auto-trim must not use it as `G()` mass. Dedicated `$stats` sizes stay on the DB/dbPath rows even when `catalogCoverageComplete` is false. Peel the contract to stable keys; do not leak printer-only fields.
+- **`json` (shipped contract, live 1.2.7).** `output.format: json` prints a **versioned object** (`ok`, `name`, `version`, `catalog`, `topology`, `totals`, `databases[]`, `namespaces[]`, `warnings[]`) — same payload `main()` returns for load() / module callers. `catalog` is `{ builder, fallback }` (`legacy` | `listCatalog` | `listClusterCatalog`). `topology` is `kind`, `setName`, `shardIds`, additive `configSetName`, `nodes[]` (identity plus per-node `stats` totals, additive `configsvr`; `databases` on remotes when replica/sharded is `expanded`), `errors[]`. Consumers: `discovery.js` (per-node job payloads), later `autoCompact` / `compact` / `onlineDefrag` targeting. Aspirational `autoTrim.js` (rank reclaimable) is TABLED. Ranked flat list *and* hierarchical rollup (db → collection → index); namespace rows are `{ ns, kind, dataSize, storageSize, freeStorageSize, objects, compaction, … }`. Keep `n/a` free-space as `null`, not `0` (Atlas M0/Flex). Additive `totals.totalSize` is collection `storageSize` plus `totalIndexSize` (the dbPath **Total** line). Additive `fsUsedSize` / `fsTotalSize` / `fsFreeSize` are the mongod volume from `db.stats()` (same on every database; omitted on Atlas shared-tier and on a mongos `raw` aggregate). `topology.consumption` sums mongod dbPaths when two or more members have stats (skip the mongos router; include CSRS). When db/dbPath totals come from collection WT instead of `db.stats()`, include `freeStorageSizeSource` (`'dbStats'|'collStatsRollup'|'unknown'`) and `freeStorageComplete` (and the index equivalents); incomplete collStats free is a lower bound — auto-trim must not use it as `G()` mass. Dedicated `$stats` sizes stay on the DB/dbPath rows even when `catalogCoverageComplete` is false. Peel the contract to stable keys; do not leak printer-only fields.
 - **`html`.** **Shipped 0.23.0.** `htmlOut` embeds the JSON contract in a self-contained page (click-to-sort tables). Size columns sort by byte magnitude (IEC units on the cell, `data-unit=bytes`); **Free / reuse** sorts by free bytes. Verbosity / `topology.depth` expanded / `limit.*` top-N filter that payload in the browser. Colour is the inline stylesheet (not configurable; later a pluggable CSS). Redirect stdout to a `.html` file. Aspirational live refresh still waits.
 - **Aspirational — live HTML.** HTML page calls script-side / local API hooks for refresh (re-snapshot without a full page reload). Depends on a durable run mode or companion listener; do not block the static JSON→HTML path on it.
 - **0.25.0 printer projection:** `limit.*` (`n` = hot top-N after verbosity; metric floors AND, 0 = off). Rank by the first non-zero `sort` key, else reclaimable bytes then compaction. JSON/module stay the full contract. `sort.compaction` / `sort.reuse` / `sort.idxFreeStorageSize` and format aliases (`tabular` / `table`) are shipped. `output.verbosity` (`full` / `summary` / `summaryIdx` / `compactOnly`) is the tabular printer as of 0.22.0 and the HTML initial view as of 0.23.0. Piped tabular colour is mdblib ANSI strip; there is no `output.colour`.
@@ -403,15 +405,15 @@ Pool size is an option (default conservative on mongos). The cap is cluster-wide
 
 #### Hot summary
 
-**Shipped 0.25.0** as a printer projection (`limit.n`), not a new verbosity. Tabular / nsTable / HTML initial view: verbosity filter, then `limit.*` metric floors (AND, 0 = off), then if `n` > 0 rank and slice. Rank is the first non-zero `sort` key for that section, else reclaimable bytes descending then compaction (`resync` > `rebuild` > `compact` > `wait`). Summary `n` is top-N databases; otherwise `n` is a global collection/namespace cap (per node when `topology.depth` is expanded). Indexes follow verbosity + floors, not `n`. Views skip when any limit is active. `compactOnly` stacks. JSON/module stay the full gather contract; dbPath/DB subtotals stay gather totals. Auto-trim consumes that JSON list.
+**Shipped 0.25.0** as a printer projection (`limit.n`), not a new verbosity. Tabular / nsTable / HTML initial view: verbosity filter, then `limit.*` metric floors (AND, 0 = off), then if `n` > 0 rank and slice. Rank is the first non-zero `sort` key for that section, else reclaimable bytes descending then compaction (`resync` > `rebuild` > `compact` > `wait`). Summary `n` is top-N databases; otherwise `n` is a global collection/namespace cap (per node when `topology.depth` is expanded). Indexes follow verbosity + floors, not `n`. Views skip when any limit is active. `compactOnly` stacks. JSON/module stay the full gather contract; dbPath/DB subtotals stay gather totals. Aspirational `autoTrim.js` would consume that JSON list.
 
 ### `compact.js` / `onlineDefrag.js`
 
-Per-namespace `compact` and update-based defrag. Not auto-trim. Auto-trim’s **opt-in oplog** path is 8.0+ `compact` + `freeSpaceTargetMB` on `local.oplog.rs`, not this script’s entropy loop.
+Per-namespace `compact` and update-based defrag. Not auto-trim. Aspirational `autoTrim.js` **opt-in oplog** path is 8.0+ `compact` + `freeSpaceTargetMB` on `local.oplog.rs`, not this script’s entropy loop.
 
 **`compact.js`:** not in live `src/` (archive **v0.2.15** only). Do not restore it without a mongosh-line rewrite. Do not restore `const … reportLog`. Entropy-loop compact is not auto-trim.
 
-**`onlineDefrag.js` live: v1.8.0** (mdblib). **Archive: v0.1.4.** `--eval var` for `dbName` / `collName` / `defragOptions`. Do not top-level-await. This IIFE stays one namespace. Auto-trim consumes dbstats JSON; do not `load()` dbstats here. Header tags this file as requiring this roadmap.
+**`onlineDefrag.js` live: v1.8.0** (mdblib). **Archive: v0.1.4.** `--eval var` for `dbName` / `collName` / `defragOptions`. Do not top-level-await. This IIFE stays one namespace. Aspirational `autoTrim.js` would consume dbstats JSON; do not `load()` dbstats here. Header tags this file as requiring this roadmap.
 
 **Shipped** on the live mongosh line (archive freeze stays v0.1.4): loads mdblib; `$collStats` is awaited; packed-temp WT is one shell `aggregate().toArray()[0]`; no `storageStats()` helper and no `withTransaction` (`startTransaction` is the writer). The loader banner prints only when `process.argv` names this file (`isOnlineDefragCliFile`). Do not read `mongo._uri`. **Page-fill autotune:** omit `pageFillRatio` and `autotunePageFillRatio` sets it from the packed sample’s settled `$collStats` (TFR × avg / C / leaf, clamped 0.5–0.95); WT too-small-to-compress pages (>5%) lower it further; set the knob to pin; 0.9 is only the tiny-sample fallback. **Double rewrite:** default `naturalReplay` parks a generation’s `_id`s (`freezeWindow`), rewrites, waits for a checkpoint, then rewrites the same batch (`maybeReplay`, `replay: 'onExtend'|'always'`). Reclaim is `$natural:-1` EOF-extend + replay so WT can shorten the file when the boundary page moves (`reuseFloor` 0.2 stops reclaim). Dirty path pauses while cache `bytes allocated for updates` ≥ `updatesSoft` (0.07); `updatesHard` (0.08) lowers that floor. Packing-induced reusable **up** in a **fixed** `storageSize` is compact-ready (`skip replay`); `storageSize` **up** is an extend (replay). This script’s job is **page occupancy**; `compact` / `autoCompact` then move allocated pages. Atlas M0/Flex [deny `compact`](https://www.mongodb.com/docs/atlas/unsupported-commands/); reclaim tail is the trim path there. **1.8.0 AIMD:** `dirtyBudgetRatio` (start from `dirtyBudgetRatio` or `generationRatio`, default 0.2) is the generation cap as a fraction of reusable. Settled (post-checkpoint) `storageSize` **up** halves the ratio (floor 0.05); no-extend settled stats add 0.02 (cap 1). The cover loop stops when `G` (reusable/storageSize) ≤ `reuseFloor` or density plateaus (|ΔG| < 0.005 for two settled cycles). Reclaim EOF-extend does not AIMD. Cache `updatesSoft` / `updatesHard` pause is unchanged.
 
@@ -425,9 +427,9 @@ Later (not this IIFE): point `compact` / `_id` rebuild at a single dbstats “co
 
 **Apply (shell):** parent URIs stay `db.getMongo().getURI()` (already; do not switch to `mongo._uri`). Do not send awaitable `hello` (`maxAwaitTimeMS` / `topologyVersion`). A per-host job is `await load()` of a script whose argv test says it is not the CLI file (`dbstats.js` is the pattern), not a scraped banner.
 
-- Plugable command profiles (auto-trim / autoCompact as a per-member job; **dbstats in module mode** as a measurement profile — JSON contract per host, no interactive table on the wire).
+- Plugable command profiles (autoCompact as a per-member job; **dbstats in module mode** as a measurement profile — JSON contract per host, no interactive table on the wire). An auto-trim profile waits on aspirational `autoTrim.js` (TABLED).
 - Prefer invoking support scripts in **non-interactive / module mode** so fan-out results are structured (`ok`, host, payload, warnings), not ANSI logs to stitch together.
-- **Direct-to-member for compact / per-node dbstats:** replica-set URI without `directConnection=true` lands on the primary; only that process is compacted (not replicated), and mongos-level dbstats misses mongod-local namespaces. Warn when `hello().me` ≠ connected host, or when `isWritablePrimary` and the seed list looks like a set. Pin each member (prefer secondaries first) and run auto-trim / autoCompact / dbstats per host.
+- **Direct-to-member for compact / per-node dbstats:** replica-set URI without `directConnection=true` lands on the primary; only that process is compacted (not replicated), and mongos-level dbstats misses mongod-local namespaces. Warn when `hello().me` ≠ connected host, or when `isWritablePrimary` and the seed list looks like a set. Pin each member (prefer secondaries first) and run autoCompact / dbstats per host.
 - Standalone, load-balanced, arbiters.
 - Execution modes: serial; shards in parallel / serial per shard; limited pool; jitter; timeout cancel. (dbstats’ internal stats **task pool** is separate — discovery owns cross-host fan-out.)
 - Target primary vs secondaries only (auto-trim wants the latter by default).
@@ -439,9 +441,9 @@ Later (not this IIFE): point `compact` / `_id` rebuild at a single dbstats “co
 
 **Shipped** on the live mongosh line (archive freeze stays v0.2.13): per-shard WT fold (collection-owning or all shard primaries; child `mongodb://` matches niceDeleteMany, no `load()`); MongoDB 8 execution-control on the snapshot + EQ (`executionControlDeprioritizationGate`, `usesThroughputProbing`, normal and low-priority `queues.execution.{read,write}.queueLength`, interval wait from `totalTimeQueuedMicros`); `bytes_dirty_intl` / `bytes_dirty_leaf` mapped from `tracked dirty internal/leaf page bytes in the cache`. Monitor-only — niceDeleteMany AIMD does not trip on execution-control. `lowPriorityAdmissionBypassThreshold` is dropped.
 
-Remaining mongosh-line work (do not block the archive):
+Remaining mongosh-line work (do not block the archive): none.
 
-- Auto-trim admission: backup cursor, repl-lag settle, WT dirty/updates (already has `backupCursorOpen`). Auto-trim **inlines** that sample; do not `load()` this file. Held: auto-trim as a vitals *consumer* of this IIFE.
+Held: auto-trim as a vitals *consumer* of this IIFE. Aspirational `autoTrim.js` (TABLED) inlines admission (backup cursor, repl-lag settle, WT dirty/updates); do not `load()` this file.
 
 ### `niceDeleteMany.js`
 
