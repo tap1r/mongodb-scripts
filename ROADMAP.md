@@ -692,7 +692,7 @@ Remaining mongosh-line work (do not block the archive): none.
 
 ## See also
 
-- [DB Storage tools](DB%20Storage%20tools.md) — dbstats report and compaction column
+- [DB Storage tools](DB%20Storage%20tools.md) — mongosh-only dbstats report, compaction helper, autoCompact / onlineDefrag / indexCacheUtil
 - [mongosh scripting guide](mongosh-scripting-guide.md)
 - [`autoCompact` command](https://www.mongodb.com/docs/manual/reference/command/autocompact/)
 - [`compact` command](https://www.mongodb.com/docs/manual/reference/command/compact/)

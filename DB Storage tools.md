@@ -1,132 +1,82 @@
 # DB storage tools
 
+Live `src/` is **mongosh-only**. The frozen dual-shell (`mongo` / mongosh) snapshot is [`legacy/mongo-shell/`](legacy/mongo-shell/README.md) (dbstats v0.12.19 / mdblib v0.15.10).
+
+These scripts evaluate WiredTiger disk use (including reclaimable free space) for maintenance and capacity planning. [dbstats.js](src/dbstats.js) is the report; [autoCompact.js](src/autoCompact.js), [onlineDefrag.js](src/onlineDefrag.js), and [indexCacheUtil.js](src/indexCacheUtil.js) act on or inspect the same storage.
+
 ## Storage engine usage reporting
 
-This script is primarily designed to evaluate disk utilisation (including "_fragmentation_") for DB maintainance and for capacity planning tasks.
-
-The [dbstats.js](src/dbstats.js) script (and [mdblib.js](src/mdblib.js) dependency) provides a basic tabular report of DB internal storage and some derived metrics:
+[dbstats.js](src/dbstats.js) (with [mdblib.js](src/mdblib.js)) reports internal storage and derived metrics:
 
 * Data size (uncompressed)
 * Storage size (on disk)
 * Document count
-* Free blocks (reclaimable/reusable space)
+* Free blocks / reuse (WiredTiger reclaimable bytes)
 * Compression statistics
 * Index storage and reusable space
-* Sharded namespace/index statistics
-* Compaction heuristics
+* Sharded namespace and index statistics
+* Compaction helper recommendations (`compact`, `rebuild`, `wait`, `resync`)
+
+Live versions: dbstats **1.2.7**, mdblib **1.1.1**.
 
 ### Installing _dbstats.js_
 
-Retrieve fresh versions of both the _dbstats.js_ and _mdblib.js_ scripts:
+Retrieve fresh copies of both scripts:
 
 ```bash
 curl --remote-name-all -fsSL https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/src/{dbstats.js,mdblib.js}
 ```
 
+Place `mdblib.js` on `cwd`, `$MDBLIB`, or another mongosh `load()` search path.
+
 ### Using _dbstats.js_
 
-Sample syntax to run against either of the _mongo_ or _mongosh_ shells:
+```bash
+mongosh [connection options] --quiet [--eval 'var options = {...};'] -f dbstats.js
+```
+
+`--file` / `-f` prints the interactive report. `load('dbstats.js')` gathers quietly and returns the JSON contract — `await` that Promise. Do not declare `options` or `optionsFile` inside the script; `--eval` must use `var` (not `let`/`const`).
+
+Options overlay is `dbstats-options.jsonc` (cwd, `--file` dir, `$MDBLIB`, `~/.mongodb`) then `--eval var options`. A missing default file is silent. Explicit path: `var optionsFile = "PATH"`.
 
 ```bash
-[mongo|mongosh] [connection options] --quiet dbstats.js
+mongosh --quiet --eval 'var options = { filter: { db: "^database$" } };' -f dbstats.js
+mongosh --quiet --eval 'var options = { output: { format: "json" } };' -f dbstats.js
+mongosh --quiet --eval 'var options = { output: { format: "html" } };' -f dbstats.js > dbstats.html
+open dbstats.html
+mongosh --quiet --eval 'var options = { output: { verbosity: "compactOnly" } };' -f dbstats.js
+mongosh --quiet --eval 'var optionsFile = "/path/to/dbstats-options.jsonc"' -f dbstats.js
 ```
+
+Further filter, sort, catalog, topology, and profile examples live in the [dbstats.js](src/dbstats.js) header.
 
 ### Prerequisites
 
-1. Prefers `mongosh` v2.x+, or the legacy `mongo` shell v5.0+ (was designed for but not tested on the legacy `mongo` v4.2+ and `mongosh` v1.x+ shells)
-2. Add [mdblib.js](src/mdblib.js) dependency to the `cwd` or `$MDBLIB` path
-3. Ensure _authorized_ users have the following minimum required roles `readAnyDatabase@admin` and `clusterMonitor@admin` (less privleges means fewer or no statistics visibility)
+1. **mongosh** 1.10 / 2.10+. **mongod** 4.4+.
+2. [mdblib.js](src/mdblib.js) on `cwd` or `$MDBLIB`.
+3. Minimum roles: `clusterMonitor@admin` and `readAnyDatabase@admin`. Fewer privileges means fewer (or no) statistics.
 
    In the Atlas UI this translates as:
+
    * Built-in Role: _Only read any database_
    * Specific Privileges: _clusterMonitor_
- 
-   Or:
-   * Custom role:
-     * Global Actions and Roles 
-       - Built-In Roles
-         - _clusterMonitor_
-         - _readAnyDatabase_
+
+   Or a custom role with Global Actions and Roles → Built-In Roles → _clusterMonitor_ and _readAnyDatabase_.
+
+4. **MongoDB 8+ sharded:** the walk grants shard-local `directShardOperations` for user-database `dbStats` / `$collStats`, then revokes it. A mongos grant does not update the shard-local user. `clusterAdmin` on the connecting user is the usual way that lease works.
+5. **Atlas M0/Flex:** one connecting node (compact / autoCompact cannot run). WiredTiger free-space is often `N/A`; db/dbPath totals may roll up collection `$collStats` as a lower bound.
+
+### Report formats and knobs
+
+* **format:** `tabular` (default; `table` is an alias), `nsTable`, `json`, `html`. JSON is the versioned contract `main()` returns (`ok`, `name`, `version`, `catalog`, `topology`, `totals`, `databases[]`, `namespaces[]`, `warnings[]`). `n/a` free-space stays `null`, not `0`.
+* **verbosity** (tabular / nsTable / HTML initial view): `full` (collections + indexes + views), `summary` (database rollup), `summaryIdx` (collections + indexes), `compactOnly` (rows with a compact/rebuild/wait/resync action). JSON stays the full payload.
+* **topology.depth** default `expanded` (catalog + `$collStats` per member, one table per node). `summary` is `$stats` on remotes plus the connecting catalog and a member footer. `topology.discover` default true; shared-tier / serverless stay one node.
+* **Sharded:** CSRS members are listed. When they are, the mongos row is `cluster data (no local/metadata)` (no `config` / `local` from the router). **Cluster consumption (total)** sums mongod dbPaths (WiredTiger collection and index files). Logs, binaries, journals, and FTDC add further disk use.
+* **Compaction** appears on collection, index, and namespace rows and on Database / dbPath rollups. Cluster consumption total blanks those action cells. `compactOnly` still filters which rows print.
 
 ### Sample output
 
 ```text
-═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-Database: admin                               Data size     Compression   Size on disk    Free blocks / reuse   Object count   Compaction
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Collections: 3
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> system.keys (unauthorized)                       0 B            N/A             0 B              N/A / N/A              0         N/A 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> system.users                                   687 B     0.03:1 snpy         36 KiB         16 KiB / 44.4%              1        ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» _id_                                                                       36 KiB         16 KiB / 44.4%                       ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» user_1_db_1                                                                36 KiB         16 KiB / 44.4%                       ———— 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> system.version                                  59 B        0:1 snpy         20 KiB            0 B /  0.0%              1        ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» _id_                                                                       20 KiB            0 B /  0.0%                       ———— 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Views: 0
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Namespaces subtotal: 3                            916 B          0.01:1         92 KiB         32 KiB / 34.8%              4        ———— 
-Indexes subtotal: 4                                                            128 KiB         48 KiB / 37.5%                       ———— 
-═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-
-═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-Database: config                              Data size     Compression   Size on disk    Free blocks / reuse   Object count   Compaction
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Collections: 9
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> analyzeShardKeySplitPoints                       0 B        0:1 snpy          4 KiB            0 B /  0.0%              0        ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» _id_                                                                        4 KiB            0 B /  0.0%                       ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» AnalyzeShardKeySplitPointsTTLIndex                                          4 KiB            0 B /  0.0%                       ———— 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> image_collection                                 0 B        0:1 snpy          4 KiB            0 B /  0.0%              0        ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» _id_                                                                        4 KiB            0 B /  0.0%                       ———— 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> queryShapeRepresentativeQueries                  0 B        0:1 snpy          4 KiB            0 B /  0.0%              0        ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» _id_                                                                        4 KiB            0 B /  0.0%                       ———— 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> sampledQueries                                   0 B        0:1 snpy          4 KiB            0 B /  0.0%              0        ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» _id_                                                                        4 KiB            0 B /  0.0%                       ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» SampledQueriesTTLIndex                                                      4 KiB            0 B /  0.0%                       ———— 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> sampledQueriesDiff                               0 B        0:1 snpy          4 KiB            0 B /  0.0%              0        ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» _id_                                                                        4 KiB            0 B /  0.0%                       ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» SampledQueriesDiffTTLIndex                                                  4 KiB            0 B /  0.0%                       ———— 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> system.indexBuilds (unauthorized)                0 B            N/A             0 B              N/A / N/A              0         N/A 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> system.preimages (unauthorized)                  0 B            N/A             0 B              N/A / N/A              0         N/A 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> system.sessions                            13.18 KiB     0.66:1 snpy         36 KiB         16 KiB / 44.4%            103        ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» _id_                                                                       44 KiB         20 KiB / 45.5%                       ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» lsidTTLIndex                                                               36 KiB         16 KiB / 44.4%                       ———— 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> transactions                                1.13 KiB     0.06:1 snpy         32 KiB         12 KiB / 37.5%              7        ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» _id_                                                                       32 KiB         12 KiB / 37.5%                       ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» parent_lsid                                                                 4 KiB            0 B /  0.0%                       ———— 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Views: 0
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Namespaces subtotal: 9                        14.31 KiB           0.2:1        116 KiB         44 KiB / 37.9%            110        ———— 
-Indexes subtotal: 13                                                           172 KiB         64 KiB / 37.2%                       ———— 
-═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-
 ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 Database: database                            Data size     Compression   Size on disk    Free blocks / reuse   Object count   Compaction
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -138,59 +88,10 @@ Collections: 1
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   ╰» array_1                                                                  9.23 MiB       7.48 MiB / 81.0%                     rebuild
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» date_-1                                                                  3.36 MiB       2.57 MiB / 76.5%                     rebuild
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» language_1_schema_1                                                      1.62 MiB        832 KiB / 50.2%                       ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» language_hashed                                                          2.59 MiB       1.66 MiB / 64.4%                     rebuild
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» location_2dsphere                                                         508 KiB        300 KiB / 59.1%                       ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» location.coordinates_2d                                                   464 KiB        276 KiB / 59.5%                       ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   ╰» object.$**_1                                                            22.11 MiB      14.07 MiB / 63.6%                     rebuild
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» quote.txt_text                                                          29.83 MiB       15.8 MiB / 53.0%                     rebuild
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» random_1                                                                 3.69 MiB       2.71 MiB / 73.6%                     rebuild
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» timestamp_-1                                                             4.01 MiB       2.94 MiB / 73.3%                     rebuild
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Views: 0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Namespaces subtotal: 1                        47.13 MiB          2.02:1      52.65 MiB      29.38 MiB / 55.8%          58616      compact
 Indexes subtotal: 11                                                         83.89 MiB       53.5 MiB / 63.8%                     rebuild
-═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-
-═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-Database: local                               Data size     Compression   Size on disk    Free blocks / reuse   Object count   Compaction
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Collections: 8
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> oplog.rs                                   84.27 MiB     2.36:1 snpy      36.48 MiB        756 KiB /  2.0%           4537        ———— 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> replset.election (unauthorized)                  0 B            N/A             0 B              N/A / N/A              0         N/A 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> replset.initialSyncId (unauthorized)             0 B            N/A             0 B              N/A / N/A              0         N/A 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> replset.minvalid (unauthorized)                  0 B            N/A             0 B              N/A / N/A              0         N/A 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> replset.oplogTruncateAfterPoint (una~            0 B            N/A             0 B              N/A / N/A              0         N/A 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> startup_log                                 4.33 KiB     0.22:1 snpy         20 KiB            0 B /  0.0%              1        ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» _id_                                                                       20 KiB            0 B /  0.0%                       ———— 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> system.replset                                 839 B     0.04:1 snpy         36 KiB         16 KiB / 44.4%              1        ———— 
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» _id_                                                                       20 KiB            0 B /  0.0%                       ———— 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> system.rollback.id (unauthorized)                0 B            N/A             0 B              N/A / N/A              0         N/A 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Views: 0
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Namespaces subtotal: 8                        84.28 MiB          2.35:1      36.66 MiB        804 KiB /  2.1%           4544        ———— 
-Indexes subtotal: 7                                                            140 KiB            0 B /  0.0%                       ———— 
 ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -212,7 +113,6 @@ Filesystem volumes (1 unique): 641.85 GiB used / 926.3 GiB capacity (69.3% used)
 [NOTE] Listed collections may omit filtered or unauthorized namespaces; database and dbPath totals are db.stats().
 ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Compaction helper recommendations
   compact   Collection or _id_ index: run compact() when reusable bytes exceed 20% of the collection (50% for _id_) and WiredTiger's reclaim floor (1 MiB on 8.0+).
@@ -222,3 +122,15 @@ Compaction helper recommendations
   ————      Below those thresholds, or not a compactable object. N/A means WiredTiger free-space is unknown.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
+
+`*` on a connecting node marks the session that produced the summary. `*` on a free-space cell is a lower bound (collection `$collStats` rollup when db-level reusable bytes are incomplete).
+
+## Other storage scripts
+
+* [autoCompact.js](src/autoCompact.js) **1.3.0** — enable, monitor, or disable the MongoDB 8.0+ `autoCompact` thread on a **mongod** (not mongos). Atlas M0/Flex fails fast. Direct-host connection. Options: `autoCompact-options.jsonc` then `var autoCompactOptions`.
+* [onlineDefrag.js](src/onlineDefrag.js) **1.8.0** — mongosh-only online defrag (first-fit packing; strategies `naturalReplay`, `naturalWindow`, `quantile`, `shapeQuantile`). Needs mdblib. `--eval` uses `var` for `dbName`, `collName`, `defragOptions`.
+* [indexCacheUtil.js](src/indexCacheUtil.js) **1.2.0** — WiredTiger index cache residency on the connected mongod. Does not load mdblib. A mongos session has no WT cache.
+
+`compact.js` is archive-only (`legacy/mongo-shell/`).
+
+See [ROADMAP.md](ROADMAP.md), the [mongosh scripting guide](mongosh-scripting-guide.md), and MongoDB’s [`compact`](https://www.mongodb.com/docs/manual/reference/command/compact/) / [`autoCompact`](https://www.mongodb.com/docs/manual/reference/command/autocompact/) docs. Atlas M0/Flex deny those commands: [unsupported commands](https://www.mongodb.com/docs/atlas/unsupported-commands/).
