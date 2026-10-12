@@ -1,7 +1,5 @@
 # DB storage tools
 
-Live `src/` is **mongosh-only**. The frozen dual-shell (`mongo` / mongosh) snapshot is [`legacy/mongo-shell/`](legacy/mongo-shell/README.md) (dbstats v0.12.19 / mdblib v0.15.10).
-
 These scripts evaluate WiredTiger disk use (including reclaimable free space) for maintenance and capacity planning. [dbstats.js](src/dbstats.js) is the report; [autoCompact.js](src/autoCompact.js), [onlineDefrag.js](src/onlineDefrag.js), and [indexCacheUtil.js](src/indexCacheUtil.js) act on or inspect the same storage.
 
 ## Storage engine usage reporting
