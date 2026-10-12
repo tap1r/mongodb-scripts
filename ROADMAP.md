@@ -90,7 +90,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `schema-sampler.js` | 0.2.16 | **0.4.0** |
 | `sleepy.js` | 0.2.6 | **0.2.7** |
 | `docSizes.js` | 0.1.34 | **0.1.35** |
-| `niceDeleteMany.js` | 0.4.11 | **1.0.0** |
+| `niceDeleteMany.js` | 0.4.11 | **1.0.1** |
 | `congestionMonitor.js` | 0.2.13 | **0.4.0** |
 | `onlineDefrag.js` | 0.1.4 | **1.8.0** |
 | `indexCacheUtil.js` | 0.1.5 | **1.2.0** |
@@ -445,9 +445,7 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `niceDeleteMany.js`
 
-**Live: v1.0.0.** **Archive: v0.4.11.** `--eval` must use `var`. Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`. Header tags this file as requiring this roadmap. Shared AIMD (`maxInFlight` MD/AI) for WT and paceMaker; WT FSM vs pace delay stay separate gates. `hasUserHint` / `hasUserCollation` collapsed to `hasNonEmptyDoc`. Policy A is `POLICY_A_STEPS` (C1 cannotSpill scan, C2–C3 user hint, C4/C7 unhinted planner then Policy B, C6 `_id` scan). Binary major ≥ 9 fails closed (`assertServerBelow9`); unknown `db.version()` also refuses.
-
-**TABLED:** MongoDB 9.0 null-equality on dotted paths that traverse arrays (`{ "a.b": null }`, `$eq` / `$ne` / `$in` / `$nin` / `$gte` / `$lte`, `$lookup`). Until testing and filter/curation refactor land, this script refuses MongoDB 9+. Mixed-version shards behind an 8.x mongos wait on that same work. Do not re-propose as the next leftover.
+**Live: v1.0.1.** **Archive: v0.4.11.** `--eval` must use `var`. Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`. Header tags this file as requiring this roadmap. Shared AIMD (`maxInFlight` MD/AI) for WT and paceMaker; WT FSM vs pace delay stay separate gates. `hasUserHint` / `hasUserCollation` collapsed to `hasNonEmptyDoc`. Policy A is `POLICY_A_STEPS` (C1 cannotSpill scan, C2–C3 user hint, C4/C7 unhinted planner then Policy B, C6 `_id` scan). MongoDB 9.0 supported as of 1.0.1: the script walk/delete path is not dotted-path-null-sensitive; user filters follow the server matcher (9.0.2 factory default of `internalQueryLegacyDottedPathNullSemantics` is pre-9). Do not re-propose a filter/curation refactor for that matcher.
 
 **TABLED:** MongoDB 9.0 optimisation of this script, including admission-controller use of [backpressure-aware driver](https://www.mongodb.com/docs/atlas/overload-errors/?interface=driver&language=python) features for Atlas Load Shedding / Intelligent Workload Management. Detect `SystemOverloadedError` (safe retry only with `RetryableError` / `NoWritesPerformed`); exponential backoff with jitter; cap retries (docs: at most two for latency-sensitive work); persistent overload is shed/pace, not a blind retry storm. Needs a mongosh that ships Node.js driver ≥ 7.6. Application still owns how long to retry and when to abandon. AIMD stays off execution-control metrics. Do not re-propose as the next leftover.
 
