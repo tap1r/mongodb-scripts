@@ -73,7 +73,7 @@ Commands issued through [`db.adminCommand()`](https://www.mongodb.com/docs/manua
 
 `db.hello()` and `db.adminCommand({ hello: 1 })` are a one-shot topology probe. Do **not** pass `topologyVersion` or `maxAwaitTimeMS`. That is [awaitable hello](https://www.mongodb.com/docs/manual/reference/command/hello/#awaitable-hello): the command blocks until the topology changes or `heartbeatFrequencyMS` (often 10 seconds) on a quiet node. `mdblib.js` `hello()` never sends those fields.
 
-Send `hello`. Do not wrap `isMaster`. The replies differ (`isWritablePrimary` vs `ismaster`) — [SERVER-49989](https://jira.mongodb.org/browse/SERVER-49989). `hello` exists on mongod 4.2+ and this repo’s server floor is 4.4, so there is no `isMaster` fallback. `ctxDemo.js` still falls back; do not copy that.
+Send `hello`. Do not wrap `isMaster`. The replies differ (`isWritablePrimary` vs `ismaster`) — [SERVER-49989](https://jira.mongodb.org/browse/SERVER-49989). `hello` exists on mongod 4.2+ and this repo’s server floor is 4.4, so there is no `isMaster` fallback. Live `ctxDemo.js` calls `hello()` only. The archive sketch still falls back; do not copy that.
 
 The parent session string is `db.getMongo().getURI()`. `mongo._uri` is private and can lag the session. Shard child URIs are rebuilt from `getURI()` — see [Child `mongodb://` URIs](#child-mongodb-uris-to-shard-primaries).
 

@@ -674,9 +674,9 @@ Remaining mongosh-line work (do not block the archive): none.
 
 ### `ctxDemo.js`
 
-**Legacy archive line: v0.1.0** (mongosh-only). `mdblib.for(db)` sketch; stand-in library, no `load('mdblib.js')`. Freeze as-is.
+**Live sketch: v0.1.0** (version string unchanged until a bump is requested). **Archive: v0.1.0** at `legacy/mongo-shell/src/ctxDemo.js` — that copy is the frozen sketch and still falls back to `isMaster()`. Do not edit the archive.
 
-**Apply (shell):** the stand-in `hello` falls back to `isMaster()`. Leave that on this frozen line. If the sketch is revived, call `hello()` only (SERVER-49989; replies differ). Do not copy the fallback into new scripts. See the scripting guide. Header tags this file as requiring this roadmap.
+The live file continues the sketch on the mongosh line. Stand-in library, no `load('mdblib.js')`. `hello()` only (SERVER-49989; replies differ). It runs the lexical-`db` trap, `mdblib.for(db)`, a second `connect()` client, `Promise.all` facades, a module-level `let` hello cache against a `WeakMap` keyed by `getMongo()`, and a deterministic global-`db` swap race. A Mongo-keyed cache is shared by sibling databases; `for()` is what keeps `dbName`. Do not land `for(db)` in `mdblib.js` from this sketch. See the scripting guide. Header tags this file as requiring this roadmap.
 
 ### `modifiedCountDocumentsByKey.js`
 

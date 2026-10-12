@@ -7,13 +7,15 @@
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *  Roadmap: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/ROADMAP.md" (required context)
     *
-    *  Legacy archive line: v0.1.0 is the snapshot for this script. mongosh-only
-    *  mdblib.for(db) sketch; still the demarked version for the whole-tree
-    *  freeze. See ROADMAP.md → Legacy mongo shell retirement.
+    *  Legacy archive line: v0.1.0 in legacy/mongo-shell is the frozen sketch
+    *  (it still falls back to isMaster). This live file continues that sketch
+    *  on the mongosh line. The version string stays 0.1.0 until a bump is
+    *  requested. See ROADMAP.md → ctxDemo.js.
     *
     *  Notes:
     *  - mongosh only
     *  - does not load mdblib.js; a tiny stand-in library is defined in this file
+    *  - hello() only. No isMaster fallback (SERVER-49989; replies differ)
     *  - uses getSiblingDB() handles (same Mongo client, different Database)
     *    and connect() (a second client) so you can see which object helpers talk to
     *
@@ -51,7 +53,7 @@
       return {
          db,
          identity: () => identityFrom(db),
-         hello: () => (typeof db.hello === 'function') ? db.hello() : db.isMaster(),
+         hello: () => db.hello(),
          name: () => db.getName()
       };
    }
@@ -64,7 +66,7 @@
    function describe(label, handle) {
       let hello = {};
       try {
-         hello = (typeof handle.hello === 'function') ? handle.hello() : handle.isMaster();
+         hello = handle.hello();
       } catch(e) {
          hello = { "ok": 0, "error": e.errmsg ?? e.message ?? String(e) };
       }
@@ -138,7 +140,7 @@
    try {
       node = connect(parentUri);
    } catch(e) {
-      console.log(`connect(${parentUri}) failed: ${e.errmsg ?? e.message ?? String(e)}`);
+      console.log(`connect(parent URI) failed: ${e.errmsg ?? e.message ?? String(e)}`);
       node = null;
    }
    if (node) {
@@ -156,6 +158,122 @@
    show('Promise.all of mdblib.for(admin|config).identity()', results);
    console.log('\nEach result keeps the dbName from its own handle.');
    console.log('That only works because `db` was captured by for(); a global cache would collapse them.');
+
+   banner('6. Hello cache: one module-level let vs WeakMap keyed by getMongo()');
+   console.log(`
+   A Mongo-keyed cache is shared by sibling databases on that client.
+   It must not be shared with a second connect() client.
+   The Database name still comes from the handle passed in, not from the cache.
+   `);
+
+   let moduleHello = null;
+   function helloViaModuleLet(handle) {
+      /*
+       *  One cache for the whole load(). The first caller stamps it.
+       *  A later client reuses that stamp. mdblib withChildSession swaps
+       *  this kind of cache serially; it does not key by Mongo client.
+       *  cachedMongoIsHandle is the proof: db names can match across clients.
+       */
+      const mongo = handle.getMongo();
+      const hit = moduleHello !== null;
+      if (!moduleHello) {
+         const doc = handle.hello();
+         moduleHello = {
+            "mongo": mongo,
+            "owner": handle.getName(),
+            "me": doc.me ?? null
+         };
+      }
+      return {
+         "cache": "module-let",
+         "hit": hit,
+         "asked": handle.getName(),
+         "owner": moduleHello.owner,
+         "cachedMongoIsHandle": moduleHello.mongo === mongo,
+         "me": moduleHello.me
+      };
+   }
+
+   const helloByMongo = new WeakMap();
+   function helloViaWeakMap(handle) {
+      const mongo = handle.getMongo();
+      let entry = helloByMongo.get(mongo);
+      const hit = !!entry;
+      if (!entry) {
+         const doc = handle.hello();
+         entry = {
+            "mongo": mongo,
+            "owner": handle.getName(),
+            "me": doc.me ?? null
+         };
+         helloByMongo.set(mongo, entry);
+      }
+      return {
+         "cache": "weakmap",
+         "hit": hit,
+         "asked": handle.getName(),
+         "owner": entry.owner,
+         "cachedMongoIsHandle": entry.mongo === mongo,
+         "me": entry.me,
+         "sameMongoAsParent": mongo === parent.getMongo()
+      };
+   }
+
+   show('module-let filled by parent', helloViaModuleLet(parent));
+   show(
+      'module-let asked for admin — owner stays the parent (same client, so this one is harmless)',
+      helloViaModuleLet(admin)
+   );
+   show('weakmap filled by parent', helloViaWeakMap(parent));
+   show(
+      'weakmap asked for admin — hit, sameMongoAsParent true, owner stays the parent',
+      helloViaWeakMap(admin)
+   );
+   if (node) {
+      show(
+         'module-let asked for the second client — hit, cachedMongoIsHandle false',
+         helloViaModuleLet(node)
+      );
+      show(
+         'weakmap asked for the second client — miss, cachedMongoIsHandle true',
+         helloViaWeakMap(node)
+      );
+   } else {
+      console.log('\nSecond client was not connected, so the cross-client miss is skipped.');
+   }
+   console.log('\nfor() still separates db names. The WeakMap only separates Mongo clients.');
+
+   banner('7. Assigning the global db races; for() does not');
+   console.log(`
+   Both tasks assign global db, then wait until both assignments have happened,
+   then read. The last assignment wins for every reader.
+   Section 5 kept both names because each facade closed over its handle.
+   `);
+   const savedDb = db;
+   try {
+      let arrived = 0;
+      let release;
+      const bothAssigned = new Promise(resolve => { release = resolve; });
+      const raced = await Promise.all([admin, configDb].map(async handle => {
+         db = handle;
+         arrived++;
+         if (arrived === 2) release();
+         await bothAssigned;
+         return {
+            "asked": handle.getName(),
+            "seen": identityFromGlobalDb().dbName
+         };
+      }));
+      show('both tasks read global db after both assignments', raced);
+      console.log('\nExpected: both seen values are "config" (the later assignment).');
+   } finally {
+      db = savedDb;
+   }
+
+   if (node && node.getMongo() !== parent.getMongo()) {
+      try { node.getMongo().close(); }
+      catch(e) { console.log(`close(second client) failed: ${e.errmsg ?? e.message ?? String(e)}`); }
+   }
 
    banner('done');
 })();
