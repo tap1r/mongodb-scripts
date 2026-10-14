@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.7"
+ *  Version: "1.2.8"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -78,9 +78,9 @@
  *     },
  *     output: {
  *        format: <'tabular'|'table'|'nsTable'|'json'|'html'>, // 'table' aliases 'tabular'
- *        concurrency: <int>, // 0 = auto (8 mongod / 4 mongos); global $collStats in-flight cap + $stats / catalog pools
+ *        concurrency: <int>, // 0 = auto (8 mongod / 4 mongos); global $collStats in-flight cap + $stats / catalog pools (fetchDbStats / fetchCollectionInfos)
  *        verbosity: <'full'|'summary'|'summaryIdx'|'compactOnly'> // printer: full = collections+indexes+views; summary = DB rollup; summaryIdx = collections+indexes; compactOnly = compact/rebuild/wait/resync rows
- *        profile: <true|false> // default false; gather phase timings + $collStats histogram (JSON additive `profile`; preGatherMs / sinceScriptMs)
+ *        profile: <true|false> // default false; gather phase timings + $stats/$collStats histograms (JSON additive `profile`; preGatherMs / sinceScriptMs)
  *     },
  *     topology: {
  *        discover: <true|false>, // default true; shared-tier / serverless stay one node (compact/autoCompact cannot run)
@@ -132,7 +132,7 @@
  *    mongosh --quiet --eval 'var options = { topology: { depth: "summary" } };' -f dbstats.js
  *
  *  Gather profiling (tuning; default off). Tabular prints a PROFILE block; json/html
- *  add a `profile` key (phases, $collStats min/p50/p95/max, overlap, slowest NS,
+ *  add a `profile` key (phases, $stats/$collStats min/p50/p95/max, overlap, slowest,
  *  preGatherMs, sinceScriptMs).
  *
  *    mongosh --quiet --eval 'var options = { output: { profile: true } };' -f dbstats.js
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.7" };
+   const __script = { "name": "dbstats.js", "version": "1.2.8" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -255,9 +255,9 @@
       },
       "output": {
          "format": "tabular", // ['tabular'|'table'|'nsTable'|'json'|'html'] ('table' → 'tabular')
-         "concurrency": 0, // 0 = auto (8 mongod / 4 mongos); global $collStats in-flight cap
+         "concurrency": 0, // 0 = auto (8 mongod / 4 mongos); global $collStats in-flight cap + $stats / catalog pools
          "verbosity": "full", // ['full'|'summary'|'summaryIdx'|'compactOnly'] printer; JSON stays the full contract
-         "profile": false // gather phase + $collStats histogram; JSON additive `profile`
+         "profile": false // gather phase + $stats/$collStats histograms; JSON additive `profile`
       },
       "topology": {
          "discover": true, // [true|false]
@@ -407,8 +407,9 @@
    function createGatherProfile(enabled) {
       /*
        *  Wall-clock gather profiler. Off unless output.profile is true.
-       *  collStats overlap is sum(per-NS ms) / collStats-phase wall (mapPool).
-       *  start/end record overlapping phases; phase() is sequential from mark.
+       *  dbStats / collStats overlap is sum(per-item ms) / that phase wall
+       *  (mapPool). start/end record overlapping phases; phase() is sequential
+       *  from mark.
        */
       const t0 = Date.now();
       const scriptStarted = (typeof __dbstatsScriptStarted === 'number')
@@ -416,11 +417,31 @@
          : t0;
       const phases = [];
       const coll = [];
+      const dbs = [];
       const spans = {};
       let mark = t0;
       let scope = 'connecting';
       const pushPhase = (name, ms, extra) => {
          phases.push(Object.assign({ "name": name, "node": scope, "ms": ms }, extra || {}));
+      };
+      const sampleDist = (samples, phaseName) => {
+         const xs = samples.map(s => s.ms).filter(Number.isFinite).sort((a, b) => a - b);
+         const pick = (p) => xs.length
+            ? xs[Math.min(xs.length - 1, Math.max(0, Math.floor(p * (xs.length - 1))))]
+            : null;
+         const phase = [...phases].reverse().find(p => p.name === phaseName);
+         const wall = phase ? phase.ms : 0;
+         const sum = xs.reduce((a, b) => a + b, 0);
+         return {
+            "n": xs.length,
+            "minMs": xs.length ? xs[0] : null,
+            "p50Ms": pick(0.5),
+            "p95Ms": pick(0.95),
+            "maxMs": xs.length ? xs[xs.length - 1] : null,
+            "sumMs": sum,
+            "overlap": (wall > 0 && sum > 0) ? +(sum / wall).toFixed(2) : null,
+            "slowest": samples.slice().sort((a, b) => b.ms - a.ms).slice(0, 15)
+         };
       };
       return {
          "enabled": enabled === true,
@@ -445,19 +466,16 @@
             delete spans[name];
          },
          touch() { mark = Date.now(); },
+         sampleDb(name, durationMs) {
+            if (enabled !== true) return;
+            dbs.push({ "db": name, "ms": durationMs, "node": scope });
+         },
          sampleColl(ns, durationMs) {
             if (enabled !== true) return;
             coll.push({ "ns": ns, "ms": durationMs, "node": scope });
          },
          finalize(extra) {
             if (enabled !== true) return null;
-            const xs = coll.map(s => s.ms).filter(Number.isFinite).sort((a, b) => a - b);
-            const pick = (p) => xs.length
-               ? xs[Math.min(xs.length - 1, Math.max(0, Math.floor(p * (xs.length - 1))))]
-               : null;
-            const collPhase = [...phases].reverse().find(p => p.name === 'collStats');
-            const wall = collPhase ? collPhase.ms : 0;
-            const sum = xs.reduce((a, b) => a + b, 0);
             const now = Date.now();
             return Object.assign({
                "elapsedMs": now - t0,
@@ -466,16 +484,8 @@
                "startedAt": new Date(t0).toISOString(),
                "scriptStartedAt": new Date(scriptStarted).toISOString(),
                phases,
-               "collStats": {
-                  "n": xs.length,
-                  "minMs": xs.length ? xs[0] : null,
-                  "p50Ms": pick(0.5),
-                  "p95Ms": pick(0.95),
-                  "maxMs": xs.length ? xs[xs.length - 1] : null,
-                  "sumMs": sum,
-                  "overlap": (wall > 0 && sum > 0) ? +(sum / wall).toFixed(2) : null,
-                  "slowest": coll.slice().sort((a, b) => b.ms - a.ms).slice(0, 15)
-               }
+               "dbStats": sampleDist(dbs, 'dbStats'),
+               "collStats": sampleDist(coll, 'collStats')
             }, extra || {});
          }
       };
@@ -623,7 +633,13 @@
             `${prefix}[cyan]dbStats[/]  ${i + 1}/${dbTotal}  ${database.name}`,
             { "force": i === 0 || i + 1 === dbTotal }
          );
-         database.applyDbStats(await fetchDbStats(database.name));
+         const t0 = Date.now();
+         try {
+            database.applyDbStats(await fetchDbStats(database.name));
+         } finally {
+            if (profile && typeof profile.sampleDb === 'function')
+               profile.sampleDb(database.name, Date.now() - t0);
+         }
       });
 
       if (depth !== 'expanded') {
@@ -780,11 +796,11 @@
        */
       const systemName = /^(system\.|replset\.)/;
       try {
-         let infos = db.getSiblingDB(database.name).getCollectionInfos(
+         const infos = await fetchCollectionInfos(
+            database.name,
             { "name": systemName },
             { "nameOnly": true, "authorizedCollections": true }
          );
-         infos = await Promise.resolve(infos);
          const extra = (infos || []).filter(
             c => c && c.name && collFilter.test(c.name) && acceptCollName(c)
          );
@@ -805,11 +821,11 @@
 
    async function listDatabaseCatalogLegacy(database, collFilter, acceptCollName) {
       try {
-         let infos = db.getSiblingDB(database.name).getCollectionInfos(
+         const infos = await fetchCollectionInfos(
+            database.name,
             { "name": collFilter },
             { "nameOnly": true, "authorizedCollections": true }
          );
-         infos = await Promise.resolve(infos);
          const rows = (infos || []).filter(c => c && c.name && acceptCollName(c));
          database.collections = stableSort(
             rows.filter(c => c.type !== 'view').map(c => catalogCollectionShell(database, c)),
@@ -1648,7 +1664,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.7',
+         "version": '1.2.8',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -3613,7 +3629,6 @@
        *  object on the contract.
        */
       if (!profile || !Array.isArray(profile.phases)) return;
-      const coll = profile.collStats || {};
       const elapsed = Number.isFinite(+profile.elapsedMs) ? (+profile.elapsedMs / 1000).toFixed(1) : '--';
       const pre = Number.isFinite(+profile.preGatherMs) ? (+profile.preGatherMs / 1000).toFixed(1) : '--';
       const since = Number.isFinite(+profile.sinceScriptMs) ? (+profile.sinceScriptMs / 1000).toFixed(1) : '--';
@@ -3630,12 +3645,16 @@
          if (Number.isFinite(+p.entries)) bits.push(`entries=${p.entries}`);
          console.log(`  ${String(p.name).padEnd(18)} ${bits.join('  ')}`);
       });
-      if (coll.n) {
-         console.log(`  ${'collStats dist'.padEnd(18)} n=${coll.n}  min=${coll.minMs}  p50=${coll.p50Ms}  p95=${coll.p95Ms}  max=${coll.maxMs}  sum=${coll.sumMs}  overlap=${coll.overlap}x`);
-         (coll.slowest || []).slice(0, 8).forEach(s => {
-            console.log(`    ${String(s.ms).padStart(6)}ms  ${s.ns}${s.node && s.node !== 'connecting' ? '  ' + s.node : ''}`);
+      const printDist = (label, dist, idKey) => {
+         if (!dist || !dist.n) return;
+         console.log(`  ${label.padEnd(18)} n=${dist.n}  min=${dist.minMs}  p50=${dist.p50Ms}  p95=${dist.p95Ms}  max=${dist.maxMs}  sum=${dist.sumMs}  overlap=${dist.overlap}x`);
+         (dist.slowest || []).slice(0, 8).forEach(s => {
+            const ident = s[idKey] || '';
+            console.log(`    ${String(s.ms).padStart(6)}ms  ${ident}${s.node && s.node !== 'connecting' ? '  ' + s.node : ''}`);
          });
-      }
+      };
+      printDist('dbStats dist', profile.dbStats, 'db');
+      printDist('collStats dist', profile.collStats, 'ns');
       console.log('');
    }
 

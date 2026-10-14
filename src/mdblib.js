@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "1.1.2"
+ *  Version: "1.1.3"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,7 +17,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "1.1.2"
+      "version": "1.1.3"
    });
 
 /*  Notes:
@@ -62,7 +62,7 @@ if (typeof __lib === 'undefined') (
  *  - $listCatalog (6.0+, collectionless admin) and $listClusterCatalog
  *    (8.0.10+, admin = cluster) list namespaces as { db, name, type }.
  *    listCatalogSnapshot selects auto|legacy|listCatalog|listClusterCatalog;
- *    on authz/failure the caller falls back to getCollectionInfos.
+ *    on authz/failure the caller falls back to fetchCollectionInfos.
  *    $listClusterCatalog is an optional mongos fast path, never the only path.
  *    shards:true is added only when the caller will consume owners; those
  *    ids stay on the entry. The caller skips the stage when connectionStatus
@@ -96,7 +96,9 @@ if (typeof __lib === 'undefined') (
  *    onDatabase when each DB's collections complete (per-DB free rollup).
  *    fetchDbStats is the async $stats path (driver command() + awaitPlain)
  *    so mapPool can overlap db.stats(). Shell runCommand() is synchronous.
- *    $stats stays a sync helper.
+ *    $stats stays a sync helper. fetchCollectionInfos is the async
+ *    getCollectionInfos path (driver listCollections().toArray()); the
+ *    shell helper is synchronous.
  *    Cache _statsPromise per collection. Callers materialise then serialise.
  *  - Owning-shard ids live on the Map for one materialize / fetchAllStats
  *    gather. A lone $collStats does not keep them. __collStatsOnMongos
@@ -3272,6 +3274,11 @@ async function awaitPlain(value) {
    return value;
 }
 
+function driverMongoClient(handle) {
+   const mongo = handle && typeof handle.getMongo === 'function' && handle.getMongo();
+   return mongo && mongo._serviceProvider && mongo._serviceProvider.mongoClient;
+}
+
 function driverCommand(handle, command) {
    /*
     *  Shell Database.runCommand() returns the document on this turn, so
@@ -3280,14 +3287,28 @@ function driverCommand(handle, command) {
     *  pinned member stays the target. Any other client uses primary, which
     *  is what runCommand does when the call omits readPreference.
     */
-   const mongo = handle && typeof handle.getMongo === 'function' && handle.getMongo();
-   const client = mongo && mongo._serviceProvider && mongo._serviceProvider.mongoClient;
+   const client = driverMongoClient(handle);
    if (client && typeof client.db === 'function') {
       const direct = !!(client.options && client.options.directConnection);
       if (direct) return client.db(handle.getName()).command(command);
       return client.db(handle.getName()).command(command, { "readPreference": "primary" });
    }
    return handle.runCommand(command);
+}
+
+function driverListCollections(handle, filter, options) {
+   /*
+    *  Driver listCollections cursor, or null when mongoClient is missing.
+    *  Same read-preference rule as driverCommand.
+    */
+   const client = driverMongoClient(handle);
+   if (!client || typeof client.db !== 'function') return null;
+   const dbh = client.db(handle.getName());
+   if (typeof dbh.listCollections !== 'function') return null;
+   const opts = Object.assign({}, options || {});
+   const direct = !!(client.options && client.options.directConnection);
+   if (!direct && opts.readPreference == null) opts.readPreference = 'primary';
+   return dbh.listCollections(filter || {}, opts);
 }
 
 async function fetchDbStats(dbName = db.getName()) {
@@ -3303,6 +3324,26 @@ async function fetchDbStats(dbName = db.getName()) {
    } catch (e) {
       return dbStatsErrorStub(dbName, e);
    }
+}
+
+async function fetchCollectionInfos(dbName = db.getName(), filter = {}, options) {
+   /*
+    *  Async getCollectionInfos. Driver listCollections().toArray() so
+    *  mapPool overlaps. Shell getCollectionInfos is synchronous. Defaults
+    *  match dbstats: nameOnly + authorizedCollections. Do not await the
+    *  live cursor (thenable drains); drainAggCursor uses toArray().
+    */
+   const handle = db.getSiblingDB(dbName);
+   const opts = Object.assign({
+      "nameOnly": true,
+      "authorizedCollections": true
+   }, options || {});
+   const spec = (filter == null) ? {} : filter;
+   const cursor = driverListCollections(handle, spec, opts);
+   if (cursor) return drainAggCursor(cursor);
+   let infos = handle.getCollectionInfos(spec, opts);
+   infos = await awaitPlain(infos);
+   return Array.isArray(infos) ? infos : [];
 }
 
 async function collStatsOnMongos() {
@@ -3591,7 +3632,7 @@ async function listCatalogSnapshot(mode = 'auto', opts = {}) {
     *  mode: auto | legacy | listCatalog | listClusterCatalog.
     *  auto: mongos && 8.0.10+ → $listClusterCatalog; else 6.0+ → $listCatalog;
     *  else legacy. On stage failure / authz, builder is legacy and entries empty
-    *  (caller lists per DB with getCollectionInfos).
+    *  (caller lists per DB with fetchCollectionInfos).
     *  opts.shards asks $listClusterCatalog for owners. The caller sets it
     *  only when those ids will be consumed. opts.skipCluster skips the stage
     *  when connectionStatus already lacks clusterMonitor.
