@@ -1,14 +1,14 @@
 (async() => {
    /*
     *  Name: "ctxDemo.js"
-    *  Version: "0.2.1"
+    *  Version: "0.2.2"
     *  Description: "demonstrates db injection after load() — lexical scope vs mdblib.for(db)"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *  Roadmap: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/ROADMAP.md" (required context)
     *
     *  Legacy archive line: v0.1.0 in legacy/mongo-shell is the frozen sketch
-    *  (it still falls back to isMaster). This live file is v0.2.1 on the
+    *  (it still falls back to isMaster). This live file is v0.2.2 on the
     *  mongosh line. See ROADMAP.md → ctxDemo.js.
     *
     *  Notes:
@@ -25,6 +25,9 @@
     *    snapshot() stores the in-flight hello promise on the Mongo client.
     *    Section 6 still awaits, but it stores the resolved hello in one let
     *  - never prints a URI
+    *  - walkthrough, not a smoke test. Each section prints the use case,
+    *    the restriction, and the values to read. It does not assert.
+    *    A pass/fail check waits until mdblib.for() exists and can be loaded
     *
     *  Usage:
     *    mongosh [connection options] [--quiet] [-f|--file] </path/to/>ctxDemo.js
@@ -210,6 +213,15 @@
       console.log(`\n==== ${title} ====`);
    }
 
+   function explain(text) {
+      /*
+       *  Printed use-case note. Kept next to the banner so a run documents
+       *  itself without a second file.
+       */
+      const body = String(text).replace(/^[ \t]+/gm, '').trim();
+      console.log(`\n${body}`);
+   }
+
    function show(step, value) {
       console.log(`\n${step}`);
       console.log(value);
@@ -291,25 +303,51 @@
    }
 
    /*
-    *  Handles under test
+    *  Handles under test.
+    *  parent is the shell's current Database. admin and config are sibling
+    *  databases on that same Mongo client. They are not targeted members.
     */
-   const parent = db;                      // shell current Database
-   const admin = db.getSiblingDB('admin'); // same Mongo client, different db name
+   const parent = db;
+   const admin = db.getSiblingDB('admin');
    const configDb = db.getSiblingDB('config');
 
+   explain(`
+   Walkthrough of a stand-in library. This file does not load mdblib.js and it does not pass or fail.
+   Each section prints the use case, the restriction, and the values to read.
+   A smoke test waits until mdblib.for() exists and these calls can be made against the real helpers.
+   `);
+
+   /*
+    *  Use case 0 — baseline siblings on the shell client.
+    *  getSiblingDB() changes the database name only. sameMongoAsParent stays
+    *  true and me stays the member the shell selected. This is the control
+    *  for later sections: a name change is not a new client.
+    */
    banner('0. Shell current db (baseline)');
+   explain(`
+   Use case: three Database handles on the shell's current Mongo client.
+   Read dbName, me, and sameMongoAsParent. admin and config must change dbName
+   and leave me and sameMongoAsParent put. Restriction: these handles cannot
+   stand in for a direct member. Discovery's local const db is a different
+   binding from this client.
+   `);
    show('parent (global db)', await describe('parent', parent));
    show('admin sibling', await describe('admin sibling', admin));
    show('config sibling', await describe('config sibling', configDb));
-   console.log('\nSibling handles share the Mongo client with the parent.');
-   console.log('If injection works, dbName changes; me / sameMongoAsParent stay put.');
 
+   /*
+    *  Use case 1 — lexical trap.
+    *  A const db in the caller does not rebind a helper defined at load time.
+    *  That is why load('mdblib.js') inside a discovery block cannot aim the
+    *  library at that block's node.
+    */
    banner('1. The trap: a local `const db` does not rebind loaded helpers');
-   console.log(`
-   function identityFromGlobalDb() { return db.getName(); } // defined at load() / top level
-
-   const db = admin;       // local, shadows nothing inside the helper
-   identityFromGlobalDb(); // still reads globalThis.db
+   explain(`
+   Use case: the caller shadows db with const db = admin, then calls a helper
+   that was defined at the top of the file and reads free db.
+   Read dbName. It must stay the parent, not "admin".
+   Restriction: functions have to be written to take the handle. A local const
+   in connectAndExec does not reach helpers that load() already defined.
    `);
    await (async function callSiteShadow() {
       const db = admin;
@@ -319,32 +357,73 @@
          await identityFromGlobalDb()
       );
    })();
-   console.log('\nExpected: dbName is still the parent, not "admin".');
-   console.log('Lexical scope is fixed where the function was defined (the global file).');
 
+   /*
+    *  Use case 2 — pass the Database as an argument.
+    *  identity(admin) reports admin. me stays the shell member because the
+    *  argument is a sibling, not a new client. A default parameter written
+    *  as db.getName() would still read the global, so the caller must pass
+    *  the name from the handle.
+    */
    banner('2. Explicit parameter');
+   explain(`
+   Use case: mdblib.identity(handle) takes the Database as an argument.
+   Read dbName. parent, admin, and config must report those names. me stays
+   the shell member because these are siblings, not new clients.
+   Restriction: every helper in the call chain must take the handle. A default
+   such as dbName = db.getName() still reads the global db.
+   `);
    show('mdblib.identity(parent)', await mdblib.identity(parent));
-   show('mdblib.identity(admin)  ← dbName should be "admin"', await mdblib.identity(admin));
-   show('mdblib.identity(configDb) ← dbName should be "config"', await mdblib.identity(configDb));
+   show('mdblib.identity(admin) — dbName is admin', await mdblib.identity(admin));
+   show('mdblib.identity(configDb) — dbName is config', await mdblib.identity(configDb));
 
-   banner('3. mdblib.for(db) — contextualise once per scope');
+   /*
+    *  Use case 3 — for(db) once per block.
+    *  The facade closes over that Database. name() and identity() use it.
+    *  snapshot() is keyed by getMongo(), so for(admin) hits the snapshot
+    *  for(parent) just filled. for() does not open a client and does not
+    *  set read preference.
+    */
+   banner('3. mdblib.for(db) — one facade per Database');
+   explain(`
+   Use case: mdblib.for(handle) binds the Database once for every method on
+   the returned object. The block owns the handle. The facade does not assign
+   the global db.
+   Read dbName on identity(), name(), and the admin snapshot. name() must be
+   "admin". The admin snapshot must be a hit and its me must match the parent,
+   because both handles share getMongo().
+   Restriction: for() does not open, close, or set read preference. A nested
+   helper that still calls the global hello() escapes the binding.
+   `);
    const mParent = mdblib.for(parent);
    const mAdmin = mdblib.for(admin);
    show('mdblib.for(parent).identity()', await mParent.identity());
-   show('mdblib.for(admin).identity()  ← nested hello() uses admin, not global db', await mAdmin.identity());
-   console.log(`\nmAdmin.name() => ${mAdmin.name()}`);
-   console.log('Same client, so for(admin).snapshot() hits the snapshot for(parent) just filled.');
-   show('mdblib.for(parent).snapshot()', await mParent.snapshot());
-   show('mdblib.for(admin).snapshot()', await mAdmin.snapshot());
+   show('mdblib.for(admin).identity() — nested hello uses admin', await mAdmin.identity());
+   show('mdblib.for(admin).name()', mAdmin.name());
+   show('mdblib.for(parent).snapshot() — fills the shell client', await mParent.snapshot());
+   show('mdblib.for(admin).snapshot() — hit, same me, dbName admin', await mAdmin.snapshot());
 
    const savedDb = db;
    try {
+      /*
+       *  Use case 4 — one direct client per advertised member.
+       *  The child URI copies parent userinfo, replaces the host, sets
+       *  directConnection, and drops replicaSet. pinned is hello.me === host.
+       *  connect(parent URI) is not this case: server selection can land on
+       *  the same member. The URI is never printed.
+       */
       banner('4. Targeted member contexts (directConnection to each hello.hosts entry)');
-      console.log(`
-   connect(parent URI) opens a second client and can select the same member.
-   A targeted context replaces the host and sets directConnection=true.
-   pinned is hello.me === the host that context asked for.
-   `);
+      explain(`
+      Use case: open one directConnection client per hello.hosts entry, primary
+      first, then each other member. This is the discovery connect() shape.
+      Read askedHost, me, pinned, writable, and secondary. pinned must be true.
+      One row is the writable primary. The others are secondaries.
+      sameMongoAsParent must be false: each direct client is a new Mongo object.
+      Restriction: connect(parent URI) can select the same member again, so a
+      matching me would not prove the clients are distinct. Fewer than two
+      hello.hosts entries (mongos, standalone) skips the member walk. The
+      rebuilt URI is not printed. Read preference on the pin is primaryPreferred.
+      `);
       const topo = await readHelloAsync(parent);
       const hosts = topo.hosts;
       const primaryHost = topo.primary;
@@ -385,12 +464,25 @@
       if (!primaryMember || !secondaries.length) {
          console.log('\nCould not pin both a primary and a secondary. Later sections stay on the shell client.');
       } else {
+         /*
+          *  Use case 5 — one in-flight hello per member.
+          *  for(member).snapshot() stores the driver command() promise on that
+          *  Mongo before awaiting it. Shell hello() / runCommand() would finish
+          *  the first member before the next started. withChildSession must not
+          *  run inside this Promise.all: it assigns the one global db.
+          */
          banner('5. Parallel facades each read their own member snapshot');
-         console.log(`
-   snapshot() awaits driver command({ hello: 1 }) and stores that promise
-   on the Mongo client before the await. maxInFlight counts commands whose
-   start happened before an earlier command returned.
-   `);
+         explain(`
+         Use case: Promise.all of mdblib.for(member).snapshot() across the direct
+         clients. Each facade closes over its own handle.
+         Read me against askedHost, writable against secondary, and startedMs
+         against returnedMs. me must match askedHost. One row is writable. The
+         rest are secondaries. maxInFlight must equal the member count, and the
+         last start must be earlier than the first return.
+         Restriction: one hello per client. Two commands on the same for() result
+         stay sequential. Shell hello() and runCommand() do not overlap inside
+         Promise.all. Do not call withChildSession from these tasks.
+         `);
          flight.started = 0;
          flight.returned = 0;
          flight.maxInFlight = 0;
@@ -416,14 +508,30 @@
          console.log(`\nmaxInFlight ${flight.maxInFlight} of ${parallel.length}. overlapped=${overlapped}.`);
          console.log('Expected: one row per host, me matches askedHost, one writable and the rest secondary.');
 
+         /*
+          *  Use case 6 — one session slot versus a WeakMap, then database scope.
+          *  The module-level let is what sessionSnapshot is today: the first
+          *  caller stamps it and every later client reuses that hello.
+          *  Reads are awaited one at a time so the stamp is not itself a race.
+          *  scope() is dbStats on the closed-over Database and is not cached
+          *  on the Mongo client.
+          */
          banner('6. One module-level snapshot vs a WeakMap, and db scope on one client');
-         console.log(`
-   Fill the module-level snapshot from the direct primary.
-   Asking it for a secondary must still return the primary me.
-   A fresh WeakMap misses on that secondary and stores that member.
-   These reads are awaited one at a time. The proof is the single slot,
-   not a synchronous hello(). admin on the primary client hits that snapshot.
-   `);
+         explain(`
+         Use case: fill one let from the direct primary, then ask it for each
+         secondary. A fresh WeakMap is filled from the same primary and then
+         asked for those secondaries, then for admin on the primary client.
+         scope() runs dbStats on the primary database and on admin.
+         Read me, writable, cachedMongoIsHandle, hit, and dbName. The let must
+         stay a hit, keep the primary me and writable true, and report
+         cachedMongoIsHandle false for a secondary. The WeakMap must miss on
+         that secondary and store that member's me. admin must hit, keep the
+         primary me, and report dbName "admin". scope() dbName and collections
+         must differ between the two databases.
+         Restriction: these reads are one at a time so the first caller stamps
+         the single let. Running the fills together would race that stamp.
+         The let stores the resolved hello. It is not an in-flight promise.
+         `);
 
          let moduleSnap = null;
          async function snapshotViaModuleLet(handle) {
@@ -496,13 +604,27 @@
          show('for(primary admin).scope()  ← dbName is admin, same Mongo snapshot', await mdblib.for(primaryAdmin).scope());
          show('for(primary admin).name()', mdblib.for(primaryAdmin).name());
 
+         /*
+          *  Use case 7 — global db assignment.
+          *  askedMe is read from each handle before any task assigns db, so
+          *  the assignment order stays the array order (primary, then
+          *  secondaries). After every assignment, each task reads the global.
+          *  The last write wins for every reader. Section 5 did not, because
+          *  each facade closed over its handle. finally restores the shell db.
+          */
          banner('7. Assigning the global db collapses the member; for() does not');
-         console.log(`
-   Each task records its own hello.me before anyone assigns the global db,
-   then assigns, then waits until every assignment has happened.
-   The read after that wait is awaited. The last assignment wins for every reader.
-   Section 5 kept every member because each facade closed over its handle.
-   `);
+         explain(`
+         Use case: each task records its own hello.me, assigns the global db,
+         waits until every assignment has happened, then reads the global.
+         This is the withChildSession hazard if two member gathers overlap.
+         Read askedMe and seenMe. askedMe must match askedHost. Every seenMe
+         must be the last host in the list, the later assignment. Section 5
+         kept a different me per row.
+         Restriction: do not overlap two withChildSession calls. Record the
+         handle's own me before anyone assigns the global. The shell db is
+         restored after this section. The reads after the gate share the last
+         client; a library gather should keep one command in flight on a client.
+         `);
          for (const member of members) {
             member.askedMe = (await readHelloAsync(member.handle)).me ?? null;
          }

@@ -96,7 +96,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `onlineDefrag.js` | 0.1.4 | **1.8.0** |
 | `indexCacheUtil.js` | 0.1.5 | **1.2.0** |
 | `killAgedSessions.js` | 0.2.2 | **0.2.3** |
-| `ctxDemo.js` | 0.1.0 | **0.2.1** |
+| `ctxDemo.js` | 0.1.0 | **0.2.2** |
 | `schema-import.js` | 0.1.8 | **0.2.0** |
 | `compact.js` | 0.2.15 | **removed** (archive only) |
 | `batchUpdater.js` | 0.1.6 | **removed** (archive only) |
@@ -688,9 +688,9 @@ Remaining mongosh-line work (do not block the archive): none.
 
 ### `ctxDemo.js`
 
-**Live sketch: v0.2.1.** **Archive: v0.1.0** at `legacy/mongo-shell/src/ctxDemo.js` — that copy is the frozen sketch and still falls back to `isMaster()`. Do not edit the archive.
+**Live sketch: v0.2.2.** **Archive: v0.1.0** at `legacy/mongo-shell/src/ctxDemo.js` — that copy is the frozen sketch and still falls back to `isMaster()`. Do not edit the archive.
 
-The live file continues the sketch on the mongosh line. Stand-in library, no `load('mdblib.js')`. `hello()` only (SERVER-49989; replies differ). Sibling databases show the lexical-`db` trap and `mdblib.for(db)`. A targeted context is a `directConnection` client to one `hello.hosts` member (the primary, then each other host), not `connect(parent URI)`. Each facade reads its own snapshot under `Promise.all`. `identity()`, `hello()`, `snapshot()`, and `scope()` await the driver client's `command()`. `snapshot()` stores the in-flight hello promise on a `WeakMap` before the await, so one hello per member can be in flight together. Shell `hello()` / `runCommand()` / `stats()` stay synchronous and do not overlap. Section 6 still awaits, and stores the resolved hello in one module-level slot. A module-level snapshot filled by the direct primary still returns that primary when asked for a secondary; a `WeakMap` keyed by `getMongo()` stores the secondary. `admin` on the primary client shares that snapshot, and `scope()` keeps `dbName`. A global `db` swap of those member handles collapses every reader onto the last member. Do not log the rebuilt URI. Do not land `for(db)` in `mdblib.js` from this sketch. See the scripting guide. Header tags this file as requiring this roadmap.
+The live file continues the sketch on the mongosh line. Stand-in library, no `load('mdblib.js')`. `hello()` only (SERVER-49989; replies differ). Sibling databases show the lexical-`db` trap and `mdblib.for(db)`. A targeted context is a `directConnection` client to one `hello.hosts` member (the primary, then each other host), not `connect(parent URI)`. Each facade reads its own snapshot under `Promise.all`. `identity()`, `hello()`, `snapshot()`, and `scope()` await the driver client's `command()`. `snapshot()` stores the in-flight hello promise on a `WeakMap` before the await, so one hello per member can be in flight together. Shell `hello()` / `runCommand()` / `stats()` stay synchronous and do not overlap. Section 6 still awaits, and stores the resolved hello in one module-level slot. A module-level snapshot filled by the direct primary still returns that primary when asked for a secondary; a `WeakMap` keyed by `getMongo()` stores the secondary. `admin` on the primary client shares that snapshot, and `scope()` keeps `dbName`. A global `db` swap of those member handles collapses every reader onto the last member. Do not log the rebuilt URI. Each section prints the use case, the restriction, and the values to read. This file is a walkthrough, not a smoke test. A pass/fail check waits until `mdblib.for()` exists and can be loaded. Do not land `for(db)` in `mdblib.js` from this sketch. See the scripting guide. Header tags this file as requiring this roadmap.
 
 ### `modifiedCountDocumentsByKey.js`
 
