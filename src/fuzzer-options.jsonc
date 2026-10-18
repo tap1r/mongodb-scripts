@@ -96,6 +96,7 @@
          // "string": "hashed"
       },
       "unique": false, // resharding a collection that has a uniqueness constraint is not supported
+      // Sent to shardCollection only when the collection is empty and the key starts with "hashed".
       "numInitialChunksPerShard": 2,
       // "collation": { "locale": "simple" },
       // "timeseries": { "timeField": "timestamp", "metaField": "data", "granularity": "hours" },

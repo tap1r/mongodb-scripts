@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.6.0"
+ *  Version: "1.6.1"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.6.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.6.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -204,6 +204,7 @@
             // "string": "hashed"
          },
          "unique": false,               // resharding a collection that has a uniqueness constraint is not supported
+         // Sent to shardCollection only when the collection is empty and the key starts with "hashed".
          "numInitialChunksPerShard": 2,
          // "collation": collation,     // inherit from collection options
          // "timeseries": tsOptions,    // not required after initial collection creation
@@ -763,6 +764,25 @@
       return (doc && doc.key) ? doc.key : null;
    }
 
+   // shardCollection accepts numInitialChunks only for an empty collection whose
+   // shard key starts with a hashed field. A hashed field later in the key needs
+   // zones (presplitHashedZones), which this script does not set.
+   function shardKeyHashedPrefix(key) {
+      if (!key || typeof key !== 'object' || Array.isArray(key))
+         return false;
+      const field = Object.keys(key)[0];
+      return field != null && key[field] === 'hashed';
+   }
+
+   function namespaceIsEmpty() {
+      return !namespace.find({}, { "_id": 1 }).limit(1).hasNext();
+   }
+
+   function mayPresplitChunks() {
+      return shardKeyHashedPrefix(shardedOptions.key)
+         && (!namespace.exists() || namespaceIsEmpty());
+   }
+
    function shardNewNamespace() {
       // A non-mongos connection skips sharding and the load continues.
       if (!isSharded())
@@ -772,31 +792,36 @@
          return false;
       }
 
-      let numInitialChunks;
+      let numInitialChunks = null;
       try {
-         numInitialChunks = initialChunkCount();
+         if (mayPresplitChunks())
+            numInitialChunks = initialChunkCount();
       } catch(e) {
          console.log('[red][ERROR] Sharding namespace failed:[/]', errText(e));
          return false;
       }
-      if (!(numInitialChunks >= 1)) {
+      if (numInitialChunks != null && !(numInitialChunks >= 1)) {
          console.log(`[red][ERROR] Sharding namespace failed:[/] initial chunk count is ${numInitialChunks}`);
          return false;
       }
 
       console.log(`\nSharding namespace with options: ${tojson(shardedOptions)}`);
-      console.log(`with initial chunks: ${numInitialChunks}`);
+      if (numInitialChunks >= 1)
+         console.log(`with initial chunks: ${numInitialChunks}`);
+      else if (!shardKeyHashedPrefix(shardedOptions.key))
+         console.log('without initial chunks: shard key has no hashed prefix');
+      else
+         console.log('without initial chunks: the collection is not empty');
+      const shardOptions = { "collation": collation };
+      if (numInitialChunks >= 1)
+         shardOptions.numInitialChunks = numInitialChunks;
       try {
          (!serverVer(6.0)) && (sh.enableSharding(dbName).ok);
          sh.shardCollection(
             `${dbName}.${collName}`,
             shardedOptions.key,
             shardedOptions.unique,
-            {
-               "numInitialChunks": numInitialChunks,
-               "collation": collation,
-               // "timeseries": {}
-            }
+            shardOptions
          );
          shardedThisRun = true;
          // console.log(`enable balancing`);
@@ -1164,13 +1189,21 @@
       }
       if (willShard && shardKeyUsesHash(shardedOptions.key) && collation.locale !== 'simple')
          reasons.push('a non-simple collation on the hashed shard key conflicts with the simple hashed index');
-      if (willShard) {
+      if (willShard && shardKeyHashedPrefix(shardedOptions.key)) {
+         let presplit = false;
          try {
-            const chunks = initialChunkCount();
-            if (!(chunks >= 1))
-               reasons.push(`initial chunk count is ${chunks}`);
+            presplit = !namespace.exists() || namespaceIsEmpty();
          } catch(e) {
-            reasons.push(`config.shards is unreadable: ${errText(e)}`);
+            reasons.push(`namespace is unreadable: ${errText(e)}`);
+         }
+         if (presplit) {
+            try {
+               const chunks = initialChunkCount();
+               if (!(chunks >= 1))
+                  reasons.push(`initial chunk count is ${chunks}`);
+            } catch(e) {
+               reasons.push(`config.shards is unreadable: ${errText(e)}`);
+            }
          }
       }
       return reasons;

@@ -85,7 +85,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `mdblib.js` | 0.15.10 | **1.1.3** |
 | `dbstats.js` | 0.12.19 | **1.2.8** |
 | `autoCompact.js` | 0.4.36 | **1.4.0** |
-| `fuzzer.js` | 0.6.43 | **1.6.0** |
+| `fuzzer.js` | 0.6.43 | **1.6.1** |
 | `oplogchurn.js` | 0.5.22 | **0.6.2** |
 | `latency.js` | 0.4.9 | **0.4.10** |
 | `schema-sampler.js` | 0.2.16 | **0.4.0** |
@@ -610,13 +610,13 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `fuzzer.js`
 
-**Live: v1.6.0.** **Archive: v0.6.43.** Mongosh-only. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()`. Compact is archive-only. Schema C random geometries are mdblib `$genPoint`, `$genLine`, and `$genPolygon`. Header tags this file as requiring this roadmap.
+**Live: v1.6.1.** **Archive: v0.6.43.** Mongosh-only. Do not restore `db.getMongo().setReadPref('primary')` at the start of `main()`. Compact is archive-only. Schema C random geometries are mdblib `$genPoint`, `$genLine`, and `$genPolygon`. Header tags this file as requiring this roadmap.
 
 Options overlay is **`resolveOptions`**: in-file defaults → **`fuzzer-options.jsonc`** → `--eval` `var options`. Explicit path is `var optionsFile`. Search path, in-shell JSONC strip, and deep-merge live in mdblib. Do not declare `options` / `optionsFile` in this file. Namespace keys (`dbName`, `collName`, `totalDocs`, …) come from the resolved document, not from `--eval` scalars. In-file defaults stay the defaults. `fuzzer-options.jsonc` is shipped beside the script as the sample overlay.
 
 **Apply (shell):** do not restore `Bulk.execute(writeConcern)` — the argument is ignored. `insertMany(..., { writeConcern })` is the path. `createIndexes` returns names and throws. `insertedIds` is an object (count keys, including on a partial bulk error). The loader banner prints only when `process.argv` names this file (`isFuzzerCliFile`). `load()` stays quiet; mdblib still loads.
 
-**Shipped:** reshard wait holds the command Promise and races an awaited timer (`sleep()` would stall the response); majority `wtimeout` defaults to 10000 ms when `w` waits past the primary (`0` waits with no limit); shared-tier `fCV()` → `serverVer()` is by design (see mdblib); **1.6.0** `--eval` `var options` overlays the JSONC file via `resolveOptions`.
+**Shipped:** reshard wait holds the command Promise and races an awaited timer (`sleep()` would stall the response); majority `wtimeout` defaults to 10000 ms when `w` waits past the primary (`0` waits with no limit); shared-tier `fCV()` → `serverVer()` is by design (see mdblib); **1.6.0** `--eval` `var options` overlays the JSONC file via `resolveOptions`. **1.6.1** `shardCollection` omits `numInitialChunks` unless the collection is empty and the shard key starts with a hashed field. `reshardCollection` still sends the count.
 
 Remaining mongosh-line work (do not block the archive): none.
 
