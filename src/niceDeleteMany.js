@@ -1303,7 +1303,9 @@
    function curationCannotSpill() {
       /*
        *  Atlas M0/Flex (and mongod with no WT in serverStatus) ignore
-       *  allowDiskUse. A leftover $setWindowFields SORT fails at 32MiB.
+       *  allowDiskUse. A leftover $setWindowFields SORT fails at the
+       *  aggregation blocking-sort budget
+       *  (internalQueryMaxBlockingSortMemoryUsageBytes, default 100MiB).
        *  mongos pace is different: shards can spill, so window mode stays eligible.
        *  Set in main() before getIds (paceReason 'no-wt').
        */
