@@ -2,24 +2,25 @@
 
 ## Install some useful dependencies (match for your OS)
 
-* OSX
+* macOS
+
+  `ps`, `pgrep`, `lsof`, and `tcpdump` are already on the system. Homebrew `openssl` is keg-only. It does not replace `/usr/bin/openssl`.
 
   ```bash
-  brew install proctools
   brew install openssl
   brew install nmap
-  brew install tcpdump
-  brew install lsof
   ```
 
 * Fedora/Red Hat/CentOS
-  
+
+  `ps` and `pgrep` come from `procps-ng`. `dnf` is the current installer. `yum` still works as a wrapper on older releases.
+
   ```bash
-  yum install proctools
-  yum install openssl
-  yum install nmap
-  yum install tcpdump
-  yum install lsof
+  dnf install procps-ng
+  dnf install openssl
+  dnf install nmap
+  dnf install tcpdump
+  dnf install lsof
   ```
 
 * Ubuntu/Debian APT
@@ -65,10 +66,10 @@ sudo kill -SIGUSR1 $(ps -p $(pgrep mongod) -o pid=)
     sudo tcpdump -s 0 tcp port 27017 or port 53 or port 88 -w /tmp/mongodb.pcap
     ```
 
-  * Using a _wireshark_ (for Windows) capture filter
+  * Using a _Wireshark_ capture filter (BPF, same language as tcpdump). `||` is display-filter syntax and is not a capture filter.
 
-    ```bash
-    tcp port 27017 || port 53 || port 88
+    ```text
+    tcp port 27017 or port 53 or port 88
     ```
 
 * **Socket stats**

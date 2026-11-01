@@ -2,72 +2,57 @@
 
 ## NOTE
 
-These steps are designed to augment the existing SSL certificate generation steps
-(<https://docs.mongodb.com/manual/tutorial/configure-ssl/#certificate-authorities>)
-and the FIPS configuration guide (<https://docs.mongodb.com/manual/tutorial/configure-fips/>).
+These steps are designed to augment the existing TLS certificate generation steps
+(<https://www.mongodb.com/docs/manual/tutorial/configure-ssl/>)
+and the FIPS configuration guide (<https://www.mongodb.com/docs/manual/tutorial/configure-fips/>).
 
 ## OVERVIEW
 
-FIPS 140-2 is cryptograhic enhancement designed to meet the Federal Information Processing Standard (FIPS).  A FIPS compliant certificate is
-similar to a regular X.509 certificate but with _hardened_ cryptographic options, specifically these include:
+FIPS 140-2 and 140-3 are the Federal Information Processing Standards for cryptographic modules. A certificate is not a cipher suite. What matters here is the module that signs it, the key algorithm, and the signature digest:
 
-- A certificate with a minimum cipher suite (ie no old compromised ciphers)
-- A private key (or certificate bundle) with an "_up armoured_" PEM format, such as PKCS8/12 that supports private key encryption and hashing for a FIPS compliant cipher (as opposed to the default use of MD5)
+- Sign a new certificate with SHA-256 or stronger. SHA-1 is not an approved signature hash for a new certificate. The OpenSSL 3 FIPS provider still implements SHA-1 for some legacy checks. A successful `openssl sha1` does not mean the module is in FIPS mode, and it is not the digest to put on a new certificate.
+- Prefer RSA 2048 or an approved ECDSA curve (P-256 or P-384), and a PKCS#8 or PKCS#12 key. Encrypt the PKCS#8 key with AES-256 if the PEM must not sit in the clear.
 
-Knowing these key requirements, this should guide both the FIPS certificate generation and troubleshooting processes.
-
-Please ensure you have a FIPS compliant version of _`openssl`_ when running these commands.  A couple of possible ways to test for FIPS capability could include:
-
-1. Run _`openssl version`_, the system returns: _`OpenSSL 1.0.1e-fips 11 Feb 2013`_ or similar denoting FIPS capability
-2. Check if _`openssl`_ is operating under FIPS mode, issue the following:
+OpenSSL 3 does not use the OpenSSL 1.0 switch `OPENSSL_FIPS=1`. FIPS is a provider, installed with `openssl fipsinstall` and selected by `openssl.cnf`. Confirm it before generating a certificate:
 
 ```bash
-env OPENSSL_FIPS=1 openssl md5 somefile
+openssl version
+openssl list -providers
 ```
 
-The above should fail as MD5 is not a FIPS approved hash standard.
+A FIPS-enforced configuration lists the `fips` provider as active (usually next to `base`) and does not leave `default` as the source of algorithms. Then:
 
 ```bash
-env OPENSSL_FIPS=1 openssl sha1 somefile
+openssl md5 somefile
+openssl sha256 somefile
 ```
 
-The above would work as SHA1 is the FIPS approved hash standard.
+MD5 must be refused. SHA-256 must succeed. Installing the provider is distro-specific. On RHEL and Fedora that is the system FIPS policy, not an environment variable.
 
-### Example
+### Generating a new self-signed certificate
 
-```bash
-$ env OPENSSL_FIPS=1 openssl md5 message.txt
-Error setting digest md5
-140062425388872:error:060800A3:digital envelope routines:EVP_DigestInit_ex:disabled for fips:digest.c:251:
-
-$ env OPENSSL_FIPS=1 openssl sha1 message.txt
-SHA1(message.txt)= 9f5080758dbf71537cc44a4d8cb67564f2ad938a
-```
-
-### Generating a new self-signed FIPS certificate
-
-Here is the generation of a standard (non-FIPS) MD5 hashed key and SHA-1 (FIPS) re-signing operation performed in a single step:
+`-sha256` is explicit so a default change cannot fall back to a weaker digest. OpenSSL 3 `req` already defaults to SHA-256.
 
 ```bash
-openssl req -newkey rsa:2048 -new -x509 -days 3650 -nodes -subj "/C=US/ST=New York/L=New York/O=MongoDB, Inc./OU=Technical Services/CN=*.mongodb.com" -out mongodb-cert.crt -keyout mongodb-cert.key
+openssl req -newkey rsa:2048 -new -x509 -sha256 -days 3650 -nodes -subj "/C=US/ST=New York/L=New York/O=MongoDB, Inc./OU=Technical Services/CN=*.mongodb.com" -out mongodb-cert.crt -keyout mongodb-cert.key
 
 cat mongodb-cert.key mongodb-cert.crt > mongodb.pk8
 ```
 
 ### Re-generating from an existing non-FIPS compliant certificate
 
-If using an older (PKCS#1) non-FIPS certificate, re-hash the private key with:
+If using an older PKCS#1 key, wrap it as an encrypted PKCS#8 key. Do not pass `-nocrypt` together with `-v2`. `-nocrypt` wins, and the output key is not encrypted.
 
-1. Re-hash the existing CA bundle _`mongodb-cert.pem`_ to create a new key file _`mongodb-pk8.key`_
+1. Convert the private key _`mongodb-cert.key`_ to _`mongodb-pk8.key`_. `openssl pkcs8` reads a key, not a certificate bundle.
 
    ```bash
-   openssl pkcs8 -nocrypt -topk8 -v2 aes-256-cbc -in mongodb-cert.pem -out mongodb-pk8.key
+   openssl pkcs8 -topk8 -v2 aes-256-cbc -in mongodb-cert.key -out mongodb-pk8.key
    ```
 
-1. Recombine the existing certificate _`mongodb-cert.pem`_ with the new key _`mongodb-pk8.key`_ to create a new _`pkcs8`_ bundle
+1. Recombine that key with the certificate only (not the old PKCS#1 key) to create the bundle:
 
    ```bash
-   cat mongodb-pk8.key mongodb-cert.pem > mongodb.pk8
+   cat mongodb-pk8.key mongodb-cert.crt > mongodb.pk8
    ```
 
 ### Generating a new CA signed FIPS compliant certificate
@@ -77,16 +62,18 @@ These options are subject to the CA provider.  If the CA does not offer FIPS com
 1. Request the CSR and generate the certificate as per normal with your CA provider
 1. Taking the signed CA bundle from the CA, use the steps above "Re-generating from existing a non-FIPS compliant certificate" to rehash the private key
 
-The names, key and certificate location will vary accroding to how the CA provider presents the bundle, adjust the syntax as required.
+The names, key and certificate location will vary according to how the CA provider presents the bundle, adjust the syntax as required.
 
 ### Update any CA path changes
 
-1. Update the _`mongod.conf`_ parameter (v4.2 syntax provided) to reflect the new certificate bundle name (if changed):
+1. Update _`mongod.conf`_ to the new bundle. `net.tls.certificateKeyFile` is the TLS key name. `PEMKeyFile` belongs under the old `net.ssl` block. If the PKCS#8 key is encrypted, set `certificateKeyFilePassword` as well.
 
    ```yaml
    net:
        tls:
-           PEMKeyFile: /path/to/certificate/mongodb.pk8
+           mode: requireTLS
+           certificateKeyFile: /path/to/certificate/mongodb.pk8
+           certificateKeyFilePassword: <passphrase>
            FIPSMode: true
    ```
 
