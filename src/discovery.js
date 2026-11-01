@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.2.2"
+    *  Version: "0.2.3"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -118,10 +118,11 @@
                      null
                   ] },
                   "$_id",
-                  { "$concat": [ // potentially fragile to IPv6 format
+                  { "$concat": [
+                     // Port is the last colon field: host:27017 and [ipv6]:port.
                      { "$first": "$advisoryHostFQDNs" },
                      ":",
-                     { "$arrayElemAt": [{ "$split": ["$_id", ":"] }, 1] }
+                     { "$arrayElemAt": [{ "$split": ["$_id", ":"] }, -1] }
                   ] }
                ]
             }
