@@ -1,8 +1,10 @@
 # Sweet32
 
-Sweet32 is the birthday attack on 64-bit block ciphers (3DES and DES). The names below are the suites to **refuse**.
+**Historical reference.** DES and 3DES are obsolete TLS ciphers. TLS 1.3 has no 64-bit block suites. NIST disallowed three-key TDEA encryption after 31 December 2023. Current JDKs disable `3DES_EDE_CBC`, and a current Ops Manager already refuses the legacy 3DES and DES suites in the default `mms.disableCiphers`. The deny list and the `s_client` samples record what to set, and what a pass or fail looked like, when the Ops Manager Java process could still complete a 3DES handshake. The captured transcript is OpenSSL 1.0 (`TLSv1/SSLv3`). On a current Ops Manager, do not add this list. A probe that finishes with `Cipher is (NONE)` is the expected result.
 
-They belong in the Ops Manager custom setting `mms.disableCiphers`, which is a comma-separated **deny** list (RFC 5246 names, not OpenSSL names such as `DES-CBC3-SHA`). Do not paste this string into an enabled-cipher setting. That would leave only these suites.
+Sweet32 (CVE-2016-2183) is the birthday attack on those 64-bit block ciphers. The names below are the suites that deny list refused.
+
+They were values for the Ops Manager custom setting `mms.disableCiphers`, a comma-separated **deny** list (RFC 5246 names, not OpenSSL names such as `DES-CBC3-SHA`). Do not paste this string into an enabled-cipher setting. That would leave only these suites.
 
 SSLv2 `SSL_CK_*` names are omitted, as are the non-suite spellings `SSL_RSA_WITH_3DES_CBC_SHA` and `SSL_RSA_WITH_DES_EDE_CBC_SHA`. Ops Manager logs those as unrecognized and does not disable them.
 
