@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.6.2"
+ *  Version: "1.7.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.6.2" };
+   const __script = { "name": "fuzzer.js", "version": "1.7.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -161,6 +161,7 @@
       "timeSeries": false,              // build timeseries collection type
       // Schemas that miss a Date at timeField are omitted from the draw.
       // On a mongos, schemas that miss metaField are omitted and the shard key becomes ranged metaField.
+      // An index key the server rejects stops the plan. The lists stay as set.
       "tsOptions": {
          "timeField": "timestamp",
          "metaField": "data",
@@ -172,7 +173,7 @@
          "size": Math.pow(2, 27),
          "max": Math.pow(2, 27) / Math.pow(2, 12)
       },
-      "expireAfterSeconds": 0,          // TTL and time series options
+      "expireAfterSeconds": 0,          // 0 omits collection TTL. A positive number is seconds after timeField.
       "fuzzer": { /* preferences */
          "id": "ts",                    // ["ts"|"oid"] - timeseries OID | client generated OID
          "range": 365.2422,             // date range in days
@@ -422,6 +423,11 @@
       if (plan.length > 0) {
          plan.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
          return;
+      }
+      if (timeSeries) {
+         const expiryWarning = timeSeriesExpiryWarning();
+         if (expiryWarning)
+            console.log(`\n[red][WARN] [yellow]time series TTL[red] ${expiryWarning}[/]`);
       }
       // Selection may have zeroed ratios. Size the sample from what this run still draws.
       const ratioSum = ratioTotal(fuzzer.ratios);
@@ -1160,6 +1166,80 @@
       return reasons;
    }
 
+   // Text and wildcard indexes are never legal. Any other type besides 1, -1,
+   // and 2dsphere is legal only on the metaField. The option lists are not rewritten.
+   function timeSeriesIndexKeyProblem(key, metaField) {
+      if (!isPlainObject(key))
+         return 'index key must be an object';
+      const fields = Object.keys(key);
+      if (fields.length === 0)
+         return 'index key is empty';
+      const problems = [];
+      fields.forEach(field => {
+         const type = key[field];
+         if (String(field).includes('$**')) {
+            problems.push('wildcard indexes are not supported');
+            return;
+         }
+         if (type === 'text') {
+            problems.push('text indexes are not supported');
+            return;
+         }
+         if (type === 1 || type === -1 || type === '2dsphere')
+            return;
+         if (metaField && field === metaField)
+            return;
+         problems.push(`"${field}" must be ascending, descending, or 2dsphere unless it is the metaField`);
+      });
+      return problems.length ? problems.join('; ') : null;
+   }
+
+   function timeSeriesIndexProblems(metaField) {
+      const reasons = [];
+      [
+         ['indexes', indexes],
+         ['hashedIndexes', hashedIndexes],
+         ['indexes2d', indexes2d],
+         ['textIndexes', textIndexes]
+      ].forEach(([label, list]) => {
+         if (!Array.isArray(list)) {
+            reasons.push(`time series ${label} must be an array`);
+            return;
+         }
+         list.forEach(key => {
+            const why = timeSeriesIndexKeyProblem(key, metaField);
+            if (why)
+               reasons.push(`time series ${label} key ${tojson(key)}: ${why}`);
+         });
+      });
+      return reasons;
+   }
+
+   function timeSeriesExpireProblem() {
+      const n = expireAfterSeconds;
+      if (typeof n === 'number' && Number.isFinite(n) && n >= 0)
+         return null;
+      return `time series expireAfterSeconds ${tojson(n)} must be a non-negative number`;
+   }
+
+   // Uniform uses offset. Normal can land further back, same 8-sigma window as the ObjectId check.
+   function timeSeriesExpiryWarning() {
+      if (!(typeof expireAfterSeconds === 'number' && expireAfterSeconds > 0))
+         return null;
+      if (!isPlainObject(fuzzer) || !Number.isFinite(+fuzzer.offset))
+         return null;
+      const day = 86400;
+      let lo = +fuzzer.offset;
+      if (String(fuzzer.distribution || '').toLowerCase() === 'normal' && Number.isFinite(+fuzzer.range)) {
+         const mu = lo + (+fuzzer.range / 2);
+         lo = Math.min(lo, mu - (8 * (+fuzzer.range / 2)));
+      }
+      if (lo * day + expireAfterSeconds > 0)
+         return null;
+      const field = (tsOptions && tsOptions.timeField) || 'timeField';
+      return `expireAfterSeconds ${expireAfterSeconds} already covers the start of the "${field}" window`;
+   }
+
    // A time series collection cannot be capped. Time series keeps its own checks.
    // A capped collection cannot be sharded, so this run leaves it unsharded.
    function cappedThisRun() {
@@ -1182,10 +1262,17 @@
       if (timeSeries) {
          const fit = timeSeriesSelection(willShard);
          if (fit.length)
-            return fit;
-         timeSeriesSchemaProblems(willShard).forEach(reason => reasons.push(reason));
-         if (willShard && timeSeriesShardKeyProblem(shardedOptions.key, tsOptions && tsOptions.metaField, tsOptions && tsOptions.timeField))
-            reasons.push(`time series shard key ${tojson(shardedOptions.key)} is not usable`);
+            fit.forEach(reason => reasons.push(reason));
+         else {
+            timeSeriesSchemaProblems(willShard).forEach(reason => reasons.push(reason));
+            if (willShard && timeSeriesShardKeyProblem(shardedOptions.key, tsOptions && tsOptions.metaField, tsOptions && tsOptions.timeField))
+               reasons.push(`time series shard key ${tojson(shardedOptions.key)} is not usable`);
+         }
+         const expireProblem = timeSeriesExpireProblem();
+         if (expireProblem)
+            reasons.push(expireProblem);
+         if (isPlainObject(indexPrefs) && indexPrefs.build)
+            timeSeriesIndexProblems(tsOptions && tsOptions.metaField).forEach(reason => reasons.push(reason));
       }
       if (willShard && shardKeyUsesHash(shardedOptions.key) && collation.locale !== 'simple')
          reasons.push('a non-simple collation on the hashed shard key conflicts with the simple hashed index');
@@ -1245,8 +1332,12 @@
             // Command field is timeseries. The option flag stays timeSeries.
             options.timeseries = tsOptions;
             console.log(`\twith time series options: ${tojson(tsOptions)}`);
-            options.expireAfterSeconds = expireAfterSeconds;
-            console.log(`\twith TTL options:\t"${expireAfterSeconds}"`);
+            // 0 means omit. A positive number is seconds after timeField.
+            if (typeof expireAfterSeconds === 'number' && expireAfterSeconds > 0) {
+               options.expireAfterSeconds = expireAfterSeconds;
+               console.log(`\twith TTL options:\t"${expireAfterSeconds}"`);
+            } else
+               console.log('\twith TTL options:\tnone');
          }
 
          try {
