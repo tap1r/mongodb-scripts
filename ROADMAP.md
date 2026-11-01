@@ -99,10 +99,11 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `ctxDemo.js` | 0.1.0 | **0.2.2** |
 | `schema-import.js` | 0.1.8 | **0.2.0** |
 | `discovery.js` | 0.2.1 | **0.2.2** |
+| `explainHisto.js` | 0.1.4 | **0.1.5** |
 | `compact.js` | 0.2.15 | **removed** (archive only) |
 | `batchUpdater.js` | 0.1.6 | **removed** (archive only) |
 
-Unchanged vs freeze (still in live `src/`): `explainHisto` 0.1.4, `connStats` 0.1.14, `rtt` 0.3.0, `oidGenerator` 0.2.7, `oidFunction` 0.1.5, `modifiedCountDocumentsByKey` 0.1.7.
+Unchanged vs freeze (still in live `src/`): `connStats` 0.1.14, `rtt` 0.3.0, `oidGenerator` 0.2.7, `oidFunction` 0.1.5, `modifiedCountDocumentsByKey` 0.1.7.
 
 #### 3. After the cut — strip and streamline
 
@@ -608,7 +609,9 @@ Scaling notes:
 
 ### `explainHisto.js`
 
-Aggregation `explain('executionStats')` stage-timer histogram. **Legacy archive line: v0.1.4** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Not dual-shell (`require` / `jsonc-require` / `./pipeline.jsonc`). Do not load mdblib, restore a `[mongo|mongosh]` usage line, or redeclare `const pipeline`. Post-freeze feature work proceeds on the mongosh line only.
+Aggregation `explain('executionStats')` stage-timer histogram. **Live: v0.1.5.** **Legacy archive line: v0.1.4** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Not dual-shell (`require` / `jsonc-require` / `./pipeline.jsonc`). Do not load mdblib, restore a `[mongo|mongosh]` usage line, or redeclare `const pipeline`. Post-freeze feature work proceeds on the mongosh line only.
+
+**0.1.5:** the bar is the per-stage cost. `executionTimeMillisEstimate` is cumulative from the start of the pipeline; the width uses the delta from the previous stage. A negative delta draws no bar. The printed total stays the sum of those deltas.
 
 Remaining mongosh-line work (do not block the archive):
 

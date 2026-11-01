@@ -1,6 +1,6 @@
 /*
  *  Name: "explainHisto.js"
- *  Version: "0.1.4"
+ *  Version: "0.1.5"
  *  Description: "Generates a text-based histogram of aggregation stage execution timers"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>explainHisto.js
 
 (() => {
-   const __script = { "name": "explainHisto.js", "version": "0.1.4" };
+   const __script = { "name": "explainHisto.js", "version": "0.1.5" };
    require('jsonc-require');
    const userPipeline = require('./pipeline.jsonc');
    const dbName = 'database';
@@ -72,20 +72,21 @@
          else name = 'Unknown';
       }
 
-      const time = stage.executionTimeMillisEstimate !== undefined ? stage.executionTimeMillisEstimate : 0;
-      const prevTime = index > 0 ? (stages[index - 1].executionTimeMillisEstimate || 0) : 0;
+      const time = +(stage.executionTimeMillisEstimate !== undefined ? stage.executionTimeMillisEstimate : 0) || 0;
+      const prevTime = index > 0 ? (+stages[index - 1].executionTimeMillisEstimate || 0) : 0;
       const delta = time - prevTime;
 
       return {
          "id": index,
          "name": name,
-         "time": +time,
-         "delta": delta
+         "time": time,
+         "delta": Number.isFinite(delta) ? delta : 0
       };
    });
 
-   // Calculate scaling
-   const maxTime = Math.max(...data.map(d => d.time));
+   // executionTimeMillisEstimate is cumulative from the start of the
+   // pipeline. The bar is the per-stage cost (delta), not that running total.
+   const maxDelta = Math.max(...data.map(d => d.delta));
    const maxBarLength = 40; // Max characters for the bar
    const totalTime = data.reduce((sum, d) => sum + d.delta, 0);
 
@@ -94,8 +95,9 @@
    console.log('━'.repeat(95));
 
    data.forEach(item => {
-      const pct = maxTime > 0 ? (item.time / maxTime) : 0;
-      const barLen = Math.round(pct * maxBarLength);
+      const cost = Math.max(0, item.delta);
+      const pct = maxDelta > 0 ? (cost / maxDelta) : 0;
+      const barLen = Math.max(0, Math.round(pct * maxBarLength));
       const bar = '░'.repeat(barLen);
 
       // Formatting columns
