@@ -167,18 +167,29 @@
   openssl pkcs12 -in cert.p12 -nocerts -nodes -out cert.pem
   ```
 
-## Atlas CA (new LetsEncrypt CA)
+## Atlas CA (Let's Encrypt and Google Trust Services)
 
-Acquire the [TrustID X3 root CA](https://www.identrust.com/dst-root-ca-x3) and [Intermediate LetsEncrypt X3 cross signed CA](https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem.txt) certificates employed by Atlas.
+Atlas signs cluster certificates with Let's Encrypt and Google Trust Services at the same time. Trust the roots, not an intermediate. The DST Root CA X3 / Let's Encrypt X3 chain expired in 2021.
 
-Import to the Java keystore (JKS) for Java driver support:
+A current JRE trust store already has these roots (Java 7u391 / 8u381 and later, and builds after 18 July 2023). Import them only into a custom trust store that does not use the JRE `cacerts`. GTS Root R3 and R4 are what Atlas uses for TLS 1.3. R1, R2, and ISRG Root X1 are still required. See the [Atlas security FAQ](https://www.mongodb.com/docs/atlas/reference/faq/security/).
 
 ```bash
-keytool -importcert -file lets-encrypt-x3-cross-signed.pem -keystore /path/to/keystore.jks -alias "Let's Encrypt X3"
-keytool -importcert -file trustid-x3-root.pem -keystore /path/to/keystore.jks -alias "TrustID X3 Root"
+curl -fsSL -o isrgrootx1.pem https://letsencrypt.org/certs/isrgrootx1.pem
+curl -fsSL -o gtsr1.pem https://pki.goog/repo/certs/gtsr1.pem
+curl -fsSL -o gtsr2.pem https://pki.goog/repo/certs/gtsr2.pem
+curl -fsSL -o gtsr3.pem https://pki.goog/repo/certs/gtsr3.pem
+curl -fsSL -o gtsr4.pem https://pki.goog/repo/certs/gtsr4.pem
+
+keytool -importcert -noprompt -trustcacerts -file isrgrootx1.pem -keystore /path/to/keystore.jks -alias "ISRG Root X1"
+keytool -importcert -noprompt -trustcacerts -file gtsr1.pem -keystore /path/to/keystore.jks -alias "GTS Root R1"
+keytool -importcert -noprompt -trustcacerts -file gtsr2.pem -keystore /path/to/keystore.jks -alias "GTS Root R2"
+keytool -importcert -noprompt -trustcacerts -file gtsr3.pem -keystore /path/to/keystore.jks -alias "GTS Root R3"
+keytool -importcert -noprompt -trustcacerts -file gtsr4.pem -keystore /path/to/keystore.jks -alias "GTS Root R4"
 ```
 
 ## Atlas CA (legacy DigiCert CA)
+
+Historical. Atlas no longer serves this chain.
 
 Acquire the Digicert Root ([DigiCert Global Root CA](https://dl.cacerts.digicert.com/DigiCertGlobalRootCA.crt)) and Intermediate CA ([DigiCert SHA2 Secure Server CA](https://dl.cacerts.digicert.com/DigiCertSHA2SecureServerCA.crt)) certificates employed by Atlas.
 
@@ -241,8 +252,12 @@ openssl x509 -inform der -in DigiCertSHA2SecureServerCA.crt -out DigiCertSHA2Sec
 
 * **Verify the server certificate against the CA via TLS**
 
+  `openssl verify` needs a PEM. `openssl x509 -text` is a text dump, so do not pipe that into `verify`.
+
   ```bash
-  openssl s_client -connect host.mongodb.net:27017 < /dev/null | openssl x509 -text | openssl verify -CAfile ca.pem
+  openssl s_client -connect host.mongodb.net:27017 < /dev/null 2>/dev/null \
+    | openssl x509 -outform PEM > /tmp/server.pem
+  openssl verify -CAfile ca.pem /tmp/server.pem
   ```
 
 * **Verify CA root chain from PEM files**
