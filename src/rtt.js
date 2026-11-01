@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "rtt.js"
-    *  Version: "0.3.2"
+    *  Version: "0.3.3"
     *  Description: "reports application round trip time latency"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -22,7 +22,7 @@
 
    // Syntax: mongosh [connection options] [--quiet] [-f|--file] </path/to/>rtt.js
 
-   const __script = { "name": "rtt.js", "version": "0.3.2" };
+   const __script = { "name": "rtt.js", "version": "0.3.3" };
    const banner = `\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`;
    console.clear();
    console.log(banner);
@@ -82,7 +82,7 @@
                      // Port is the last colon field: host:27017 and [ipv6]:port.
                      { "$first": "$advisoryHostFQDNs" },
                      ":",
-                     { "$arrayElemAt": [{ "$split": ["$_id", ":"] }, -1] }
+                     { "$last": { "$split": ["$_id", ":"] } }
                   ] }
                ]
             }

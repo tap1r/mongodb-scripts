@@ -98,9 +98,9 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `killAgedSessions.js` | 0.2.2 | **0.2.3** |
 | `ctxDemo.js` | 0.1.0 | **0.2.2** |
 | `schema-import.js` | 0.1.8 | **0.2.2** |
-| `discovery.js` | 0.2.1 | **0.2.3** |
+| `discovery.js` | 0.2.1 | **0.2.4** |
 | `explainHisto.js` | 0.1.4 | **0.1.5** |
-| `rtt.js` | 0.3.0 | **0.3.2** |
+| `rtt.js` | 0.3.0 | **0.3.3** |
 | `compact.js` | 0.2.15 | **removed** (archive only) |
 | `batchUpdater.js` | 0.1.6 | **removed** (archive only) |
 
@@ -438,11 +438,13 @@ Later (not this IIFE): point `compact` / `_id` rebuild at a single dbstats “co
 
 ### `discovery.js`
 
-**Live: v0.2.3.** **Legacy archive line: v0.2.1** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Do not strip named capture groups for legacy mongo. Post-freeze feature work proceeds on the mongosh line only. Header tags this file as requiring this roadmap.
+**Live: v0.2.4.** **Legacy archive line: v0.2.1** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Do not strip named capture groups for legacy mongo. Post-freeze feature work proceeds on the mongosh line only. Header tags this file as requiring this roadmap.
 
 **0.2.2:** a multi-host parent URI is parsed from the first host. `URL()` rejects comma-separated hosts. Child userinfo is re-encoded.
 
 **0.2.3:** when `config.mongos` has an advisory FQDN, the port is the last colon field of `_id`. That is `27017` for both `host:27017` and `[2001:db8::1]:27017`. The second field of a bracketed IPv6 id is not the port.
+
+**0.2.4:** that port is `$last` of the `_id` split. On 4.4 this is the array operator, an alias of `$arrayElemAt` index `-1`.
 
 **Apply (shell):** parent URIs stay `db.getMongo().getURI()` (already; do not switch to `mongo._uri`). WHATWG `URL` rejects comma-separated hosts: parse userinfo and query from the first host, and re-encode userinfo. Do not send awaitable `hello` (`maxAwaitTimeMS` / `topologyVersion`). A per-host job is `await load()` of a script whose argv test says it is not the CLI file (`dbstats.js` is the pattern), not a scraped banner.
 
@@ -693,11 +695,13 @@ Remaining mongosh-line work (do not block the archive): none.
 
 ### `rtt.js`
 
-**Live: v0.3.2.** **Legacy archive line: v0.3.0** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. TODOs stay TBA on the mongosh line.
+**Live: v0.3.3.** **Legacy archive line: v0.3.0** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. TODOs stay TBA on the mongosh line.
 
 **0.3.1:** the mongos child URI percent-encodes the driver username and password. Those values are plaintext. `@`, `:`, or `/` in the password no longer splits the URI. A null password is omitted rather than written as the word `null`.
 
 **0.3.2:** when `config.mongos` has an advisory FQDN, the port is the last colon field of `_id`. That is `27017` for both `host:27017` and `[2001:db8::1]:27017`.
+
+**0.3.3:** that port is `$last` of the `_id` split. On 4.4 this is the array operator, an alias of `$arrayElemAt` index `-1`.
 
 ### `sleepy.js`
 
