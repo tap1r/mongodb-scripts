@@ -1,6 +1,6 @@
 /*
  *  Name: "schema-sampler.js"
- *  Version: "0.4.0"
+ *  Version: "0.4.1"
  *  Description: generate schema with simulated mongosqld sampling commands
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,6 +13,9 @@
  *  - filter.db / filter.collection drive listDatabases and getCollectionInfos
  *    (RegExp, string, or array of names). Catalog results are also matched
  *    client-side so a server that ignores listDatabases.filter still honours them.
+ *  - Collections include type "timeseries". That name is the user namespace,
+ *    and on FCV 9.0 it is the only one. Views stay a separate list. The
+ *    default collection filter still skips system.*.
  *  - --eval var options overlays optionDefaults. Do not declare options in this file.
  */
 
@@ -35,7 +38,7 @@ const optionDefaults = {
 };
 
 (() => {
-   const __script = { "name": "schema-sampler.js", "version": "0.4.0" };
+   const __script = { "name": "schema-sampler.js", "version": "0.4.1" };
    print(`\n#### Running script ${__script.name} v${__script.version}\n`);
 
    function isPlainObject(value) {
@@ -110,11 +113,13 @@ const optionDefaults = {
       const sampleAgg = (coll, pipeline) => coll.aggregate(pipeline, aggOptions).toArray();
       const listOptions = { "nameOnly": true, "authorizedCollections": true };
       const collectionNameQuery = catalogNameQuery(filter.collection);
-      const listColFilter = { "type": "collection" };
-      const listViewFilter = { "type": "view" };
-      if (collectionNameQuery != null) {
-         listColFilter.name = collectionNameQuery;
-         listViewFilter.name = collectionNameQuery;
+      // Equality on type. listCollections does not promise $in on that field.
+      // "timeseries" is the logical name, including an FCV 9.0 viewless collection.
+      const sampledTypes = ["collection", "timeseries"];
+      function infosFilter(type) {
+         const listFilter = { "type": type };
+         if (collectionNameQuery != null) listFilter.name = collectionNameQuery;
+         return listFilter;
       }
 
       function listDatabaseNames() {
@@ -148,10 +153,11 @@ const optionDefaults = {
       }
 
       const namespace = (dbName, collName) => db.getSiblingDB(dbName).getCollection(collName);
+      const listInfos = (dbName, type) => db.getSiblingDB(dbName)
+         .getCollectionInfos(infosFilter(type), listOptions)
+         .filter(({ name }) => nameAccepted(name, filter.collection));
       const collections = dbName => {
-         return db.getSiblingDB(dbName)
-            .getCollectionInfos(listColFilter, listOptions)
-            .filter(({ name }) => nameAccepted(name, filter.collection))
+         return sampledTypes.flatMap(type => listInfos(dbName, type))
             .map(({ 'name': collName }) => ({
                "name":      collName,
                "documents": namespace(dbName, collName).estimatedDocumentCount(),
@@ -160,9 +166,7 @@ const optionDefaults = {
             }));
       };
       const views = dbName => {
-         return db.getSiblingDB(dbName)
-            .getCollectionInfos(listViewFilter, listOptions)
-            .filter(({ name }) => nameAccepted(name, filter.collection))
+         return listInfos(dbName, "view")
             .map(({ 'name': viewName, 'options': viewOptions }) => ({
                "name":     viewName,
                "options":  viewOptions,
