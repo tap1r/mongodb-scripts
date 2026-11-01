@@ -259,7 +259,7 @@ p.finally(process.stdout.write('\x1b[?1049l'));
 p.finally(() => { process.stdout.write('\x1b[?1049l'); });
 ```
 
-Live `src/congestionMonitor.js` (v0.5.0) uses `.finally(() => process.stdout.write(…))` so the restore waits for the EQ paints. Archive freeze v0.2.13 passes `process.stdout.write(...)` directly; that write runs when the chain is built (wontfix on the freeze line).
+Live `src/congestionMonitor.js` (v0.5.1) restores the terminal on `process` `exit` (`\x1b[?1049l` then `\x1b[?25h`). The EQ loops do not settle, so a `.finally` on those promises never runs. Each private-mode change is its own sequence: `l` or `h` ends the CSI. Archive freeze v0.2.13 passes `process.stdout.write(...)` directly; that write runs when the chain is built (wontfix on the freeze line).
 
 ### Thenable cursors: do not `await` a live cursor
 

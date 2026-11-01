@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.5.0"
+    *  Version: "0.5.1"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,7 +11,9 @@
     *  Legacy archive line: v0.2.13 is the snapshot for this script. mongosh-only
     *  (incompatible with legacy mongo); still the demarked version for the
     *  whole-tree freeze. Archive `.finally(process.stdout.write(…))` is wontfix
-    *  on that line. Live wraps `.finally(() => process.stdout.write(…))`.
+    *  on that line. Live restores the terminal on process exit
+    *  (`?1049l` then `?25h`). A combined CSI ends at `l`.
+    *  The EQ draws do not settle.
     *  Mongos: child mongodb:// to shard primaries (collection owners when
     *  dbName/collName are set via --eval var, else all listShards); worst-shard
     *  fold. URI construction matches niceDeleteMany.js. Do not load() that file.
@@ -1072,17 +1074,30 @@
       }
       const tableWidth = Math.max(54, tableTitle.length + 6);
       const titleSpacing = (tableWidth - tableTitle.length) / 2;
-      process.stdout.write('\x1b[?25l;1049h]'); // disable the console cursor and enable alternate buffer 
+      // Each private mode is its own CSI. `l` or `h` is the final byte, so
+      // `\x1b[?25l;1049h]` hides the cursor and prints `;1049h]` as text.
+      // Enter the alternate screen, then hide the cursor after clear().
+      // EQ.draw() never settles, so restore on process exit (mongosh Ctrl+C
+      // reaches that hook). Leave the alternate screen, then show the cursor.
+      let consoleRestored = false;
+      const restoreConsole = () => {
+         if (consoleRestored) return;
+         consoleRestored = true;
+         try { process.stdout.write('\x1b[?1049l\x1b[?25h'); }
+         catch (_) { /* stdout already closed */ }
+      };
+      process.stdout.write('\x1b[?1049h');
       console.clear();
+      process.stdout.write('\x1b[?25l');
+      process.on('exit', restoreConsole);
       console.log('╭' + '─'.repeat(titleSpacing - 1) + '┤' + tableTitle + '├' + '─'.repeat(titleSpacing - 1) + '╮');
       metrics.forEach(() => {
          console.log('│'+ ' '.repeat(tableWidth) + '│'); 
       });
       console.log('╰'+ '─'.repeat(tableWidth) + '╯');
-      Promise.allSettled( // do not await to background thread
-         // begin rendering EQ bars
+      Promise.allSettled( // draws loop until the process exits; do not restore here
          metrics.map(({ eq }) => eq.draw())
-      ).finally(() => process.stdout.write('\x1b[?1049l;25h]')); // disable alternate buffer and re-enable the console cursor
+      );
 
       while (true) { // refresh stats
          if (shardVitals.enabled) {
