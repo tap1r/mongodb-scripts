@@ -841,7 +841,8 @@ class CollectionStats extends StorageMetrics {
    /*
     *  Catalog identity first (name, type, dbName). Storage fields stay at
     *  constructor defaults until fetchStats / applyCollStats. type is kept
-    *  so listedCollectionCount can exclude timeseries after stats land.
+    *  so listedCollectionCount can tell a viewful timeseries name from a
+    *  collection. FCV 9.0 counts that name toward ncollections.
     */
    constructor(dto = {}) {
       super(dto);

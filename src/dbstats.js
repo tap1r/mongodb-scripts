@@ -745,14 +745,29 @@
       return isSharded() ? 4 : 8;
    }
 
+   function viewlessTimeseries() {
+      /*
+       *  FCV 9.0 stores a time series as one namespace. db.stats().collections
+       *  counts that name. Below FCV 9.0 the counted namespace is
+       *  system.buckets.* and the timeseries name is an extra list entry.
+       *  fCV() falls back to the binary on Atlas M0/Flex.
+       */
+      return typeof fCV === 'function' && fCV(9);
+   }
+
    function catalogSliceNeedsLegacy(database, slice) {
       /*
        *  Empty or collection-less slice while $stats reports collections/views:
        *  $listCatalog missed the DB (8.0 redaction of local/config, authz, or
-       *  timeseries name without system.buckets). Fall back to listCollections.
+       *  a viewful timeseries name without system.buckets). Fall back to
+       *  listCollections. An FCV 9.0 timeseries row covers its ncollections
+       *  entry.
        */
       const rows = Array.isArray(slice) ? slice : [];
-      const hasCollection = rows.some(e => e && e.type === 'collection');
+      const viewless = viewlessTimeseries();
+      const hasCollection = rows.some(e => e && (
+         e.type === 'collection' || (viewless && e.type === 'timeseries')
+      ));
       const hasView = rows.some(e => e && e.type === 'view');
       const ncoll = database.ncollections;
       const nviews = database.nviews;
@@ -935,19 +950,24 @@
 
    function countListedCollections(infos = []) {
       /*
-       *  $stats.collections counts type:collection (including system.buckets).
-       *  listCollections of collection|timeseries also returns the timeseries
-       *  name — exclude those from the coverage count.
+       *  Compare to $stats.collections. Below FCV 9.0 a timeseries name is
+       *  extra (system.buckets.* is the counted collection). On FCV 9.0 the
+       *  timeseries name is that collection.
        */
-      return infos.reduce((n, c) => n + ((c && c.type) === 'timeseries' ? 0 : 1), 0);
+      const countTimeseries = viewlessTimeseries();
+      return (infos || []).reduce((n, c) => {
+         if (!c) return n;
+         if (!countTimeseries && c.type === 'timeseries') return n;
+         return n + 1;
+      }, 0);
    }
 
    function catalogCoverageComplete(database) {
       /*
        *  Fetched collections cover the database the table is claiming to subtotal.
        *  Sharded ncollections is a per-shard array (not unique NS) — skip the count check.
-       *  Compare $stats.collections to listed type:collection, not to
-       *  collections.length (timeseries names are extra list entries).
+       *  Compare $stats.collections to listedCollectionCount, not to
+       *  collections.length. Below FCV 9.0 that count omits timeseries names.
        */
       if (database.catalogError) return false;
       if (catalogFilterRestricts()) return false;
