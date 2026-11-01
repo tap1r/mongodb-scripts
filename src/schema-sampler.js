@@ -1,6 +1,6 @@
 /*
  *  Name: "schema-sampler.js"
- *  Version: "0.4.1"
+ *  Version: "0.4.2"
  *  Description: generate schema with simulated mongosqld sampling commands
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -16,6 +16,9 @@
  *  - Collections include type "timeseries". That name is the user namespace,
  *    and on FCV 9.0 it is the only one. Views stay a separate list. The
  *    default collection filter still skips system.*.
+ *  - getCollectionInfos is not nameOnly. nameOnly drops options, so a view
+ *    loses viewOn/pipeline and a timeseries loses options.timeseries.
+ *    listDatabases stays nameOnly.
  *  - --eval var options overlays optionDefaults. Do not declare options in this file.
  */
 
@@ -38,7 +41,7 @@ const optionDefaults = {
 };
 
 (() => {
-   const __script = { "name": "schema-sampler.js", "version": "0.4.1" };
+   const __script = { "name": "schema-sampler.js", "version": "0.4.2" };
    print(`\n#### Running script ${__script.name} v${__script.version}\n`);
 
    function isPlainObject(value) {
@@ -111,7 +114,9 @@ const optionDefaults = {
       };
       aggOptions.readPreference = { "mode": readPreference };
       const sampleAgg = (coll, pipeline) => coll.aggregate(pipeline, aggOptions).toArray();
-      const listOptions = { "nameOnly": true, "authorizedCollections": true };
+      // nameOnly drops options: a view loses viewOn/pipeline and a timeseries
+      // loses options.timeseries. listDatabases stays nameOnly.
+      const listOptions = { "authorizedCollections": true };
       const collectionNameQuery = catalogNameQuery(filter.collection);
       // Equality on type. listCollections does not promise $in on that field.
       // "timeseries" is the logical name, including an FCV 9.0 viewless collection.
@@ -158,8 +163,9 @@ const optionDefaults = {
          .filter(({ name }) => nameAccepted(name, filter.collection));
       const collections = dbName => {
          return sampledTypes.flatMap(type => listInfos(dbName, type))
-            .map(({ 'name': collName }) => ({
+            .map(({ 'name': collName, 'options': collOptions }) => ({
                "name":      collName,
+               "options":   collOptions,
                "documents": namespace(dbName, collName).estimatedDocumentCount(),
                "indexes":   namespace(dbName, collName).getIndexes(),
                "$sample":   sampleAgg(namespace(dbName, collName), collectionPipeline)
