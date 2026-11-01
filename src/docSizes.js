@@ -1,6 +1,6 @@
 /*
  *  Name: "docSizes.js"
- *  Version: "0.1.35"
+ *  Version: "0.1.36"
  *  Description: "sample document size distribution"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -30,7 +30,7 @@ const optionDefaults = {
    /*
     *  main
     */
-   const __script = { "name": "docSizes.js", "version": "0.1.35" };
+   const __script = { "name": "docSizes.js", "version": "0.1.36" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    // Caller: var options = { ... } (--eval or REPL). Do not declare or assign it in this file.
@@ -42,12 +42,13 @@ const optionDefaults = {
    const hello = db.hello();
    if (typeof readPref === 'undefined')
       (readPref = (hello.secondary === false) ? 'primaryPreferred' : 'secondaryPreferred');
-   try { // not direct-shard-friendly
-      if (db.getSiblingDB(dbName).getCollectionInfos({ "name": collName }, { "nameOnly": true })[0]?.name !== collName)
-         throw 'namespace does not exist';
-   } catch(e) {
-      console.error(`${dbName}.${collName}`, e.errmsg ?? e.message ?? String(e));
-   }
+   // Connected node's catalog. A name that node does not list stops the script.
+   const listed = db.getSiblingDB(dbName).getCollectionInfos(
+      { "name": collName },
+      { "nameOnly": true }
+   );
+   if (listed[0]?.name !== collName)
+      throw new Error(`${__script.name}: ${dbName}.${collName} does not exist`);
 
    // retrieve collection metadata
    const namespace = db.getSiblingDB(dbName).getCollection(collName);

@@ -90,7 +90,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `latency.js` | 0.4.9 | **0.4.11** |
 | `schema-sampler.js` | 0.2.16 | **0.4.1** |
 | `sleepy.js` | 0.2.6 | **0.2.7** |
-| `docSizes.js` | 0.1.34 | **0.1.35** |
+| `docSizes.js` | 0.1.34 | **0.1.36** |
 | `niceDeleteMany.js` | 0.4.11 | **1.0.1** |
 | `congestionMonitor.js` | 0.2.13 | **0.5.1** |
 | `onlineDefrag.js` | 0.1.4 | **1.8.0** |
@@ -693,9 +693,11 @@ Remaining mongosh-line work (do not block the archive): none.
 
 ### `docSizes.js`
 
-**Live: v0.1.35.** **Archive: v0.1.34.** Per-command RP on `$sample`. `--eval` `var options` overlays in-file `optionDefaults` (`dbName`, `collName`, `sampleSize`). Do not declare `options` in this file. Does not load mdblib.
+**Live: v0.1.36.** **Archive: v0.1.34.** Per-command RP on `$sample`. `--eval` `var options` overlays in-file `optionDefaults` (`dbName`, `collName`, `sampleSize`). Do not declare `options` in this file. Does not load mdblib.
 
 **Shipped:** `--eval` `var options` overlay (no version bump).
+
+**0.1.36:** a namespace the connected node does not list throws and stops. The old check printed the miss and then read `stats()`.
 
 Remaining mongosh-line work (do not block the archive): none.
 
