@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "congestionMonitor.js"
-    *  Version: "0.4.0"
+    *  Version: "0.5.0"
     *  Description: "realtime monitor for mongod congestion vitals, designed for use with client side admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -62,7 +62,6 @@
       "queues": true,
       "shardingStatistics": true,
       "storageEngine": true,
-      "tenantMigrations": true,
       "tcmalloc": true,
       "wiredTiger": true
    };
@@ -304,7 +303,6 @@
       const readLpQ = execQueueLength(readQ, 'lowPriority');
       const writeLpQ = execQueueLength(writeQ, 'lowPriority');
       const deprioGate = !!executionControlDeprioritizationGate;
-      const tm = ss.tenantMigrations ?? {};
       return {
          ...eviction,
          "cacheSizeBytes": cacheSizeBytes,
@@ -388,7 +386,6 @@
          "usesThroughputProbing": !!exec.usesThroughputProbing,
          "usesThroughputProbingStatus": !!exec.usesThroughputProbing ? 'high' : 'low',
          "usesThroughputProbingScale": 1,
-         "activeShardMigrations": (tm.currentMigrationsDonating > 0 || tm.currentMigrationsReceiving > 0),
          "activeFlowControl": ss.flowControl?.isLagged === true && ss.flowControl?.enabled === true,
          "activeIndexBuilds": (ss.indexBuilds?.total ?? 0) > (ss.indexBuilds?.phases?.commit ?? 0)
             || (ss.activeIndexBuilds?.total ?? 0) > 0,
@@ -445,7 +442,7 @@
       "cacheEvictions", "dirtyCacheEvictions", "dirtyUpdatesCacheEvictions",
       "evictionsTriggered", "backupCursorOpen", "usesThroughputProbing",
       "executionControlDeprioritizationGate",
-      "activeShardMigrations", "activeFlowControl", "activeIndexBuilds",
+      "activeFlowControl", "activeIndexBuilds",
       "activeRangeDeleter", "activeCheckpoint", "slowRecentCheckpoint"
    ];
    const VITALS_FOLD_STATUS = [

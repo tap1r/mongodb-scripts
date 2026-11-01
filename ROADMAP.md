@@ -92,7 +92,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `sleepy.js` | 0.2.6 | **0.2.7** |
 | `docSizes.js` | 0.1.34 | **0.1.35** |
 | `niceDeleteMany.js` | 0.4.11 | **1.0.1** |
-| `congestionMonitor.js` | 0.2.13 | **0.4.0** |
+| `congestionMonitor.js` | 0.2.13 | **0.5.0** |
 | `onlineDefrag.js` | 0.1.4 | **1.8.0** |
 | `indexCacheUtil.js` | 0.1.5 | **1.2.0** |
 | `killAgedSessions.js` | 0.2.2 | **0.2.3** |
@@ -449,9 +449,11 @@ Later (not this IIFE): point `compact` / `_id` rebuild at a single dbstats “co
 
 ### `congestionMonitor.js`
 
-**Live: v0.4.0.** **Legacy archive line: v0.2.13** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Known `.finally(process.stdout.write(…))` (write runs immediately) is **wontfix on this line**. Live wraps `.finally(() => process.stdout.write(…))`. Post-freeze feature work proceeds on the mongosh line only.
+**Live: v0.5.0.** **Legacy archive line: v0.2.13** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. Known `.finally(process.stdout.write(…))` (write runs immediately) is **wontfix on this line**. Live wraps `.finally(() => process.stdout.write(…))`. Post-freeze feature work proceeds on the mongosh line only.
 
 **Shipped** on the live mongosh line (archive freeze stays v0.2.13): per-shard WT fold (collection-owning or all shard primaries; child `mongodb://` matches niceDeleteMany, no `load()`); MongoDB 8 execution-control on the snapshot + EQ (`executionControlDeprioritizationGate`, `usesThroughputProbing`, normal and low-priority `queues.execution.{read,write}.queueLength`, interval wait from `totalTimeQueuedMicros`); `bytes_dirty_intl` / `bytes_dirty_leaf` mapped from `tracked dirty internal/leaf page bytes in the cache`. Monitor-only — niceDeleteMany AIMD does not trip on execution-control. `lowPriorityAdmissionBypassThreshold` is dropped.
+
+**0.5.0:** drops the `tenantMigrations` opt-in and the `activeShardMigrations` vital. That section was the serverless tenant-migration gauge, removed in 8.1. `activeRangeDeleter` stays on `shardingStatistics.rangeDeleterTasks`.
 
 Remaining mongosh-line work (do not block the archive): none.
 
