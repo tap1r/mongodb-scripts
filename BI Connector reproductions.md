@@ -46,7 +46,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
 3. Substitute for the given parameters in the use case template where required:
 
    - _`{host}`_ (_`db1.example.net:27017`_ format)
-   - _`{uri}`_ (_`mongodb://db1.example.net,db2.example.net:27017/?replicaSet=rs0`_ format)
+   - _`{uri}`_ (_`mongodb://db1.example.net:27017,db2.example.net:27017/?replicaSet=rs0`_ format)
    - _`{srv}`_ (_`mongodb+srv://srv.example.net/`_ format)
    - _`{bi_host}`_ (_`bic.example.net`_ format)
    - _`{bi_user}`_ (end user)
@@ -97,7 +97,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
 ### _mongosqld_ startup parameters
 
    ```bash
-   mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-authenticationSource admin -vv -u {user} -p {passwd}
+   mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-authenticationSource admin -vv -u {admin_user} -p {admin_passwd}
    ```
 
 ### _mysql_ connection string
@@ -111,7 +111,7 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
 ### _mongosqld_ startup parameters
 
    ```bash
-   mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --mongo-sslCAFile=mongodb.pk8 --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -vv -u {user} -p {passwd}
+   mongosqld --addr 0.0.0.0:3307 --mongo-uri {uri} --auth --mongo-ssl --mongo-sslCAFile=mongodb.pk8 --sslCAFile=mongodb.pk8 --sslPEMKeyFile=mongodb.pk8 --sslMode=allowSSL --mongo-authenticationSource admin -vv -u {admin_user} -p {admin_passwd}
    ```
 
 ### _mysql_ connection string
@@ -134,11 +134,12 @@ Generate a matching command syntax set for _`mysql`_, _`mongosqld`_ and _`mongod
 
 ## Read preferences
 
-To change from the default _Primary_ preference, add either of the following to the _`mongosqld`_ startup parameters:
+To change from the default _Primary_ preference, add `readPreference` to the MongoDB URI. Use `?` when the URI has no query string, and `&` when it already has one. Each seed host carries its own port.
 
 ```text
---mongo-uri {uri|srv}&readPreference=secondaryPreferred
---mongo-uri {host}/?connect=direct&readPreference=secondaryPreferred
+--mongo-uri mongodb://db1.example.net:27017,db2.example.net:27017/?replicaSet=rs0&readPreference=secondaryPreferred
+--mongo-uri mongodb+srv://srv.example.net/?readPreference=secondaryPreferred
+--mongo-uri mongodb://db1.example.net:27017/?connect=direct&readPreference=secondaryPreferred
 ```
 
 ## Sampling modes
