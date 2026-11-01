@@ -10,7 +10,7 @@
     *  Dual-shell snapshot: legacy/mongo-shell (v0.4.36). This file is mongosh-only.
     *
     *  Notes:
-    *  - automates the autoCompact command with monitoring (https://www.mongodb.com/docs/v8.0/reference/command/autoCompact/)
+    *  - automates the autoCompact command with monitoring (https://www.mongodb.com/docs/manual/reference/command/autoCompact/)
     *  - mongosh only; MongoDB 8.0+ WiredTiger mongod (not mongos); FCV 8.0+ (binary 8 with FCV 7 is rejected). Do not top-level-await this IIFE (rewriter SyntaxError)
     *  - Atlas M0/Flex fails fast; serverless platform string kept (deprecated). https://www.mongodb.com/docs/atlas/unsupported-commands/
     *  - per mongod only (not replicated); excludes local.oplog.rs
