@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.6.1"
+ *  Version: "1.6.2"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.6.1" };
+   const __script = { "name": "fuzzer.js", "version": "1.6.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -1242,7 +1242,8 @@
             console.log(`\twith capped options:\t"${tojson(cappedOptions)}"`);
          }
          if (timeSeries && fCV(5.0) && !isAtlasPlatform('serverless')) {
-            options.timeSeries = tsOptions;
+            // Command field is timeseries. The option flag stays timeSeries.
+            options.timeseries = tsOptions;
             console.log(`\twith time series options: ${tojson(tsOptions)}`);
             options.expireAfterSeconds = expireAfterSeconds;
             console.log(`\twith TTL options:\t"${expireAfterSeconds}"`);
