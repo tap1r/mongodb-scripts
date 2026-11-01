@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "discovery.js"
-    *  Version: "0.2.1"
+    *  Version: "0.2.2"
     *  Description: "Topology discovery with directed command execution"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -335,29 +335,37 @@
    function decomposeParentUri(rawUri = db.getMongo().getURI()) {
       /*
        *  Parent session URI → parts for rebuilding legacy mongodb:// child URIs.
-       *  Parent may be mongodb:// or mongodb+srv://. Hosts always come from topology
-       *  discovery (not DNS SRV re-expansion). Credentials are left as mongosh reports
-       *  them (already URL-safe). Query params are preserved except srvMaxHosts and
-       *  srvServiceName. isSrv drives TLS default when recomposing.
+       *  Public Mongo.getURI(); mongosh _uri is private and can lag.
+       *  WHATWG URL rejects comma-separated hosts: parse userinfo and query
+       *  via the first host. Child hosts come from topology discovery.
+       *  Do not log the URI.
        */
       if (!rawUri || typeof rawUri !== 'string') {
          throw new Error('decomposeParentUri: missing parent URI');
       }
 
       const isSrv = /^mongodb\+srv:/i.test(rawUri);
-      // Parse with a non-SRV scheme so URL() accepts the string; children always emit mongodb://
       const parseable = rawUri.replace(/^mongodb\+srv:/i, 'mongodb:');
+      const withoutScheme = parseable.replace(/^mongodb:\/\//i, '');
+      const authEnd = withoutScheme.search(/[/?]/);
+      const authority = authEnd >= 0 ? withoutScheme.slice(0, authEnd) : withoutScheme;
+      const at = authority.lastIndexOf('@');
+      const hosts = at >= 0 ? authority.slice(at + 1) : authority;
+      const userinfo = at >= 0 ? authority.slice(0, at + 1) : '';
+      const rest = authEnd >= 0 ? withoutScheme.slice(authEnd) : '/';
+      const firstHost = (hosts.split(',')[0] || '').trim() || 'localhost';
       let url;
       try {
-         url = new URL(parseable);
+         url = new URL(`mongodb://${userinfo}${firstHost}${rest || '/'}`);
       } catch(e) {
          throw new Error(`decomposeParentUri: cannot parse parent URI (${e.message})`);
       }
 
       const searchParams = new URLSearchParams(url.searchParams);
-      // Only these SRV options must not ride onto non-SRV / multi-host / direct child URIs
+      // SRV options must not ride onto non-SRV / multi-host / direct child URIs
       searchParams.delete('srvMaxHosts');
       searchParams.delete('srvServiceName');
+      searchParams.delete('srvQueryTimeoutMS');
 
       return {
          "isSrv": isSrv,
@@ -371,17 +379,23 @@
 
    function formatLegacyMongoUri({ username = '', password = '', hosts, pathname = '/', searchParams } = {}) {
       /*
-       *  Always emit mongodb:// (never mongodb+srv). Userinfo passed through as-is.
+       *  Always emit mongodb:// (never mongodb+srv). Re-encode userinfo:
+       *  URL() may return decoded or already-percent-encoded username/password.
        */
       if (!hosts) {
          throw new Error('formatLegacyMongoUri: hosts required');
       }
 
+      const encodePart = (value) => {
+         let decoded = String(value);
+         try { decoded = decodeURIComponent(decoded); } catch(_) { /* keep raw */ }
+         return encodeURIComponent(decoded);
+      };
       let auth = '';
       if (username) {
-         auth = username;
+         auth = encodePart(username);
          if (password !== '' && password != null) {
-            auth += `:${password}`;
+            auth += `:${encodePart(password)}`;
          }
          auth += '@';
       }
@@ -405,7 +419,7 @@
       params.delete('maxStalenessSeconds');
       params.delete('minPoolSize');
       params.delete('maxPoolSize');
-      // srvMaxHosts / srvServiceName already stripped in decomposeParentUri
+      // srvMaxHosts / srvServiceName / srvQueryTimeoutMS already stripped in decomposeParentUri
 
       // mongodb+srv implies TLS by default; mongodb:// does not — apply if unset
       if (parent.isSrv && !params.has('tls') && !params.has('ssl')) {
