@@ -9,7 +9,7 @@
  *
  *  Notes:
  *  - synthetic slow op via $function + sleep (javascriptEnabled; unsupported
- *    on Atlas Flex; $function deprecated toward $sleep).
+ *    on Atlas Flex).
  *  - getLog("global") + EJSON.parse to recover durationMillis.
  */
 
@@ -46,7 +46,6 @@
       { "$project": {
          "_id": 0,
          "slowms": {
-            // deprecated operator in v8, likely to be replaced with a future $sleep operator
             "$function": { // unsupported on Flex tier
                "body": `function(ms) { sleep(ms) }`,
                "args": [slowms],
