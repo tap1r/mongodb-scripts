@@ -36,7 +36,7 @@ Driver pages: 136 kB
 Xen hard limit: ??? kB
 ```
 
-## Combined scipt
+## Combined script
 
 ```bash
 sudo dmidecode -s system-product-name

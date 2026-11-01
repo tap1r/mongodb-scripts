@@ -13,7 +13,7 @@ Status is implied by section: **planned** unless marked later / hardening.
 - **Required context.** A script header `Roadmap: … (required context)` means this file is an input to edits of that script. Open the matching [By script](#by-script) section before changing it. The tag is not a version pin.
 - **`MiniHud` / `mapPool`.** Shipped in `mdblib.js` **v0.17.0** (`process.stdout.write('\\r')`, never `console.log`). **dbstats P1** (v0.14.3) is the first consumer: catalog-first `N`, then a global `$collStats` in-flight cap drives a TTY mini-HUD (`done/total`, in-flight/queued, optional ETA); `onDatabase` still rolls each DB when its collections complete. Shared emit rules: TTY progress only; silent in json / html / redirected mode — never `\\r` bars in piped logs. Finite walks (dbstats) may show % / ETA; long-running AIMD tools (niceDeleteMany) stay congestion-only. Clear the HUD before the tabular report.
 - **Topology fan-out.** Per-mongod tools (`autoCompact`, WT vitals, dbstats snapshots) eventually ride `discovery.js`. Until then, operators target members with a direct connection.
-- **Legacy mongo shell retirement.** Dual-shell tree archived **2026-09-01** at [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/) (tag `legacy-mongo-shell` on `c78904f`). Live `src/` is **mongosh-only** after the [strip pass](#3-after-the-cut--strip-and-streamline-next-general-architecture). Current library: **`mdblib.js` v1.1.3**.
+- **Legacy mongo shell retirement.** Dual-shell tree archived **2026-09-01** at [`legacy/mongo-shell/src/`](legacy/mongo-shell/src/) (tag `legacy-mongo-shell` on `c78904f`). Live `src/` is **mongosh-only** after the [strip pass](#3-after-the-cut--strip-and-streamline). Current library: **`mdblib.js` v1.1.3**.
 - **Distribution (TABLED).** npm consumption model and active upgrades via `fetch()` — see [Script consumption](#script-consumption-unify-standalone-vs-modular). Live path stays `mongosh --file` + `load()`. Do not re-propose as the next leftover.
 
 ### Legacy mongo shell retirement
@@ -103,9 +103,9 @@ No further dual-shell feature work on the archived line. Operators who still hav
 
 Unchanged vs freeze (still in live `src/`): `explainHisto` 0.1.4, `connStats` 0.1.14, `discovery` 0.2.1, `rtt` 0.3.0, `oidGenerator` 0.2.7, `oidFunction` 0.1.5, `modifiedCountDocumentsByKey` 0.1.7.
 
-#### 3. After the cut — strip and streamline (next general architecture)
+#### 3. After the cut — strip and streamline
 
-**Executed in live `src/` (`mdblib.js` v0.15.11, now v0.15.13).** Archive is unchanged. Remaining helper work (`for(db)`, MetaStats) is not this pass.
+**Executed in live `src/` (shim deletion in `mdblib.js` v0.15.11).** Archive is unchanged. Live library is **v1.1.3**. `for(db)` is still later. The `MetaStats` façade was dropped after this pass.
 
 Done in this pass:
 

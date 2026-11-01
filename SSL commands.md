@@ -174,7 +174,7 @@ Acquire the [TrustID X3 root CA](https://www.identrust.com/dst-root-ca-x3) and [
 Import to the Java keystore (JKS) for Java driver support:
 
 ```bash
-keytool -importcert -file lets-encrypt-x3-cross-signed.pem -keystore /path/to/keystore.jks -alias "Let's Eencrypt X3"
+keytool -importcert -file lets-encrypt-x3-cross-signed.pem -keystore /path/to/keystore.jks -alias "Let's Encrypt X3"
 keytool -importcert -file trustid-x3-root.pem -keystore /path/to/keystore.jks -alias "TrustID X3 Root"
 ```
 

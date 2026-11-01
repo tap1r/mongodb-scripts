@@ -32,7 +32,7 @@ Scan for listening ports
 nmap -sT -p 27017-27019,37017-37019 localhost external
 ```
 
-Validate the SNI header by inspecting the returned SSL subject/SAN attributes.  Using the [TLS Server tests](https://github.com/tap1r/mongodb-scripts/blob/master/SSL%20commands.md#tls-server-tests) as a basis, we can fomulate this command:
+Validate the SNI header by inspecting the returned SSL subject/SAN attributes.  Using the [TLS Server tests](https://github.com/tap1r/mongodb-scripts/blob/master/SSL%20commands.md#tls-server-tests) as a basis, we can formulate this command:
 
 ```bash
 openssl s_client -connect external:27017 < /dev/null | openssl x509 -noout -text | grep "subject=\|Subject:\|X509v3\ Subject\ Alternative\ Name:\|DNS:"

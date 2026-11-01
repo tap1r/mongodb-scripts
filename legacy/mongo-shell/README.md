@@ -5,7 +5,7 @@ Last **dual-shell** (`mongo` 4.4+ / mongosh) snapshot of `src/`.
 | | |
 |--|--|
 | Cut date | 2026-09-01 |
-| Intended git tag | `legacy-mongo-shell` (on the commit that adds this tree) |
+| Git tag | `legacy-mongo-shell` on `c78904f` (pushed) |
 | Library | `src/mdblib.js` **v0.15.10** — pair archived scripts with this file |
 | mongod floor | 4.4 |
 | Legacy `mongo` floor | 4.4 |

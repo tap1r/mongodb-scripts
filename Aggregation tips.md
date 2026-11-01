@@ -34,31 +34,37 @@ The [oplogchurn.js](src/oplogchurn.js) script provides a metric of real-time opl
 
 ### Using _oplogchurn.js_
 
-Sample syntax to run against either the _mongo_ or _mongosh_ shells:
+mongosh only. The dual-shell copy is in `legacy/mongo-shell/`.
 
 ```bash
-[mongo|mongosh] [connection options] --quiet oplogchurn.js
+mongosh [connection options] [--quiet] [-f|--file] oplogchurn.js
 ```
 
 ### Sample output
 
+Rules are 62 columns. Label rows use a 36-character header and a 25-character value, so they are one column shorter. Sizes come from `AutoFactor` (MiB, not MB).
+
 ```text
-============================================================
-Start time:                         2020-11-16T00:12:39.117Z
-End time:                           2020-11-16T01:12:39.117Z
-Interval duration:                                   1 hr(s)
-Average oplog compression ratio:                      1.84:1
-Interval document count:                                 377
-Interval data size:                                  0.04 MB
-Estimated interval storage size:                     0.02 MB
-------------------------------------------------------------
-Estimated current oplog churn:                    0.02 MB/hr
-============================================================
+══════════════════════════════════════════════════════════════
+Hostname:                                  db-host.example.com
+dbPath:                                               /data/db
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Start time:                          2020-11-16T00:12:39.117Z
+End time:                            2020-11-16T01:12:39.117Z
+Requested interval:                                      1 hr
+Observed interval:                                       1 hr
+Average oplog compression ratio:                       1.84:1
+Interval document count:                                  377
+Interval data size:                                  0.04 MiB
+Estimated interval storage size:                     0.02 MiB
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Estimated current oplog data churn:               0.02 MiB/hr
+══════════════════════════════════════════════════════════════
 ```
 
 ## Schema analysis
 
-A aggregation pipeline to describe a collection _schema_ as inferred from a canonicalised document _shape_.
+An aggregation pipeline to describe a collection _schema_ as inferred from a canonicalised document _shape_. [schema-sampler.js](src/schema-sampler.js) samples a catalog and writes JSON. This snippet is a one-off shape for a single collection.
 
 ```javascript
 (() => {
