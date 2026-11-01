@@ -1,34 +1,41 @@
 # Kerberos AES interop requirements
 
-Internal research that has illustrated a known interoperability issue between MIT Kerberos and MS Active Directory.  That in particular is the choice of salt used by the _keytab_ generation tools, which happen to differ.  The following is an internally developed procedure that we use to workaround this limitation during the _keytab_ generation.
+MIT Kerberos and Active Directory derive an AES keytab entry with different salts. `ktutil` salts with the principal you name. Active Directory salts a user account with the user principal name (UPN), then the service uses the service principal name (SPN). Generating the entry directly as the SPN produces a key Active Directory will not accept.
+
+This is MIT `ktutil` (`addent`, `list`, `delent`, `wkt`). The Heimdal `ktutil` on macOS does not take these commands.
 
 ## Ensure the AES ciphers are enabled
 
-In the _`krb5.conf`_ file, add the following snippet:
+In `krb5.conf`:
 
-```yaml
+```ini
 [libdefaults]
     default_tkt_enctypes = aes256-cts-hmac-sha1-96
     default_tgs_enctypes = aes256-cts-hmac-sha1-96
 ```
 
-Using _`ktutil`_ we're going to perform a trick to force _`ktutil`_ to use the right salt. When _`ktutil`_ generates a _keytab_ entry, it uses the _principal_ as the _salt_.  However if we generate an entry using a hex encoded key, _`ktutil`_ doesn't need to salt it.  Substitute the example values as appropriate for your environment.  The steps are:
+## Build the keytab
 
-1. Generate a key using the UPN, with the Active Directory domain (REALM) following the '@' capitalised
-2. Dump the resulting key into hex
-3. Re-import the key as a new entry using the _servicePrincipalName_ as the principal
+`ktutil` does not salt a key supplied as hex. Create the key as the UPN, copy those bytes, and store them under the SPN.
 
-```bash
+1. Add an entry for the UPN. The realm after `@` is uppercase. `<KVNO>` is the account's `msDS-KeyVersionNumber`.
+2. List the entry and copy the hex key.
+3. Add a second entry with `-key`, using the SPN as the principal and the same kvno and enctype. Paste the hex key. This entry is not salted again.
+4. Delete the UPN slot so the keytab contains only the SPN.
+5. Write the keytab.
+
+```text
 $ ktutil
-ktutil:  add_entry -password -p mongodb/host.mongodb.com@MONGODB.COM -e aes256-cts-hmac-sha1-96 -k <KVNO>
-Password for mongodb/host.mongodb.com@MONGODB.COM:
+ktutil:  addent -password -p mongodb_svc@MONGODB.COM -k 2 -e aes256-cts-hmac-sha1-96
+Password for mongodb_svc@MONGODB.COM:
 ktutil:  list -k
 slot KVNO Principal
 ---- ---- ---------------------------------------------------------------------
-   1    2 mongodb/host.mongodb.com@MONGODB.COM (0x0c4f65678310e3ab14bfd9dc6a1f65a25f13ed6fa72062c4713409b5b2c7dca0)
-ktutil:  add_entry -key -p mongodb/host.mongodb.com@MONGODB.COM -e aes256-cts-hmac-sha1-96 -k <KVNO>
+   1    2 mongodb_svc@MONGODB.COM (0x0c4f65678310e3ab14bfd9dc6a1f65a25f13ed6fa72062c4713409b5b2c7dca0)
+ktutil:  addent -key -p mongodb/host.mongodb.com@MONGODB.COM -k 2 -e aes256-cts-hmac-sha1-96
 Key for mongodb/host.mongodb.com@MONGODB.COM (hex): 0x0c4f65678310e3ab14bfd9dc6a1f65a25f13ed6fa72062c4713409b5b2c7dca0
-ktutil:  write_kt mongodb_ad.keytab
+ktutil:  delent 1
+ktutil:  wkt mongodb_ad.keytab
 ```
 
-The resulting _keytab_ file (_`mongodb_ad.keytab`_) will be salted with the AES-256 _enctype_ cipher.
+`mongodb_ad.keytab` holds the SPN. The key bytes are the ones derived from the UPN salt.
