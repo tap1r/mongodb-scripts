@@ -381,7 +381,7 @@ const report = await load('dbstats.js');
 
 `await` the `load()`. The file’s async IIFE is user code; the rewriter does not await it for the caller. The IIFE’s return value is the contract (`return dbStats` at the bottom of `dbstats.js`).
 
-Loader IIFEs in `autoCompact.js`, `onlineDefrag.js`, `fuzzer.js`, and `oplogchurn.js` still print a banner when the file is `load()`ed. Gate them with the same argv test before a fan-out `load()`s them. `onlineDefrag.js` does not `load()` dbstats; a snapshot belongs on `await load('dbstats.js')`, not a scraped table.
+`autoCompact.js`, `onlineDefrag.js`, `fuzzer.js`, and `oplogchurn.js` use the same argv test (`isAutoCompactCliFile`, `isOnlineDefragCliFile`, `isFuzzerCliFile`, `isOplogchurnCliFile`). A `load()` of those files does not print the banner. `onlineDefrag.js` does not `load()` dbstats; a snapshot belongs on `await load('dbstats.js')`, not a scraped table.
 
 ---
 
