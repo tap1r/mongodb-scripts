@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "rtt.js"
-    *  Version: "0.3.0"
+    *  Version: "0.3.1"
     *  Description: "reports application round trip time latency"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -22,7 +22,7 @@
 
    // Syntax: mongosh [connection options] [--quiet] [-f|--file] </path/to/>rtt.js
 
-   const __script = { "name": "rtt.js", "version": "0.3.0" };
+   const __script = { "name": "rtt.js", "version": "0.3.1" };
    const banner = `\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m\n`;
    console.clear();
    console.log(banner);
@@ -99,12 +99,18 @@
 
    function mongosSeededURI(seedList = []) {
       /*
-       *  return the seeded URI
+       *  return the seeded URI.
+       *  Driver credentials are plaintext. Encode them once. Do not
+       *  decode first: a literal % in the password is part of the secret.
+       *  Do not log the URI.
        */
       const [username, password, authSource, authMech, compressors, tls] = mongoOptions();
-      return (username === null)
-         ? `mongodb://${seedList.toString()}/?tls=${tls}&compressors=${compressors}`
-         : `mongodb://${username}:${password}@${seedList.toString()}/?tls=${tls}&authSource=${authSource}&authMechanism=${authMech}&compressors=${compressors}`;
+      const hosts = seedList.toString();
+      const query = `tls=${tls}&compressors=${compressors}`;
+      if (username === null) return `mongodb://${hosts}/?${query}`;
+      let userinfo = encodeURIComponent(String(username));
+      if (password !== '' && password != null) userinfo += `:${encodeURIComponent(String(password))}`;
+      return `mongodb://${userinfo}@${hosts}/?${query}&authSource=${encodeURIComponent(String(authSource))}&authMechanism=${encodeURIComponent(String(authMech))}`;
    }
 
    function servers() {

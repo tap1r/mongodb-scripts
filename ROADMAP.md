@@ -100,10 +100,11 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `schema-import.js` | 0.1.8 | **0.2.0** |
 | `discovery.js` | 0.2.1 | **0.2.2** |
 | `explainHisto.js` | 0.1.4 | **0.1.5** |
+| `rtt.js` | 0.3.0 | **0.3.1** |
 | `compact.js` | 0.2.15 | **removed** (archive only) |
 | `batchUpdater.js` | 0.1.6 | **removed** (archive only) |
 
-Unchanged vs freeze (still in live `src/`): `connStats` 0.1.14, `rtt` 0.3.0, `oidGenerator` 0.2.7, `oidFunction` 0.1.5, `modifiedCountDocumentsByKey` 0.1.7.
+Unchanged vs freeze (still in live `src/`): `connStats` 0.1.14, `oidGenerator` 0.2.7, `oidFunction` 0.1.5, `modifiedCountDocumentsByKey` 0.1.7.
 
 #### 3. After the cut — strip and streamline
 
@@ -680,7 +681,9 @@ Remaining mongosh-line work (do not block the archive): none.
 
 ### `rtt.js`
 
-**Legacy archive line: v0.3.0** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. TODOs stay TBA on the mongosh line.
+**Live: v0.3.1.** **Legacy archive line: v0.3.0** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Do not top-level-await. TODOs stay TBA on the mongosh line.
+
+**0.3.1:** the mongos child URI percent-encodes the driver username and password. Those values are plaintext. `@`, `:`, or `/` in the password no longer splits the URI. A null password is omitted rather than written as the word `null`.
 
 ### `sleepy.js`
 
