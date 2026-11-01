@@ -97,7 +97,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `indexCacheUtil.js` | 0.1.5 | **1.2.0** |
 | `killAgedSessions.js` | 0.2.2 | **0.2.3** |
 | `ctxDemo.js` | 0.1.0 | **0.2.2** |
-| `schema-import.js` | 0.1.8 | **0.2.1** |
+| `schema-import.js` | 0.1.8 | **0.2.2** |
 | `discovery.js` | 0.2.1 | **0.2.2** |
 | `explainHisto.js` | 0.1.4 | **0.1.5** |
 | `rtt.js` | 0.3.0 | **0.3.1** |
@@ -675,11 +675,13 @@ Remaining mongosh-line work (do not block the archive):
 
 ### `schema-import.js`
 
-**Live: v0.2.1.** **Archive: v0.1.8.** Mongosh-only. Do not restore `db.getMongo().setReadPref(readPreference)` — writes already target primary. `--eval` `var options` overlays in-file `optionDefaults` (`schemaFile`, `drop`). Do not declare `options` / `userOptions` in this file. Parse-and-create reads JSON/EJSON of the schema-sampler array: collections (`createCollection`, passing `options.timeseries` / `expireAfterSeconds` / `collation`, `insertMany` of `$sample`, `createIndex` minus `_id_` and any index the server already built), then views (`createView` when `options.viewOn` / `options.pipeline` are present). `listDBs()` returns the `db` names. The shell `createIndexes` helper takes key patterns, so each spec is its own `createIndex`. `createIndex` returns the name and throws. `insertMany` `insertedIds` is an object; count keys, including a partial bulk error. Parenthesize `(await write(...)).field`. Existing namespaces are skipped unless `drop: true`. See the scripting guide. Header tags this file as requiring this roadmap.
+**Live: v0.2.2.** **Archive: v0.1.8.** Mongosh-only. Do not restore `db.getMongo().setReadPref(readPreference)` — writes already target primary. `--eval` `var options` overlays in-file `optionDefaults` (`schemaFile`, `drop`). Do not declare `options` / `userOptions` in this file. Parse-and-create reads JSON/EJSON of the schema-sampler array: collections (`createCollection`, passing `options.timeseries` / `expireAfterSeconds` / `collation` / capped `size`/`max` / `clusteredIndex` / `validator` with `validationLevel` and `validationAction`, `insertMany` of `$sample`, `createIndex` minus `_id_` and any index the server already built), then views (`createView` when `options.viewOn` / `options.pipeline` are present). `listDBs()` returns the `db` names. The shell `createIndexes` helper takes key patterns, so each spec is its own `createIndex`. `createIndex` returns the name and throws. `insertMany` `insertedIds` is an object; count keys, including a partial bulk error. Parenthesize `(await write(...)).field`. Existing namespaces are skipped unless `drop: true`. See the scripting guide. Header tags this file as requiring this roadmap.
 
 **Shipped:** **0.2.0** parse-and-create from sampler JSON, `listDBs()` names, `--eval` overlay.
 
 **0.2.1:** a collection with `options.timeseries.timeField` is created as a time series. The default meta/time index is not sent to `createIndex` again.
+
+**0.2.2:** `createCollection` also passes capped `size`/`max`, `clusteredIndex`, and `validator` / `validationLevel` / `validationAction`.
 
 Remaining mongosh-line work (do not block the archive): none.
 
