@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.4.11"
+ *  Version: "0.4.12"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,6 +11,8 @@
  *  - synthetic slow op via $function + sleep (javascriptEnabled; unsupported
  *    on Atlas Flex).
  *  - getLog("global") + EJSON.parse to recover durationMillis.
+ *    A log line that does not carry this comment throws. It is not
+ *    reported as a server time of 0 - slowms.
  */
 
 // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>latency.js
@@ -21,7 +23,7 @@
    /*
     *  main
     */
-   const __script = { "name": "latency.js", "version": "0.4.11" };
+   const __script = { "name": "latency.js", "version": "0.4.12" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    const spacing = 1;
@@ -154,15 +156,19 @@
       t1 = Date.now();
    }
 
-   const [{ 'attr': { durationMillis = 0 } = {} } = {}] = db.adminCommand(
-      { "getLog": "global" }
-   ).log.map(
-      EJSON.parse
-   ).filter(
-      ({ 'attr': { 'command': { comment = '' } = {} } = {} } = {}) => {
-         return comment == filter;
-      }
-   );
+   const logResult = db.adminCommand({ "getLog": "global" });
+   const durations = (logResult.log || []).flatMap(line => {
+      let doc;
+      try { doc = EJSON.parse(line); }
+      catch (_) { return []; }
+      const comment = doc?.attr?.command?.comment;
+      const durationMillis = doc?.attr?.durationMillis;
+      if (comment != filter || typeof durationMillis !== 'number') return [];
+      return [durationMillis];
+   });
+   if (!durations.length)
+      throw new Error(`${__script.name}: slow op was not found in the global log`);
+   const durationMillis = durations[0];
 
    t2 = Date.now();
    try {

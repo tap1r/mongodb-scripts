@@ -87,7 +87,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `autoCompact.js` | 0.4.36 | **1.4.0** |
 | `fuzzer.js` | 0.6.43 | **1.6.1** |
 | `oplogchurn.js` | 0.5.22 | **0.6.2** |
-| `latency.js` | 0.4.9 | **0.4.11** |
+| `latency.js` | 0.4.9 | **0.4.12** |
 | `schema-sampler.js` | 0.2.16 | **0.4.2** |
 | `sleepy.js` | 0.2.6 | **0.2.7** |
 | `docSizes.js` | 0.1.34 | **0.1.36** |
@@ -647,9 +647,11 @@ Remaining mongosh-line work (do not block the archive): none.
 
 ### `latency.js`
 
-**Live: v0.4.11.** **Archive: v0.4.9.** Mongosh-only (inline polyfill dropped). Do not restore `[mongo|mongosh]`.
+**Live: v0.4.12.** **Archive: v0.4.9.** Mongosh-only (inline polyfill dropped). Do not restore `[mongo|mongosh]`.
 
 **0.4.11:** drops `tenantMigrations: false` from the `serverStatus` probe. That section was the serverless tenant-migration gauge, removed in 8.1.
+
+**0.4.12:** a global log with no line for this synthetic comment throws. It is not reported as a server time of `0 - slowms`. A line that does not parse is skipped.
 
 Remaining mongosh-line work (do not block the archive):
 
