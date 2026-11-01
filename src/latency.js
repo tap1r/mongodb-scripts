@@ -1,6 +1,6 @@
 /*
  *  Name: "latency.js"
- *  Version: "0.4.10"
+ *  Version: "0.4.11"
  *  Description: "Driver and network latency telemetry PoC"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -21,7 +21,7 @@
    /*
     *  main
     */
-   const __script = { "name": "latency.js", "version": "0.4.10" };
+   const __script = { "name": "latency.js", "version": "0.4.11" };
    console.log(`\n\x1b[33m#### Running script ${__script.name} v${__script.version} on shell v${version()}\x1b[0m`);
 
    const spacing = 1;
@@ -129,7 +129,6 @@
             "spillWiredTiger": false,
             "storageEngine": false,
             "tcmalloc": false,
-            "tenantMigrations": false,
             "trafficRecording": false,
             "transactions": false,
             "transportSecurity": false,
