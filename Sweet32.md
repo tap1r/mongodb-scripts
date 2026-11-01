@@ -44,10 +44,10 @@ openssl s_client -connect host.mongodb.net:8443 -cipher 3DES < /dev/null | grep 
 Fail. The handshake completed and 3DES is still accepted:
 
 ```text
-depth=0 C = US, ST = test, L = test, O = test Security, OU = IT Department, CN = ec2-52-65-116-16.ap-southeast-2.compute.amazonaws.com
+depth=0 CN = host.example.com
 verify error:num=18:self signed certificate
 verify return:1
-depth=0 C = US, ST = test, L = test, O = test Security, OU = IT Department, CN = ec2-52-65-116-16.ap-southeast-2.compute.amazonaws.com
+depth=0 CN = host.example.com
 verify return:1
 DONE
 New, TLSv1/SSLv3, Cipher is ECDHE-RSA-DES-CBC3-SHA
