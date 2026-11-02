@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.8.7"
+ *  Version: "1.8.8"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.8.7" };
+   const __script = { "name": "fuzzer.js", "version": "1.8.8" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -2124,6 +2124,8 @@
    let progressBatch = 0;
    let progressShown = false;
    let progressLive = false;
+   // Acknowledged documents over wall time since the inserts started.
+   let progressStartedAt = 0;
 
    function insertBar(inserted, total, width = 24) {
       const n = Math.max(1, width);
@@ -2136,11 +2138,25 @@
       return '█'.repeat(filled) + '░'.repeat(n - filled);
    }
 
+   function progressEta(inserted, total) {
+      if (!(progressStartedAt > 0) || !(inserted > 0))
+         return '--';
+      if (!(total > inserted))
+         return formatHudTime(0);
+      const elapsed = (Date.now() - progressStartedAt) / 1000;
+      const remain = (elapsed / inserted) * (total - inserted);
+      if (remain > 0 && remain < 1)
+         return '<1s';
+      return formatHudTime(remain);
+   }
+
    function progressText(inserted, bytes, batchNo, final = false) {
       const total = totalDocs;
       const frac = total > 0 ? Math.min(1, inserted / total) : 1;
       const pct = (total > 0 && inserted >= total) ? 100 : Math.floor(frac * 100);
-      const batch = (!final && batchNo > 0) ? `, batch [blue]${batchNo}[/]` : '';
+      const batch = (!final && batchNo > 0)
+         ? `, batch [blue]${batchNo}[/], ETA [blue]${progressEta(inserted, total)}[/]`
+         : '';
       const shownBytes = grouped(bytes);
       return `[yellow]insert[/]  [blue]${inserted}[/]/[blue]${total}[/]  ${insertBar(inserted, total)}  [blue]${pct}[/]%, [blue]${shownBytes}[/] ${plural(bytes, 'byte', 'bytes')}${batch}`;
    }
@@ -2226,6 +2242,7 @@
    async function genBulk(prepared) {
       // writerConcurrency inserts may be in flight. The packer waits while every
       // slot is full. At 1 it waits before packing the next batch.
+      progressStartedAt = Date.now();
       let inserted = 0;
       let batchNo = 0;
       let failed = false;
