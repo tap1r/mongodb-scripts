@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.7.0"
+ *  Version: "1.7.1"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.7.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.7.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -473,18 +473,26 @@
       }
 
       const avgSize = $floor(docSize / sampleSize);
-      if (maxSize > bsonMax * 0.95)
-         console.log(`\n[Warning] The largest sample document of ${maxSize} bytes approaches or exceeds the BSON max size of ${bsonMax} bytes`);
-      else if (avgSize > bsonMax * 0.95)
-         console.log(`\n[Warning] The average document size of ${avgSize} bytes approaches or exceeds the BSON max size of ${bsonMax} bytes`);
       console.log(`\nSampling ${sampleSize} ${plural(sampleSize, 'document', 'documents')} each with BSON size averaging ${avgSize} ${plural(avgSize, 'byte', 'bytes')}, largest ${maxSize} ${plural(maxSize, 'byte', 'bytes')}`);
-      // Size from the largest sample so a batch of heavy documents stays under the BSON max.
+      // One document may be bsonMax. The batch has to fit in the message,
+      // which is larger. A document over bsonMax cannot be inserted.
       const basis = (maxSize >= 1) ? maxSize : avgSize;
-      const sampledSize = $floor(bsonMax * 0.95 / basis);
-      const batchCap = 1000;
-      // return (maxWriteBatchSize < sampledSize) ? maxWriteBatchSize : sampledSize;
-      const batchSize = Math.min(batchCap, sampledSize);
+      const countCap = Math.min(1000, maxWriteBatchSize);
+      let batchSize = countCap;
+      if (basis > bsonMax) {
+         batchSize = 0;
+         console.log(`\n[Warning] The largest sample document of ${maxSize} bytes exceeds the BSON max of ${bsonMax} bytes`);
+      } else if (basis >= 1) {
+         const messageBudget = $floor(maxMessageSizeBytes * 0.95);
+         const byMessage = $floor(messageBudget / basis);
+         batchSize = Math.max(1, Math.min(countCap, byMessage));
+      }
+      // Two copies of a document over 1 MiB (this insert and the next batch)
+      // are the heap spike. Wait for the insert before building the next one.
+      const overlapBatches = !(basis > (1 << 20));
       console.log(`Estimated optimal capacity of ${batchSize} ${plural(batchSize, 'document', 'documents')} per batch`);
+      if (batchSize >= 1 && !overlapBatches)
+         console.log('Sample documents are over 1 MiB. The next batch waits until the insert returns.');
 
       if (createFailed)
          throw createFailed;
@@ -499,18 +507,18 @@
          case 'pre':
             console.log('Building indexing metadata first');
             buildIndexes();
-            if ((await genBulk(batchSize)) === false)
+            if ((await genBulk(batchSize, overlapBatches)) === false)
                return;
             break;
          case 'post':
             console.log('Populating collection first');
-            if ((await genBulk(batchSize)) === false)
+            if ((await genBulk(batchSize, overlapBatches)) === false)
                return;
             buildIndexes();
             break;
          default:
             console.log(`Unsupported index build preference "${indexPrefs.order}": defaulting to "post"`);
-            if ((await genBulk(batchSize)) === false)
+            if ((await genBulk(batchSize, overlapBatches)) === false)
                return;
             buildIndexes();
       }
@@ -1450,7 +1458,7 @@
       return docs;
    }
 
-   async function genBulk(batchSize) {
+   async function genBulk(batchSize, overlapBatches = true) {
       if (!(batchSize >= 1)) {
          console.log(`\n[Warning] Batch size ${batchSize} is below 1. Skipping bulk insert.`);
          return true;
@@ -1477,9 +1485,12 @@
             return null;
          });
          const n = prepared.n;
+         const overlap = overlapBatches;
          batchNo++;
+         let upcoming = null;
          try {
-            prepared = await nextBatch(true);
+            if (overlap)
+               upcoming = await nextBatch(true);
          } catch(e) {
             await inflight;
             throw e;
@@ -1497,6 +1508,7 @@
                console.log(errText(writeError));
             return false;
          }
+         prepared = overlap ? upcoming : await nextBatch(false);
       }
 
       console.log('Generation completed.');

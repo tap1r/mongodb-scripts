@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "1.1.3"
+ *  Version: "1.1.4"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,16 +17,17 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "1.1.3"
+      "version": "1.1.4"
    });
 
 /*  Notes:
  *  - mongosh only (floor 1.10 / 2.10+)
  *  - floor mongod to v4.4. The check sets __mdblibShellIncompatible /
  *    __mdblibServerUnsupported and does not print or read a caller's options.
- *  - bsonMax, maxWriteBatchSize, pid, and nonce are first-read globals.
- *    load() does not call hello, serverStatus, or features for them.
- *    One hello() fills both BSON limits. fuzzer reads bsonMax.
+ *  - bsonMax, maxMessageSizeBytes, maxWriteBatchSize, pid, and nonce are
+ *    first-read globals. load() does not call hello, serverStatus, or
+ *    features for them. One hello() fills the BSON limits. fuzzer reads
+ *    bsonMax and maxMessageSizeBytes.
  *  - Session snapshot (first read): atlas platform, fCV, and isSharded share
  *    one hello / hostInfo / serverStatus / listShards / getParameter.
  *    hello() and serverVer() are first-read on that snapshot (helloDoc,
@@ -544,6 +545,9 @@ function bsonLimits() {
       "bsonMax": (doc.ok && typeof doc.maxBsonObjectSize === 'number')
          ? doc.maxBsonObjectSize
          : 16 * Math.pow(1024, 2),
+      "maxMessageSizeBytes": (doc.ok && typeof doc.maxMessageSizeBytes === 'number')
+         ? doc.maxMessageSizeBytes
+         : 48 * 1000 * 1000,
       "maxWriteBatchSize": (typeof doc.maxWriteBatchSize === 'undefined')
          ? 100000
          : doc.maxWriteBatchSize
@@ -591,6 +595,7 @@ function installLazyGlobal(name, read) {
 }
 
 installLazyGlobal('bsonMax', () => bsonLimits().bsonMax);
+installLazyGlobal('maxMessageSizeBytes', () => bsonLimits().maxMessageSizeBytes);
 installLazyGlobal('maxWriteBatchSize', () => bsonLimits().maxWriteBatchSize);
 installLazyGlobal('pid', shellPid);
 installLazyGlobal('nonce', shellNonce);
@@ -2451,29 +2456,48 @@ function $getRandRatioInt(ratios = [1]) {
    return weightedIndex[$floor($rand() * weightedIndex.length)];
 }
 
+function $genRandFrom(len, drawChar) {
+   /*
+    *  One byte per character, then one string. The old += loop kept every
+    *  prefix alive until the function returned.
+    */
+   if (!(len > 0) || !Number.isFinite(len))
+      return '';
+   const count = Math.ceil(len);
+   if (typeof Buffer !== 'undefined') {
+      const buf = Buffer.allocUnsafe(count);
+      for (let i = 0; i < count; i++)
+         buf[i] = drawChar().charCodeAt(0) & 0xff;
+      return buf.toString('latin1');
+   }
+   const chunk = 1 << 16;
+   const parts = [];
+   let left = count;
+   while (left > 0) {
+      const take = left > chunk ? chunk : left;
+      const piece = new Array(take);
+      for (let i = 0; i < take; i++)
+         piece[i] = drawChar();
+      parts.push(piece.join(''));
+      left -= take;
+   }
+   return parts.join('');
+}
+
 function $genRandHex(len = 1) {
    /*
     *  generate random hexadecimal string
     */
-   let res = '';
-   for (let i = 0; i < len; i++) {
-      res += ($floor($rand() * 16)).toString(16);
-   }
-
-   return res;
+   const chars = '0123456789abcdef';
+   return $genRandFrom(len, () => chars.charAt($floor($rand() * 16)));
 }
 
 function $genRandStr(len = 1) {
    /*
     *  generate random alpha-numeric string
     */
-   let res = '';
    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-   for (let i = 0; i < len; i++) {
-      res += chars.charAt($floor($rand() * chars.length));
-   }
-
-   return res;
+   return $genRandFrom(len, () => chars.charAt($floor($rand() * chars.length)));
 }
 
 const phraseDet = ['the', 'a', 'one', 'some', 'each'];
@@ -2582,13 +2606,8 @@ function $genRandAlpha(len = 1) {
    /*
     *  generate random alpha-character string
     */
-   let res = '';
    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-   for (let i = 0; i < len; i++) {
-      res += chars.charAt($getRandInt(0, chars.length));
-   }
-
-   return res;
+   return $genRandFrom(len, () => chars.charAt($getRandInt(0, chars.length)));
 }
 
 function $genRandSymbol() {
