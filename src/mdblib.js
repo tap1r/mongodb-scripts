@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "1.1.4"
+ *  Version: "1.1.5"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,7 +17,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "1.1.4"
+      "version": "1.1.5"
    });
 
 /*  Notes:
@@ -1729,11 +1729,20 @@ function formatTime(s) {
    return formatHudTime(s);
 }
 
+// 4096 integers is 16 KiB, under the 65536-byte getRandomValues quota.
+// Each draw is one fresh value. The result is in [0, 1).
+const randPool = new Uint32Array(4096);
+let randPoolAt = randPool.length;
+
 function $rand() {
    /*
     *  Preferred PRNG (Web Crypto)
     */
-   return crypto.webcrypto.getRandomValues(new Uint32Array(1))[0] / Uint32MaxVal;
+   if (randPoolAt >= randPool.length) {
+      crypto.webcrypto.getRandomValues(randPool);
+      randPoolAt = 0;
+   }
+   return randPool[randPoolAt++] / (Uint32MaxVal + 1);
 }
 
 function $ceil(num) {
