@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.8.2"
+ *  Version: "1.8.3"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.8.2" };
+   const __script = { "name": "fuzzer.js", "version": "1.8.3" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -339,7 +339,9 @@
       fuzzer.ratios = [1];
    if (isPlainObject(indexPrefs) && !hasOwn(indexPrefs, 'commitQuorum'))
       indexPrefs.commitQuorum = (writeConcern.w == 0) ? 1 : writeConcern.w;
-   if (isPlainObject(indexOptions) && !hasOwn(indexOptions, 'collation'))
+   // Remember this before the copy. Afterwards every plain indexOptions has a collation.
+   const indexCollationSpecified = isPlainObject(indexOptions) && hasOwn(indexOptions, 'collation');
+   if (isPlainObject(indexOptions) && !indexCollationSpecified)
       indexOptions.collation = collation;
    if (isPlainObject(indexes2dOptions) && !hasOwn(indexes2dOptions, 'default_language'))
       indexes2dOptions.default_language = idioma;
@@ -464,6 +466,28 @@
       return `[green]${indexOrderText()}[/]  [dim]quorum[/] [blue]${indexPrefs.commitQuorum}[/]`;
    }
 
+   function collationLocale(spec) {
+      if (!isPlainObject(spec) || spec.locale == null || spec.locale === '')
+         return '';
+      return String(spec.locale);
+   }
+
+   // Regular indexes share indexOptions.collation. Inherited follows the collection.
+   function indexCollationNote() {
+      const word = indexCollationSpecified ? '[green]specified[/]' : '[dim]inherited[/]';
+      const spec = indexCollationSpecified && isPlainObject(indexOptions)
+         ? indexOptions.collation
+         : collation;
+      const locale = collationLocale(spec);
+      return locale ? `${word}  [blue]${locale}[/]` : word;
+   }
+
+   function languageNote(options) {
+      if (!isPlainObject(options) || options.default_language == null || options.default_language === '')
+         return '';
+      return `  [dim]lang[/] [blue]${options.default_language}[/]`;
+   }
+
    function shardingText() {
       if (cappedThisRun() && sharding && isSharded())
          return '[yellow]skipped[/]  [dim](capped)[/]';
@@ -528,15 +552,26 @@
             : '';
          return [sample.file, `${weightText}${omitted}${detailText}`];
       });
-      const indexRows = [['build', indexesText()]];
+      const indexRows = [
+         ['build', indexesText()],
+         ['existing', dropIndexes ? '[yellow]drop[/]' : '[dim]keep[/]']
+      ];
       if (isPlainObject(indexPrefs) && indexPrefs.build) {
-         [
-            ['index', indexes],
-            ['hashed', hashedIndexes],
-            ['2d', indexes2d],
-            ['text', textIndexes]
-         ].forEach(([label, keys]) => {
-            (keys || []).forEach(spec => indexRows.push([label, oneLine(spec)]));
+         const groups = [
+            ['index', indexes, null],
+            ['hashed', hashedIndexes, null],
+            ['2d', indexes2d, indexes2dOptions],
+            ['text', textIndexes, textIndexOptions]
+         ];
+         groups.forEach(([label, keys, langOptions]) => {
+            if (!keys || !keys.length) {
+               indexRows.push([label, '[dim]none[/]']);
+               return;
+            }
+            if (label === 'index')
+               indexRows.push(['collation', indexCollationNote()]);
+            const lang = langOptions ? languageNote(langOptions) : '';
+            keys.forEach(spec => indexRows.push([label, `${oneLine(spec)}${lang}`]));
          });
       }
       const sections = [
@@ -569,18 +604,97 @@
             valueW = Math.max(valueW, visibleLength(value));
          });
       });
-      const leftSpan = labelW + 2;
-      const rightSpan = valueW + 2;
+      hudLabelW = labelW;
+      hudValueW = Math.max(valueW, 24);
+      const file = resolved.source.file;
+      const optionLines = file ? wrapPlain(file, hudValueW) : ['defaults'];
+      const base = file ? file.slice(Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\')) + 1) : '';
+      optionLines.forEach((chunk, i) => {
+         let value = '[dim]defaults[/]';
+         if (file) {
+            const at = base ? chunk.lastIndexOf(base) : -1;
+            value = at < 0
+               ? `[dim]${chunk}[/]`
+               : `[dim]${chunk.slice(0, at)}[/]${chunk.slice(at)}`;
+         }
+         sections[0][1].push([i === 0 ? 'options' : '', value]);
+      });
+      const leftSpan = hudLabelW + 2;
+      const rightSpan = hudValueW + 2;
       sections.forEach(([title, rows], i) => {
          const rule = i === 0
             ? paintRule('┌', '┬', '┐', title, leftSpan, rightSpan)
             : paintRule('├', '┼', '┤', title, leftSpan, rightSpan);
          console.log((i === 0 ? '\n' : '') + rule);
-         rows.forEach(([label, value]) => console.log(paintRow(label, value, labelW, valueW)));
+         rows.forEach(([label, value]) => console.log(paintRow(label, value, hudLabelW, hudValueW)));
       });
       console.log(paintRule('└', '┴', '┘', '', leftSpan, rightSpan));
-      // The options path is long. It sits under the box so it does not stretch every row.
-      console.log(`[cyan]options[/]  ${optionsText()}`);
+   }
+
+   let hudLabelW = 0;
+   let hudValueW = 0;
+
+   function wrapPlain(text, width) {
+      const limit = Math.max(8, width);
+      const lines = [];
+      let rest = String(text);
+      while (rest.length > limit) {
+         let cut = rest.lastIndexOf('/', limit);
+         if (cut < Math.floor(limit / 2))
+            cut = limit;
+         else
+            cut += 1;
+         lines.push(rest.slice(0, cut));
+         rest = rest.slice(cut);
+      }
+      if (rest)
+         lines.push(rest);
+      return lines.length ? lines : [''];
+   }
+
+   function wrapCell(text, width) {
+      const limit = Math.max(8, width);
+      const value = String(text);
+      if (value.length <= limit)
+         return [value];
+      if (!value.includes(', '))
+         return wrapPlain(value, limit);
+      const items = value.split(', ');
+      const lines = [];
+      let cur = '';
+      items.forEach((item, n) => {
+         const piece = n < items.length - 1 ? `${item},` : item;
+         const next = cur ? `${cur} ${piece}` : piece;
+         if (cur && next.length > limit) {
+            lines.push(cur);
+            cur = piece;
+         } else
+            cur = next;
+      });
+      if (cur)
+         lines.push(cur);
+      return lines.length ? lines : [''];
+   }
+
+   function printBuilt(rows) {
+      if (!rows || !rows.length)
+         return;
+      if (progressLive) {
+         batchHud.clear();
+         progressLive = false;
+      }
+      const leftSpan = hudLabelW + 2;
+      const rightSpan = hudValueW + 2;
+      console.log('\n' + paintRule('┌', '┬', '┐', 'built', leftSpan, rightSpan));
+      rows.forEach(([label, value]) => {
+         const failed = String(value).startsWith('[red]');
+         const plain = failed ? stripAnsiMarkup(value) : String(value);
+         const colour = failed ? 'red' : 'blue';
+         wrapCell(plain, hudValueW).forEach((chunk, i) => {
+            console.log(paintRow(i === 0 ? label : '', `[${colour}]${chunk}[/]`, hudLabelW, hudValueW));
+         });
+      });
+      console.log(paintRule('└', '┴', '┘', '', leftSpan, rightSpan));
    }
 
    async function main() {
@@ -668,14 +782,14 @@
       // Index order is a HUD row. pre builds before the inserts. Anything else inserts first.
       switch (indexOrderText()) {
          case 'pre':
-            buildIndexes();
+            printBuilt(buildIndexes());
             if ((await genBulk(firstBatch)) === false)
                return;
             break;
          default:
             if ((await genBulk(firstBatch)) === false)
                return;
-            buildIndexes();
+            printBuilt(buildIndexes());
       }
 
       // redistribute chunks if required
@@ -1551,21 +1665,17 @@
       }
    }
 
-   function indexBuildMessage(result, label) {
-      // mongosh createIndexes resolves to the index names. A failure throws.
-      const names = Array.isArray(result) ? result.join(', ') : result;
-      return `${label}  ${names}`;
-   }
-
    function createIndexSet(keys, options, label) {
       const useCommitQuorum = fCV(4.4) && (isReplSet() || isSharded());
       const args = useCommitQuorum
          ? [keys, options, indexPrefs.commitQuorum]
          : [keys, options];
       try {
-         console.log(indexBuildMessage(namespace.createIndexes(...args), label));
+         const names = namespace.createIndexes(...args);
+         const text = Array.isArray(names) ? names.join(', ') : String(names);
+         return [label, text];
       } catch(e) {
-         console.log(`[red][ERROR][/] ${label} operation failed:`, errText(e));
+         return [label, `[red]${errText(e)}[/]`];
       }
    }
 
@@ -1575,29 +1685,24 @@
       const secondary = namespace.getIndexes().filter(index => index.name !== '_id_');
       if (secondary.length === 0)
          return;
-      console.log('\nDropping all existing indexes:');
       namespace.dropIndexes();
    }
 
    function buildIndexes() {
-      if (indexPrefs.build) {
-         if (indexes.length > 0)
-            createIndexSet(indexes, indexOptions, 'indexes');
-         else
-            console.log('No regular index builds specified.');
-
-         const specialSets = [
-            [hashedIndexes, hashedIndexOptions, 'hashed'],
-            [indexes2d, indexes2dOptions, '2d'],
-            [textIndexes, textIndexOptions, 'text']
-         ].filter(([keys]) => keys.length > 0);
-         if (specialSets.length > 0)
-            specialSets.forEach(([keys, options, label]) => createIndexSet(keys, options, label));
-         else
-            console.log('No special index builds specified.');
-      }
-
-      return;
+      const built = [];
+      if (!indexPrefs.build)
+         return built;
+      if (indexes.length > 0)
+         built.push(createIndexSet(indexes, indexOptions, 'index'));
+      [
+         [hashedIndexes, hashedIndexOptions, 'hashed'],
+         [indexes2d, indexes2dOptions, '2d'],
+         [textIndexes, textIndexOptions, 'text']
+      ].forEach(([keys, options, label]) => {
+         if (keys && keys.length)
+            built.push(createIndexSet(keys, options, label));
+      });
+      return built;
    }
 
    function insertedFromWrite(value) {
