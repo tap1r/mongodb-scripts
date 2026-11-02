@@ -7,6 +7,7 @@
 // totalDocs stays $getRandExp(totalDocsExp) unless totalDocs is set.
 // writeConcern.w stays "majority" on a replica set or mongos, otherwise 1, unless set.
 // writeConcern.wtimeout is 10000 ms when w waits past the primary, unless set. 0 waits with no limit.
+// writerConcurrency is how many inserts stay in flight. 1 waits for each insert before the next batch is packed.
 // indexPrefs.commitQuorum follows that w unless set.
 // indexOptions.collation follows collation unless set.
 // indexes2dOptions.default_language and textIndexOptions.default_language follow idioma unless set.
@@ -45,6 +46,8 @@
       "wtimeout": 10000,
       "j": false
    },
+   // Inserts in flight. 1 holds a single batch. Above 1 the shell also keeps the batch it is packing.
+   "writerConcurrency": 2,
    "indexPrefs": {
       "build": true,
       "order": "post", // ["pre"|"post"] collection population

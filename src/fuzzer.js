@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.8.1"
+ *  Version: "1.8.2"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.8.1" };
+   const __script = { "name": "fuzzer.js", "version": "1.8.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -154,6 +154,9 @@
          // wtimeout is 10000 ms when w waits past the primary, unless the overlay sets it.
          // wtimeout 0 waits without a limit.
       },
+      // Inserts in flight. 1 waits for each insert before the next batch is packed.
+      // Above 1 the shell also keeps the batch it is packing.
+      "writerConcurrency": 2,
       "indexPrefs": { /* build index preferences */
          "build": true,                 // [true|false]
          "order": "post"                // ["pre"|"post"] collection population
@@ -307,6 +310,7 @@
             : ((isReplSet() || isSharded()) ? "majority" : 1),
          "j": hasOwn(wc, 'j') ? wc.j : false
       },
+      writerConcurrency = opt.writerConcurrency,
       indexPrefs = opt.indexPrefs,
       timeSeries = opt.timeSeries,
       tsOptions = opt.tsOptions,
@@ -395,6 +399,190 @@
       lastYieldAt = Date.now();
    }
 
+   function oneLine(value) {
+      return tojson(value).replace(/\s+/g, ' ');
+   }
+
+   function distributionText() {
+      const name = String(fuzzer.distribution || '').toLowerCase();
+      if (name === 'uniform' || name === 'normal')
+         return `[green]${name}[/]`;
+      return `[yellow]${fuzzer.distribution}[/]  [dim]using uniform[/]`;
+   }
+
+   function namespaceText() {
+      const ns = `${dbName}.${collName}`;
+      if (dropNamespace)
+         return `${ns}  [yellow]drop[/]`;
+      if (namespace.exists())
+         return `${ns}  [green]keep[/]`;
+      return `${ns}  [green]create[/]`;
+   }
+
+   function compressorText() {
+      if (isAtlasPlatform('sharedTier'))
+         return '[yellow]omitted[/]  [dim](shared tier)[/]';
+      const [name, msg] = parseCompressor(compressor);
+      return msg ? `[green]${name}[/]  [yellow]${msg}[/]` : `[green]${name}[/]`;
+   }
+
+   function writeConcernText() {
+      const parts = [
+         `[dim]w=[/][blue]${writeConcern.w}[/]`,
+         `[dim]j=[/][blue]${writeConcern.j}[/]`
+      ];
+      if (hasOwn(writeConcern, 'wtimeout'))
+         parts.push(`[dim]wtimeout=[/][blue]${writeConcern.wtimeout}[/]`);
+      return parts.join('  ');
+   }
+
+   function timeSeriesText() {
+      if (!timeSeries)
+         return '[dim]off[/]';
+      const ttl = (typeof expireAfterSeconds === 'number' && expireAfterSeconds > 0)
+         ? `  [dim]ttl[/] [blue]${expireAfterSeconds}s[/]`
+         : '';
+      return `[green]${tsOptions.timeField}[/] [dim]/[/] [green]${tsOptions.metaField}[/] [dim]/[/] [green]${tsOptions.granularity}[/]${ttl}`;
+   }
+
+   function cappedText() {
+      if (!cappedThisRun())
+         return '[dim]off[/]';
+      return `[dim]size[/] [blue]${cappedOptions.size}[/]  [dim]max[/] [blue]${cappedOptions.max}[/]`;
+   }
+
+   function indexOrderText() {
+      const order = String((indexPrefs && indexPrefs.order) || '').toLowerCase();
+      if (order === 'pre' || order === 'post')
+         return order;
+      return 'post';
+   }
+
+   function indexesText() {
+      if (!isPlainObject(indexPrefs) || !indexPrefs.build)
+         return '[dim]off[/]';
+      return `[green]${indexOrderText()}[/]  [dim]quorum[/] [blue]${indexPrefs.commitQuorum}[/]`;
+   }
+
+   function shardingText() {
+      if (cappedThisRun() && sharding && isSharded())
+         return '[yellow]skipped[/]  [dim](capped)[/]';
+      if (!sharding || !isSharded())
+         return '[dim]off[/]';
+      return oneLine(shardedOptions.key);
+   }
+
+   function optionsText() {
+      const file = resolved.source.file;
+      if (!file)
+         return '[dim]defaults[/]';
+      const slash = Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\'));
+      if (slash < 0)
+         return file;
+      return `[dim]${file.slice(0, slash + 1)}[/]${file.slice(slash + 1)}`;
+   }
+
+   function schemaDetail(sample) {
+      const meta = isPlainObject(sample.spec.schema) ? sample.spec.schema : {};
+      return [meta.type, meta.comment].filter(Boolean).join(': ');
+   }
+
+   function visibleLength(text) {
+      return stripAnsiMarkup(String(text)).length;
+   }
+
+   function padVisible(text, width) {
+      const gap = width - visibleLength(text);
+      return gap > 0 ? text + ' '.repeat(gap) : text;
+   }
+
+   // Colour tags set a new SGR code. They do not nest, so a title sits between dim segments.
+   function paintRule(left, mid, right, title, leftSpan, rightSpan) {
+      const rightBody = '─'.repeat(rightSpan);
+      if (!title)
+         return `[dim]${left}${'─'.repeat(leftSpan)}${mid}${rightBody}${right}[/]`;
+      const stamp = `─ ${title} `;
+      if (stamp.length >= leftSpan) {
+         const cut = Math.max(0, leftSpan - 2);
+         return `[dim]${left}─ [/][yellow]${title.slice(0, cut)}[/][dim]${mid}${rightBody}${right}[/]`;
+      }
+      const rest = '─'.repeat(leftSpan - stamp.length);
+      return `[dim]${left}─ [/][yellow]${title}[/][dim] ${rest}${mid}${rightBody}${right}[/]`;
+   }
+
+   function paintRow(label, value, labelW, valueW) {
+      return `[dim]│[/] ${padVisible(`[cyan]${label}[/]`, labelW)} [dim]│[/] ${padVisible(value, valueW)} [dim]│[/]`;
+   }
+
+   function printHud() {
+      const ratios = Array.isArray(fuzzer.ratios) ? fuzzer.ratios : [1];
+      const from = new Date(now + fuzzer.offset * 86400000).toISOString();
+      const to = new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString();
+      const schemaRows = schemaSamples.map((sample, i) => {
+         const weight = ratioWeight(ratios[i]);
+         const detail = schemaDetail(sample);
+         const weightText = weight > 0 ? `[blue]${weight}[/]` : '[dim]0[/]';
+         const omitted = weight > 0 ? '' : '  [dim]omitted[/]';
+         const detailText = detail
+            ? (weight > 0 ? `  ${detail}` : `  [dim]${detail}[/]`)
+            : '';
+         return [sample.file, `${weightText}${omitted}${detailText}`];
+      });
+      const indexRows = [['build', indexesText()]];
+      if (isPlainObject(indexPrefs) && indexPrefs.build) {
+         [
+            ['index', indexes],
+            ['hashed', hashedIndexes],
+            ['2d', indexes2d],
+            ['text', textIndexes]
+         ].forEach(([label, keys]) => {
+            (keys || []).forEach(spec => indexRows.push([label, oneLine(spec)]));
+         });
+      }
+      const sections = [
+         ['run', [
+            ['namespace', namespaceText()],
+            ['documents', `[blue]${totalDocs}[/]`],
+            ['writer concurrency', `[blue]${writerConcurrency}[/]`]
+         ]],
+         ['window', [
+            ['distribution', distributionText()],
+            ['from', from],
+            ['to', to]
+         ]],
+         ['collection', [
+            ['compressor', compressorText()],
+            ['collation', String(collation && collation.locale)],
+            ['write concern', writeConcernText()],
+            ['time series', timeSeriesText()],
+            ['capped', cappedText()],
+            ['sharding', shardingText()]
+         ]],
+         ['schemas', schemaRows],
+         ['indexes', indexRows]
+      ];
+      let labelW = 0;
+      let valueW = 0;
+      sections.forEach(([, rows]) => {
+         rows.forEach(([label, value]) => {
+            labelW = Math.max(labelW, String(label).length);
+            valueW = Math.max(valueW, visibleLength(value));
+         });
+      });
+      const leftSpan = labelW + 2;
+      const rightSpan = valueW + 2;
+      sections.forEach(([title, rows], i) => {
+         const rule = i === 0
+            ? paintRule('┌', '┬', '┐', title, leftSpan, rightSpan)
+            : paintRule('├', '┼', '┤', title, leftSpan, rightSpan);
+         console.log((i === 0 ? '\n' : '') + rule);
+         rows.forEach(([label, value]) => console.log(paintRow(label, value, labelW, valueW)));
+      });
+      console.log(paintRule('└', '┴', '┘', '', leftSpan, rightSpan));
+      // The options path is long. It sits under the box so it does not stretch every row.
+      console.log(`[cyan]options[/]  ${optionsText()}`);
+   }
+
    async function main() {
       /*
        *  main
@@ -408,19 +596,10 @@
          console.log(`\n[red][ERROR][/] ${msg}`);
          return;
       }
-      if (resolved.source.file)
-         console.log(`\nOptions file "${resolved.source.file}"`);
       if (schemaFileErrors.length > 0) {
          schemaFileErrors.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
          return;
       }
-      schemaSamples.forEach(sample => {
-         const meta = isPlainObject(sample.spec.schema) ? sample.spec.schema : {};
-         const detail = [meta.type, meta.comment].filter(Boolean).join(': ');
-         console.log(detail
-            ? `Schema sample ${sample.file} (${detail})`
-            : `Schema sample ${sample.file}`);
-      });
       if (schemaSamples.length === 0) {
          console.log('\n[red][ERROR][/] fuzzer.schemas is empty');
          return;
@@ -451,11 +630,14 @@
       if (cappedThisRun() && sharding && isSharded())
          console.log('\n[red][WARN] [yellow]sharding[red] is skipped because a capped collection cannot be sharded[/]');
 
-      console.log(`\nSynthesising ${totalDocs} ${plural(totalDocs, 'document', 'documents')}`);
-
       const distributionName = String(fuzzer.distribution || '').toLowerCase();
       if (distributionName !== 'uniform' && distributionName !== 'normal')
          console.log(`\nUnsupported distribution type: ${fuzzer.distribution}\nDefaulting to "uniform"`);
+      const orderName = String((indexPrefs && indexPrefs.order) || '').toLowerCase();
+      if (orderName !== 'pre' && orderName !== 'post')
+         console.log(`\nUnsupported index build preference "${indexPrefs.order}": defaulting to "post"`);
+
+      printHud();
 
       // Drop finishes before create. The first batch is built while create runs.
       async function beginCreateNS() {
@@ -483,23 +665,14 @@
 
       dropExistingIndexes();
 
-      // set collection/index build order, generate and bulk write the documents, create indexes
-      console.log(`\nIndex build order preference "${indexPrefs.order}"`);
-      switch (indexPrefs.order.toLowerCase()) {
+      // Index order is a HUD row. pre builds before the inserts. Anything else inserts first.
+      switch (indexOrderText()) {
          case 'pre':
-            console.log('Building indexing metadata first');
             buildIndexes();
             if ((await genBulk(firstBatch)) === false)
                return;
-            break;
-         case 'post':
-            console.log('Populating collection first');
-            if ((await genBulk(firstBatch)) === false)
-               return;
-            buildIndexes();
             break;
          default:
-            console.log(`Unsupported index build preference "${indexPrefs.order}": defaulting to "post"`);
             if ((await genBulk(firstBatch)) === false)
                return;
             buildIndexes();
@@ -747,19 +920,8 @@
       /*
        *  drop target namespace
        */
-      if (dropNamespace && !!dbName && !!collName) {
-         console.log(`\nDropping namespace "${dbName}.${collName}"\n`);
+      if (dropNamespace && !!dbName && !!collName)
          namespace.drop();
-         return;
-      }
-      let msg;
-      if (!dropNamespace && !namespace.exists())
-         msg = `\nNominated namespace "${dbName}.${collName}" does not exist\n`;
-      else
-         msg = `\nPreserving existing namespace "${dbName}.${collName}"`;
-
-      console.log(msg);
-      return;
    }
 
    function parseCompressor(compressor = '', msg = '') {
@@ -1285,9 +1447,19 @@
       return sharding && isSharded() && !cappedThisRun();
    }
 
+   function writerConcurrencyProblem() {
+      const n = writerConcurrency;
+      if (typeof n === 'number' && Number.isSafeInteger(n) && n >= 1)
+         return null;
+      return `writerConcurrency ${tojson(n)} must be an integer of at least 1`;
+   }
+
    function collectionPlan() {
       const willShard = shardThisRun();
       const reasons = [];
+      const concurrencyProblem = writerConcurrencyProblem();
+      if (concurrencyProblem)
+         reasons.push(concurrencyProblem);
       if (timeSeries && !fCV(5.0))
          reasons.push('time series requires fCV 5.0 or newer');
       if (timeSeries && isAtlasPlatform('serverless'))
@@ -1333,15 +1505,11 @@
 
    function createNS() {
       if (namespace.exists()) {
-         console.log(`\nNamespace "${dbName}.${collName}" exists`);
          if (!shardThisRun())
             return true;
          return shardPreservedNamespace();
       } else {
-         let [blockCompressor, msg] = parseCompressor(compressor);
-         console.log(`Creating namespace "${dbName}.${collName}"`);
-         console.log(`\twith block compressor:\t"${blockCompressor}" ${msg}`);
-         console.log(`\twith collation locale:\t"${collation.locale}"`);
+         let [blockCompressor] = parseCompressor(compressor);
          let options = {
             "storageEngine": (isAtlasPlatform('sharedTier'))
                            ? undefined
@@ -1361,18 +1529,13 @@
             options.capped = true;
             options.size = cappedOptions.size;
             options.max = cappedOptions.max;
-            console.log(`\twith capped options:\t"${tojson(cappedOptions)}"`);
          }
          if (timeSeries && fCV(5.0) && !isAtlasPlatform('serverless')) {
             // Command field is timeseries. The option flag stays timeSeries.
             options.timeseries = tsOptions;
-            console.log(`\twith time series options: ${tojson(tsOptions)}`);
             // 0 means omit. A positive number is seconds after timeField.
-            if (typeof expireAfterSeconds === 'number' && expireAfterSeconds > 0) {
+            if (typeof expireAfterSeconds === 'number' && expireAfterSeconds > 0)
                options.expireAfterSeconds = expireAfterSeconds;
-               console.log(`\twith TTL options:\t"${expireAfterSeconds}"`);
-            } else
-               console.log('\twith TTL options:\tnone');
          }
 
          try {
@@ -1390,15 +1553,12 @@
 
    function indexBuildMessage(result, label) {
       // mongosh createIndexes resolves to the index names. A failure throws.
-      const names = Array.isArray(result) ? result.join(',') : result;
-      return `${label} completed with results:\t${names}`;
+      const names = Array.isArray(result) ? result.join(', ') : result;
+      return `${label}  ${names}`;
    }
 
-   function createIndexSet(keys, options, label, heading) {
+   function createIndexSet(keys, options, label) {
       const useCommitQuorum = fCV(4.4) && (isReplSet() || isSharded());
-      const quorum = useCommitQuorum ? indexPrefs.commitQuorum : 'disabled';
-      console.log(heading(quorum));
-      keys.forEach(index => console.log(`\tkey: ${tojson(index)}`));
       const args = useCommitQuorum
          ? [keys, options, indexPrefs.commitQuorum]
          : [keys, options];
@@ -1421,30 +1581,21 @@
 
    function buildIndexes() {
       if (indexPrefs.build) {
-         if (indexes.length > 0) {
-            createIndexSet(indexes, indexOptions, 'Indexing', (quorum) =>
-               `\nBuilding ${plural(indexes.length, 'index', 'indexes')} with collation locale "${collation.locale}" with commit quorum "${quorum}":`
-            );
-         } else
+         if (indexes.length > 0)
+            createIndexSet(indexes, indexOptions, 'indexes');
+         else
             console.log('No regular index builds specified.');
 
          const specialSets = [
-            [hashedIndexes, hashedIndexOptions, (quorum) =>
-               `\nBuilding hashed ${plural(hashedIndexes.length, 'index', 'indexes')} with collation locale "simple" with commit quorum "${quorum}":`],
-            [indexes2d, indexes2dOptions, (quorum) =>
-               `\nBuilding 2d ${plural(indexes2d.length, 'index', 'indexes')} with default language "${idioma}" with commit quorum "${quorum}":`],
-            [textIndexes, textIndexOptions, (quorum) =>
-               `\nBuilding text ${plural(textIndexes.length, 'index', 'indexes')} with default language "${idioma}" with commit quorum "${quorum}":`]
+            [hashedIndexes, hashedIndexOptions, 'hashed'],
+            [indexes2d, indexes2dOptions, '2d'],
+            [textIndexes, textIndexOptions, 'text']
          ].filter(([keys]) => keys.length > 0);
-         if (specialSets.length > 0) {
-            specialSets.forEach(([keys, options, heading]) => {
-               createIndexSet(keys, options, 'Special indexing', heading);
-            });
-         } else
-            console.log('\nNo special index builds specified.');
-
-      } else
-         console.log('\nBuilding indexes: "false"');
+         if (specialSets.length > 0)
+            specialSets.forEach(([keys, options, label]) => createIndexSet(keys, options, label));
+         else
+            console.log('No special index builds specified.');
+      }
 
       return;
    }
@@ -1478,6 +1629,61 @@
    // The insert command wrapper sits above the document bytes. 32 KiB leaves
    // room for it. A legal document that does not fit is held for the next batch.
    const MESSAGE_RESERVE_BYTES = 32 * 1024;
+   const batchHud = new MiniHud({ "enabled": true, "throttleMs": 0 });
+   let ackedBytes = 0;
+   let progressInserted = 0;
+   let progressBatch = 0;
+   let progressShown = false;
+   let progressLive = false;
+
+   function insertBar(inserted, total, width = 24) {
+      const n = Math.max(1, width);
+      const frac = total > 0 ? Math.min(1, inserted / total) : 1;
+      let filled = frac >= 1 ? n : Math.floor(frac * n);
+      if (inserted > 0 && filled === 0)
+         filled = 1;
+      if (frac < 1)
+         filled = Math.min(filled, n - 1);
+      return '█'.repeat(filled) + '░'.repeat(n - filled);
+   }
+
+   function progressText(inserted, bytes, batchNo, final = false) {
+      const total = totalDocs;
+      const frac = total > 0 ? Math.min(1, inserted / total) : 1;
+      const pct = (total > 0 && inserted >= total) ? 100 : Math.floor(frac * 100);
+      const batch = (!final && batchNo > 0) ? `, batch [blue]${batchNo}[/]` : '';
+      return `[yellow]insert[/]  [blue]${inserted}[/]/[blue]${total}[/]  ${insertBar(inserted, total)}  [blue]${pct}[/]%, [blue]${bytes}[/] ${plural(bytes, 'byte', 'bytes')}${batch}`;
+   }
+
+   function showProgress(inserted, bytes, batchNo, final = false) {
+      progressInserted = inserted;
+      progressBatch = batchNo;
+      const line = progressText(inserted, bytes, batchNo, final);
+      if (batchHud.enabled && !final) {
+         batchHud.render(line, { "force": true });
+         progressShown = true;
+         progressLive = true;
+         return;
+      }
+      if (final && !batchHud.enabled && progressShown)
+         return;
+      const lead = progressShown ? '' : '\n';
+      batchHud.clear();
+      console.log(lead + line);
+      progressShown = true;
+      progressLive = false;
+   }
+
+   function logLine(...args) {
+      const restore = progressLive;
+      batchHud.clear();
+      progressLive = false;
+      console.log(...args);
+      if (!restore)
+         return;
+      batchHud.render(progressText(progressInserted, ackedBytes, progressBatch), { "force": true });
+      progressLive = true;
+   }
    let packGenerated = 0;
    let packHeld = null;
    let packSkipped = 0;
@@ -1506,13 +1712,13 @@
             const depth = documentDepth(doc);
             if (depth > 64) {
                packDepthWarned = true;
-               console.log(`\n[Warning] A document is nested ${depth} levels, past 64. The run continues.`);
+               logLine(`\n[Warning] A document is nested ${depth} levels, past 64. The run continues.`);
             }
          }
          await yieldSometimes();
          if (size > bsonMax) {
             packSkipped++;
-            console.log(`\n[Warning] A document of ${size} bytes exceeds the BSON max of ${bsonMax} bytes. It is not inserted.`);
+            logLine(`\n[Warning] A document of ${size} bytes exceeds the BSON max of ${bsonMax} bytes. It is not inserted.`);
             continue;
          }
          if (docs.length > 0 && (bytes + size) > messageBudget) {
@@ -1528,10 +1734,8 @@
    }
 
    async function genBulk(prepared) {
-      // Two inserts may be in flight. The packer waits while both slots are full,
-      // so the shell holds those two batches and the one it is building.
-      const WRITE_SLOTS = 2;
-      console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} ${plural(totalDocs, 'document', 'documents')}:`);
+      // writerConcurrency inserts may be in flight. The packer waits while every
+      // slot is full. At 1 it waits before packing the next batch.
       let inserted = 0;
       let batchNo = 0;
       let failed = false;
@@ -1542,12 +1746,14 @@
             ? insertedFromWrite(info.writeError)
             : Object.keys((info.result && info.result.insertedIds) || {}).length;
          inserted += bInserted;
-         console.log(`\t[Batch ${info.no}] inserted ${bInserted} ${plural(bInserted, 'document', 'documents')}, ${info.bytes} ${plural(info.bytes, 'byte', 'bytes')} (${inserted}/${totalDocs})`);
+         if (!(info.writeError || bInserted < info.n))
+            ackedBytes += info.bytes;
+         showProgress(inserted, ackedBytes, info.no);
          if (info.writeError || bInserted < info.n) {
             failed = true;
             bulkStop = true;
             if (info.writeError)
-               console.log(errText(info.writeError));
+               logLine(errText(info.writeError));
             return false;
          }
          return true;
@@ -1588,7 +1794,7 @@
          while (prepared && !bulkStop) {
             launch(prepared);
             prepared = null;
-            if (slots.size >= WRITE_SLOTS && !(await settleOne()))
+            if (slots.size >= writerConcurrency && !(await settleOne()))
                break;
             if (bulkStop)
                break;
@@ -1600,14 +1806,14 @@
          throw e;
       }
       await drainSlots();
+      showProgress(inserted, ackedBytes, progressBatch, true);
       if (failed) {
          const shortfall = totalDocs - inserted;
-         console.log(`\n[red][ERROR][/] Bulk insert stopped after ${inserted} of ${totalDocs} documents (${shortfall} short)`);
+         logLine(`\n[red][ERROR][/] Bulk insert stopped after ${inserted} of ${totalDocs} documents (${shortfall} short)`);
          return false;
       }
       if (packSkipped > 0)
-         console.log(`\n${packSkipped} ${plural(packSkipped, 'document', 'documents')} over the BSON max ${plural(packSkipped, 'was', 'were')} not inserted.`);
-      console.log('Generation completed.');
+         logLine(`\n${packSkipped} ${plural(packSkipped, 'document', 'documents')} over the BSON max ${plural(packSkipped, 'was', 'were')} not inserted.`);
       return true;
    }
 
