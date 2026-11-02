@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.7.4"
+ *  Version: "1.8.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.7.4" };
+   const __script = { "name": "fuzzer.js", "version": "1.8.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -457,7 +457,7 @@
       if (distributionName !== 'uniform' && distributionName !== 'normal')
          console.log(`\nUnsupported distribution type: ${fuzzer.distribution}\nDefaulting to "uniform"`);
 
-      // Drop finishes before create. createNS runs while the size sample is drawn.
+      // Drop finishes before create. The first batch is built while create runs.
       async function beginCreateNS() {
          return createNS();
       }
@@ -467,61 +467,19 @@
          createFailed = err;
          return false;
       });
-
-      // One document from each live schema, then discard it. The batch uses the
-      // largest size so a batch of that schema still fits in one message.
-      const ratios = Array.isArray(fuzzer.ratios) ? fuzzer.ratios : [1];
-      const schemaIndexes = [];
-      for (let i = 0; i < schemaSamples.length; i++) {
-         if (ratioWeight(ratios[i]) > 0)
-            schemaIndexes.push(i);
-      }
-      let weightedSize = 0, weight = 0, maxSize = 0, maxDepth = 0;
-      try {
-         for (let i = 0; i < schemaIndexes.length; i++) {
-            const schemaIndex = schemaIndexes[i];
-            const doc = genDocument(fuzzer, timestamp, schemaIndex);
-            const size = bsonsize(doc);
-            const depth = documentDepth(doc);
-            const schemaWeight = ratioWeight(ratios[schemaIndex]);
-            weightedSize += size * schemaWeight;
-            weight += schemaWeight;
-            if (size > maxSize)
-               maxSize = size;
-            if (depth > maxDepth)
-               maxDepth = depth;
-            await yieldSometimes();
-         }
-      } catch(e) {
-         await creating;
-         throw e;
-      }
-
-      const sampleSize = schemaIndexes.length;
-      const avgSize = (weight > 0) ? $floor(weightedSize / weight) : 0;
-      console.log(`\nSampling ${sampleSize} ${plural(sampleSize, 'schema', 'schemas')}, one document each. Weighted average ${avgSize} ${plural(avgSize, 'byte', 'bytes')}, largest ${maxSize} ${plural(maxSize, 'byte', 'bytes')}`);
-      if (maxDepth > 64)
-         console.log(`\n[Warning] A sample document is nested ${maxDepth} levels, past 64. The run continues.`);
-      // basis is the largest sample. A document over bsonMax cannot be inserted.
-      // The batch is min(1000, maxWriteBatchSize, message limit / basis).
-      const basis = (maxSize >= 1) ? maxSize : avgSize;
-      const countCap = Math.min(1000, maxWriteBatchSize);
-      let batchSize = countCap;
-      if (basis > bsonMax) {
-         batchSize = 0;
-         console.log(`\n[Warning] The largest sample document of ${maxSize} bytes exceeds the BSON max of ${bsonMax} bytes`);
-      } else if (basis >= 1) {
-         const byMessage = $floor(maxMessageSizeBytes / basis);
-         batchSize = Math.min(countCap, byMessage);
-         if (batchSize < 1)
-            batchSize = 1;
-      }
-      console.log(`Estimated optimal capacity of ${batchSize} ${plural(batchSize, 'document', 'documents')} per batch`);
-
+      let packError = null;
+      const packing = takePackedBatch().catch(err => {
+         packError = err;
+         return null;
+      });
+      await Promise.all([creating, packing]);
       if (createFailed)
          throw createFailed;
+      if (packError)
+         throw packError;
       if (!(await creating))
          return;
+      const firstBatch = await packing;
 
       dropExistingIndexes();
 
@@ -531,18 +489,18 @@
          case 'pre':
             console.log('Building indexing metadata first');
             buildIndexes();
-            if ((await genBulk(batchSize)) === false)
+            if ((await genBulk(firstBatch)) === false)
                return;
             break;
          case 'post':
             console.log('Populating collection first');
-            if ((await genBulk(batchSize)) === false)
+            if ((await genBulk(firstBatch)) === false)
                return;
             buildIndexes();
             break;
          default:
             console.log(`Unsupported index build preference "${indexPrefs.order}": defaulting to "post"`);
-            if ((await genBulk(batchSize)) === false)
+            if ((await genBulk(firstBatch)) === false)
                return;
             buildIndexes();
       }
@@ -734,13 +692,12 @@
    function genDocument({
          id = 'ts', range = 365.2422, offset = -300, interval = 7,
          distribution = 'uniform', ratios = [1] } = {},
-         timestamp, schemaIndex) {
+         timestamp) {
       /*
-       *  Pick one loaded schema, then build only that document.
-       *  schemaIndex measures that schema. Bulk insert draws by ratio.
+       *  Pick one loaded schema by its weight, then build only that document.
        *  A string that starts with "=" is an expression.
        */
-      const index = (schemaIndex == null) ? ratioIndex(ratios) : schemaIndex;
+      const index = ratioIndex(ratios);
       const sample = schemaSamples[index];
       if (!sample)
          throw new Error(`schema ratio index ${index} but only ${schemaSamples.length} ${plural(schemaSamples.length, 'schema file is', 'schema files are')} loaded`);
@@ -1518,35 +1475,57 @@
       });
    }
 
-   async function takeBatch(n, overlap) {
+   // The insert command wrapper sits above the document bytes. 32 KiB leaves
+   // room for it. A legal document that does not fit is held for the next batch.
+   const MESSAGE_RESERVE_BYTES = 32 * 1024;
+   let packGenerated = 0;
+   let packHeld = null;
+   let packSkipped = 0;
+   let packDepthWarned = false;
+
+   async function takePackedBatch() {
+      const countCap = Math.min(1000, maxWriteBatchSize);
+      const messageBudget = Math.max(1, maxMessageSizeBytes - MESSAGE_RESERVE_BYTES);
       const docs = [];
-      for (let i = 0; i < n; i++) {
-         docs.push(genDocument(fuzzer, timestamp));
-         if (overlap)
-            await yieldSometimes();
+      let bytes = 0;
+      if (packHeld) {
+         docs.push(packHeld.doc);
+         bytes = packHeld.size;
+         packHeld = null;
       }
-      return docs;
+      while (docs.length < countCap && packGenerated < totalDocs) {
+         packGenerated++;
+         const doc = genDocument(fuzzer, timestamp);
+         const size = bsonsize(doc);
+         if (!packDepthWarned) {
+            const depth = documentDepth(doc);
+            if (depth > 64) {
+               packDepthWarned = true;
+               console.log(`\n[Warning] A document is nested ${depth} levels, past 64. The run continues.`);
+            }
+         }
+         await yieldSometimes();
+         if (size > bsonMax) {
+            packSkipped++;
+            console.log(`\n[Warning] A document of ${size} bytes exceeds the BSON max of ${bsonMax} bytes. It is not inserted.`);
+            continue;
+         }
+         if (docs.length > 0 && (bytes + size) > messageBudget) {
+            packHeld = { doc, size };
+            break;
+         }
+         docs.push(doc);
+         bytes += size;
+      }
+      if (docs.length === 0)
+         return null;
+      return { docs, bytes, n: docs.length };
    }
 
-   async function genBulk(batchSize) {
-      if (!(batchSize >= 1)) {
-         console.log(`\n[Warning] Batch size ${batchSize} is below 1. Skipping bulk insert.`);
-         return true;
-      }
-      const batches = $ceil(totalDocs / batchSize);
-      console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} ${plural(totalDocs, 'document', 'documents')} in ${batches} ${plural(batches, 'batch', 'batches')}:`);
+   async function genBulk(prepared) {
+      console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} ${plural(totalDocs, 'document', 'documents')}:`);
       let inserted = 0;
-      let remaining = totalDocs;
       let batchNo = 0;
-      const nextBatch = async overlap => {
-         if (!(remaining > 0))
-            return null;
-         const n = Math.min(batchSize, remaining);
-         remaining -= n;
-         return { n, docs: await takeBatch(n, overlap) };
-      };
-
-      let prepared = await nextBatch(false);
       while (prepared) {
          // Catch immediately so a rejection during the next batch is not unhandled.
          let writeError = null;
@@ -1555,9 +1534,10 @@
             return null;
          });
          const n = prepared.n;
+         const bytes = prepared.bytes;
          batchNo++;
          try {
-            prepared = await nextBatch(true);
+            prepared = await takePackedBatch();
          } catch(e) {
             await inflight;
             throw e;
@@ -1567,7 +1547,7 @@
             ? insertedFromWrite(writeError)
             : Object.keys((result && result.insertedIds) || {}).length;
          inserted += bInserted;
-         console.log(`\t[Batch ${batchNo}/${batches}] bulk inserted ${bInserted} ${plural(bInserted, 'document', 'documents')}`);
+         console.log(`\t[Batch ${batchNo}] inserted ${bInserted} ${plural(bInserted, 'document', 'documents')}, ${bytes} ${plural(bytes, 'byte', 'bytes')} (${inserted}/${totalDocs})`);
          if (writeError || bInserted < n) {
             const shortfall = totalDocs - inserted;
             console.log(`\n[red][ERROR][/] Bulk insert stopped after ${inserted} of ${totalDocs} documents (${shortfall} short)`);
@@ -1576,7 +1556,8 @@
             return false;
          }
       }
-
+      if (packSkipped > 0)
+         console.log(`\n${packSkipped} ${plural(packSkipped, 'document', 'documents')} over the BSON max ${plural(packSkipped, 'was', 'were')} not inserted.`);
       console.log('Generation completed.');
       return true;
    }
