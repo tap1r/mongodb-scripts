@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.8.3"
+ *  Version: "1.8.4"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.8.3" };
+   const __script = { "name": "fuzzer.js", "version": "1.8.4" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -488,6 +488,10 @@
       return `  [dim]lang[/] [blue]${options.default_language}[/]`;
    }
 
+   function grouped(n) {
+      return Number(n).toLocaleString('en-US');
+   }
+
    function shardingText() {
       if (cappedThisRun() && sharding && isSharded())
          return '[yellow]skipped[/]  [dim](capped)[/]';
@@ -577,7 +581,7 @@
       const sections = [
          ['run', [
             ['namespace', namespaceText()],
-            ['documents', `[blue]${totalDocs}[/]`],
+            ['documents', `[blue]${grouped(totalDocs)}[/]`],
             ['writer concurrency', `[blue]${writerConcurrency}[/]`]
          ]],
          ['window', [
@@ -1757,7 +1761,8 @@
       const frac = total > 0 ? Math.min(1, inserted / total) : 1;
       const pct = (total > 0 && inserted >= total) ? 100 : Math.floor(frac * 100);
       const batch = (!final && batchNo > 0) ? `, batch [blue]${batchNo}[/]` : '';
-      return `[yellow]insert[/]  [blue]${inserted}[/]/[blue]${total}[/]  ${insertBar(inserted, total)}  [blue]${pct}[/]%, [blue]${bytes}[/] ${plural(bytes, 'byte', 'bytes')}${batch}`;
+      const shownBytes = grouped(bytes);
+      return `[yellow]insert[/]  [blue]${inserted}[/]/[blue]${total}[/]  ${insertBar(inserted, total)}  [blue]${pct}[/]%, [blue]${shownBytes}[/] ${plural(bytes, 'byte', 'bytes')}${batch}`;
    }
 
    function showProgress(inserted, bytes, batchNo, final = false) {
