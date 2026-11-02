@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.7.3"
+ *  Version: "1.7.4"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.7.3" };
+   const __script = { "name": "fuzzer.js", "version": "1.7.4" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -443,9 +443,6 @@
          if (expiryWarning)
             console.log(`\n[red][WARN] [yellow]time series TTL[red] ${expiryWarning}[/]`);
       }
-      // Selection may have zeroed ratios. Size the sample from what this run still draws.
-      const ratioSum = ratioTotal(fuzzer.ratios);
-      const sampleSize = $floor((8 + ratioSum) ** 2);
       const oidWindow = tsObjectIdWindow();
       if (oidWindow.length > 0) {
          oidWindow.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
@@ -471,15 +468,24 @@
          return false;
       });
 
-      // One document at a time. The average is logged. The batch uses the largest
-      // size so a batch of that schema still fits in one message.
-      let docSize = 0, maxSize = 0, maxDepth = 0;
+      // One document from each live schema, then discard it. The batch uses the
+      // largest size so a batch of that schema still fits in one message.
+      const ratios = Array.isArray(fuzzer.ratios) ? fuzzer.ratios : [1];
+      const schemaIndexes = [];
+      for (let i = 0; i < schemaSamples.length; i++) {
+         if (ratioWeight(ratios[i]) > 0)
+            schemaIndexes.push(i);
+      }
+      let weightedSize = 0, weight = 0, maxSize = 0, maxDepth = 0;
       try {
-         for (let i = 0; i < sampleSize; i++) {
-            const doc = genDocument(fuzzer, timestamp);
+         for (let i = 0; i < schemaIndexes.length; i++) {
+            const schemaIndex = schemaIndexes[i];
+            const doc = genDocument(fuzzer, timestamp, schemaIndex);
             const size = bsonsize(doc);
             const depth = documentDepth(doc);
-            docSize += size;
+            const schemaWeight = ratioWeight(ratios[schemaIndex]);
+            weightedSize += size * schemaWeight;
+            weight += schemaWeight;
             if (size > maxSize)
                maxSize = size;
             if (depth > maxDepth)
@@ -491,8 +497,9 @@
          throw e;
       }
 
-      const avgSize = $floor(docSize / sampleSize);
-      console.log(`\nSampling ${sampleSize} ${plural(sampleSize, 'document', 'documents')} each with BSON size averaging ${avgSize} ${plural(avgSize, 'byte', 'bytes')}, largest ${maxSize} ${plural(maxSize, 'byte', 'bytes')}`);
+      const sampleSize = schemaIndexes.length;
+      const avgSize = (weight > 0) ? $floor(weightedSize / weight) : 0;
+      console.log(`\nSampling ${sampleSize} ${plural(sampleSize, 'schema', 'schemas')}, one document each. Weighted average ${avgSize} ${plural(avgSize, 'byte', 'bytes')}, largest ${maxSize} ${plural(maxSize, 'byte', 'bytes')}`);
       if (maxDepth > 64)
          console.log(`\n[Warning] A sample document is nested ${maxDepth} levels, past 64. The run continues.`);
       // basis is the largest sample. A document over bsonMax cannot be inserted.
@@ -727,12 +734,13 @@
    function genDocument({
          id = 'ts', range = 365.2422, offset = -300, interval = 7,
          distribution = 'uniform', ratios = [1] } = {},
-         timestamp) {
+         timestamp, schemaIndex) {
       /*
        *  Pick one loaded schema, then build only that document.
+       *  schemaIndex measures that schema. Bulk insert draws by ratio.
        *  A string that starts with "=" is an expression.
        */
-      const index = ratioIndex(ratios);
+      const index = (schemaIndex == null) ? ratioIndex(ratios) : schemaIndex;
       const sample = schemaSamples[index];
       if (!sample)
          throw new Error(`schema ratio index ${index} but only ${schemaSamples.length} ${plural(schemaSamples.length, 'schema file is', 'schema files are')} loaded`);
