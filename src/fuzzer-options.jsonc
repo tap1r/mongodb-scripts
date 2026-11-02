@@ -87,8 +87,11 @@
       //   "start" piles events on offset. A larger alpha or a smaller scale tightens that pile.
       // exponential: cut to the window. lambda (per day, default 1/range) or mean, not both, and origin.
       //   mean is the untruncated mean. The window cuts the tail.
+      // poisson: frequency draw. Each timestamp is a whole day from origin, Poisson counts.
+      //   lambda is the mean day count (default range), or mean, not both. origin as above.
+      //   "start" counts forward from offset. Tails are not cut.
       // A name outside this list stops the plan.
-      "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
+      "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"|"poisson"]
       // "distributionParams": { "mu": 0, "sigma": 30 },
       // "polymorphic": {
       //    "enabled": false,

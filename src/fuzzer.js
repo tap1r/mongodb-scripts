@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.8.5"
+ *  Version: "1.8.6"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.8.5" };
+   const __script = { "name": "fuzzer.js", "version": "1.8.6" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -188,8 +188,10 @@
          //   Defaults are the quartiles, range/8, and mix 0.5. Tails are not cut.
          // pareto: Lomax, cut to the window. alpha (1.161), scale (range), origin ("start"|"end").
          // exponential: cut to the window. lambda (per day, default 1/range) or mean, and origin.
+         // poisson: frequency draw. Whole days from origin. lambda is the mean count (default range), or mean.
+         //   Tails are not cut. "start" counts forward from offset.
          // A name outside this list stops the plan. 8 sigma is the ts ObjectId span for the unbounded draws.
-         "distribution": "uniform",     // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
+         "distribution": "uniform",     // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"|"poisson"]
          // "distributionParams": { "mu": 0, "sigma": 30 },
          // "polymorphic": { /* experimental */
             // "enabled": false,
@@ -415,15 +417,17 @@
 
    // Days from now. uniform fills the window. normal and bimodal are not cut;
    // their ts ObjectId span is 8 sigma. pareto and exponential are cut to the window.
+   // poisson is a day count and is not cut; its span is the counts it can actually draw.
    // The untruncated mdblib pareto and exponential helpers stay unused: a date draw
    // has to stay inside the ObjectId years when id is ts.
-   const DISTRIBUTION_NAMES = ['uniform', 'normal', 'bimodal', 'pareto', 'exponential'];
+   const DISTRIBUTION_NAMES = ['uniform', 'normal', 'bimodal', 'pareto', 'exponential', 'poisson'];
    const DISTRIBUTION_KEYS = {
       uniform: [],
       normal: ['mu', 'sigma'],
       bimodal: ['mix', 'mu1', 'sigma1', 'mu2', 'sigma2', 'sigma'],
       pareto: ['alpha', 'scale', 'origin'],
-      exponential: ['lambda', 'mean', 'origin']
+      exponential: ['lambda', 'mean', 'origin'],
+      poisson: ['lambda', 'mean', 'origin']
    };
    let distributionResolved = null;
 
@@ -478,6 +482,82 @@
       return x < span ? x : span;
    }
 
+   // Whole-day Poisson count. The table is the practical support: weights more than
+   // e^-40 below the mode are dropped. A huge mean uses the normal limit instead of a table.
+   function poissonSampler(lambda) {
+      const sd = Math.sqrt(lambda);
+      if (sd > 20000) {
+         const lowK = Math.max(0, Math.floor(lambda - 8 * sd));
+         const highK = Math.ceil(lambda + 8 * sd);
+         return {
+            lowK,
+            highK,
+            draw() {
+               const k = Math.round(drawNormal(lambda, sd));
+               return k > 0 ? k : 0;
+            }
+         };
+      }
+      const mode = Math.floor(lambda);
+      const logCut = -40;
+      const right = [0];
+      let logW = 0;
+      let k = mode;
+      while (right.length < 250000) {
+         const next = logW + Math.log(lambda) - Math.log(k + 1);
+         if (!(next > logCut))
+            break;
+         logW = next;
+         k++;
+         right.push(logW);
+      }
+      const left = [];
+      logW = 0;
+      k = mode;
+      while (k > 0 && left.length < 250000) {
+         const next = logW + Math.log(k) - Math.log(lambda);
+         if (!(next > logCut))
+            break;
+         logW = next;
+         k--;
+         left.push(logW);
+      }
+      const below = left.length;
+      const logWeights = left.reverse().concat(right);
+      let sum = 0;
+      const weights = logWeights.map(lw => {
+         const w = Math.exp(lw);
+         sum += w;
+         return w;
+      });
+      const cdf = new Float64Array(weights.length);
+      let acc = 0;
+      for (let i = 0; i < weights.length; i++) {
+         acc += weights[i] / sum;
+         cdf[i] = acc;
+      }
+      cdf[cdf.length - 1] = 1;
+      const lowK = mode - below;
+      const highK = lowK + cdf.length - 1;
+      return {
+         lowK,
+         highK,
+         draw() {
+            const u = $rand();
+            let lo = 0;
+            let hi = cdf.length - 1;
+            while (lo < hi) {
+               const mid = (lo + hi) >> 1;
+               if (u < cdf[mid])
+                  hi = mid;
+               else
+                  lo = mid + 1;
+            }
+            return lowK + lo;
+         }
+      };
+   }
+
    function resolveDistribution(prefs) {
       const unusable = (errors, requested) => ({
          requested: requested || '',
@@ -501,7 +581,7 @@
       const rawParams = prefs.distributionParams;
       const errors = [];
       if (folded && !DISTRIBUTION_NAMES.includes(folded))
-         errors.push(`unsupported distribution type "${requested}". Use uniform, normal, bimodal, pareto, or exponential`);
+         errors.push(`unsupported distribution type "${requested}". Use uniform, normal, bimodal, pareto, exponential, or poisson`);
       if (!Number.isFinite(offset))
          errors.push('fuzzer.offset must be a finite number of days');
       if (!Number.isFinite(range) || !(range > 0))
@@ -647,6 +727,41 @@
             rows.push(
                ['lambda', statText(lambda, 'per day')],
                ['mean', `${statText(1 / lambda, 'days')} [dim](untruncated)[/]`],
+               ['origin', `[blue]${origin}[/]`]
+            );
+         }
+      } else if (known && name === 'poisson') {
+         const lambdaValue = readNumber('lambda');
+         const meanValue = readNumber('mean');
+         let lambda;
+         if (lambdaValue !== undefined && meanValue !== undefined) {
+            errors.push('fuzzer.distributionParams accepts lambda or mean, not both');
+         } else if (lambdaValue !== undefined) {
+            lambda = lambdaValue;
+         } else if (meanValue !== undefined) {
+            lambda = meanValue;
+         } else if (range > 0) {
+            lambda = range;
+         }
+         if (lambda !== undefined && !(lambda > 0)) {
+            const key = lambdaValue === undefined ? 'mean' : 'lambda';
+            errors.push(`fuzzer.distributionParams.${key} must be greater than 0`);
+         }
+         const origin = readOrigin();
+         if (windowOk && lambda > 0) {
+            const sampler = poissonSampler(lambda);
+            unbounded = true;
+            if (origin === 'end') {
+               low = hi - sampler.highK;
+               high = hi - sampler.lowK;
+               draw = () => hi - sampler.draw();
+            } else {
+               low = lo + sampler.lowK;
+               high = lo + sampler.highK;
+               draw = () => lo + sampler.draw();
+            }
+            rows.push(
+               ['lambda', `${statText(lambda, 'days')} [dim](mean)[/]`],
                ['origin', `[blue]${origin}[/]`]
             );
          }
