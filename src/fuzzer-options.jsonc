@@ -79,7 +79,17 @@
       "range": 365.2422,
       "offset": -300,
       "interval": 7,
+      // uniform fills [offset, offset + range] and takes no parameters.
+      // normal: mu, sigma (days). Defaults are the window center and range/2. Tails are not cut.
+      // bimodal: mix, mu1, sigma1, mu2, sigma2. sigma fills a width that was omitted.
+      //   Defaults are the quartiles, range/8, and mix 0.5. Tails are not cut.
+      // pareto: Lomax, cut to the window. alpha (1.161), scale (range), origin ("start"|"end").
+      //   "start" piles events on offset. A larger alpha or a smaller scale tightens that pile.
+      // exponential: cut to the window. lambda (per day, default 1/range) or mean, not both, and origin.
+      //   mean is the untruncated mean. The window cuts the tail.
+      // A name outside this list stops the plan.
       "distribution": "uniform", // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
+      // "distributionParams": { "mu": 0, "sigma": 30 },
       // "polymorphic": {
       //    "enabled": false,
       //    "varyTypes": false,

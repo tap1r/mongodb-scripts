@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.8.4"
+ *  Version: "1.8.5"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.8.4" };
+   const __script = { "name": "fuzzer.js", "version": "1.8.5" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -182,7 +182,15 @@
          "range": 365.2422,             // date range in days
          "offset": -300,                // date offset in days from now() (negative = past, positive = future)
          "interval": 7,                 // date interval in days
+         // uniform fills [offset, offset + range] and takes no parameters.
+         // normal: mu, sigma (days). Defaults are the window center and range/2. Tails are not cut.
+         // bimodal: mix, mu1, sigma1, mu2, sigma2. sigma fills a width that was omitted.
+         //   Defaults are the quartiles, range/8, and mix 0.5. Tails are not cut.
+         // pareto: Lomax, cut to the window. alpha (1.161), scale (range), origin ("start"|"end").
+         // exponential: cut to the window. lambda (per day, default 1/range) or mean, and origin.
+         // A name outside this list stops the plan. 8 sigma is the ts ObjectId span for the unbounded draws.
          "distribution": "uniform",     // ["uniform"|"normal"|"bimodal"|"pareto"|"exponential"]
+         // "distributionParams": { "mu": 0, "sigma": 30 },
          // "polymorphic": { /* experimental */
             // "enabled": false,
             // "varyTypes": false,       // fuzz BSON types
@@ -405,11 +413,269 @@
       return tojson(value).replace(/\s+/g, ' ');
    }
 
+   // Days from now. uniform fills the window. normal and bimodal are not cut;
+   // their ts ObjectId span is 8 sigma. pareto and exponential are cut to the window.
+   // The untruncated mdblib pareto and exponential helpers stay unused: a date draw
+   // has to stay inside the ObjectId years when id is ts.
+   const DISTRIBUTION_NAMES = ['uniform', 'normal', 'bimodal', 'pareto', 'exponential'];
+   const DISTRIBUTION_KEYS = {
+      uniform: [],
+      normal: ['mu', 'sigma'],
+      bimodal: ['mix', 'mu1', 'sigma1', 'mu2', 'sigma2', 'sigma'],
+      pareto: ['alpha', 'scale', 'origin'],
+      exponential: ['lambda', 'mean', 'origin']
+   };
+   let distributionResolved = null;
+
+   function formatStat(n) {
+      if (!Number.isFinite(n))
+         return String(n);
+      const abs = Math.abs(n);
+      if (abs !== 0 && abs < 1e-4)
+         return n.toExponential(2);
+      const places = abs >= 1 ? 3 : 6;
+      let text = n.toFixed(places).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+      if (text === '-0')
+         text = '0';
+      return text;
+   }
+
+   function statText(n, unit) {
+      const value = `[blue]${formatStat(n)}[/]`;
+      return unit ? `${value} [dim]${unit}[/]` : value;
+   }
+
+   function drawNormal(mu, sigma) {
+      for (let attempt = 0; attempt < 4; attempt++) {
+         const x = $genNormal(mu, sigma);
+         if (Number.isFinite(x))
+            return x;
+      }
+      throw new Error('normal draw was not finite');
+   }
+
+   // Exponential rate lambda, conditioned on falling inside [0, span].
+   function truncatedExponential(lambda, span) {
+      const covered = -Math.expm1(-lambda * span);
+      const portion = $rand() * covered;
+      if (!(portion < 1))
+         return span;
+      const x = -Math.log1p(-portion) / lambda;
+      if (!(x > 0))
+         return 0;
+      return x < span ? x : span;
+   }
+
+   // Lomax (Pareto II) shape alpha and scale, conditioned on [0, span].
+   function truncatedLomax(alpha, scale, span) {
+      const spanSurvival = Math.pow(1 + span / scale, -alpha);
+      const survival = 1 - $rand() * (1 - (Number.isFinite(spanSurvival) ? spanSurvival : 0));
+      if (!(survival > 0))
+         return span;
+      const x = scale * (Math.pow(survival, -1 / alpha) - 1);
+      if (!(x > 0))
+         return 0;
+      return x < span ? x : span;
+   }
+
+   function resolveDistribution(prefs) {
+      const unusable = (errors, requested) => ({
+         requested: requested || '',
+         name: 'uniform',
+         unbounded: false,
+         errors,
+         rows: [],
+         low: 0,
+         high: 0,
+         draw: () => { throw new Error(errors[0] || 'distribution is not usable'); }
+      });
+      if (!isPlainObject(prefs))
+         return unusable(['fuzzer must be an object'], '');
+
+      const requested = prefs.distribution != null ? String(prefs.distribution) : '';
+      const folded = requested.toLowerCase();
+      const known = !folded || DISTRIBUTION_NAMES.includes(folded);
+      const name = known ? (folded || 'uniform') : 'uniform';
+      const offset = +prefs.offset;
+      const range = +prefs.range;
+      const rawParams = prefs.distributionParams;
+      const errors = [];
+      if (folded && !DISTRIBUTION_NAMES.includes(folded))
+         errors.push(`unsupported distribution type "${requested}". Use uniform, normal, bimodal, pareto, or exponential`);
+      if (!Number.isFinite(offset))
+         errors.push('fuzzer.offset must be a finite number of days');
+      if (!Number.isFinite(range) || !(range > 0))
+         errors.push('fuzzer.range must be a finite number of days greater than 0');
+      if (rawParams != null && !isPlainObject(rawParams))
+         errors.push('fuzzer.distributionParams must be an object');
+
+      const params = isPlainObject(rawParams) ? rawParams : {};
+      const windowOk = Number.isFinite(offset) && Number.isFinite(range) && range > 0;
+      const lo = windowOk ? offset : 0;
+      const hi = windowOk ? offset + range : 0;
+      if (known && isPlainObject(rawParams)) {
+         Object.keys(params).forEach(key => {
+            if (!DISTRIBUTION_KEYS[name].includes(key))
+               errors.push(`fuzzer.distributionParams.${key} does not apply to ${name}`);
+         });
+      }
+
+      function given(key) {
+         if (!hasOwn(params, key))
+            return false;
+         const value = params[key];
+         return value != null && value !== '';
+      }
+
+      function readNumber(key) {
+         if (!given(key))
+            return undefined;
+         const n = +params[key];
+         if (!Number.isFinite(n)) {
+            errors.push(`fuzzer.distributionParams.${key} must be a finite number`);
+            return undefined;
+         }
+         return n;
+      }
+
+      function readOrigin() {
+         if (!given('origin'))
+            return 'start';
+         const word = String(params.origin).toLowerCase();
+         if (word !== 'start' && word !== 'end') {
+            errors.push('fuzzer.distributionParams.origin must be "start" or "end"');
+            return 'start';
+         }
+         return word;
+      }
+
+      // An omitted key keeps fallback. A present value has to be greater than 0.
+      function positive(key, value, fallback) {
+         if (value === undefined)
+            return fallback;
+         if (!(value > 0))
+            errors.push(`fuzzer.distributionParams.${key} must be greater than 0`);
+         return value;
+      }
+
+      let draw = () => $getRandNum(lo, hi);
+      let low = lo;
+      let high = hi;
+      let unbounded = false;
+      const rows = [];
+
+      if (known && name === 'normal') {
+         const mu = readNumber('mu');
+         const sigma = readNumber('sigma');
+         const mean = mu === undefined ? lo + range / 2 : mu;
+         const width = positive('sigma', sigma, range / 2);
+         if (windowOk && Number.isFinite(mean) && width > 0) {
+            const span = 8 * width;
+            low = Math.min(lo, mean - span);
+            high = Math.max(hi, mean + span);
+            unbounded = true;
+            draw = () => drawNormal(mean, width);
+            rows.push(['mu', statText(mean, 'days')], ['sigma', statText(width, 'days')]);
+         }
+      } else if (known && name === 'bimodal') {
+         const mixValue = readNumber('mix');
+         const mix = mixValue === undefined ? 0.5 : mixValue;
+         if (mixValue !== undefined && !(mix > 0 && mix < 1))
+            errors.push('fuzzer.distributionParams.mix must be greater than 0 and less than 1');
+         const shared = readNumber('sigma');
+         if (shared !== undefined && !(shared > 0))
+            errors.push('fuzzer.distributionParams.sigma must be greater than 0');
+         const mu1 = readNumber('mu1');
+         const mu2 = readNumber('mu2');
+         const mean1 = mu1 === undefined ? lo + range / 4 : mu1;
+         const mean2 = mu2 === undefined ? lo + (3 * range) / 4 : mu2;
+         const widthFallback = shared !== undefined ? shared : range / 8;
+         const width1 = positive('sigma1', readNumber('sigma1'), widthFallback);
+         const width2 = positive('sigma2', readNumber('sigma2'), widthFallback);
+         if (windowOk && mix > 0 && mix < 1 && width1 > 0 && width2 > 0 && Number.isFinite(mean1) && Number.isFinite(mean2)) {
+            low = Math.min(lo, mean1 - 8 * width1, mean2 - 8 * width2);
+            high = Math.max(hi, mean1 + 8 * width1, mean2 + 8 * width2);
+            unbounded = true;
+            draw = () => ($rand() < mix) ? drawNormal(mean1, width1) : drawNormal(mean2, width2);
+            rows.push(
+               ['mix', statText(mix)],
+               ['mu1', statText(mean1, 'days')],
+               ['sigma1', statText(width1, 'days')],
+               ['mu2', statText(mean2, 'days')],
+               ['sigma2', statText(width2, 'days')]
+            );
+         }
+      } else if (known && name === 'pareto') {
+         const alpha = positive('alpha', readNumber('alpha'), 1.161);
+         const scale = positive('scale', readNumber('scale'), range);
+         const origin = readOrigin();
+         if (windowOk && alpha > 0 && scale > 0) {
+            draw = () => {
+               const x = truncatedLomax(alpha, scale, range);
+               return origin === 'end' ? hi - x : lo + x;
+            };
+            rows.push(
+               ['alpha', statText(alpha)],
+               ['scale', statText(scale, 'days')],
+               ['origin', `[blue]${origin}[/]`]
+            );
+         }
+      } else if (known && name === 'exponential') {
+         const lambdaValue = readNumber('lambda');
+         const meanValue = readNumber('mean');
+         let lambda;
+         if (lambdaValue !== undefined && meanValue !== undefined) {
+            errors.push('fuzzer.distributionParams accepts lambda or mean, not both');
+         } else if (lambdaValue !== undefined) {
+            lambda = lambdaValue;
+            if (!(lambda > 0))
+               errors.push('fuzzer.distributionParams.lambda must be greater than 0');
+         } else if (meanValue !== undefined) {
+            if (!(meanValue > 0))
+               errors.push('fuzzer.distributionParams.mean must be greater than 0');
+            else
+               lambda = 1 / meanValue;
+         } else if (range > 0) {
+            lambda = 1 / range;
+         }
+         const origin = readOrigin();
+         if (windowOk && lambda > 0) {
+            draw = () => {
+               const x = truncatedExponential(lambda, range);
+               return origin === 'end' ? hi - x : lo + x;
+            };
+            rows.push(
+               ['lambda', statText(lambda, 'per day')],
+               ['mean', `${statText(1 / lambda, 'days')} [dim](untruncated)[/]`],
+               ['origin', `[blue]${origin}[/]`]
+            );
+         }
+      }
+
+      if (errors.length)
+         return unusable(errors, requested || name);
+      return {
+         requested: requested || name,
+         name,
+         unbounded,
+         errors: [],
+         rows,
+         low,
+         high,
+         draw
+      };
+   }
+
+   function distributionSpec() {
+      if (!distributionResolved)
+         distributionResolved = resolveDistribution(fuzzer);
+      return distributionResolved;
+   }
+
    function distributionText() {
-      const name = String(fuzzer.distribution || '').toLowerCase();
-      if (name === 'uniform' || name === 'normal')
-         return `[green]${name}[/]`;
-      return `[yellow]${fuzzer.distribution}[/]  [dim]using uniform[/]`;
+      const spec = distributionSpec();
+      const tail = spec.unbounded ? '  [dim]unbounded[/]' : '';
+      return `[green]${spec.name}[/]${tail}`;
    }
 
    function namespaceText() {
@@ -546,6 +812,7 @@
       const ratios = Array.isArray(fuzzer.ratios) ? fuzzer.ratios : [1];
       const from = new Date(now + fuzzer.offset * 86400000).toISOString();
       const to = new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString();
+      const windowSpec = distributionSpec();
       const schemaRows = schemaSamples.map((sample, i) => {
          const weight = ratioWeight(ratios[i]);
          const detail = schemaDetail(sample);
@@ -586,6 +853,7 @@
          ]],
          ['window', [
             ['distribution', distributionText()],
+            ...windowSpec.rows,
             ['from', from],
             ['to', to]
          ]],
@@ -748,9 +1016,6 @@
       if (cappedThisRun() && sharding && isSharded())
          console.log('\n[red][WARN] [yellow]sharding[red] is skipped because a capped collection cannot be sharded[/]');
 
-      const distributionName = String(fuzzer.distribution || '').toLowerCase();
-      if (distributionName !== 'uniform' && distributionName !== 'normal')
-         console.log(`\nUnsupported distribution type: ${fuzzer.distribution}\nDefaulting to "uniform"`);
       const orderName = String((indexPrefs && indexPrefs.order) || '').toLowerCase();
       if (orderName !== 'pre' && orderName !== 'post')
          console.log(`\nUnsupported index build preference "${indexPrefs.order}": defaulting to "post"`);
@@ -827,19 +1092,14 @@
    function tsObjectIdWindow() {
       if (String(fuzzer.id || 'ts').toLowerCase() === 'oid')
          return [];
+      const spec = distributionSpec();
+      if (spec.errors.length)
+         return [];
       const day = 86400;
-      let lo = fuzzer.offset;
-      let hi = fuzzer.offset + fuzzer.range;
-      // normal is unbounded. 8 sigma is past any draw this run will produce.
-      if (String(fuzzer.distribution || '').toLowerCase() === 'normal') {
-         const mu = fuzzer.offset + (fuzzer.range / 2);
-         const span = 8 * (fuzzer.range / 2);
-         lo = Math.min(lo, mu - span);
-         hi = Math.max(hi, mu + span);
-      }
+      // low and high already include the 8-sigma tails of an unbounded draw.
       const reasons = [];
-      const minSeconds = timestamp + lo * day;
-      const maxSeconds = timestamp + hi * day;
+      const minSeconds = timestamp + spec.low * day;
+      const maxSeconds = timestamp + spec.high * day;
       if (minSeconds < 0)
          reasons.push(`the 'ts' ObjectId time starts at ${isoSeconds(minSeconds)}, before 1970`);
       if (maxSeconds > OID_SECONDS_MAX)
@@ -980,41 +1240,18 @@
       return node;
    }
 
-   function genDocument({
-         id = 'ts', range = 365.2422, offset = -300, interval = 7,
-         distribution = 'uniform', ratios = [1] } = {},
-         timestamp) {
+   function genDocument({ id = 'ts', ratios = [1] } = {}, timestamp) {
       /*
        *  Pick one loaded schema by its weight, then build only that document.
        *  A string that starts with "=" is an expression.
+       *  The timestamp comes from fuzzer.distribution.
        */
       const index = ratioIndex(ratios);
       const sample = schemaSamples[index];
       if (!sample)
          throw new Error(`schema ratio index ${index} but only ${schemaSamples.length} ${plural(schemaSamples.length, 'schema file is', 'schema files are')} loaded`);
       const day = 86400;
-      let secondsOffset;
-      switch (distribution.toLowerCase()) {
-         case 'uniform':
-            secondsOffset = $floor($getRandNum(offset, offset + range) * day);
-            break;
-         case 'normal': // genNormal(mu, sigma)
-            secondsOffset = $floor($genNormal(offset + (range / 2), range / 2) * day);
-            break;
-         case 'bimodal': // not implemented yet
-            // secondsOffset = $floor($getRandNum(offset, offset + range) * day);
-            // break;
-         case 'pareto': // not implemented yet
-            // $genRandIncPareto(min, alpha = 1.161) {}
-            // secondsOffset = $floor($genRandIncPareto(offset + range) * day);
-            // break;
-         case 'exponential': // not implemented yet
-            // $getRandExp();
-            // secondsOffset = $floor($getRandExp(offset, offset + range, 128) * day);
-            // break;
-         default: // bimodal, pareto, and exponential stay unimplemented
-            secondsOffset = +$floor($getRandNum(offset, offset + range) * day);
-      }
+      const secondsOffset = $floor(distributionSpec().draw() * day);
       let oid;
       switch (id.toLowerCase()) {
          case 'oid':
@@ -1537,19 +1774,15 @@
       return `time series expireAfterSeconds ${tojson(n)} must be a non-negative number`;
    }
 
-   // Uniform uses offset. Normal can land further back, same 8-sigma window as the ObjectId check.
+   // The earliest draw is distributionSpec().low. Unbounded draws use the 8-sigma edge.
    function timeSeriesExpiryWarning() {
       if (!(typeof expireAfterSeconds === 'number' && expireAfterSeconds > 0))
          return null;
-      if (!isPlainObject(fuzzer) || !Number.isFinite(+fuzzer.offset))
+      const spec = distributionSpec();
+      if (spec.errors.length || !Number.isFinite(spec.low))
          return null;
       const day = 86400;
-      let lo = +fuzzer.offset;
-      if (String(fuzzer.distribution || '').toLowerCase() === 'normal' && Number.isFinite(+fuzzer.range)) {
-         const mu = lo + (+fuzzer.range / 2);
-         lo = Math.min(lo, mu - (8 * (+fuzzer.range / 2)));
-      }
-      if (lo * day + expireAfterSeconds > 0)
+      if (spec.low * day + expireAfterSeconds > 0)
          return null;
       const field = (tsOptions && tsOptions.timeField) || 'timeField';
       return `expireAfterSeconds ${expireAfterSeconds} already covers the start of the "${field}" window`;
@@ -1578,6 +1811,7 @@
       const concurrencyProblem = writerConcurrencyProblem();
       if (concurrencyProblem)
          reasons.push(concurrencyProblem);
+      distributionSpec().errors.forEach(reason => reasons.push(reason));
       if (timeSeries && !fCV(5.0))
          reasons.push('time series requires fCV 5.0 or newer');
       if (timeSeries && isAtlasPlatform('serverless'))
