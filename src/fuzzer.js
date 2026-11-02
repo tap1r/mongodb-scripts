@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.8.0"
+ *  Version: "1.8.1"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.8.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.8.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -1465,8 +1465,8 @@
       return 0;
    }
 
-   // User async: the rewriter does not await this at the call, so the next batch
-   // can be built while this insert is in flight. A short batch is awaited first.
+   // User async: the rewriter does not await this at the call. genBulk keeps the
+   // promise and may launch a second insert before this one settles.
    async function insertBatch(docs) {
       // mongosh Bulk.execute ignores its writeConcern argument.
       return namespace.insertMany(docs, {
@@ -1482,8 +1482,11 @@
    let packHeld = null;
    let packSkipped = 0;
    let packDepthWarned = false;
+   let bulkStop = false;
 
    async function takePackedBatch() {
+      if (bulkStop)
+         return null;
       const countCap = Math.min(1000, maxWriteBatchSize);
       const messageBudget = Math.max(1, maxMessageSizeBytes - MESSAGE_RESERVE_BYTES);
       const docs = [];
@@ -1494,6 +1497,8 @@
          packHeld = null;
       }
       while (docs.length < countCap && packGenerated < totalDocs) {
+         if (bulkStop)
+            return null;
          packGenerated++;
          const doc = genDocument(fuzzer, timestamp);
          const size = bsonsize(doc);
@@ -1523,38 +1528,82 @@
    }
 
    async function genBulk(prepared) {
+      // Two inserts may be in flight. The packer waits while both slots are full,
+      // so the shell holds those two batches and the one it is building.
+      const WRITE_SLOTS = 2;
       console.log(`\nSpecified date range time series:\n\tfrom:\t\t${new Date(now + fuzzer.offset * 86400000).toISOString()}\n\tto:\t\t${new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString()}\n\tdistribution:\t${fuzzer.distribution}\n\nGenerating ${totalDocs} ${plural(totalDocs, 'document', 'documents')}:`);
       let inserted = 0;
       let batchNo = 0;
-      while (prepared) {
-         // Catch immediately so a rejection during the next batch is not unhandled.
-         let writeError = null;
-         const inflight = insertBatch(prepared.docs).catch(err => {
-            writeError = err;
-            return null;
-         });
-         const n = prepared.n;
-         const bytes = prepared.bytes;
-         batchNo++;
-         try {
-            prepared = await takePackedBatch();
-         } catch(e) {
-            await inflight;
-            throw e;
-         }
-         const result = await inflight;
-         const bInserted = writeError
-            ? insertedFromWrite(writeError)
-            : Object.keys((result && result.insertedIds) || {}).length;
+      let failed = false;
+      const slots = new Set();
+
+      function account(info) {
+         const bInserted = info.writeError
+            ? insertedFromWrite(info.writeError)
+            : Object.keys((info.result && info.result.insertedIds) || {}).length;
          inserted += bInserted;
-         console.log(`\t[Batch ${batchNo}] inserted ${bInserted} ${plural(bInserted, 'document', 'documents')}, ${bytes} ${plural(bytes, 'byte', 'bytes')} (${inserted}/${totalDocs})`);
-         if (writeError || bInserted < n) {
-            const shortfall = totalDocs - inserted;
-            console.log(`\n[red][ERROR][/] Bulk insert stopped after ${inserted} of ${totalDocs} documents (${shortfall} short)`);
-            if (writeError)
-               console.log(errText(writeError));
+         console.log(`\t[Batch ${info.no}] inserted ${bInserted} ${plural(bInserted, 'document', 'documents')}, ${info.bytes} ${plural(info.bytes, 'byte', 'bytes')} (${inserted}/${totalDocs})`);
+         if (info.writeError || bInserted < info.n) {
+            failed = true;
+            bulkStop = true;
+            if (info.writeError)
+               console.log(errText(info.writeError));
             return false;
          }
+         return true;
+      }
+
+      function launch(batch) {
+         const job = {
+            no: ++batchNo,
+            n: batch.n,
+            bytes: batch.bytes,
+            result: null,
+            writeError: null
+         };
+         job.promise = insertBatch(batch.docs).catch(err => {
+            job.writeError = err;
+            bulkStop = true;
+            return null;
+         }).then(result => {
+            job.result = result;
+            return job;
+         });
+         slots.add(job.promise);
+      }
+
+      async function settleOne() {
+         const job = await Promise.race(slots);
+         slots.delete(job.promise);
+         return account(job);
+      }
+
+      async function drainSlots() {
+         while (slots.size > 0) {
+            await settleOne();
+         }
+      }
+
+      try {
+         while (prepared && !bulkStop) {
+            launch(prepared);
+            prepared = null;
+            if (slots.size >= WRITE_SLOTS && !(await settleOne()))
+               break;
+            if (bulkStop)
+               break;
+            prepared = await takePackedBatch();
+         }
+      } catch(e) {
+         bulkStop = true;
+         await drainSlots();
+         throw e;
+      }
+      await drainSlots();
+      if (failed) {
+         const shortfall = totalDocs - inserted;
+         console.log(`\n[red][ERROR][/] Bulk insert stopped after ${inserted} of ${totalDocs} documents (${shortfall} short)`);
+         return false;
       }
       if (packSkipped > 0)
          console.log(`\n${packSkipped} ${plural(packSkipped, 'document', 'documents')} over the BSON max ${plural(packSkipped, 'was', 'were')} not inserted.`);
