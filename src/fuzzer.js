@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.8.6"
+ *  Version: "1.8.7"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.8.6" };
+   const __script = { "name": "fuzzer.js", "version": "1.8.7" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -182,7 +182,8 @@
          "range": 365.2422,             // date range in days
          "offset": -300,                // date offset in days from now() (negative = past, positive = future)
          "interval": 7,                 // date interval in days
-         // uniform fills [offset, offset + range] and takes no parameters.
+         // offset and range may also be set on distributionParams. Omitted, they use the values above.
+         // uniform fills [offset, offset + range].
          // normal: mu, sigma (days). Defaults are the window center and range/2. Tails are not cut.
          // bimodal: mix, mu1, sigma1, mu2, sigma2. sigma fills a width that was omitted.
          //   Defaults are the quartiles, range/8, and mix 0.5. Tails are not cut.
@@ -422,12 +423,12 @@
    // has to stay inside the ObjectId years when id is ts.
    const DISTRIBUTION_NAMES = ['uniform', 'normal', 'bimodal', 'pareto', 'exponential', 'poisson'];
    const DISTRIBUTION_KEYS = {
-      uniform: [],
-      normal: ['mu', 'sigma'],
-      bimodal: ['mix', 'mu1', 'sigma1', 'mu2', 'sigma2', 'sigma'],
-      pareto: ['alpha', 'scale', 'origin'],
-      exponential: ['lambda', 'mean', 'origin'],
-      poisson: ['lambda', 'mean', 'origin']
+      uniform: ['offset', 'range'],
+      normal: ['mu', 'sigma', 'offset', 'range'],
+      bimodal: ['mix', 'mu1', 'sigma1', 'mu2', 'sigma2', 'sigma', 'offset', 'range'],
+      pareto: ['alpha', 'scale', 'origin', 'offset', 'range'],
+      exponential: ['lambda', 'mean', 'origin', 'offset', 'range'],
+      poisson: ['lambda', 'mean', 'origin', 'offset', 'range']
    };
    let distributionResolved = null;
 
@@ -565,6 +566,8 @@
          unbounded: false,
          errors,
          rows: [],
+         offset: 0,
+         range: 0,
          low: 0,
          high: 0,
          draw: () => { throw new Error(errors[0] || 'distribution is not usable'); }
@@ -576,23 +579,14 @@
       const folded = requested.toLowerCase();
       const known = !folded || DISTRIBUTION_NAMES.includes(folded);
       const name = known ? (folded || 'uniform') : 'uniform';
-      const offset = +prefs.offset;
-      const range = +prefs.range;
       const rawParams = prefs.distributionParams;
       const errors = [];
       if (folded && !DISTRIBUTION_NAMES.includes(folded))
          errors.push(`unsupported distribution type "${requested}". Use uniform, normal, bimodal, pareto, exponential, or poisson`);
-      if (!Number.isFinite(offset))
-         errors.push('fuzzer.offset must be a finite number of days');
-      if (!Number.isFinite(range) || !(range > 0))
-         errors.push('fuzzer.range must be a finite number of days greater than 0');
       if (rawParams != null && !isPlainObject(rawParams))
          errors.push('fuzzer.distributionParams must be an object');
 
       const params = isPlainObject(rawParams) ? rawParams : {};
-      const windowOk = Number.isFinite(offset) && Number.isFinite(range) && range > 0;
-      const lo = windowOk ? offset : 0;
-      const hi = windowOk ? offset + range : 0;
       if (known && isPlainObject(rawParams)) {
          Object.keys(params).forEach(key => {
             if (!DISTRIBUTION_KEYS[name].includes(key))
@@ -638,11 +632,46 @@
          return value;
       }
 
+      // distributionParams wins. Omitted keys use fuzzer.offset and fuzzer.range.
+      let offset;
+      if (given('offset')) {
+         offset = readNumber('offset');
+         if (offset === undefined)
+            offset = NaN;
+      } else {
+         offset = +prefs.offset;
+         if (!Number.isFinite(offset))
+            errors.push('fuzzer.offset must be a finite number of days');
+      }
+      let range;
+      if (given('range')) {
+         range = readNumber('range');
+         if (range === undefined)
+            range = NaN;
+         else if (!(range > 0)) {
+            errors.push('fuzzer.distributionParams.range must be greater than 0');
+            range = NaN;
+         }
+      } else {
+         range = +prefs.range;
+         if (!Number.isFinite(range) || !(range > 0))
+            errors.push('fuzzer.range must be a finite number of days greater than 0');
+      }
+      const windowOk = Number.isFinite(offset) && Number.isFinite(range) && range > 0;
+      const lo = windowOk ? offset : 0;
+      const hi = windowOk ? offset + range : 0;
+
       let draw = () => $getRandNum(lo, hi);
       let low = lo;
       let high = hi;
       let unbounded = false;
       const rows = [];
+      if (windowOk) {
+         rows.push(
+            ['offset', statText(lo, 'days')],
+            ['range', statText(range, 'days')]
+         );
+      }
 
       if (known && name === 'normal') {
          const mu = readNumber('mu');
@@ -775,6 +804,8 @@
          unbounded,
          errors: [],
          rows,
+         offset: lo,
+         range,
          low,
          high,
          draw
@@ -925,9 +956,9 @@
 
    function printHud() {
       const ratios = Array.isArray(fuzzer.ratios) ? fuzzer.ratios : [1];
-      const from = new Date(now + fuzzer.offset * 86400000).toISOString();
-      const to = new Date(now + (fuzzer.offset + fuzzer.range) * 86400000).toISOString();
       const windowSpec = distributionSpec();
+      const from = new Date(now + windowSpec.offset * 86400000).toISOString();
+      const to = new Date(now + (windowSpec.offset + windowSpec.range) * 86400000).toISOString();
       const schemaRows = schemaSamples.map((sample, i) => {
          const weight = ratioWeight(ratios[i]);
          const detail = schemaDetail(sample);

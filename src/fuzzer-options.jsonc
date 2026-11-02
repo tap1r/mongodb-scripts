@@ -79,7 +79,8 @@
       "range": 365.2422,
       "offset": -300,
       "interval": 7,
-      // uniform fills [offset, offset + range] and takes no parameters.
+      // offset and range may also be set on distributionParams. Omitted, they use the values above.
+      // uniform fills [offset, offset + range].
       // normal: mu, sigma (days). Defaults are the window center and range/2. Tails are not cut.
       // bimodal: mix, mu1, sigma1, mu2, sigma2. sigma fills a width that was omitted.
       //   Defaults are the quartiles, range/8, and mix 0.5. Tails are not cut.
