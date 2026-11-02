@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.7.2"
+ *  Version: "1.7.3"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.7.2" };
+   const __script = { "name": "fuzzer.js", "version": "1.7.3" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -378,8 +378,22 @@
 
    // setImmediate reaches the poll phase, so an in-flight driver call can finish
    // during generation. sleep() blocks the thread. A bare Promise.resolve() does not poll.
+   // Yield every 32 documents or 8 ms. A turn after every document dominates a small batch.
+   const YIELD_DOC_INTERVAL = 32;
+   const YIELD_MS_INTERVAL = 8;
    const yieldNow = () => new Promise(resolve => setImmediate(resolve));
    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+   let docsSinceYield = 0;
+   let lastYieldAt = Date.now();
+
+   async function yieldSometimes() {
+      docsSinceYield++;
+      if (docsSinceYield < YIELD_DOC_INTERVAL && (Date.now() - lastYieldAt) < YIELD_MS_INTERVAL)
+         return;
+      docsSinceYield = 0;
+      await yieldNow();
+      lastYieldAt = Date.now();
+   }
 
    async function main() {
       /*
@@ -470,7 +484,7 @@
                maxSize = size;
             if (depth > maxDepth)
                maxDepth = depth;
-            await yieldNow();
+            await yieldSometimes();
          }
       } catch(e) {
          await creating;
@@ -638,9 +652,17 @@
       return null;
    }
 
+   // One compiled function per expression. The scope names stay oid, date, ts, idioma, totalDocs.
+   const schemaExprCache = new Map();
+
    function evalSchemaExpr(expr, scope) {
       const names = Object.keys(scope);
-      const fn = new Function(...names, `"use strict"; return (${expr});`);
+      const key = `${names.join('\0')}\0${expr}`;
+      let fn = schemaExprCache.get(key);
+      if (!fn) {
+         fn = new Function(...names, `"use strict"; return (${expr});`);
+         schemaExprCache.set(key, fn);
+      }
       return fn(...names.map(name => scope[name]));
    }
 
@@ -1493,7 +1515,7 @@
       for (let i = 0; i < n; i++) {
          docs.push(genDocument(fuzzer, timestamp));
          if (overlap)
-            await yieldNow();
+            await yieldSometimes();
       }
       return docs;
    }
