@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.8.8"
+ *  Version: "1.8.9"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.8.8" };
+   const __script = { "name": "fuzzer.js", "version": "1.8.9" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -354,20 +354,23 @@
    const indexCollationSpecified = isPlainObject(indexOptions) && hasOwn(indexOptions, 'collation');
    if (isPlainObject(indexOptions) && !indexCollationSpecified)
       indexOptions.collation = collation;
-   if (isPlainObject(indexes2dOptions) && !hasOwn(indexes2dOptions, 'default_language'))
-      indexes2dOptions.default_language = idioma;
-   if (isPlainObject(textIndexOptions) && !hasOwn(textIndexOptions, 'default_language'))
-      textIndexOptions.default_language = idioma;
+   // One list feeds the HUD, the plan, and createIndexes.
+   const INDEX_GROUPS = [
+      { "keys": indexes, "options": indexOptions, "hudLabel": "index", "planLabel": "indexes", "language": false },
+      { "keys": hashedIndexes, "options": hashedIndexOptions, "hudLabel": "hashed", "planLabel": "hashedIndexes", "language": false },
+      { "keys": indexes2d, "options": indexes2dOptions, "hudLabel": "2d", "planLabel": "indexes2d", "language": true },
+      { "keys": textIndexes, "options": textIndexOptions, "hudLabel": "text", "planLabel": "textIndexes", "language": true }
+   ];
+   INDEX_GROUPS.forEach(group => {
+      if (group.language && isPlainObject(group.options) && !hasOwn(group.options, 'default_language'))
+         group.options.default_language = idioma;
+   });
    if (idxCompressor != 'default') {
       const configString = `block_compressor=${parseCompressor(idxCompressor)[0]}`;
-      if (isPlainObject(indexOptions))
-         indexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
-      if (isPlainObject(hashedIndexOptions))
-         hashedIndexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
-      if (isPlainObject(indexes2dOptions))
-         indexes2dOptions.storageEngine = { "wiredTiger": { "configString": configString } };
-      if (isPlainObject(textIndexOptions))
-         textIndexOptions.storageEngine = { "wiredTiger": { "configString": configString } };
+      INDEX_GROUPS.forEach(group => {
+         if (isPlainObject(group.options))
+            group.options.storageEngine = { "wiredTiger": { "configString": configString } };
+      });
    }
    const schemaAnchor = resolved.source.file ? optionsDirOf(resolved.source.file) : null;
    const schemaLoad = resolved.ok
@@ -384,6 +387,7 @@
    const namespace = database.getCollection(collName);
    const now = new Date().getTime();
    const timestamp = $floor(now / 1000);
+   const DAY_SECONDS = 86400;
 
    function plural(n, one, many) {
       return (n === 1) ? one : many;
@@ -481,6 +485,11 @@
       if (!(x > 0))
          return 0;
       return x < span ? x : span;
+   }
+
+   // Distance is days from the window start, or back from the end.
+   function placeOnWindow(distance, origin, lo, hi) {
+      return origin === 'end' ? hi - distance : lo + distance;
    }
 
    // Whole-day Poisson count. The table is the practical support: weights more than
@@ -632,6 +641,29 @@
          return value;
       }
 
+      // Exponential inverts mean into a daily rate. Poisson keeps mean as the day count.
+      function readLambdaOrMean(fallback, invertMean) {
+         const lambdaValue = readNumber('lambda');
+         const meanValue = readNumber('mean');
+         if (lambdaValue !== undefined && meanValue !== undefined) {
+            errors.push('fuzzer.distributionParams accepts lambda or mean, not both');
+            return undefined;
+         }
+         if (lambdaValue !== undefined) {
+            if (!(lambdaValue > 0))
+               errors.push('fuzzer.distributionParams.lambda must be greater than 0');
+            return lambdaValue;
+         }
+         if (meanValue !== undefined) {
+            if (!(meanValue > 0)) {
+               errors.push('fuzzer.distributionParams.mean must be greater than 0');
+               return undefined;
+            }
+            return invertMean ? 1 / meanValue : meanValue;
+         }
+         return fallback;
+      }
+
       // distributionParams wins. Omitted keys use fuzzer.offset and fuzzer.range.
       let offset;
       if (given('offset')) {
@@ -719,10 +751,7 @@
          const scale = positive('scale', readNumber('scale'), range);
          const origin = readOrigin();
          if (windowOk && alpha > 0 && scale > 0) {
-            draw = () => {
-               const x = truncatedLomax(alpha, scale, range);
-               return origin === 'end' ? hi - x : lo + x;
-            };
+            draw = () => placeOnWindow(truncatedLomax(alpha, scale, range), origin, lo, hi);
             rows.push(
                ['alpha', statText(alpha)],
                ['scale', statText(scale, 'days')],
@@ -730,29 +759,10 @@
             );
          }
       } else if (known && name === 'exponential') {
-         const lambdaValue = readNumber('lambda');
-         const meanValue = readNumber('mean');
-         let lambda;
-         if (lambdaValue !== undefined && meanValue !== undefined) {
-            errors.push('fuzzer.distributionParams accepts lambda or mean, not both');
-         } else if (lambdaValue !== undefined) {
-            lambda = lambdaValue;
-            if (!(lambda > 0))
-               errors.push('fuzzer.distributionParams.lambda must be greater than 0');
-         } else if (meanValue !== undefined) {
-            if (!(meanValue > 0))
-               errors.push('fuzzer.distributionParams.mean must be greater than 0');
-            else
-               lambda = 1 / meanValue;
-         } else if (range > 0) {
-            lambda = 1 / range;
-         }
+         const lambda = readLambdaOrMean(range > 0 ? 1 / range : undefined, true);
          const origin = readOrigin();
          if (windowOk && lambda > 0) {
-            draw = () => {
-               const x = truncatedExponential(lambda, range);
-               return origin === 'end' ? hi - x : lo + x;
-            };
+            draw = () => placeOnWindow(truncatedExponential(lambda, range), origin, lo, hi);
             rows.push(
                ['lambda', statText(lambda, 'per day')],
                ['mean', `${statText(1 / lambda, 'days')} [dim](untruncated)[/]`],
@@ -760,22 +770,7 @@
             );
          }
       } else if (known && name === 'poisson') {
-         const lambdaValue = readNumber('lambda');
-         const meanValue = readNumber('mean');
-         let lambda;
-         if (lambdaValue !== undefined && meanValue !== undefined) {
-            errors.push('fuzzer.distributionParams accepts lambda or mean, not both');
-         } else if (lambdaValue !== undefined) {
-            lambda = lambdaValue;
-         } else if (meanValue !== undefined) {
-            lambda = meanValue;
-         } else if (range > 0) {
-            lambda = range;
-         }
-         if (lambda !== undefined && !(lambda > 0)) {
-            const key = lambdaValue === undefined ? 'mean' : 'lambda';
-            errors.push(`fuzzer.distributionParams.${key} must be greater than 0`);
-         }
+         const lambda = readLambdaOrMean(range > 0 ? range : undefined, false);
          const origin = readOrigin();
          if (windowOk && lambda > 0) {
             const sampler = poissonSampler(lambda);
@@ -912,16 +907,6 @@
       return oneLine(shardedOptions.key);
    }
 
-   function optionsText() {
-      const file = resolved.source.file;
-      if (!file)
-         return '[dim]defaults[/]';
-      const slash = Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\'));
-      if (slash < 0)
-         return file;
-      return `[dim]${file.slice(0, slash + 1)}[/]${file.slice(slash + 1)}`;
-   }
-
    function schemaDetail(sample) {
       const meta = isPlainObject(sample.spec.schema) ? sample.spec.schema : {};
       return [meta.type, meta.comment].filter(Boolean).join(': ');
@@ -954,11 +939,14 @@
       return `[dim]│[/] ${padVisible(`[cyan]${label}[/]`, labelW)} [dim]│[/] ${padVisible(value, valueW)} [dim]│[/]`;
    }
 
+   let hudLabelW = 0;
+   let hudValueW = 0;
+
    function printHud() {
       const ratios = Array.isArray(fuzzer.ratios) ? fuzzer.ratios : [1];
       const windowSpec = distributionSpec();
-      const from = new Date(now + windowSpec.offset * 86400000).toISOString();
-      const to = new Date(now + (windowSpec.offset + windowSpec.range) * 86400000).toISOString();
+      const from = new Date(now + windowSpec.offset * DAY_SECONDS * 1000).toISOString();
+      const to = new Date(now + (windowSpec.offset + windowSpec.range) * DAY_SECONDS * 1000).toISOString();
       const schemaRows = schemaSamples.map((sample, i) => {
          const weight = ratioWeight(ratios[i]);
          const detail = schemaDetail(sample);
@@ -974,21 +962,16 @@
          ['existing', dropIndexes ? '[yellow]drop[/]' : '[dim]keep[/]']
       ];
       if (isPlainObject(indexPrefs) && indexPrefs.build) {
-         const groups = [
-            ['index', indexes, null],
-            ['hashed', hashedIndexes, null],
-            ['2d', indexes2d, indexes2dOptions],
-            ['text', textIndexes, textIndexOptions]
-         ];
-         groups.forEach(([label, keys, langOptions]) => {
+         INDEX_GROUPS.forEach(group => {
+            const keys = group.keys;
             if (!keys || !keys.length) {
-               indexRows.push([label, '[dim]none[/]']);
+               indexRows.push([group.hudLabel, '[dim]none[/]']);
                return;
             }
-            if (label === 'index')
+            if (group.hudLabel === 'index')
                indexRows.push(['collation', indexCollationNote()]);
-            const lang = langOptions ? languageNote(langOptions) : '';
-            keys.forEach(spec => indexRows.push([label, `${oneLine(spec)}${lang}`]));
+            const lang = group.language ? languageNote(group.options) : '';
+            keys.forEach(spec => indexRows.push([group.hudLabel, `${oneLine(spec)}${lang}`]));
          });
       }
       const sections = [
@@ -1048,9 +1031,6 @@
       });
       console.log(paintRule('└', '┴', '┘', '', leftSpan, rightSpan));
    }
-
-   let hudLabelW = 0;
-   let hudValueW = 0;
 
    function wrapPlain(text, width) {
       const limit = Math.max(8, width);
@@ -1162,19 +1142,17 @@
       if (cappedThisRun() && sharding && isSharded())
          console.log('\n[red][WARN] [yellow]sharding[red] is skipped because a capped collection cannot be sharded[/]');
 
-      const orderName = String((indexPrefs && indexPrefs.order) || '').toLowerCase();
-      if (orderName !== 'pre' && orderName !== 'post')
+      const orderName = indexOrderText();
+      if (orderName !== String((indexPrefs && indexPrefs.order) || '').toLowerCase())
          console.log(`\nUnsupported index build preference "${indexPrefs.order}": defaulting to "post"`);
 
       printHud();
 
-      // Drop finishes before create. The first batch is built while create runs.
-      async function beginCreateNS() {
-         return createNS();
-      }
+      // Drop finishes before create. createNS is async so the rewriter can
+      // yield on createCollection while the first batch is packed.
       dropNS();
       let createFailed = null;
-      const creating = beginCreateNS().catch(err => {
+      const creating = createNS().catch(err => {
          createFailed = err;
          return false;
       });
@@ -1195,7 +1173,7 @@
       dropExistingIndexes();
 
       // Index order is a HUD row. pre builds before the inserts. Anything else inserts first.
-      switch (indexOrderText()) {
+      switch (orderName) {
          case 'pre':
             printBuilt(buildIndexes());
             if ((await genBulk(firstBatch)) === false)
@@ -1241,11 +1219,10 @@
       const spec = distributionSpec();
       if (spec.errors.length)
          return [];
-      const day = 86400;
       // low and high already include the 8-sigma tails of an unbounded draw.
       const reasons = [];
-      const minSeconds = timestamp + spec.low * day;
-      const maxSeconds = timestamp + spec.high * day;
+      const minSeconds = timestamp + spec.low * DAY_SECONDS;
+      const maxSeconds = timestamp + spec.high * DAY_SECONDS;
       if (minSeconds < 0)
          reasons.push(`the 'ts' ObjectId time starts at ${isoSeconds(minSeconds)}, before 1970`);
       if (maxSeconds > OID_SECONDS_MAX)
@@ -1312,6 +1289,11 @@
       if (slots === 0)
          return 'fuzzer.ratios are all zero';
       return null;
+   }
+
+   // Key order is the expression-cache key: oid, date, ts, idioma, totalDocs.
+   function schemaScope({ oid = null, date = null, ts = null } = {}) {
+      return { oid, date, ts, idioma, totalDocs };
    }
 
    // One compiled function per expression. The scope names stay oid, date, ts, idioma, totalDocs.
@@ -1396,8 +1378,7 @@
       const sample = schemaSamples[index];
       if (!sample)
          throw new Error(`schema ratio index ${index} but only ${schemaSamples.length} ${plural(schemaSamples.length, 'schema file is', 'schema files are')} loaded`);
-      const day = 86400;
-      const secondsOffset = $floor(distributionSpec().draw() * day);
+      const secondsOffset = $floor(distributionSpec().draw() * DAY_SECONDS);
       let oid;
       switch (id.toLowerCase()) {
          case 'oid':
@@ -1412,9 +1393,7 @@
       }
       const date = new Date(now + secondsOffset * 1000);
       const ts = new Timestamp({ "t": timestamp + secondsOffset, "i": 0 });
-      return realiseSchema(sample.spec, {
-         oid, date, ts, idioma, totalDocs
-      }, sample.file);
+      return realiseSchema(sample.spec, schemaScope({ oid, date, ts }), sample.file);
    }
 
    function dropNS() {
@@ -1576,11 +1555,10 @@
    }
 
    function isSameShardKey() {
-      const ns = `${dbName}.${collName}`;
       try {
-         const doc = db.getSiblingDB('config').getCollection('collections').findOne({ _id: ns });
-         if (doc && doc.key)
-            return shardKeysMatch(doc.key, shardedOptions.key);
+         const key = catalogShardKey();
+         if (key)
+            return shardKeysMatch(key, shardedOptions.key);
       } catch(e) {
          // Catalog unreadable. Fall through to this run's shard attempt.
       }
@@ -1824,44 +1802,11 @@
       if (typeof value !== 'string' || !value.startsWith('='))
          return false;
       try {
-         const got = evalSchemaExpr(value.slice(1), {
-            oid: null,
-            date: new Date(0),
-            ts: null,
-            idioma,
-            totalDocs
-         });
+         const got = evalSchemaExpr(value.slice(1), schemaScope({ "date": new Date(0) }));
          return got instanceof Date;
       } catch(e) {
          return false;
       }
-   }
-
-   function selectedSchemaSamples() {
-      const ratios = Array.isArray(fuzzer.ratios) ? fuzzer.ratios : [1];
-      const selected = [];
-      for (let i = 0; i < schemaSamples.length; i++) {
-         if (ratioWeight(ratios[i]) > 0)
-            selected.push(schemaSamples[i]);
-      }
-      return selected;
-   }
-
-   function timeSeriesSchemaProblems(willShard) {
-      const timeField = tsOptions && tsOptions.timeField;
-      const metaField = tsOptions && tsOptions.metaField;
-      const reasons = [];
-      if (!timeField) {
-         reasons.push('time series requires tsOptions.timeField');
-         return reasons;
-      }
-      selectedSchemaSamples().forEach(sample => {
-         if (!timeFieldIsDate(sample.spec[timeField]))
-            reasons.push(`time series timeField "${timeField}" must be a Date in ${sample.file}`);
-         if (willShard && metaField && !hasOwn(sample.spec, metaField))
-            reasons.push(`time series metaField "${metaField}" must be present in ${sample.file}`);
-      });
-      return reasons;
    }
 
    // Text and wildcard indexes are never legal. Any other type besides 1, -1,
@@ -1894,20 +1839,16 @@
 
    function timeSeriesIndexProblems(metaField) {
       const reasons = [];
-      [
-         ['indexes', indexes],
-         ['hashedIndexes', hashedIndexes],
-         ['indexes2d', indexes2d],
-         ['textIndexes', textIndexes]
-      ].forEach(([label, list]) => {
+      INDEX_GROUPS.forEach(group => {
+         const list = group.keys;
          if (!Array.isArray(list)) {
-            reasons.push(`time series ${label} must be an array`);
+            reasons.push(`time series ${group.planLabel} must be an array`);
             return;
          }
          list.forEach(key => {
             const why = timeSeriesIndexKeyProblem(key, metaField);
             if (why)
-               reasons.push(`time series ${label} key ${tojson(key)}: ${why}`);
+               reasons.push(`time series ${group.planLabel} key ${tojson(key)}: ${why}`);
          });
       });
       return reasons;
@@ -1927,8 +1868,7 @@
       const spec = distributionSpec();
       if (spec.errors.length || !Number.isFinite(spec.low))
          return null;
-      const day = 86400;
-      if (spec.low * day + expireAfterSeconds > 0)
+      if (spec.low * DAY_SECONDS + expireAfterSeconds > 0)
          return null;
       const field = (tsOptions && tsOptions.timeField) || 'timeField';
       return `expireAfterSeconds ${expireAfterSeconds} already covers the start of the "${field}" window`;
@@ -1965,14 +1905,7 @@
       if (reasons.length)
          return reasons;
       if (timeSeries) {
-         const fit = timeSeriesSelection(willShard);
-         if (fit.length)
-            fit.forEach(reason => reasons.push(reason));
-         else {
-            timeSeriesSchemaProblems(willShard).forEach(reason => reasons.push(reason));
-            if (willShard && timeSeriesShardKeyProblem(shardedOptions.key, tsOptions && tsOptions.metaField, tsOptions && tsOptions.timeField))
-               reasons.push(`time series shard key ${tojson(shardedOptions.key)} is not usable`);
-         }
+         timeSeriesSelection(willShard).forEach(reason => reasons.push(reason));
          const expireProblem = timeSeriesExpireProblem();
          if (expireProblem)
             reasons.push(expireProblem);
@@ -1981,10 +1914,10 @@
       }
       if (willShard && shardKeyUsesHash(shardedOptions.key) && collation.locale !== 'simple')
          reasons.push('a non-simple collation on the hashed shard key conflicts with the simple hashed index');
-      if (willShard && shardKeyHashedPrefix(shardedOptions.key)) {
+      if (willShard) {
          let presplit = false;
          try {
-            presplit = !namespace.exists() || namespaceIsEmpty();
+            presplit = mayPresplitChunks();
          } catch(e) {
             reasons.push(`namespace is unreadable: ${errText(e)}`);
          }
@@ -2001,52 +1934,51 @@
       return reasons;
    }
 
-   function createNS() {
+   async function createNS() {
       if (namespace.exists()) {
          if (!shardThisRun())
             return true;
          return shardPreservedNamespace();
-      } else {
-         let [blockCompressor] = parseCompressor(compressor);
-         let options = {
-            "storageEngine": (isAtlasPlatform('sharedTier'))
-                           ? undefined
-                           : { "wiredTiger": { "configString": `block_compressor=${blockCompressor}` } },
-            "collation": collation,
-            "writeConcern": writeConcern,
-            // fCV(5.3) && "clusteredIndex": {},
-            // fCV(6.0) && "changeStreamPreAndPostImages": {},
-            // "validator": {},
-            // "validationLevel": <string>,
-            // "validationAction": <string>,
-            // "indexOptionDefaults": {},
-            // "viewOn": <string>,
-            // "pipeline": []
-         };
-         if (cappedThisRun()) {
-            options.capped = true;
-            options.size = cappedOptions.size;
-            options.max = cappedOptions.max;
-         }
-         if (timeSeries && fCV(5.0) && !isAtlasPlatform('serverless')) {
-            // Command field is timeseries. The option flag stays timeSeries.
-            options.timeseries = tsOptions;
-            // 0 means omit. A positive number is seconds after timeField.
-            if (typeof expireAfterSeconds === 'number' && expireAfterSeconds > 0)
-               options.expireAfterSeconds = expireAfterSeconds;
-         }
-
-         try {
-            database.createCollection(collName, options);
-         } catch(e) {
-            console.log('\n[red][ERROR] Namespace creation failed:[/]', errText(e));
-            return false;
-         }
-
-         if (!shardThisRun())
-            return true;
-         return shardNewNamespace();
       }
+      let [blockCompressor] = parseCompressor(compressor);
+      const createOptions = {
+         "storageEngine": (isAtlasPlatform('sharedTier'))
+                        ? undefined
+                        : { "wiredTiger": { "configString": `block_compressor=${blockCompressor}` } },
+         "collation": collation,
+         "writeConcern": writeConcern,
+         // fCV(5.3) && "clusteredIndex": {},
+         // fCV(6.0) && "changeStreamPreAndPostImages": {},
+         // "validator": {},
+         // "validationLevel": <string>,
+         // "validationAction": <string>,
+         // "indexOptionDefaults": {},
+         // "viewOn": <string>,
+         // "pipeline": []
+      };
+      if (cappedThisRun()) {
+         createOptions.capped = true;
+         createOptions.size = cappedOptions.size;
+         createOptions.max = cappedOptions.max;
+      }
+      if (timeSeries && fCV(5.0) && !isAtlasPlatform('serverless')) {
+         // Command field is timeseries. The option flag stays timeSeries.
+         createOptions.timeseries = tsOptions;
+         // 0 means omit. A positive number is seconds after timeField.
+         if (typeof expireAfterSeconds === 'number' && expireAfterSeconds > 0)
+            createOptions.expireAfterSeconds = expireAfterSeconds;
+      }
+
+      try {
+         database.createCollection(collName, createOptions);
+      } catch(e) {
+         console.log('\n[red][ERROR] Namespace creation failed:[/]', errText(e));
+         return false;
+      }
+
+      if (!shardThisRun())
+         return true;
+      return shardNewNamespace();
    }
 
    function createIndexSet(keys, options, label) {
@@ -2076,15 +2008,9 @@
       const built = [];
       if (!indexPrefs.build)
          return built;
-      if (indexes.length > 0)
-         built.push(createIndexSet(indexes, indexOptions, 'index'));
-      [
-         [hashedIndexes, hashedIndexOptions, 'hashed'],
-         [indexes2d, indexes2dOptions, '2d'],
-         [textIndexes, textIndexOptions, 'text']
-      ].forEach(([keys, options, label]) => {
-         if (keys && keys.length)
-            built.push(createIndexSet(keys, options, label));
+      INDEX_GROUPS.forEach(group => {
+         if (group.keys && group.keys.length)
+            built.push(createIndexSet(group.keys, group.options, group.hudLabel));
       });
       return built;
    }
