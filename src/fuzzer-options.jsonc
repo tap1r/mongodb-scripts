@@ -17,8 +17,12 @@
 // Sample schemas are pluggable files. genDocument picks one, then builds only that document.
 // A schema string that starts with "=" is an expression. Other strings are literals.
 // optionsVersion must match fuzzer.js. A mismatch or an unknown key warns. The run continues.
+// output.format table is the HUD. json prints the same contract once, with no colour and no bar.
 {
-   "optionsVersion": 2,
+   "optionsVersion": 3,
+   "output": {
+      "format": "table" // ["table"|"json"] table is an alias of tabular
+   },
    "dbName": "database",
    "collName": "collection",
    "totalDocsExp": 3.5,

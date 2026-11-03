@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.14.3"
+ *  Version: "1.15.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -12,6 +12,7 @@
 // Usage: mongosh [connection options] [--quiet] [--eval 'var options = {...};'] [-f|--file] </path/to/>fuzzer.js
 // Overlay: fuzzer-options.jsonc (cwd, --file dir, $MDBLIB, ~/.mongodb) then var options. Missing default is silent.
 // optionsVersion must match OPTIONS_VERSION. A mismatch or an unknown key warns. The run continues.
+// output.format is table (the HUD) or json (the contract, once). table is an alias of tabular.
 // Explicit path: var optionsFile = "PATH". --eval var options overlays the file.
 // JSONC parse/search lives in mdblib resolveOptions.
 // Sample schemas: schema-a.jsonc, schema-b.jsonc, schema-c.jsonc
@@ -26,7 +27,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.14.3" };
+   const __script = { "name": "fuzzer.js", "version": "1.15.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -73,7 +74,10 @@
       }
       return files.some(f => /(^|[\\/])fuzzer\.js$/i.test(String(f)));
    }
-   if (isFuzzerCliFile()) console.log(`\n\n[yellow]${__comment}[/]`);
+   // The async IIFE prints this once it knows output.format. json stays quiet.
+   __fuzzerCliFile = isFuzzerCliFile();
+   __fuzzerBanner = __comment;
+   __fuzzerScript = __script;
 })();
 
 (async() => {
@@ -141,9 +145,12 @@
     *  fuzzer.schemas points at the sample plug-ins genDocument realises.
     */
 
-   const OPTIONS_VERSION = 2;
+   const OPTIONS_VERSION = 3;
    const optionDefaults = {
       "optionsVersion": OPTIONS_VERSION, // a loaded file must match. A mismatch warns.
+      "output": {
+         "format": "tabular" // ["tabular"|"table"|"json"] table is an alias of tabular
+      },
       "dbName": 'database',             // database name
       "collName": 'collection',         // collection name
       "totalDocsExp": 3.5,              // totalDocs = $getRandExp(totalDocsExp) unless the overlay sets totalDocs
@@ -353,6 +360,9 @@
       "optionsFile": explicitFile,
       overlay,
       "optionsVersion": OPTIONS_VERSION,
+      "aliases": {
+         "output.format": { "table": "tabular" }
+      },
       "contract": deepMergeOptions(optionDefaults, {
          "totalDocs": 0,
          "writeConcern": { "w": 1, "wtimeout": 0 },
@@ -447,6 +457,13 @@
       indexes2dOptions = opt.indexes2dOptions,
       textIndexes = opt.textIndexes,
       textIndexOptions = opt.textIndexOptions;
+   const runWarnings = [];
+   let builtRows = [];
+   let insertResult = null;
+   let runError = null;
+   noteOutputFormat();
+   if (cliTable())
+      console.log(`\n\n[yellow]${__fuzzerBanner}[/]`);
    const WRITE_CONCERN_WTIMEOUT_MS = 10000;
    if (!hasOwn(wc, 'wtimeout')) {
       const wtimeout = defaultWriteConcernTimeout(writeConcern.w);
@@ -973,6 +990,276 @@
    let hudLabelW = 0;
    let hudValueW = 0;
 
+   function outputRawFormat() {
+      return (isPlainObject(opt.output) && typeof opt.output.format === 'string')
+         ? opt.output.format
+         : 'tabular';
+   }
+
+   // table is rewritten to tabular by resolveOptions. Anything else uses the HUD.
+   function outputFormat() {
+      return outputRawFormat() === 'json' ? 'json' : 'tabular';
+   }
+
+   function noteOutputFormat() {
+      const raw = outputRawFormat();
+      if (raw === 'json' || raw === 'tabular' || raw === 'table')
+         return;
+      resolved.warnings.push({
+         "code": 'outputFormat',
+         "message": `output.format ${JSON.stringify(raw)} is not table or json. The run uses table.`
+      });
+   }
+
+   function cliFile() {
+      return typeof __fuzzerCliFile !== 'undefined' && !!__fuzzerCliFile;
+   }
+
+   function cliTable() {
+      return cliFile() && outputFormat() !== 'json';
+   }
+
+   function cliJson() {
+      return cliFile() && outputFormat() === 'json';
+   }
+
+   function report(...args) {
+      if (cliTable())
+         console.log(...args);
+   }
+
+   function plainText(value) {
+      return stripAnsiMarkup(String(value)).replace(/\s+/g, ' ').trim();
+   }
+
+   function scriptVersion() {
+      return (typeof __fuzzerScript !== 'undefined' && __fuzzerScript && __fuzzerScript.version)
+         ? __fuzzerScript.version
+         : '1.15.0';
+   }
+
+   function namespaceContract() {
+      const name = `${dbName}.${collName}`;
+      let action = 'create';
+      if (dropNamespace)
+         action = 'drop';
+      else {
+         try {
+            action = namespace.exists() ? 'keep' : 'create';
+         } catch(e) {
+            action = null;
+         }
+      }
+      return { name, action };
+   }
+
+   function windowContract() {
+      const spec = distributionSpec();
+      return {
+         "distribution": spec.name,
+         "unbounded": !!spec.unbounded,
+         "offset": spec.offset,
+         "range": spec.range,
+         "from": new Date(now + spec.offset * DAY_SECONDS * 1000).toISOString(),
+         "to": new Date(now + (spec.offset + spec.range) * DAY_SECONDS * 1000).toISOString(),
+         "shape": (spec.rows || []).map(([label, value]) => ({
+            label,
+            "value": plainText(value)
+         }))
+      };
+   }
+
+   function shardingContract() {
+      if (cappedThisRun() && sharding && isSharded())
+         return { "enabled": false, "skipped": 'capped' };
+      if (!sharding || !isSharded())
+         return { "enabled": false };
+      const zones = zoneRanges();
+      return {
+         "enabled": true,
+         "key": shardedOptions.key,
+         "zones": zones ? zones.length : 0,
+         "presplit": presplitHashedZonesActive()
+      };
+   }
+
+   function collectionContract() {
+      let compressorName = null;
+      let compressorNote = null;
+      if (isViewRun())
+         compressorNote = 'view';
+      else if (isAtlasPlatform('sharedTier'))
+         compressorNote = 'shared tier';
+      else {
+         const parsed = parseCompressor(compressor);
+         compressorName = parsed[0];
+         compressorNote = parsed[1] || null;
+      }
+      const concern = { "w": writeConcern.w, "j": writeConcern.j };
+      if (hasOwn(writeConcern, 'wtimeout'))
+         concern.wtimeout = writeConcern.wtimeout;
+      const out = {
+         "compressor": compressorName,
+         "collation": (collation && collation.locale) || null,
+         "writeConcern": concern,
+         "timeSeries": timeSeries ? {
+            "timeField": tsOptions.timeField,
+            "metaField": tsOptions.metaField,
+            "granularity": tsOptions.granularity,
+            "expireAfterSeconds": (typeof expireAfterSeconds === 'number' && expireAfterSeconds > 0)
+               ? expireAfterSeconds
+               : null
+         } : null,
+         "capped": cappedThisRun() ? {
+            "size": cappedOptions.size,
+            "max": cappedOptions.max
+         } : null,
+         "sharding": shardingContract()
+      };
+      if (compressorNote)
+         out.compressorNote = compressorNote;
+      const spec = createSpec();
+      if (!spec)
+         return out;
+      if (isViewRun())
+         out.viewOn = spec.viewOn;
+      if (hasOwn(spec, 'clusteredIndex'))
+         out.clustered = true;
+      if (isPlainObject(spec.changeStreamPreAndPostImages))
+         out.images = spec.changeStreamPreAndPostImages.enabled === true;
+      if (objectHasKeys(spec.validator) || hasOwn(spec, 'validationLevel') || hasOwn(spec, 'validationAction')) {
+         out.validator = {
+            "level": (typeof spec.validationLevel === 'string') ? spec.validationLevel : 'strict',
+            "action": (typeof spec.validationAction === 'string') ? spec.validationAction : 'error'
+         };
+      }
+      if (objectHasKeys(spec.indexOptionDefaults))
+         out.indexDefaults = true;
+      return out;
+   }
+
+   function schemasContract() {
+      const ratios = Array.isArray(fuzzer.ratios) ? fuzzer.ratios : [1];
+      return schemaSamples.map((sample, i) => {
+         const weight = ratioWeight(ratios[i]);
+         const detail = schemaDetail(sample);
+         return {
+            "file": sample.file,
+            weight,
+            "omitted": !(weight > 0),
+            "detail": detail || null
+         };
+      });
+   }
+
+   function indexesContract() {
+      const build = !!(isPlainObject(indexPrefs) && indexPrefs.build);
+      const out = {
+         build,
+         "order": build ? indexOrderText() : null,
+         "commitQuorum": build ? indexPrefs.commitQuorum : null,
+         "existing": dropIndexes ? 'drop' : 'keep',
+         "groups": []
+      };
+      if (!build)
+         return out;
+      const spec = indexCollationSpecified && isPlainObject(indexOptions)
+         ? indexOptions.collation
+         : collation;
+      out.collation = {
+         "source": indexCollationSpecified ? 'specified' : 'inherited',
+         "locale": collationLocale(spec) || null
+      };
+      INDEX_GROUPS.forEach(group => {
+         const keys = Array.isArray(group.keys) ? group.keys : [];
+         const language = (group.language && isPlainObject(group.options))
+            ? (group.options.default_language || null)
+            : null;
+         out.groups.push({
+            "label": group.hudLabel,
+            language,
+            keys
+         });
+      });
+      return out;
+   }
+
+   function drawsContract() {
+      const spec = drawsSpec();
+      if (!spec.names.length)
+         return [];
+      return spec.names.map(name => {
+         const item = spec.specs[name];
+         const row = {
+            name,
+            "kind": item.kind,
+            "slots": item.slots || null
+         };
+         if (item.point)
+            row.point = item.point;
+         if (item.distribution)
+            row.distribution = item.distribution;
+         if (!item.with && item.span > 1)
+            row.span = item.span;
+         if (item.with) {
+            row.with = item.with;
+            row.correlation = item.correlation;
+         }
+         return row;
+      });
+   }
+
+   function builtContract() {
+      return builtRows.map(row => ({
+         "label": row.label,
+         "names": row.names,
+         "error": row.error
+      }));
+   }
+
+   function jsonReplacer(_key, value) {
+      if (value instanceof Date)
+         return value.toISOString();
+      if (value != null && typeof value === 'object' && typeof value.toNumber === 'function')
+         return value.toNumber();
+      return value;
+   }
+
+   function outputContract(extra) {
+      const more = extra || {};
+      const errors = Array.isArray(more.errors) ? more.errors.slice() : [];
+      const contract = {
+         "ok": errors.length ? 0 : 1,
+         "name": 'fuzzer.js',
+         "version": scriptVersion(),
+         "namespace": namespaceContract(),
+         "documents": isViewRun() ? null : totalDocs,
+         "writerConcurrency": writerConcurrency,
+         "optionsPath": resolved.source.file || null,
+         "window": windowContract(),
+         "collection": collectionContract(),
+         "schemas": schemasContract(),
+         "indexes": indexesContract(),
+         "draws": drawsContract(),
+         "built": builtContract(),
+         "insert": insertResult,
+         "warnings": resolved.warnings.concat(runWarnings),
+         errors
+      };
+      if (hasOwn(more, 'ok'))
+         contract.ok = more.ok;
+      return contract;
+   }
+
+   // CLI json prints the contract once. The completion value is the contract.
+   // load() waits, returns true, and does not print.
+   function publish(extra) {
+      const contract = outputContract(extra);
+      if (cliJson())
+         console.log(JSON.stringify(contract, jsonReplacer, 2));
+      return contract;
+   }
+
    function printHud() {
       const ratios = Array.isArray(fuzzer.ratios) ? fuzzer.ratios : [1];
       const windowSpec = distributionSpec();
@@ -1103,7 +1390,7 @@
    }
 
    function printBuilt(rows) {
-      if (!rows || !rows.length)
+      if (!cliTable() || !rows || !rows.length)
          return;
       if (progressLive) {
          batchHud.clear();
@@ -1112,12 +1399,12 @@
       const leftSpan = hudLabelW + 2;
       const rightSpan = hudValueW + 2;
       console.log('\n' + paintRule('┌', '┬', '┐', 'built', leftSpan, rightSpan));
-      rows.forEach(([label, value]) => {
-         const failed = String(value).startsWith('[red]');
-         const plain = failed ? stripAnsiMarkup(value) : String(value);
+      rows.forEach(row => {
+         const failed = !!row.error;
+         const plain = failed ? row.error : row.names.join(', ');
          const colour = failed ? 'red' : 'blue';
          wrapCell(plain, hudValueW).forEach((chunk, i) => {
-            console.log(paintRow(i === 0 ? label : '', `[${colour}]${chunk}[/]`, hudLabelW, hudValueW));
+            console.log(paintRow(i === 0 ? row.label : '', `[${colour}]${chunk}[/]`, hudLabelW, hudValueW));
          });
       });
       console.log(paintRule('└', '┴', '┘', '', leftSpan, rightSpan));
@@ -1133,51 +1420,68 @@
          const msg = (resolved.warnings[0] && resolved.warnings[0].message)
             || resolved.error
             || 'options file failed';
-         console.log(`\n[red][ERROR][/] ${msg}`);
-         return;
+         report(`\n[red][ERROR][/] ${msg}`);
+         return publish({ "ok": 0, "errors": [msg] });
       }
       resolved.warnings.forEach(warning => {
-         console.log(`\n[red][WARN] [yellow]${warning.message}[/]`);
+         report(`\n[red][WARN] [yellow]${warning.message}[/]`);
       });
       if (schemaFileErrors.length > 0) {
-         schemaFileErrors.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
-         return;
+         schemaFileErrors.forEach(reason => report(`\n[red][ERROR][/] ${reason}`));
+         return publish({ "ok": 0, "errors": schemaFileErrors.slice() });
       }
       if (schemaSamples.length === 0) {
-         console.log('\n[red][ERROR][/] fuzzer.schemas is empty');
-         return;
+         const msg = 'fuzzer.schemas is empty';
+         report(`\n[red][ERROR][/] ${msg}`);
+         return publish({ "ok": 0, "errors": [msg] });
       }
       const ratioProblem = schemaRatioProblem(fuzzer.ratios, schemaSamples.length);
       if (ratioProblem) {
-         console.log(`\n[red][ERROR][/] ${ratioProblem}`);
-         return;
+         report(`\n[red][ERROR][/] ${ratioProblem}`);
+         return publish({ "ok": 0, "errors": [ratioProblem] });
       }
       // Printed before the plan so a later time-series error is not read as a capped failure.
-      if (capped && timeSeries)
-         console.log('\n[red][WARN] [yellow]capped[red] is not applied because a time series collection cannot be capped[/]');
+      if (capped && timeSeries) {
+         runWarnings.push({
+            "code": 'capped',
+            "message": 'capped is not applied because a time series collection cannot be capped'
+         });
+         report('\n[red][WARN] [yellow]capped[red] is not applied because a time series collection cannot be capped[/]');
+      }
       const plan = collectionPlan();
       if (plan.length > 0) {
-         plan.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
-         return;
+         plan.forEach(reason => report(`\n[red][ERROR][/] ${reason}`));
+         return publish({ "ok": 0, "errors": plan.slice() });
       }
       if (timeSeries) {
          const expiryWarning = timeSeriesExpiryWarning();
-         if (expiryWarning)
-            console.log(`\n[red][WARN] [yellow]time series TTL[red] ${expiryWarning}[/]`);
+         if (expiryWarning) {
+            runWarnings.push({ "code": 'timeSeriesTtl', "message": `time series TTL ${expiryWarning}` });
+            report(`\n[red][WARN] [yellow]time series TTL[red] ${expiryWarning}[/]`);
+         }
       }
       const oidWindow = tsObjectIdWindow();
       if (oidWindow.length > 0) {
-         oidWindow.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
-         return;
+         oidWindow.forEach(reason => report(`\n[red][ERROR][/] ${reason}`));
+         return publish({ "ok": 0, "errors": oidWindow.slice() });
       }
-      if (cappedThisRun() && sharding && isSharded())
-         console.log('\n[red][WARN] [yellow]sharding[red] is skipped because a capped collection cannot be sharded[/]');
+      if (cappedThisRun() && sharding && isSharded()) {
+         runWarnings.push({
+            "code": 'sharding',
+            "message": 'sharding is skipped because a capped collection cannot be sharded'
+         });
+         report('\n[red][WARN] [yellow]sharding[red] is skipped because a capped collection cannot be sharded[/]');
+      }
 
       const orderName = indexOrderText();
-      if (orderName !== String((indexPrefs && indexPrefs.order) || '').toLowerCase())
-         console.log(`\nUnsupported index build preference "${indexPrefs.order}": defaulting to "post"`);
+      if (orderName !== String((indexPrefs && indexPrefs.order) || '').toLowerCase()) {
+         const message = `Unsupported index build preference "${indexPrefs.order}": defaulting to "post"`;
+         runWarnings.push({ "code": 'indexOrder', "message": message });
+         report(`\n${message}`);
+      }
 
-      printHud();
+      if (cliTable())
+         printHud();
 
       // Pools are fixed before the first document. A view does not draw them.
       if (!isViewRun())
@@ -1187,9 +1491,9 @@
       if (isViewRun()) {
          dropNS();
          if (!(await createNS()))
-            return;
-         console.log('\n [green]Fuzzing completed![/]\n');
-         return;
+            return publish({ "ok": 0, "errors": [runError || 'Namespace creation failed'] });
+         report('\n [green]Fuzzing completed![/]\n');
+         return publish({ "ok": 1 });
       }
 
       // Drop finishes before create. createNS is async so the rewriter can
@@ -1211,33 +1515,43 @@
       if (packError)
          throw packError;
       if (!(await creating))
-         return;
+         return publish({ "ok": 0, "errors": [runError || 'Namespace creation failed'] });
       const firstBatch = await packing;
 
       dropExistingIndexes();
 
       // Index order is a HUD row. pre builds before the inserts. Anything else inserts first.
+      let bulkOk = false;
       switch (orderName) {
          case 'pre':
-            printBuilt(buildIndexes());
-            if ((await genBulk(firstBatch)) === false)
-               return;
+            builtRows = buildIndexes();
+            printBuilt(builtRows);
+            bulkOk = (await genBulk(firstBatch)) !== false;
             break;
          default:
-            if ((await genBulk(firstBatch)) === false)
-               return;
-            printBuilt(buildIndexes());
+            bulkOk = (await genBulk(firstBatch)) !== false;
+            if (bulkOk) {
+               builtRows = buildIndexes();
+               printBuilt(builtRows);
+            }
       }
+      if (!bulkOk)
+         return publish({
+            "ok": 0,
+            "errors": [`Bulk insert stopped after ${progressInserted} of ${totalDocs} documents`]
+         });
 
       // redistribute chunks if required
       const reshard = reshardDecision();
       if (reshard.action === 'call')
          await reshardNamespace(reshard.sameKey);
-      else if (reshard.action === 'warn')
-         console.log(reshard.message);
+      else if (reshard.action === 'warn') {
+         runWarnings.push({ "code": 'reshard', "message": plainText(reshard.message) });
+         report(reshard.message);
+      }
 
-      console.log('\n [green]Fuzzing completed![/]\n');
-      return;
+      report('\n [green]Fuzzing completed![/]\n');
+      return publish({ "ok": 1 });
    }
 
    // ObjectId time is 4 bytes: 8 hex digits, 1970-01-01 through 2106-02-07T06:28:15Z.
@@ -2036,7 +2350,8 @@
          });
          return true;
       } catch(e) {
-         console.log('[red][ERROR] Sharding namespace failed:[/]', errText(e));
+         runError = `Sharding namespace failed: ${errText(e)}`;
+         report('[red][ERROR] Sharding namespace failed:[/]', errText(e));
          return false;
       }
    }
@@ -2318,7 +2633,8 @@
       if (!isSharded())
          return true;
       if (!(sharding && namespace.exists())) {
-         console.log('[red][ERROR] Sharding namespace failed:[/] the namespace does not exist');
+         runError = 'Sharding namespace failed: the namespace does not exist';
+         report('[red][ERROR] Sharding namespace failed:[/] the namespace does not exist');
          return false;
       }
 
@@ -2327,27 +2643,29 @@
          if (mayPresplitChunks())
             numInitialChunks = initialChunkCount();
       } catch(e) {
-         console.log('[red][ERROR] Sharding namespace failed:[/]', errText(e));
+         runError = `Sharding namespace failed: ${errText(e)}`;
+         report('[red][ERROR] Sharding namespace failed:[/]', errText(e));
          return false;
       }
       if (numInitialChunks != null && !(numInitialChunks >= 1)) {
-         console.log(`[red][ERROR] Sharding namespace failed:[/] initial chunk count is ${numInitialChunks}`);
+         runError = `Sharding namespace failed: initial chunk count is ${numInitialChunks}`;
+         report(`[red][ERROR] Sharding namespace failed:[/] initial chunk count is ${numInitialChunks}`);
          return false;
       }
 
-      console.log(`\nSharding namespace with options: ${tojson(shardedOptions)}`);
+      report(`\nSharding namespace with options: ${tojson(shardedOptions)}`);
       const zones = zoneRanges();
       const presplitZones = presplitHashedZonesActive();
       if (presplitZones)
-         console.log(`with presplitHashedZones and ${zones.length} zone ${plural(zones.length, 'range', 'ranges')}`);
+         report(`with presplitHashedZones and ${zones.length} zone ${plural(zones.length, 'range', 'ranges')}`);
       else if (zones)
-         console.log(`with ${zones.length} zone ${plural(zones.length, 'range', 'ranges')}`);
+         report(`with ${zones.length} zone ${plural(zones.length, 'range', 'ranges')}`);
       else if (numInitialChunks >= 1)
-         console.log(`with initial chunks: ${numInitialChunks}`);
+         report(`with initial chunks: ${numInitialChunks}`);
       else if (!shardKeyHashedPrefix(shardedOptions.key))
-         console.log('without initial chunks: shard key has no hashed prefix');
+         report('without initial chunks: shard key has no hashed prefix');
       else
-         console.log('without initial chunks: the collection is not empty');
+         report('without initial chunks: the collection is not empty');
       if (!applyZoneRanges())
          return false;
       const shardOptions = { "collation": collation };
@@ -2375,10 +2693,11 @@
          // A preserved collection can already be sharded when config.collections
          // is keyed by UUID and the namespace lookup misses.
          if (/already sharded|sharding already enabled/i.test(text)) {
-            console.log(`\nNamespace "${dbName}.${collName}" is already sharded`);
+            report(`\nNamespace "${dbName}.${collName}" is already sharded`);
             return true;
          }
-         console.log('[red][ERROR] Sharding namespace failed:[/]', text);
+         runError = `Sharding namespace failed: ${text}`;
+         report('[red][ERROR] Sharding namespace failed:[/]', text);
          return false;
       }
    }
@@ -2386,11 +2705,12 @@
    function shardPreservedNamespace() {
       try {
          if (catalogShardKey()) {
-            console.log(`\nNamespace "${dbName}.${collName}" is already sharded`);
+            report(`\nNamespace "${dbName}.${collName}" is already sharded`);
             return true;
          }
       } catch(e) {
-         console.log('[red][ERROR] Sharding namespace failed:[/]', errText(e));
+         runError = `Sharding namespace failed: ${errText(e)}`;
+         report('[red][ERROR] Sharding namespace failed:[/]', errText(e));
          return false;
       }
       return shardNewNamespace();
@@ -2464,7 +2784,8 @@
             await cmd();
             reshardOk = true;
          } catch(e) {
-            console.log('Resharding attempt:', errText(e));
+            runWarnings.push({ "code": 'reshard', "message": `Resharding attempt: ${errText(e)}` });
+            report('Resharding attempt:', errText(e));
          }
       };
       const rebalancingOps = () => {
@@ -2537,7 +2858,7 @@
          ],
          { "comment": "Monitoring resharding progress by fuzzer.js" }).toArray();
       };
-      console.log('\nResharding activated...');
+      report('\nResharding activated...');
       const pollIntervalMS = 500;
       let done = false;
       // Hold the issuing command Promise so mongosh does not exit (and abort resharding) early.
@@ -2554,14 +2875,16 @@
          try {
             const ops = rebalancingOps();
             monitorFailed = false;
-            if (ops.length > 0) {
+            if (ops.length > 0 && cliTable()) {
                console.clear();
                console.log(`\nMonitoring resharding operations:\n`);
                ops.forEach(op => printjson(op));
             }
          } catch(e) {
-            if (!monitorFailed)
-               console.log('Resharding monitor:', errText(e));
+            if (!monitorFailed) {
+               runWarnings.push({ "code": 'reshard', "message": `Resharding monitor: ${errText(e)}` });
+               report('Resharding monitor:', errText(e));
+            }
             monitorFailed = true;
          }
          if (!done)
@@ -2570,10 +2893,11 @@
       try {
          await reshardPromise;
       } catch(e) {
-         console.log('Resharding attempt:', errText(e));
+         runWarnings.push({ "code": 'reshard', "message": `Resharding attempt: ${errText(e)}` });
+         report('Resharding attempt:', errText(e));
       }
       if (reshardOk)
-         console.log(`\nResharding complete.`);
+         report('\nResharding complete.');
    }
 
    function shardKeyUsesHash(key) {
@@ -2635,13 +2959,22 @@
          return [`time series schema selection is empty${detail}`];
       }
       fuzzer.ratios = ratios;
-      if (omitted.length)
-         console.log(`\n[red][WARN] [yellow]time series[red] omitted ${omitted.join(', ')}[/]`);
+      if (omitted.length) {
+         runWarnings.push({
+            "code": 'timeSeries',
+            "message": `time series omitted ${omitted.join(', ')}`
+         });
+         report(`\n[red][WARN] [yellow]time series[red] omitted ${omitted.join(', ')}[/]`);
+      }
       if (willShard && timeSeriesShardKeyProblem(shardedOptions.key, metaField, timeField)) {
          // Ranged, so the sample can keep a hashed index on another field.
          const next = {};
          next[metaField || timeField] = 1;
-         console.log(`\n[red][WARN] [yellow]time series shard key[red] ${tojson(shardedOptions.key)} is replaced with ${tojson(next)}[/]`);
+         runWarnings.push({
+            "code": 'timeSeriesShardKey',
+            "message": `time series shard key ${tojson(shardedOptions.key)} is replaced with ${tojson(next)}`
+         });
+         report(`\n[red][WARN] [yellow]time series shard key[red] ${tojson(shardedOptions.key)} is replaced with ${tojson(next)}[/]`);
          shardedOptions.key = next;
       }
       return [];
@@ -2823,7 +3156,8 @@
       try {
          database.createCollection(collName, createOptions);
       } catch(e) {
-         console.log('\n[red][ERROR] Namespace creation failed:[/]', errText(e));
+         runError = `Namespace creation failed: ${errText(e)}`;
+         report('\n[red][ERROR] Namespace creation failed:[/]', errText(e));
          return false;
       }
 
@@ -2839,10 +3173,10 @@
          : [keys, options];
       try {
          const names = namespace.createIndexes(...args);
-         const text = Array.isArray(names) ? names.join(', ') : String(names);
-         return [label, text];
+         const list = Array.isArray(names) ? names.slice() : [String(names)];
+         return { label, "names": list, "error": null };
       } catch(e) {
-         return [label, `[red]${errText(e)}[/]`];
+         return { label, "names": [], "error": errText(e) };
       }
    }
 
@@ -2895,7 +3229,7 @@
    // The insert command wrapper sits above the document bytes. 32 KiB leaves
    // room for it. A legal document that does not fit is held for the next batch.
    const MESSAGE_RESERVE_BYTES = 32 * 1024;
-   const batchHud = new MiniHud({ "enabled": true, "throttleMs": 0 });
+   const batchHud = new MiniHud({ "enabled": cliTable(), "throttleMs": 0 });
    let ackedBytes = 0;
    let progressInserted = 0;
    let progressBatch = 0;
@@ -2941,15 +3275,16 @@
    function showProgress(inserted, bytes, batchNo, final = false) {
       progressInserted = inserted;
       progressBatch = batchNo;
+      // The bar is progress, not a contract field. json, load(), and a pipe stay quiet.
+      if (!cliTable() || !batchHud.enabled)
+         return;
       const line = progressText(inserted, bytes, batchNo, final);
-      if (batchHud.enabled && !final) {
+      if (!final) {
          batchHud.render(line, { "force": true });
          progressShown = true;
          progressLive = true;
          return;
       }
-      if (final && !batchHud.enabled && progressShown)
-         return;
       const lead = progressShown ? '' : '\n';
       batchHud.clear();
       console.log(lead + line);
@@ -2958,6 +3293,11 @@
    }
 
    function logLine(...args) {
+      const text = args.map(part => stripAnsiMarkup(String(part))).join(' ').replace(/\s+/g, ' ').trim();
+      if (text)
+         runWarnings.push({ "code": 'run', "message": text });
+      if (!cliTable())
+         return;
       const restore = progressLive;
       batchHud.clear();
       progressLive = false;
@@ -3091,6 +3431,13 @@
       }
       await drainSlots();
       showProgress(inserted, ackedBytes, progressBatch, true);
+      insertResult = {
+         "ok": !failed,
+         "inserted": inserted,
+         "total": totalDocs,
+         "bytes": ackedBytes,
+         "skipped": packSkipped
+      };
       if (failed) {
          const shortfall = totalDocs - inserted;
          logLine(`\n[red][ERROR][/] Bulk insert stopped after ${inserted} of ${totalDocs} documents (${shortfall} short)`);
@@ -3102,9 +3449,22 @@
    }
 
    try {
-      await main();
+      return await main();
    } catch(e) {
-      console.log('[red][ERROR][/]', errText(e));
+      const message = errText(e);
+      let jsonCli = false;
+      let tableCli = false;
+      try {
+         jsonCli = cliJson();
+         tableCli = cliTable();
+      } catch(ignore) {
+         jsonCli = false;
+         tableCli = false;
+      }
+      if (jsonCli)
+         publish({ "ok": 0, "errors": [message] });
+      else if (tableCli)
+         console.log('[red][ERROR][/]', message);
       throw e;
    }
 })();
