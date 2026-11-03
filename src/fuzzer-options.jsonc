@@ -117,11 +117,15 @@
       //    "weighting": 50
       // },
       // Named draws. values is the pool, or distribution draws one.
-      // pool freezes that many distribution draws. follow "n" walks the pool.
+      // pool freezes that many distribution draws. follow "n" walks the pool by group.
+      // span is how many consecutive documents share one value. Omitted, it is 1.
+      // with names one parent. correlation is 0 through 1. Omitted on a child, it is 1.
+      // pareto and exponential take bound as the truncation window. span is the group.
       // A schema field reads the name with =draws.sku. =n is the generation index.
       // "draws": {
-      //    "sku": { "pool": 50, "distribution": "uniform", "lo": 1000, "hi": 9999 },
-      //    "tier": { "values": ["a", "b", "c"], "follow": "n" }
+      //    "sku": { "pool": 50, "distribution": "uniform", "lo": 1000, "hi": 9999, "span": 20 },
+      //    "tier": { "values": ["a", "b", "c"], "follow": "n", "span": 20 },
+      //    "price": { "distribution": "normal", "mu": 10, "sigma": 2, "with": "sku", "correlation": 0.8 }
       // },
       "schemas": ["schema-a.jsonc", "schema-b.jsonc", "schema-c.jsonc"],
       // an empty schemas array skips the sample files

@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.13.0"
+ *  Version: "1.13.1"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,7 +25,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.13.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.13.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -217,10 +217,14 @@
             // "weighting": 50           // 0-100%
          // },
          // Named draws. A values list, or a distribution, optionally pooled.
-         // follow "n" walks the pool. Schema fields read draws.<name>. n is the generation index.
+         // span is how many consecutive documents share one value. Omitted, it is 1.
+         // with names one parent. correlation is 0 through 1. Omitted on a child, it is 1.
+         // follow "n" walks the pool by group. Schema fields read draws.<name>.
+         // pareto and exponential take bound as the truncation window. span is the group.
          // "draws": {
-         //    "sku": { "pool": 50, "distribution": "uniform", "lo": 1000, "hi": 9999 },
-         //    "tier": { "values": ["a", "b", "c"], "follow": "n" }
+         //    "sku": { "pool": 50, "distribution": "uniform", "lo": 1000, "hi": 9999, "span": 20 },
+         //    "tier": { "values": ["a", "b", "c"], "follow": "n", "span": 20 },
+         //    "price": { "distribution": "normal", "mu": 10, "sigma": 2, "with": "sku", "correlation": 0.8 }
          // },
          "draws": {},
          "schemas": [
@@ -1316,16 +1320,19 @@
    }
 
    const DRAW_NAMES = ['uniform', 'normal', 'bimodal', 'pareto', 'exponential', 'poisson'];
+   const VALUE_KEYS = ['values', 'follow', 'span', 'with', 'correlation'];
+   // span is the document group. Pareto and exponential use bound for the window.
    const DRAW_KEYS = {
-      uniform: ['distribution', 'lo', 'hi', 'pool', 'follow'],
-      normal: ['distribution', 'mu', 'sigma', 'pool', 'follow'],
-      bimodal: ['distribution', 'mix', 'mu1', 'sigma1', 'mu2', 'sigma2', 'pool', 'follow'],
-      pareto: ['distribution', 'alpha', 'scale', 'span', 'pool', 'follow'],
-      exponential: ['distribution', 'lambda', 'span', 'pool', 'follow'],
-      poisson: ['distribution', 'lambda', 'pool', 'follow']
+      uniform: ['distribution', 'lo', 'hi', 'pool', 'follow', 'span', 'with', 'correlation'],
+      normal: ['distribution', 'mu', 'sigma', 'pool', 'follow', 'span', 'with', 'correlation'],
+      bimodal: ['distribution', 'mix', 'mu1', 'sigma1', 'mu2', 'sigma2', 'pool', 'follow', 'span', 'with', 'correlation'],
+      pareto: ['distribution', 'alpha', 'scale', 'bound', 'pool', 'follow', 'span', 'with', 'correlation'],
+      exponential: ['distribution', 'lambda', 'bound', 'pool', 'follow', 'span', 'with', 'correlation'],
+      poisson: ['distribution', 'lambda', 'pool', 'follow', 'span', 'with', 'correlation']
    };
    let drawsResolved = null;
    let drawPools = null;
+   let drawGroups = null;
 
    function drawsSpec() {
       if (!drawsResolved)
@@ -1366,7 +1373,7 @@
          return value;
       }
 
-      // follow "n" walks a pool or a values list. A bare draw has no sequence to walk.
+      // follow "n" walks a pool or a values list by group. A bare draw has no sequence to walk.
       function readFollow(spec, name, hasList) {
          if (!hasOwn(spec, 'follow') || spec.follow == null || spec.follow === '')
             return false;
@@ -1377,6 +1384,49 @@
          if (!hasList)
             errors.push(`fuzzer.draws.${name}.follow needs a pool or a values list`);
          return hasList;
+      }
+
+      function readWith(spec, name) {
+         if (!hasOwn(spec, 'with') || spec.with == null || spec.with === '')
+            return null;
+         if (typeof spec.with !== 'string') {
+            errors.push(`fuzzer.draws.${name}.with must name a draw`);
+            return null;
+         }
+         if (spec.with === name) {
+            errors.push(`fuzzer.draws.${name}.with cannot name itself`);
+            return null;
+         }
+         return spec.with;
+      }
+
+      function readCorrelation(spec, name, parent) {
+         const present = hasOwn(spec, 'correlation') && spec.correlation != null && spec.correlation !== '';
+         if (present && !parent)
+            errors.push(`fuzzer.draws.${name}.correlation needs with`);
+         if (!present)
+            return 1;
+         const value = spec.correlation;
+         if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+            errors.push(`fuzzer.draws.${name}.correlation must be from 0 through 1`);
+            return 1;
+         }
+         return value;
+      }
+
+      // A child takes its group from the parent, so span there is an error.
+      function readSpan(spec, name, parent) {
+         const present = hasOwn(spec, 'span') && spec.span != null && spec.span !== '';
+         if (!present)
+            return 1;
+         const value = spec.span;
+         if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1)
+            errors.push(`fuzzer.draws.${name}.span must be an integer of at least 1`);
+         if (parent)
+            errors.push(`fuzzer.draws.${name}.span does not apply to a child. The group comes from ${parent}`);
+         if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 1)
+            return value;
+         return 1;
       }
 
       Object.keys(raw).forEach(name => {
@@ -1398,20 +1448,26 @@
          }
          if (hasValues) {
             Object.keys(spec).forEach(key => {
-               if (key !== 'values' && key !== 'follow')
+               if (!VALUE_KEYS.includes(key))
                   errors.push(`fuzzer.draws.${name}.${key} does not apply`);
             });
             const listOk = Array.isArray(spec.values) && spec.values.length > 0;
             if (!listOk)
                errors.push(`fuzzer.draws.${name}.values must be a non-empty array`);
             const follow = readFollow(spec, name, listOk);
+            const parent = readWith(spec, name);
+            const correlation = readCorrelation(spec, name, parent);
+            const span = readSpan(spec, name, parent);
             if (errors.length === before) {
                names.push(name);
                specs[name] = {
                   "kind": 'values',
                   "list": spec.values.slice(),
                   follow,
-                  "slots": spec.values.length
+                  "slots": spec.values.length,
+                  span,
+                  "with": parent,
+                  correlation
                };
             }
             return;
@@ -1468,17 +1524,33 @@
          } else if (folded === 'pareto') {
             item.alpha = positive(spec, name, 'alpha', 1.161);
             item.scale = positive(spec, name, 'scale', 1);
-            item.span = positive(spec, name, 'span', 1);
+            item.bound = positive(spec, name, 'bound', 1);
          } else if (folded === 'exponential') {
             item.lambda = positive(spec, name, 'lambda', 1);
-            item.span = positive(spec, name, 'span', 1);
+            item.bound = positive(spec, name, 'bound', 1);
          } else {
             item.lambda = positive(spec, name, 'lambda', 1);
          }
+         const parent = readWith(spec, name);
+         const correlation = readCorrelation(spec, name, parent);
+         const span = readSpan(spec, name, parent);
+         item.span = span;
+         item.with = parent;
+         item.correlation = correlation;
          if (errors.length === before) {
             names.push(name);
             specs[name] = item;
          }
+      });
+      names.forEach(name => {
+         const item = specs[name];
+         if (!item.with)
+            return;
+         const parentItem = specs[item.with];
+         if (!parentItem)
+            errors.push(`fuzzer.draws.${name}.with names "${item.with}", which is not a draw`);
+         else if (parentItem.with)
+            errors.push(`fuzzer.draws.${name}.with names "${item.with}", which follows "${parentItem.with}"`);
       });
       return { errors, names, specs };
    }
@@ -1492,9 +1564,9 @@
          case 'bimodal':
             return $genBimodal(item.mix, item.mu1, item.sigma1, item.mu2, item.sigma2);
          case 'pareto':
-            return $genTruncatedLomax(item.alpha, item.scale, item.span);
+            return $genTruncatedLomax(item.alpha, item.scale, item.bound);
          case 'exponential':
-            return $genTruncatedExponential(item.lambda, item.span);
+            return $genTruncatedExponential(item.lambda, item.bound);
          default:
             return $genPoisson(item.lambda);
       }
@@ -1503,6 +1575,7 @@
    function buildDrawPools() {
       const spec = drawsSpec();
       drawPools = {};
+      drawGroups = {};
       spec.names.forEach(name => {
          const item = spec.specs[name];
          if (item.kind === 'values')
@@ -1511,21 +1584,78 @@
             drawPools[name] = Array.from({ "length": item.pool }, () => drawDistribution(item));
          else
             drawPools[name] = null;
+         drawGroups[name] = {};
       });
+   }
+
+   // One stored value per group. A child is stored under the parent group.
+   function groupValue(name, groupId) {
+      const groups = drawGroups[name];
+      if (hasOwn(groups, groupId))
+         return groups[groupId];
+      const item = drawsSpec().specs[name];
+      const list = drawPools[name];
+      let value;
+      if (list) {
+         const at = item.follow ? (groupId % list.length) : $getRandInt(0, list.length);
+         value = list[at];
+      } else
+         value = drawDistribution(item);
+      groups[groupId] = value;
+      return value;
+   }
+
+   function freshValue(item, list) {
+      if (list)
+         return list[$getRandInt(0, list.length)];
+      return drawDistribution(item);
+   }
+
+   // correlation 1 returns the stored value. 0 draws again. A values list
+   // keeps the stored value when a uniform draw is below the correlation.
+   // A numeric distribution blends in the child's units. Poisson rounds.
+   function correlated(item, list, stored) {
+      const correlation = item.correlation;
+      if (!(correlation < 1))
+         return stored;
+      if (item.kind === 'values') {
+         if (correlation > 0 && $rand() < correlation)
+            return stored;
+         return freshValue(item, list);
+      }
+      const fresh = freshValue(item, list);
+      if (!(correlation > 0))
+         return fresh;
+      let mixed = correlation * stored + (1 - correlation) * fresh;
+      if (item.distribution === 'poisson') {
+         mixed = Math.round(mixed);
+         if (mixed < 0)
+            mixed = 0;
+      }
+      return mixed;
    }
 
    function documentDraws(n) {
       const spec = drawsSpec();
       const out = {};
       const index = (typeof n === 'number' && n >= 0) ? n : 0;
+      const roots = [];
+      const children = [];
       spec.names.forEach(name => {
+         if (spec.specs[name].with)
+            children.push(name);
+         else
+            roots.push(name);
+      });
+      roots.forEach(name => {
          const item = spec.specs[name];
-         const list = drawPools && drawPools[name];
-         if (list) {
-            const at = item.follow ? (index % list.length) : $getRandInt(0, list.length);
-            out[name] = list[at];
-         } else
-            out[name] = drawDistribution(item);
+         out[name] = groupValue(name, Math.floor(index / item.span));
+      });
+      children.forEach(name => {
+         const item = spec.specs[name];
+         const parent = spec.specs[item.with];
+         const groupId = Math.floor(index / parent.span);
+         out[name] = correlated(item, drawPools[name], groupValue(name, groupId));
       });
       return out;
    }
@@ -1535,10 +1665,17 @@
       if (!spec.names.length)
          return '';
       return spec.names.map(name => {
-         const slots = spec.specs[name].slots;
-         if (slots)
-            return `[blue]${name}[/]×[blue]${grouped(slots)}[/]`;
-         return `[blue]${name}[/]`;
+         const item = spec.specs[name];
+         const parts = [];
+         if (item.slots)
+            parts.push(`[blue]${name}[/]×[blue]${grouped(item.slots)}[/]`);
+         else
+            parts.push(`[blue]${name}[/]`);
+         if (!item.with && item.span > 1)
+            parts.push(`every [blue]${grouped(item.span)}[/]`);
+         if (item.with)
+            parts.push(`with [blue]${item.with}[/] [blue]${item.correlation}[/]`);
+         return parts.join(' ');
       }).join('  ');
    }
 
