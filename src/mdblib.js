@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "1.3.0"
+ *  Version: "1.4.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,7 +17,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "1.3.0"
+      "version": "1.4.0"
    });
 
 /*  Notes:
@@ -2848,6 +2848,190 @@ function $genExponential(lambda = 1) {
     *  exponential distribution function
     */
    return -Math.log(1.0 - $rand()) / lambda;
+}
+
+function $genUniform(lo, hi) {
+   /*
+    *  one draw on [lo, hi)
+    */
+   return $getRandNum(lo, hi);
+}
+
+function $genNormalDraw(mu, sigma) {
+   /*
+    *  one finite normal draw.
+    *  $genNormal stays the raw Box-Muller step.
+    */
+   for (let attempt = 0; attempt < 4; attempt++) {
+      const x = $genNormal(mu, sigma);
+      if (Number.isFinite(x))
+         return x;
+   }
+   throw new Error('normal draw was not finite');
+}
+
+function $genBimodal(mix, mu1, sigma1, mu2, sigma2) {
+   /*
+    *  one draw from a mixture of two normals.
+    *  mix is the weight of the first normal.
+    */
+   return ($rand() < mix) ? $genNormalDraw(mu1, sigma1) : $genNormalDraw(mu2, sigma2);
+}
+
+function $placeOnWindow(distance, origin, lo, hi) {
+   /*
+    *  distance runs forward from lo, or back from hi when origin is "end".
+    */
+   return origin === 'end' ? hi - distance : lo + distance;
+}
+
+function $genTruncatedLomax(alpha, scale, span, origin, lo, hi) {
+   /*
+    *  Lomax (Pareto II) conditioned on [0, span].
+    *  This is not $genRandIncPareto.
+    *  An origin of "end" measures back from hi. Any other origin adds to lo.
+    *  Omit origin to return the distance in [0, span].
+    */
+   const spanSurvival = Math.pow(1 + span / scale, -alpha);
+   const survival = 1 - $rand() * (1 - (Number.isFinite(spanSurvival) ? spanSurvival : 0));
+   let x = span;
+   if (survival > 0) {
+      x = scale * (Math.pow(survival, -1 / alpha) - 1);
+      if (!(x > 0))
+         x = 0;
+      else if (!(x < span))
+         x = span;
+   }
+   if (origin === undefined || origin === null)
+      return x;
+   return $placeOnWindow(x, origin, lo, hi);
+}
+
+function $genTruncatedExponential(lambda, span, origin, lo, hi) {
+   /*
+    *  exponential rate lambda, conditioned on [0, span].
+    *  This is not $genExponential.
+    *  An origin of "end" measures back from hi. Any other origin adds to lo.
+    *  Omit origin to return the distance in [0, span].
+    */
+   const covered = -Math.expm1(-lambda * span);
+   const portion = $rand() * covered;
+   let x = span;
+   if (portion < 1) {
+      x = -Math.log1p(-portion) / lambda;
+      if (!(x > 0))
+         x = 0;
+      else if (!(x < span))
+         x = span;
+   }
+   if (origin === undefined || origin === null)
+      return x;
+   return $placeOnWindow(x, origin, lo, hi);
+}
+
+// One table per lambda. A later draw with the same rate reuses it.
+const poissonSamplerCache = new Map();
+
+function $poissonSampler(lambda) {
+   /*
+    *  whole-number Poisson sampler for one lambda.
+    *  The table is the practical support: weights more than
+    *  e^-40 below the mode are dropped. A huge mean uses the normal limit.
+    */
+   const rate = +lambda;
+   if (!(rate > 0) || !Number.isFinite(rate))
+      throw new Error('poisson lambda must be greater than 0');
+   const cached = poissonSamplerCache.get(rate);
+   if (cached)
+      return cached;
+
+   const sd = Math.sqrt(rate);
+   let sampler;
+   if (sd > 20000) {
+      const lowK = Math.max(0, Math.floor(rate - 8 * sd));
+      const highK = Math.ceil(rate + 8 * sd);
+      sampler = {
+         lowK,
+         highK,
+         draw() {
+            const k = Math.round($genNormalDraw(rate, sd));
+            return k > 0 ? k : 0;
+         }
+      };
+   } else {
+      const mode = Math.floor(rate);
+      const logCut = -40;
+      const right = [0];
+      let logW = 0;
+      let k = mode;
+      while (right.length < 250000) {
+         const next = logW + Math.log(rate) - Math.log(k + 1);
+         if (!(next > logCut))
+            break;
+         logW = next;
+         k++;
+         right.push(logW);
+      }
+      const left = [];
+      logW = 0;
+      k = mode;
+      while (k > 0 && left.length < 250000) {
+         const next = logW + Math.log(k) - Math.log(rate);
+         if (!(next > logCut))
+            break;
+         logW = next;
+         k--;
+         left.push(logW);
+      }
+      const below = left.length;
+      const logWeights = left.reverse().concat(right);
+      let sum = 0;
+      const weights = logWeights.map(lw => {
+         const w = Math.exp(lw);
+         sum += w;
+         return w;
+      });
+      const cdf = new Float64Array(weights.length);
+      let acc = 0;
+      for (let i = 0; i < weights.length; i++) {
+         acc += weights[i] / sum;
+         cdf[i] = acc;
+      }
+      cdf[cdf.length - 1] = 1;
+      const lowK = mode - below;
+      const highK = lowK + cdf.length - 1;
+      sampler = {
+         lowK,
+         highK,
+         draw() {
+            const u = $rand();
+            let lo = 0;
+            let hi = cdf.length - 1;
+            while (lo < hi) {
+               const mid = (lo + hi) >> 1;
+               if (u < cdf[mid])
+                  hi = mid;
+               else
+                  lo = mid + 1;
+            }
+            return lowK + lo;
+         }
+      };
+   }
+   poissonSamplerCache.set(rate, sampler);
+   return sampler;
+}
+
+function $genPoisson(lambda, origin, lo, hi) {
+   /*
+    *  one whole-number Poisson count.
+    *  An origin of "end" counts back from hi. Any other origin adds the count to lo.
+    *  Omit origin to return the count.
+    */
+   const k = $poissonSampler(lambda).draw();
+   if (origin === undefined || origin === null)
+      return k;
+   return $placeOnWindow(k, origin, lo, hi);
 }
 
 function $genLuhnNumber(input) {

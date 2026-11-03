@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.11.0"
+ *  Version: "1.12.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,7 +25,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.11.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.12.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -515,11 +515,12 @@
       return tojson(value).replace(/\s+/g, ' ');
    }
 
-   // Days from now. uniform fills the window. normal and bimodal are not cut;
-   // their ts ObjectId span is 8 sigma. pareto and exponential are cut to the window.
-   // poisson is a day count and is not cut; its span is the counts it can actually draw.
-   // The untruncated mdblib pareto and exponential helpers stay unused: a date draw
-   // has to stay inside the ObjectId years when id is ts.
+   // Days from now. The draw is a mdblib helper. offset, range, and origin stay
+   // this window. uniform fills it. normal and bimodal are not cut; their ts
+   // ObjectId span is 8 sigma. pareto is a truncated Lomax and exponential is
+   // truncated; both are cut to the window. poisson is a whole-number count and
+   // is not cut; its span is the counts it can draw. $genNormal stays the raw
+   // normal. $genRandIncPareto and $genExponential stay unused.
    const DISTRIBUTION_NAMES = ['uniform', 'normal', 'bimodal', 'pareto', 'exponential', 'poisson'];
    const DISTRIBUTION_KEYS = {
       uniform: ['offset', 'range'],
@@ -547,120 +548,6 @@
    function statText(n, unit) {
       const value = `[blue]${formatStat(n)}[/]`;
       return unit ? `${value} [dim]${unit}[/]` : value;
-   }
-
-   function drawNormal(mu, sigma) {
-      for (let attempt = 0; attempt < 4; attempt++) {
-         const x = $genNormal(mu, sigma);
-         if (Number.isFinite(x))
-            return x;
-      }
-      throw new Error('normal draw was not finite');
-   }
-
-   // Exponential rate lambda, conditioned on falling inside [0, span].
-   function truncatedExponential(lambda, span) {
-      const covered = -Math.expm1(-lambda * span);
-      const portion = $rand() * covered;
-      if (!(portion < 1))
-         return span;
-      const x = -Math.log1p(-portion) / lambda;
-      if (!(x > 0))
-         return 0;
-      return x < span ? x : span;
-   }
-
-   // Lomax (Pareto II) shape alpha and scale, conditioned on [0, span].
-   function truncatedLomax(alpha, scale, span) {
-      const spanSurvival = Math.pow(1 + span / scale, -alpha);
-      const survival = 1 - $rand() * (1 - (Number.isFinite(spanSurvival) ? spanSurvival : 0));
-      if (!(survival > 0))
-         return span;
-      const x = scale * (Math.pow(survival, -1 / alpha) - 1);
-      if (!(x > 0))
-         return 0;
-      return x < span ? x : span;
-   }
-
-   // Distance is days from the window start, or back from the end.
-   function placeOnWindow(distance, origin, lo, hi) {
-      return origin === 'end' ? hi - distance : lo + distance;
-   }
-
-   // Whole-day Poisson count. The table is the practical support: weights more than
-   // e^-40 below the mode are dropped. A huge mean uses the normal limit instead of a table.
-   function poissonSampler(lambda) {
-      const sd = Math.sqrt(lambda);
-      if (sd > 20000) {
-         const lowK = Math.max(0, Math.floor(lambda - 8 * sd));
-         const highK = Math.ceil(lambda + 8 * sd);
-         return {
-            lowK,
-            highK,
-            draw() {
-               const k = Math.round(drawNormal(lambda, sd));
-               return k > 0 ? k : 0;
-            }
-         };
-      }
-      const mode = Math.floor(lambda);
-      const logCut = -40;
-      const right = [0];
-      let logW = 0;
-      let k = mode;
-      while (right.length < 250000) {
-         const next = logW + Math.log(lambda) - Math.log(k + 1);
-         if (!(next > logCut))
-            break;
-         logW = next;
-         k++;
-         right.push(logW);
-      }
-      const left = [];
-      logW = 0;
-      k = mode;
-      while (k > 0 && left.length < 250000) {
-         const next = logW + Math.log(k) - Math.log(lambda);
-         if (!(next > logCut))
-            break;
-         logW = next;
-         k--;
-         left.push(logW);
-      }
-      const below = left.length;
-      const logWeights = left.reverse().concat(right);
-      let sum = 0;
-      const weights = logWeights.map(lw => {
-         const w = Math.exp(lw);
-         sum += w;
-         return w;
-      });
-      const cdf = new Float64Array(weights.length);
-      let acc = 0;
-      for (let i = 0; i < weights.length; i++) {
-         acc += weights[i] / sum;
-         cdf[i] = acc;
-      }
-      cdf[cdf.length - 1] = 1;
-      const lowK = mode - below;
-      const highK = lowK + cdf.length - 1;
-      return {
-         lowK,
-         highK,
-         draw() {
-            const u = $rand();
-            let lo = 0;
-            let hi = cdf.length - 1;
-            while (lo < hi) {
-               const mid = (lo + hi) >> 1;
-               if (u < cdf[mid])
-                  hi = mid;
-               else
-                  lo = mid + 1;
-            }
-            return lowK + lo;
-         }
-      };
    }
 
    function resolveDistribution(prefs) {
@@ -788,7 +675,7 @@
       const lo = windowOk ? offset : 0;
       const hi = windowOk ? offset + range : 0;
 
-      let draw = () => $getRandNum(lo, hi);
+      let draw = () => $genUniform(lo, hi);
       let low = lo;
       let high = hi;
       let unbounded = false;
@@ -810,7 +697,7 @@
             low = Math.min(lo, mean - span);
             high = Math.max(hi, mean + span);
             unbounded = true;
-            draw = () => drawNormal(mean, width);
+            draw = () => $genNormalDraw(mean, width);
             rows.push(['mu', statText(mean, 'days')], ['sigma', statText(width, 'days')]);
          }
       } else if (known && name === 'bimodal') {
@@ -832,7 +719,7 @@
             low = Math.min(lo, mean1 - 8 * width1, mean2 - 8 * width2);
             high = Math.max(hi, mean1 + 8 * width1, mean2 + 8 * width2);
             unbounded = true;
-            draw = () => ($rand() < mix) ? drawNormal(mean1, width1) : drawNormal(mean2, width2);
+            draw = () => $genBimodal(mix, mean1, width1, mean2, width2);
             rows.push(
                ['mix', statText(mix)],
                ['mu1', statText(mean1, 'days')],
@@ -846,7 +733,7 @@
          const scale = positive('scale', readNumber('scale'), range);
          const origin = readOrigin();
          if (windowOk && alpha > 0 && scale > 0) {
-            draw = () => placeOnWindow(truncatedLomax(alpha, scale, range), origin, lo, hi);
+            draw = () => $genTruncatedLomax(alpha, scale, range, origin, lo, hi);
             rows.push(
                ['alpha', statText(alpha)],
                ['scale', statText(scale, 'days')],
@@ -857,7 +744,7 @@
          const lambda = readLambdaOrMean(range > 0 ? 1 / range : undefined, true);
          const origin = readOrigin();
          if (windowOk && lambda > 0) {
-            draw = () => placeOnWindow(truncatedExponential(lambda, range), origin, lo, hi);
+            draw = () => $genTruncatedExponential(lambda, range, origin, lo, hi);
             rows.push(
                ['lambda', statText(lambda, 'per day')],
                ['mean', `${statText(1 / lambda, 'days')} [dim](untruncated)[/]`],
@@ -868,17 +755,16 @@
          const lambda = readLambdaOrMean(range > 0 ? range : undefined, false);
          const origin = readOrigin();
          if (windowOk && lambda > 0) {
-            const sampler = poissonSampler(lambda);
+            const sampler = $poissonSampler(lambda);
             unbounded = true;
             if (origin === 'end') {
                low = hi - sampler.highK;
                high = hi - sampler.lowK;
-               draw = () => hi - sampler.draw();
             } else {
                low = lo + sampler.lowK;
                high = lo + sampler.highK;
-               draw = () => lo + sampler.draw();
             }
+            draw = () => $genPoisson(lambda, origin, lo, hi);
             rows.push(
                ['lambda', `${statText(lambda, 'days')} [dim](mean)[/]`],
                ['origin', `[blue]${origin}[/]`]
