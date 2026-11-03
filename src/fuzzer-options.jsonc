@@ -18,7 +18,7 @@
 // A schema string that starts with "=" is an expression. Other strings are literals.
 // optionsVersion must match fuzzer.js. A mismatch or an unknown key warns. The run continues.
 {
-   "optionsVersion": 1,
+   "optionsVersion": 2,
    "dbName": "database",
    "collName": "collection",
    "totalDocsExp": 3.5,
@@ -115,6 +115,13 @@
       //    "cardinality": 1,
       //    "sparsity": 0,
       //    "weighting": 50
+      // },
+      // Named draws. values is the pool, or distribution draws one.
+      // pool freezes that many distribution draws. follow "n" walks the pool.
+      // A schema field reads the name with =draws.sku. =n is the generation index.
+      // "draws": {
+      //    "sku": { "pool": 50, "distribution": "uniform", "lo": 1000, "hi": 9999 },
+      //    "tier": { "values": ["a", "b", "c"], "follow": "n" }
       // },
       "schemas": ["schema-a.jsonc", "schema-b.jsonc", "schema-c.jsonc"],
       // an empty schemas array skips the sample files

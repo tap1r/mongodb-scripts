@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.12.0"
+ *  Version: "1.13.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,7 +25,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.12.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.13.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -129,7 +129,7 @@
     *  fuzzer.schemas points at the sample plug-ins genDocument realises.
     */
 
-   const OPTIONS_VERSION = 1;
+   const OPTIONS_VERSION = 2;
    const optionDefaults = {
       "optionsVersion": OPTIONS_VERSION, // a loaded file must match. A mismatch warns.
       "dbName": 'database',             // database name
@@ -216,6 +216,13 @@
             // "sparsity": 0,            // 0-100%
             // "weighting": 50           // 0-100%
          // },
+         // Named draws. A values list, or a distribution, optionally pooled.
+         // follow "n" walks the pool. Schema fields read draws.<name>. n is the generation index.
+         // "draws": {
+         //    "sku": { "pool": 50, "distribution": "uniform", "lo": 1000, "hi": 9999 },
+         //    "tier": { "values": ["a", "b", "c"], "follow": "n" }
+         // },
+         "draws": {},
          "schemas": [
             "schema-a.jsonc",
             "schema-b.jsonc",
@@ -350,6 +357,7 @@
             "pipeline": []
          },
          "fuzzer": {
+            "draws": {},
             "distributionParams": {
                "offset": 0,
                "range": 1,
@@ -380,7 +388,8 @@
          "textIndexOptions",
          "create.validator",
          "create.indexOptionDefaults",
-         "create.clusteredIndex.key"
+         "create.clusteredIndex.key",
+         "fuzzer.draws"
       ]
    });
    const opt = resolved.options;
@@ -976,12 +985,16 @@
             keys.forEach(spec => indexRows.push([group.hudLabel, `${oneLine(spec)}${lang}`]));
          });
       }
+      const runRows = [
+         ['namespace', namespaceText()],
+         ['documents', isViewRun() ? '[dim]skipped[/]' : `[blue]${grouped(totalDocs)}[/]`],
+         ['writer concurrency', `[blue]${writerConcurrency}[/]`]
+      ];
+      const drawsLine = drawsHudText();
+      if (drawsLine)
+         runRows.push(['draws', drawsLine]);
       const sections = [
-         ['run', [
-            ['namespace', namespaceText()],
-            ['documents', isViewRun() ? '[dim]skipped[/]' : `[blue]${grouped(totalDocs)}[/]`],
-            ['writer concurrency', `[blue]${writerConcurrency}[/]`]
-         ]],
+         ['run', runRows],
          ['window', [
             ['distribution', distributionText()],
             ...windowSpec.rows,
@@ -1146,6 +1159,10 @@
 
       printHud();
 
+      // Pools are fixed before the first document. A view does not draw them.
+      if (!isViewRun())
+         buildDrawPools();
+
       // A view is created and the run stops. No pack, insert, index, or shard.
       if (isViewRun()) {
          dropNS();
@@ -1298,12 +1315,239 @@
       return null;
    }
 
-   // Key order is the expression-cache key: oid, date, ts, idioma, totalDocs.
-   function schemaScope({ oid = null, date = null, ts = null } = {}) {
-      return { oid, date, ts, idioma, totalDocs };
+   const DRAW_NAMES = ['uniform', 'normal', 'bimodal', 'pareto', 'exponential', 'poisson'];
+   const DRAW_KEYS = {
+      uniform: ['distribution', 'lo', 'hi', 'pool', 'follow'],
+      normal: ['distribution', 'mu', 'sigma', 'pool', 'follow'],
+      bimodal: ['distribution', 'mix', 'mu1', 'sigma1', 'mu2', 'sigma2', 'pool', 'follow'],
+      pareto: ['distribution', 'alpha', 'scale', 'span', 'pool', 'follow'],
+      exponential: ['distribution', 'lambda', 'span', 'pool', 'follow'],
+      poisson: ['distribution', 'lambda', 'pool', 'follow']
+   };
+   let drawsResolved = null;
+   let drawPools = null;
+
+   function drawsSpec() {
+      if (!drawsResolved)
+         drawsResolved = resolveDraws(isPlainObject(fuzzer) ? fuzzer.draws : null);
+      return drawsResolved;
    }
 
-   // One compiled function per expression. The scope names stay oid, date, ts, idioma, totalDocs.
+   function resolveDraws(raw) {
+      const errors = [];
+      const names = [];
+      const specs = {};
+      if (raw == null)
+         return { errors, names, specs };
+      if (!isPlainObject(raw)) {
+         errors.push('fuzzer.draws must be an object');
+         return { errors, names, specs };
+      }
+
+      function readNumber(spec, name, key) {
+         if (!hasOwn(spec, key) || spec[key] == null || spec[key] === '')
+            return undefined;
+         const n = +spec[key];
+         if (!Number.isFinite(n)) {
+            errors.push(`fuzzer.draws.${name}.${key} must be a finite number`);
+            return undefined;
+         }
+         return n;
+      }
+
+      function positive(spec, name, key, fallback) {
+         const value = readNumber(spec, name, key);
+         if (value === undefined)
+            return fallback;
+         if (!(value > 0)) {
+            errors.push(`fuzzer.draws.${name}.${key} must be greater than 0`);
+            return fallback;
+         }
+         return value;
+      }
+
+      // follow "n" walks a pool or a values list. A bare draw has no sequence to walk.
+      function readFollow(spec, name, hasList) {
+         if (!hasOwn(spec, 'follow') || spec.follow == null || spec.follow === '')
+            return false;
+         if (spec.follow !== 'n') {
+            errors.push(`fuzzer.draws.${name}.follow must be "n"`);
+            return false;
+         }
+         if (!hasList)
+            errors.push(`fuzzer.draws.${name}.follow needs a pool or a values list`);
+         return hasList;
+      }
+
+      Object.keys(raw).forEach(name => {
+         const spec = raw[name];
+         const before = errors.length;
+         if (!isPlainObject(spec)) {
+            errors.push(`fuzzer.draws.${name} must be an object`);
+            return;
+         }
+         const hasValues = hasOwn(spec, 'values');
+         const hasDistribution = hasOwn(spec, 'distribution') && spec.distribution != null && spec.distribution !== '';
+         if (hasValues && hasDistribution) {
+            errors.push(`fuzzer.draws.${name} accepts values or distribution, not both`);
+            return;
+         }
+         if (!hasValues && !hasDistribution) {
+            errors.push(`fuzzer.draws.${name} needs a values list or a distribution`);
+            return;
+         }
+         if (hasValues) {
+            Object.keys(spec).forEach(key => {
+               if (key !== 'values' && key !== 'follow')
+                  errors.push(`fuzzer.draws.${name}.${key} does not apply`);
+            });
+            const listOk = Array.isArray(spec.values) && spec.values.length > 0;
+            if (!listOk)
+               errors.push(`fuzzer.draws.${name}.values must be a non-empty array`);
+            const follow = readFollow(spec, name, listOk);
+            if (errors.length === before) {
+               names.push(name);
+               specs[name] = {
+                  "kind": 'values',
+                  "list": spec.values.slice(),
+                  follow,
+                  "slots": spec.values.length
+               };
+            }
+            return;
+         }
+
+         const requested = String(spec.distribution);
+         const folded = requested.toLowerCase();
+         if (!DRAW_NAMES.includes(folded)) {
+            errors.push(`fuzzer.draws.${name} unsupported distribution "${requested}". Use uniform, normal, bimodal, pareto, exponential, or poisson`);
+            return;
+         }
+         Object.keys(spec).forEach(key => {
+            if (!DRAW_KEYS[folded].includes(key))
+               errors.push(`fuzzer.draws.${name}.${key} does not apply to ${folded}`);
+         });
+         let pool = null;
+         if (hasOwn(spec, 'pool') && spec.pool != null && spec.pool !== '') {
+            const p = spec.pool;
+            if (typeof p !== 'number' || !Number.isSafeInteger(p) || p < 1 || p > 1000000)
+               errors.push(`fuzzer.draws.${name}.pool must be an integer from 1 through 1000000`);
+            else
+               pool = p;
+         }
+         const follow = readFollow(spec, name, pool != null);
+         const item = {
+            "kind": 'distribution',
+            "distribution": folded,
+            pool,
+            follow,
+            "slots": pool
+         };
+         if (folded === 'uniform') {
+            const lo = readNumber(spec, name, 'lo');
+            const hi = readNumber(spec, name, 'hi');
+            item.lo = lo === undefined ? 0 : lo;
+            item.hi = hi === undefined ? 1 : hi;
+            if (!(item.lo < item.hi))
+               errors.push(`fuzzer.draws.${name}.lo must be less than hi`);
+         } else if (folded === 'normal') {
+            const mu = readNumber(spec, name, 'mu');
+            item.mu = mu === undefined ? 0 : mu;
+            item.sigma = positive(spec, name, 'sigma', 1);
+         } else if (folded === 'bimodal') {
+            const mix = readNumber(spec, name, 'mix');
+            item.mix = mix === undefined ? 0.5 : mix;
+            if (mix !== undefined && !(item.mix > 0 && item.mix < 1))
+               errors.push(`fuzzer.draws.${name}.mix must be greater than 0 and less than 1`);
+            const mu1 = readNumber(spec, name, 'mu1');
+            const mu2 = readNumber(spec, name, 'mu2');
+            item.mu1 = mu1 === undefined ? -1 : mu1;
+            item.mu2 = mu2 === undefined ? 1 : mu2;
+            item.sigma1 = positive(spec, name, 'sigma1', 1);
+            item.sigma2 = positive(spec, name, 'sigma2', 1);
+         } else if (folded === 'pareto') {
+            item.alpha = positive(spec, name, 'alpha', 1.161);
+            item.scale = positive(spec, name, 'scale', 1);
+            item.span = positive(spec, name, 'span', 1);
+         } else if (folded === 'exponential') {
+            item.lambda = positive(spec, name, 'lambda', 1);
+            item.span = positive(spec, name, 'span', 1);
+         } else {
+            item.lambda = positive(spec, name, 'lambda', 1);
+         }
+         if (errors.length === before) {
+            names.push(name);
+            specs[name] = item;
+         }
+      });
+      return { errors, names, specs };
+   }
+
+   function drawDistribution(item) {
+      switch (item.distribution) {
+         case 'uniform':
+            return $genUniform(item.lo, item.hi);
+         case 'normal':
+            return $genNormalDraw(item.mu, item.sigma);
+         case 'bimodal':
+            return $genBimodal(item.mix, item.mu1, item.sigma1, item.mu2, item.sigma2);
+         case 'pareto':
+            return $genTruncatedLomax(item.alpha, item.scale, item.span);
+         case 'exponential':
+            return $genTruncatedExponential(item.lambda, item.span);
+         default:
+            return $genPoisson(item.lambda);
+      }
+   }
+
+   function buildDrawPools() {
+      const spec = drawsSpec();
+      drawPools = {};
+      spec.names.forEach(name => {
+         const item = spec.specs[name];
+         if (item.kind === 'values')
+            drawPools[name] = item.list.slice();
+         else if (item.pool)
+            drawPools[name] = Array.from({ "length": item.pool }, () => drawDistribution(item));
+         else
+            drawPools[name] = null;
+      });
+   }
+
+   function documentDraws(n) {
+      const spec = drawsSpec();
+      const out = {};
+      const index = (typeof n === 'number' && n >= 0) ? n : 0;
+      spec.names.forEach(name => {
+         const item = spec.specs[name];
+         const list = drawPools && drawPools[name];
+         if (list) {
+            const at = item.follow ? (index % list.length) : $getRandInt(0, list.length);
+            out[name] = list[at];
+         } else
+            out[name] = drawDistribution(item);
+      });
+      return out;
+   }
+
+   function drawsHudText() {
+      const spec = drawsSpec();
+      if (!spec.names.length)
+         return '';
+      return spec.names.map(name => {
+         const slots = spec.specs[name].slots;
+         if (slots)
+            return `[blue]${name}[/]×[blue]${grouped(slots)}[/]`;
+         return `[blue]${name}[/]`;
+      }).join('  ');
+   }
+
+   // Key order is the expression-cache key: oid, date, ts, idioma, totalDocs, n, draws.
+   function schemaScope({ oid = null, date = null, ts = null, n = 0, draws = null } = {}) {
+      return { oid, date, ts, idioma, totalDocs, n, "draws": draws || {} };
+   }
+
+   // One compiled function per expression. The scope names stay oid, date, ts, idioma, totalDocs, n, draws.
    const schemaExprCache = new Map();
 
    function evalSchemaExpr(expr, scope) {
@@ -1375,7 +1619,7 @@
       return node;
    }
 
-   function genDocument({ id = 'ts', ratios = [1] } = {}, timestamp) {
+   function genDocument({ id = 'ts', ratios = [1] } = {}, timestamp, n) {
       /*
        *  Pick one loaded schema by its weight, then build only that document.
        *  A string that starts with "=" is an expression.
@@ -1400,7 +1644,8 @@
       }
       const date = new Date(now + secondsOffset * 1000);
       const ts = new Timestamp({ "t": timestamp + secondsOffset, "i": 0 });
-      return realiseSchema(sample.spec, schemaScope({ oid, date, ts }), sample.file);
+      const docDraws = documentDraws(n);
+      return realiseSchema(sample.spec, schemaScope({ oid, date, ts, n, "draws": docDraws }), sample.file);
    }
 
    function dropNS() {
@@ -2283,6 +2528,7 @@
       if (concurrencyProblem)
          reasons.push(concurrencyProblem);
       distributionSpec().errors.forEach(reason => reasons.push(reason));
+      drawsSpec().errors.forEach(reason => reasons.push(reason));
       // Zone checks wait until a time series run has replaced the shard key.
       createAndShardSlotProblems(willShard, !timeSeries).forEach(reason => reasons.push(reason));
       if (timeSeries && !fCV(5.0))
@@ -2522,7 +2768,7 @@
          if (bulkStop)
             return null;
          packGenerated++;
-         const doc = genDocument(fuzzer, timestamp);
+         const doc = genDocument(fuzzer, timestamp, packGenerated - 1);
          const size = bsonsize(doc);
          if (!packDepthWarned) {
             const depth = documentDepth(doc);

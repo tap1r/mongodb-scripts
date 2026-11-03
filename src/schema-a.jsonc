@@ -1,6 +1,6 @@
 // Sample schema A, general purpose.
 // A string that starts with "=" is an expression. Other strings, numbers, and null are literals.
-// Expressions may use the preamble names oid, date, ts, idioma, and totalDocs.
+// Expressions may use the preamble names oid, date, ts, idioma, totalDocs, n, and draws.
 {
    "_id": "=oid",
    "schema": {
@@ -10,6 +10,10 @@
    },
    // hashed index. The shard key is date, ranged.
    "language": "=idioma",
+   // n is the generation index. draws.<name> is one shared value for this document.
+   // "seq": "=n",
+   // "sku": "=draws.sku",
+   // "skuAgain": "=draws.sku",
    "string": "=$genRandStr($getRandIntInc(6, 24))",
    "quote": {
       // idiomas[$getRandRatioInt([80, 0, 0, 5, 0, 3, 2])]

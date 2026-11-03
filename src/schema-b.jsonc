@@ -1,6 +1,6 @@
 // Sample schema B, time series.
 // A string that starts with "=" is an expression. Other strings, numbers, and null are literals.
-// Expressions may use the preamble names oid, date, ts, idioma, and totalDocs.
+// Expressions may use the preamble names oid, date, ts, idioma, totalDocs, n, and draws.
 // tsOptions.timeField is "timestamp" and tsOptions.metaField is "data".
 // This sample stores the Date at "timestamp" and the series name at "data".
 // A time series run keeps this file. Schema A stores a Timestamp at

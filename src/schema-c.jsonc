@@ -1,6 +1,6 @@
 // Sample schema C, GeoJSON.
 // A string that starts with "=" is an expression. Other strings, numbers, and null are literals.
-// Expressions may use the preamble names oid, date, ts, idioma, and totalDocs.
+// Expressions may use the preamble names oid, date, ts, idioma, totalDocs, n, and draws.
 // $genPoint, $genLine, and $genPolygon draw the single geometries.
 // A polygon shares one southwest corner, so the ring stays counterclockwise.
 // $genPolygon(true) adds a clockwise hole inside that ring, at least one degree off either pole.
