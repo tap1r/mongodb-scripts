@@ -74,6 +74,18 @@
    },
    // 0 omits collection TTL. A positive number is seconds after timeField.
    "expireAfterSeconds": 0,
+   // Omitted create keys are not sent. A view creates and does not insert.
+   // An empty validator or indexOptionDefaults is omitted.
+   // "create": {
+   //    "clusteredIndex": { "key": { "_id": 1 }, "unique": true }, // fCV 5.3+
+   //    "changeStreamPreAndPostImages": { "enabled": false }, // fCV 6.0+
+   //    "validator": { "$jsonSchema": { "bsonType": "object" } },
+   //    "validationLevel": "strict", // ["off"|"strict"|"moderate"|"constraint"]
+   //    "validationAction": "error", // ["error"|"warn"|"errorAndLog"]
+   //    "indexOptionDefaults": {}
+   //    // "viewOn": "source",
+   //    // "pipeline": []
+   // },
    "fuzzer": {
       "id": "ts", // ["ts"|"oid"]
       "range": 365.2422,
@@ -116,7 +128,15 @@
       },
       "unique": false, // resharding a collection that has a uniqueness constraint is not supported
       // Sent to shardCollection only when the collection is empty and the key starts with "hashed".
+      // Omitted when presplitHashedZones applies the zones below.
       "numInitialChunksPerShard": 2,
+      // "presplitHashedZones": false, // empty collection; zones required
+      // A hashed prefix needs one zone from MinKey to MaxKey.
+      // A hashed field after a ranged prefix needs that prefix to differ, and MinKey on the hashed lower bound.
+      // Ranges are [min, max). The next zone starts at the previous max.
+      // "zones": [
+      //    { "min": { "date": 0 }, "max": { "date": 1 }, "zone": "east" }
+      // ],
       // "collation": { "locale": "simple" },
       // "timeseries": { "timeField": "timestamp", "metaField": "data", "granularity": "hours" },
       "reShard": false

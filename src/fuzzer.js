@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.8.9"
+ *  Version: "1.9.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -24,7 +24,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.8.9" };
+   const __script = { "name": "fuzzer.js", "version": "1.9.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -177,6 +177,17 @@
          "max": Math.pow(2, 27) / Math.pow(2, 12)
       },
       "expireAfterSeconds": 0,          // 0 omits collection TTL. A positive number is seconds after timeField.
+      // Omitted create keys are not sent. A view creates and does not insert.
+      // "create": {
+      //    "clusteredIndex": { "key": { "_id": 1 }, "unique": true }, // fCV 5.3+
+      //    "changeStreamPreAndPostImages": { "enabled": false },      // fCV 6.0+
+      //    "validator": { "$jsonSchema": { "bsonType": "object" } },
+      //    "validationLevel": "strict",   // ["off"|"strict"|"moderate"|"constraint"]
+      //    "validationAction": "error",   // ["error"|"warn"|"errorAndLog"]
+      //    "indexOptionDefaults": {}
+      //    // "viewOn": "source",
+      //    // "pipeline": []
+      // },
       "fuzzer": { /* preferences */
          "id": "ts",                    // ["ts"|"oid"] - timeseries OID | client generated OID
          "range": 365.2422,             // date range in days
@@ -220,7 +231,15 @@
          },
          "unique": false,               // resharding a collection that has a uniqueness constraint is not supported
          // Sent to shardCollection only when the collection is empty and the key starts with "hashed".
+         // Omitted when presplitHashedZones applies the zones below.
          "numInitialChunksPerShard": 2,
+         // "presplitHashedZones": false, // empty collection; zones required
+         // Hashed prefix: one zone from MinKey to MaxKey. Shards in that zone share the chunks.
+         // Hashed field after a prefix: lower prefix is not MinKey or MaxKey, hashed lower bound is MinKey.
+         // Ranges are [min, max). The next zone starts at the previous max.
+         // "zones": [
+         //    { "min": { "date": MinKey }, "max": { "date": MaxKey }, "zone": "all" }
+         // ],
          // "collation": collation,     // inherit from collection options
          // "timeseries": tsOptions,    // not required after initial collection creation
          "reShard": true
@@ -350,6 +369,22 @@
       fuzzer.ratios = [1];
    if (isPlainObject(indexPrefs) && !hasOwn(indexPrefs, 'commitQuorum'))
       indexPrefs.commitQuorum = (writeConcern.w == 0) ? 1 : writeConcern.w;
+   // A merged key keeps the default field order and appends new fields.
+   // The shard key is ordered, so a layer that sets key replaces it whole.
+   if (isPlainObject(shardedOptions)) {
+      if (resolved.source.file) {
+         try {
+            const fromFile = shardKeyFromLayer(readJsonc(resolved.source.file));
+            if (fromFile)
+               shardedOptions.key = fromFile;
+         } catch(e) {
+            // resolveOptions already reported a bad options file.
+         }
+      }
+      const fromOverlay = shardKeyFromLayer(overlay);
+      if (fromOverlay)
+         shardedOptions.key = fromOverlay;
+   }
    // Remember this before the copy. Afterwards every plain indexOptions has a collation.
    const indexCollationSpecified = isPlainObject(indexOptions) && hasOwn(indexOptions, 'collation');
    if (isPlainObject(indexOptions) && !indexCollationSpecified)
@@ -829,6 +864,8 @@
    }
 
    function compressorText() {
+      if (isViewRun())
+         return '[dim]omitted[/]  [dim](view)[/]';
       if (isAtlasPlatform('sharedTier'))
          return '[yellow]omitted[/]  [dim](shared tier)[/]';
       const [name, msg] = parseCompressor(compressor);
@@ -899,12 +936,31 @@
       return Number(n).toLocaleString('en-US');
    }
 
+   function collectionRows() {
+      const rows = [
+         ['compressor', compressorText()],
+         ['collation', String(collation && collation.locale)],
+         ['write concern', writeConcernText()],
+         ['time series', timeSeriesText()],
+         ['capped', cappedText()]
+      ];
+      createHudRows().forEach(row => rows.push(row));
+      rows.push(['sharding', shardingText()]);
+      return rows;
+   }
+
    function shardingText() {
       if (cappedThisRun() && sharding && isSharded())
          return '[yellow]skipped[/]  [dim](capped)[/]';
       if (!sharding || !isSharded())
          return '[dim]off[/]';
-      return oneLine(shardedOptions.key);
+      let text = oneLine(shardedOptions.key);
+      const zones = zoneRanges();
+      if (zones)
+         text += `  [dim]zones[/] [blue]${zones.length}[/]`;
+      if (presplitHashedZonesActive())
+         text += '  [green]presplit[/]';
+      return text;
    }
 
    function schemaDetail(sample) {
@@ -977,7 +1033,7 @@
       const sections = [
          ['run', [
             ['namespace', namespaceText()],
-            ['documents', `[blue]${grouped(totalDocs)}[/]`],
+            ['documents', isViewRun() ? '[dim]skipped[/]' : `[blue]${grouped(totalDocs)}[/]`],
             ['writer concurrency', `[blue]${writerConcurrency}[/]`]
          ]],
          ['window', [
@@ -986,14 +1042,7 @@
             ['from', from],
             ['to', to]
          ]],
-         ['collection', [
-            ['compressor', compressorText()],
-            ['collation', String(collation && collation.locale)],
-            ['write concern', writeConcernText()],
-            ['time series', timeSeriesText()],
-            ['capped', cappedText()],
-            ['sharding', shardingText()]
-         ]],
+         ['collection', collectionRows()],
          ['schemas', schemaRows],
          ['indexes', indexRows]
       ];
@@ -1147,6 +1196,15 @@
          console.log(`\nUnsupported index build preference "${indexPrefs.order}": defaulting to "post"`);
 
       printHud();
+
+      // A view is created and the run stops. No pack, insert, index, or shard.
+      if (isViewRun()) {
+         dropNS();
+         if (!(await createNS()))
+            return;
+         console.log('\n [green]Fuzzing completed![/]\n');
+         return;
+      }
 
       // Drop finishes before create. createNS is async so the rewriter can
       // yield on createCollection while the first batch is packed.
@@ -1448,8 +1506,8 @@
    }
 
    // shardCollection accepts numInitialChunks only for an empty collection whose
-   // shard key starts with a hashed field. A hashed field later in the key needs
-   // zones (presplitHashedZones), which this script does not set.
+   // shard key starts with a hashed field. presplitHashedZones covers a hashed
+   // field anywhere in the key once shardedOptions.zones is set.
    function shardKeyHashedPrefix(key) {
       if (!key || typeof key !== 'object' || Array.isArray(key))
          return false;
@@ -1462,8 +1520,382 @@
    }
 
    function mayPresplitChunks() {
+      // Zone ranges replace the even hashed split.
+      if (presplitHashedZonesRequested() || zoneRanges())
+         return false;
       return shardKeyHashedPrefix(shardedOptions.key)
          && (!namespace.exists() || namespaceIsEmpty());
+   }
+
+   function createSpec() {
+      return isPlainObject(opt.create) ? opt.create : null;
+   }
+
+   function isViewRun() {
+      const spec = createSpec();
+      if (!spec)
+         return false;
+      if (typeof spec.viewOn === 'string' && spec.viewOn !== '')
+         return true;
+      return Array.isArray(spec.pipeline);
+   }
+
+   function shardKeyFromLayer(layer) {
+      if (!isPlainObject(layer) || !isPlainObject(layer.shardedOptions))
+         return null;
+      if (!hasOwn(layer.shardedOptions, 'key') || !isPlainObject(layer.shardedOptions.key))
+         return null;
+      return layer.shardedOptions.key;
+   }
+
+   function isMinKey(value) {
+      if (value == null)
+         return false;
+      if (typeof MinKey === 'function' && (value === MinKey || value instanceof MinKey))
+         return true;
+      return value._bsontype === 'MinKey';
+   }
+
+   function isMaxKey(value) {
+      if (value == null)
+         return false;
+      if (typeof MaxKey === 'function' && (value === MaxKey || value instanceof MaxKey))
+         return true;
+      return value._bsontype === 'MaxKey';
+   }
+
+   function zoneRanges() {
+      if (!isPlainObject(shardedOptions) || !hasOwn(shardedOptions, 'zones'))
+         return null;
+      const zones = shardedOptions.zones;
+      if (!Array.isArray(zones) || zones.length === 0)
+         return null;
+      return zones;
+   }
+
+   function presplitHashedZonesRequested() {
+      return !!(isPlainObject(shardedOptions) && shardedOptions.presplitHashedZones === true);
+   }
+
+   // Zones on a hashed key set the flag. numInitialChunks has no effect once zones exist.
+   function presplitHashedZonesActive() {
+      return !!(zoneRanges() && isPlainObject(shardedOptions) && shardKeyUsesHash(shardedOptions.key));
+   }
+
+   function clusteredKeyOk(spec) {
+      if (!isPlainObject(spec) || !isPlainObject(spec.key))
+         return false;
+      const fields = Object.keys(spec.key);
+      return fields.length === 1 && fields[0] === '_id' && spec.key._id === 1;
+   }
+
+   function objectHasKeys(value) {
+      return isPlainObject(value) && Object.keys(value).length > 0;
+   }
+
+   function zoneShapeProblem(zone, key) {
+      if (!isPlainObject(zone))
+         return 'must be a document';
+      if (!isPlainObject(zone.min) || !isPlainObject(zone.max))
+         return 'min and max must be documents';
+      if (!hasOwn(zone, 'zone') || (zone.zone != null && typeof zone.zone !== 'string'))
+         return 'zone must be a string or null';
+      if (!isPlainObject(key))
+         return 'needs a shard key';
+      const fields = Object.keys(key);
+      const minFields = Object.keys(zone.min);
+      const maxFields = Object.keys(zone.max);
+      if (minFields.join('\0') !== fields.join('\0') || maxFields.join('\0') !== fields.join('\0'))
+         return 'min and max must use the shard key fields in order';
+      return null;
+   }
+
+   function applyZoneRanges() {
+      const zones = zoneRanges();
+      if (!zones)
+         return true;
+      const ns = `${dbName}.${collName}`;
+      try {
+         zones.forEach(range => {
+            sh.updateZoneKeyRange(ns, range.min, range.max, range.zone);
+         });
+         return true;
+      } catch(e) {
+         console.log('[red][ERROR] Sharding namespace failed:[/]', errText(e));
+         return false;
+      }
+   }
+
+   function applyCreateSlots(createOptions) {
+      const spec = createSpec();
+      if (!spec)
+         return;
+      if (isViewRun()) {
+         createOptions.viewOn = spec.viewOn;
+         createOptions.pipeline = Array.isArray(spec.pipeline) ? spec.pipeline : [];
+         return;
+      }
+      if (isPlainObject(spec.clusteredIndex)) {
+         const src = spec.clusteredIndex;
+         const clustered = { "key": src.key };
+         clustered.unique = hasOwn(src, 'unique') ? src.unique : true;
+         if (typeof src.name === 'string' && src.name !== '')
+            clustered.name = src.name;
+         createOptions.clusteredIndex = clustered;
+      }
+      if (isPlainObject(spec.changeStreamPreAndPostImages)) {
+         createOptions.changeStreamPreAndPostImages = {
+            "enabled": spec.changeStreamPreAndPostImages.enabled
+         };
+      }
+      if (objectHasKeys(spec.validator))
+         createOptions.validator = spec.validator;
+      if (typeof spec.validationLevel === 'string')
+         createOptions.validationLevel = spec.validationLevel;
+      if (typeof spec.validationAction === 'string')
+         createOptions.validationAction = spec.validationAction;
+      if (objectHasKeys(spec.indexOptionDefaults))
+         createOptions.indexOptionDefaults = spec.indexOptionDefaults;
+   }
+
+   function createHudRows() {
+      const spec = createSpec();
+      const rows = [];
+      if (!spec)
+         return rows;
+      if (isViewRun())
+         rows.push(['view', `[green]${spec.viewOn}[/]`]);
+      if (hasOwn(spec, 'clusteredIndex'))
+         rows.push(['clustered', '[green]_id[/]']);
+      if (isPlainObject(spec.changeStreamPreAndPostImages)) {
+         const on = spec.changeStreamPreAndPostImages.enabled === true;
+         rows.push(['images', on ? '[green]pre/post[/]' : '[dim]off[/]']);
+      }
+      if (objectHasKeys(spec.validator) || hasOwn(spec, 'validationLevel') || hasOwn(spec, 'validationAction')) {
+         const level = (typeof spec.validationLevel === 'string') ? spec.validationLevel : 'strict';
+         const action = (typeof spec.validationAction === 'string') ? spec.validationAction : 'error';
+         rows.push(['validator', `[blue]${level}[/]  [dim]/[/]  [blue]${action}[/]`]);
+      }
+      if (objectHasKeys(spec.indexOptionDefaults))
+         rows.push(['index defaults', '[green]set[/]']);
+      return rows;
+   }
+
+   function zoneSlotProblems(willShard) {
+      const reasons = [];
+      if (!isPlainObject(shardedOptions) || !hasOwn(shardedOptions, 'zones'))
+         return reasons;
+      const zones = shardedOptions.zones;
+      if (!Array.isArray(zones)) {
+         reasons.push('shardedOptions.zones must be an array');
+         return reasons;
+      }
+      if (zones.length === 0)
+         return reasons;
+      if (!willShard)
+         reasons.push('shardedOptions.zones require sharding this run');
+      zones.forEach((zone, i) => {
+         const why = zoneShapeProblem(zone, shardedOptions.key);
+         if (why)
+            reasons.push(`shardedOptions.zones[${i}] ${why}`);
+      });
+      return reasons;
+   }
+
+   function presplitSlotProblems(willShard) {
+      const reasons = [];
+      if (!isPlainObject(shardedOptions))
+         return reasons;
+      if (hasOwn(shardedOptions, 'presplitHashedZones') && typeof shardedOptions.presplitHashedZones !== 'boolean') {
+         reasons.push('presplitHashedZones must be a boolean');
+         return reasons;
+      }
+      const requested = shardedOptions.presplitHashedZones === true;
+      const implied = presplitHashedZonesActive();
+      if (!requested && !implied)
+         return reasons;
+      if (!fCV(5.0))
+         reasons.push('presplitHashedZones requires fCV 5.0 or newer');
+      if (requested && !willShard)
+         reasons.push('presplitHashedZones requires sharding this run');
+      if (requested && !shardKeyUsesHash(shardedOptions.key))
+         reasons.push('presplitHashedZones requires a hashed field in the shard key');
+      if (requested && !zoneRanges())
+         reasons.push('presplitHashedZones requires shardedOptions.zones');
+      if ((requested || implied) && zoneRanges()) {
+         const why = presplitZoneProblem(shardedOptions.key, zoneRanges());
+         if (why)
+            reasons.push(why);
+      }
+      // dropNamespace removes the collection before create, so that run is empty.
+      // Read the namespace only when this run would presplit an existing one.
+      if ((requested || implied) && willShard && !dropNamespace) {
+         try {
+            if (namespace.exists() && !namespaceIsEmpty())
+               reasons.push('presplitHashedZones requires an empty collection');
+         } catch(e) {
+            reasons.push(`namespace is unreadable: ${errText(e)}`);
+         }
+      }
+      return reasons;
+   }
+
+   // A hashed prefix can presplit only one zone, and that zone is the whole key.
+   // A hashed field later in the key presplits on the prefix: the lower prefix is a
+   // real value, and the hashed field's lower bound is MinKey. Ranges are [min, max).
+   function presplitZoneProblem(key, zones) {
+      if (!isPlainObject(key) || !Array.isArray(zones))
+         return null;
+      const fields = Object.keys(key);
+      let hashAt = -1;
+      for (let i = 0; i < fields.length; i++) {
+         if (key[fields[i]] === 'hashed') {
+            hashAt = i;
+            break;
+         }
+      }
+      if (hashAt < 0)
+         return null;
+      if (hashAt === 0) {
+         const zone = zones[0];
+         let covers = zones.length === 1
+            && isPlainObject(zone)
+            && isPlainObject(zone.min)
+            && isPlainObject(zone.max);
+         if (covers) {
+            for (let i = 0; i < fields.length; i++) {
+               if (!isMinKey(zone.min[fields[i]]) || !isMaxKey(zone.max[fields[i]]))
+                  covers = false;
+            }
+         }
+         return covers ? null : 'presplitHashedZones with a hashed prefix needs one zone from MinKey to MaxKey';
+      }
+      for (let z = 0; z < zones.length; z++) {
+         const zone = zones[z];
+         if (!isPlainObject(zone) || !isPlainObject(zone.min) || !isPlainObject(zone.max))
+            continue;
+         for (let i = 0; i < hashAt; i++) {
+            const low = zone.min[fields[i]];
+            if (isMinKey(low) || isMaxKey(low))
+               return `presplitHashedZones zones[${z}] prefix lower bound cannot be MinKey or MaxKey`;
+         }
+         for (let i = hashAt; i < fields.length; i++) {
+            if (!isMinKey(zone.min[fields[i]]))
+               return `presplitHashedZones zones[${z}] lower bound from the hashed field must be MinKey`;
+         }
+         let differs = false;
+         for (let i = 0; i < hashAt; i++) {
+            if (tojson(zone.min[fields[i]]) !== tojson(zone.max[fields[i]]))
+               differs = true;
+         }
+         if (!differs)
+            return `presplitHashedZones zones[${z}] upper prefix must differ from the lower prefix`;
+      }
+      return null;
+   }
+
+   function shardSlotProblems(willShard) {
+      const reasons = [];
+      zoneSlotProblems(willShard).forEach(reason => reasons.push(reason));
+      presplitSlotProblems(willShard).forEach(reason => reasons.push(reason));
+      return reasons;
+   }
+
+   // checkShard is false while a time series run may still replace the shard key.
+   function createAndShardSlotProblems(willShard, checkShard = true) {
+      const reasons = [];
+      if (hasOwn(opt, 'create') && !isPlainObject(opt.create))
+         reasons.push('create must be a document');
+      const spec = createSpec();
+      const viewOnSet = !!(spec && typeof spec.viewOn === 'string' && spec.viewOn !== '');
+      const view = isViewRun();
+      if (spec && hasOwn(spec, 'viewOn') && !viewOnSet)
+         reasons.push('create.viewOn must be a non-empty string');
+      if (spec && hasOwn(spec, 'pipeline') && !Array.isArray(spec.pipeline))
+         reasons.push('create.pipeline must be an array');
+      if (spec && Array.isArray(spec.pipeline) && !viewOnSet)
+         reasons.push('create.pipeline requires create.viewOn');
+      if (spec && Array.isArray(spec.pipeline)) {
+         spec.pipeline.forEach((stage, i) => {
+            if (!isPlainObject(stage))
+               reasons.push(`create.pipeline[${i}] must be a document`);
+         });
+      }
+      if (viewOnSet && spec.viewOn === collName)
+         reasons.push('create.viewOn must name a different collection');
+      if (view && spec) {
+         if (capped)
+            reasons.push('a view cannot be capped');
+         if (timeSeries)
+            reasons.push('a view cannot be a time series');
+         if (willShard)
+            reasons.push('a view cannot be sharded');
+         if (hasOwn(spec, 'clusteredIndex'))
+            reasons.push('a view cannot set clusteredIndex');
+         if (hasOwn(spec, 'changeStreamPreAndPostImages'))
+            reasons.push('a view cannot set changeStreamPreAndPostImages');
+         if (objectHasKeys(spec.validator))
+            reasons.push('a view cannot set a validator');
+         if (hasOwn(spec, 'validationLevel') || hasOwn(spec, 'validationAction'))
+            reasons.push('a view cannot set validationLevel or validationAction');
+         if (objectHasKeys(spec.indexOptionDefaults))
+            reasons.push('a view cannot set indexOptionDefaults');
+      }
+      if (spec && hasOwn(spec, 'clusteredIndex') && !view) {
+         const clustered = spec.clusteredIndex;
+         if (!fCV(5.3))
+            reasons.push('clusteredIndex requires fCV 5.3 or newer');
+         if (!clusteredKeyOk(clustered))
+            reasons.push('clusteredIndex key must be { _id: 1 }');
+         else if (hasOwn(clustered, 'unique') && clustered.unique !== true)
+            reasons.push('clusteredIndex unique must be true');
+         if (isPlainObject(clustered) && hasOwn(clustered, 'name') && (typeof clustered.name !== 'string' || clustered.name === ''))
+            reasons.push('clusteredIndex name must be a non-empty string');
+         if (cappedThisRun())
+            reasons.push('a clustered collection cannot be capped');
+         if (timeSeries)
+            reasons.push('a time series collection cannot set clusteredIndex');
+         if (willShard && !clusteredKeyOk({ "key": shardedOptions.key }))
+            reasons.push('a clustered collection shards only on { _id: 1 }');
+      }
+      if (spec && hasOwn(spec, 'changeStreamPreAndPostImages') && !view) {
+         const images = spec.changeStreamPreAndPostImages;
+         const keys = isPlainObject(images) ? Object.keys(images) : [];
+         if (!fCV(6.0))
+            reasons.push('changeStreamPreAndPostImages requires fCV 6.0 or newer');
+         if (keys.length !== 1 || keys[0] !== 'enabled' || typeof images.enabled !== 'boolean')
+            reasons.push('changeStreamPreAndPostImages must be { enabled: <boolean> }');
+         if (timeSeries)
+            reasons.push('a time series collection cannot set changeStreamPreAndPostImages');
+      }
+      if (spec && hasOwn(spec, 'validator') && !isPlainObject(spec.validator))
+         reasons.push('create.validator must be a document');
+      if (spec && hasOwn(spec, 'validationLevel') && !view) {
+         const level = spec.validationLevel;
+         const known = level === 'off' || level === 'strict' || level === 'moderate' || level === 'constraint';
+         if (typeof level !== 'string' || !known)
+            reasons.push('validationLevel must be off, strict, moderate, or constraint');
+         else if (level === 'constraint' && !fCV(8.0))
+            reasons.push('validationLevel constraint requires fCV 8.0 or newer');
+      }
+      if (spec && hasOwn(spec, 'validationAction') && !view) {
+         const action = spec.validationAction;
+         const known = action === 'error' || action === 'warn' || action === 'errorAndLog';
+         if (typeof action !== 'string' || !known)
+            reasons.push('validationAction must be error, warn, or errorAndLog');
+         else if (action === 'errorAndLog' && !fCV(8.0))
+            reasons.push('validationAction errorAndLog requires fCV 8.0 or newer');
+      }
+      if (spec && spec.validationLevel === 'constraint' && !view) {
+         const action = hasOwn(spec, 'validationAction') ? spec.validationAction : 'error';
+         if (action !== 'error' && action !== 'errorAndLog')
+            reasons.push('validationLevel constraint requires validationAction error or errorAndLog');
+      }
+      if (spec && hasOwn(spec, 'indexOptionDefaults') && !isPlainObject(spec.indexOptionDefaults))
+         reasons.push('create.indexOptionDefaults must be a document');
+      if (checkShard)
+         shardSlotProblems(willShard).forEach(reason => reasons.push(reason));
+      return reasons;
    }
 
    function shardNewNamespace() {
@@ -1489,14 +1921,24 @@
       }
 
       console.log(`\nSharding namespace with options: ${tojson(shardedOptions)}`);
-      if (numInitialChunks >= 1)
+      const zones = zoneRanges();
+      const presplitZones = presplitHashedZonesActive();
+      if (presplitZones)
+         console.log(`with presplitHashedZones and ${zones.length} zone ${plural(zones.length, 'range', 'ranges')}`);
+      else if (zones)
+         console.log(`with ${zones.length} zone ${plural(zones.length, 'range', 'ranges')}`);
+      else if (numInitialChunks >= 1)
          console.log(`with initial chunks: ${numInitialChunks}`);
       else if (!shardKeyHashedPrefix(shardedOptions.key))
          console.log('without initial chunks: shard key has no hashed prefix');
       else
          console.log('without initial chunks: the collection is not empty');
+      if (!applyZoneRanges())
+         return false;
       const shardOptions = { "collation": collation };
-      if (numInitialChunks >= 1)
+      if (presplitZones)
+         shardOptions.presplitHashedZones = true;
+      else if (numInitialChunks >= 1)
          shardOptions.numInitialChunks = numInitialChunks;
       try {
          (!serverVer(6.0)) && (sh.enableSharding(dbName).ok);
@@ -1600,13 +2042,7 @@
             "unique": shardedOptions.unique,
             "numInitialChunks": numInitialChunks,
             "collation": collation,
-            // "zones": [
-            //       {
-            //          "min": { "<document with same shape as shardkey>" },
-            //          "max": { "<document with same shape as shardkey>" },
-            //          "zone": null // <string> | null
-            //       }
-            // ],
+            ...(zoneRanges() && { "zones": zoneRanges() }),
             ...(sameKey && fCV(8.0) && { "forceRedistribution": true })
          });
          try {
@@ -1898,6 +2334,8 @@
       if (concurrencyProblem)
          reasons.push(concurrencyProblem);
       distributionSpec().errors.forEach(reason => reasons.push(reason));
+      // Zone checks wait until a time series run has replaced the shard key.
+      createAndShardSlotProblems(willShard, !timeSeries).forEach(reason => reasons.push(reason));
       if (timeSeries && !fCV(5.0))
          reasons.push('time series requires fCV 5.0 or newer');
       if (timeSeries && isAtlasPlatform('serverless'))
@@ -1914,6 +2352,8 @@
       }
       if (willShard && shardKeyUsesHash(shardedOptions.key) && collation.locale !== 'simple')
          reasons.push('a non-simple collation on the hashed shard key conflicts with the simple hashed index');
+      if (timeSeries)
+         shardSlotProblems(willShard).forEach(reason => reasons.push(reason));
       if (willShard) {
          let presplit = false;
          try {
@@ -1936,38 +2376,33 @@
 
    async function createNS() {
       if (namespace.exists()) {
-         if (!shardThisRun())
+         if (!shardThisRun() || isViewRun())
             return true;
          return shardPreservedNamespace();
       }
-      let [blockCompressor] = parseCompressor(compressor);
       const createOptions = {
-         "storageEngine": (isAtlasPlatform('sharedTier'))
-                        ? undefined
-                        : { "wiredTiger": { "configString": `block_compressor=${blockCompressor}` } },
          "collation": collation,
-         "writeConcern": writeConcern,
-         // fCV(5.3) && "clusteredIndex": {},
-         // fCV(6.0) && "changeStreamPreAndPostImages": {},
-         // "validator": {},
-         // "validationLevel": <string>,
-         // "validationAction": <string>,
-         // "indexOptionDefaults": {},
-         // "viewOn": <string>,
-         // "pipeline": []
+         "writeConcern": writeConcern
       };
-      if (cappedThisRun()) {
-         createOptions.capped = true;
-         createOptions.size = cappedOptions.size;
-         createOptions.max = cappedOptions.max;
+      if (!isViewRun()) {
+         let [blockCompressor] = parseCompressor(compressor);
+         createOptions.storageEngine = (isAtlasPlatform('sharedTier'))
+            ? undefined
+            : { "wiredTiger": { "configString": `block_compressor=${blockCompressor}` } };
+         if (cappedThisRun()) {
+            createOptions.capped = true;
+            createOptions.size = cappedOptions.size;
+            createOptions.max = cappedOptions.max;
+         }
+         if (timeSeries && fCV(5.0) && !isAtlasPlatform('serverless')) {
+            // Command field is timeseries. The option flag stays timeSeries.
+            createOptions.timeseries = tsOptions;
+            // 0 means omit. A positive number is seconds after timeField.
+            if (typeof expireAfterSeconds === 'number' && expireAfterSeconds > 0)
+               createOptions.expireAfterSeconds = expireAfterSeconds;
+         }
       }
-      if (timeSeries && fCV(5.0) && !isAtlasPlatform('serverless')) {
-         // Command field is timeseries. The option flag stays timeSeries.
-         createOptions.timeseries = tsOptions;
-         // 0 means omit. A positive number is seconds after timeField.
-         if (typeof expireAfterSeconds === 'number' && expireAfterSeconds > 0)
-            createOptions.expireAfterSeconds = expireAfterSeconds;
-      }
+      applyCreateSlots(createOptions);
 
       try {
          database.createCollection(collName, createOptions);
@@ -1976,7 +2411,7 @@
          return false;
       }
 
-      if (!shardThisRun())
+      if (!shardThisRun() || isViewRun())
          return true;
       return shardNewNamespace();
    }
