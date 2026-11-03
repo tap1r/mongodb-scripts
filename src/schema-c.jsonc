@@ -1,10 +1,12 @@
 // Sample schema C, GeoJSON.
 // A string that starts with "=" is an expression. Other strings, numbers, and null are literals.
 // Expressions may use the preamble names oid, date, ts, idioma, and totalDocs.
-// $genPoint, $genLine, and $genPolygon draw the random geometries.
+// $genPoint, $genLine, and $genPolygon draw the single geometries.
 // A polygon shares one southwest corner, so the ring stays counterclockwise.
-// $genPolygon(true) adds a clockwise hole inside that ring.
-// multiPoint, multiLineString, and multiPolygon stay on fixed positions.
+// $genPolygon(true) adds a clockwise hole inside that ring, at least one degree off either pole.
+// $genMultiPoint, $genMultiLineString, and $genMultiPolygon draw the multi geometries.
+// Each part uses that same corner and winding. An omitted count is 2 to 4.
+// $genMultiPolygon(true) adds a clockwise hole inside each triangle.
 {
    "_id": "=oid",
    "schema": {
@@ -30,65 +32,26 @@
    "polygon": "=$genPolygon()",
    // Same triangle with a clockwise hole.
    "polygonMulti": "=$genPolygon(true)",
-   // GeoJSON MultiPoint
-   "multiPoint": {
-      "type": "MultiPoint",
-      "coordinates": [
-         [-73.9580, 40.8003],
-         [-73.9498, 40.7968],
-         [-73.9737, 40.7648],
-         [-73.9814, 40.7681]
-      ]
-   },
-   // GeoJSON MultiLineString
-   "multiLineString": {
-      "type": "MultiLineString",
-      "coordinates": [
-         [
-            [-73.96943, 40.78519],
-            [-73.96082, 40.78095]
-         ],
-         [
-            [-73.96415, 40.79229],
-            [-73.95544, 40.78854]
-         ],
-         [
-            [-73.97162, 40.78205],
-            [-73.96374, 40.77715]
-         ],
-         [
-            [-73.97880, 40.77247],
-            [-73.97036, 40.76811]
-         ]
-      ]
-   },
-   // GeoJSON MultiPolygon
-   "multiPolygon": {
-      "type": "MultiPolygon",
-      "coordinates": [
-         [[
-            [-73.958, 40.8003],
-            [-73.9814, 40.7681],
-            [-73.9737, 40.7648],
-            [-73.9498, 40.7968],
-            [-73.958, 40.8003]
-         ]],
-         [[
-            [-73.930, 40.790],
-            [-73.920, 40.790],
-            [-73.920, 40.800],
-            [-73.930, 40.800],
-            [-73.930, 40.790]
-         ]]
-      ]
-   },
-   // GeoJSON GeometryCollection
+   // GeoJSON MultiPoint. 2 to 4 positions.
+   "multiPoint": "=$genMultiPoint()",
+   // GeoJSON MultiLineString. Each line shares one corner.
+   "multiLineString": "=$genMultiLineString()",
+   // GeoJSON MultiPolygon. Each shell is counterclockwise.
+   "multiPolygon": "=$genMultiPolygon()",
+   // Same polygons with a clockwise hole in each.
+   "multiPolygonHole": "=$genMultiPolygon(true)",
+   // GeoJSON GeometryCollection. Composed from the helpers. No collection helper.
    "geoCollection": {
       "type": "GeometryCollection",
       "geometries": [
          "=$genPoint()",
          "=$genLine()",
-         "=$genPolygon()"
+         "=$genPolygon()",
+         "=$genPolygon(true)",
+         "=$genMultiPoint()",
+         "=$genMultiLineString()",
+         "=$genMultiPolygon()",
+         "=$genMultiPolygon(true)"
       ]
    }
 }

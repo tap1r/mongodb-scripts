@@ -155,6 +155,7 @@
       // { "multiPoint": "2dsphere" },
       // { "multiLineString": "2dsphere" },
       // { "multiPolygon": "2dsphere" },
+      // { "multiPolygonHole": "2dsphere" },
       // { "geoCollection": "2dsphere" }
    ],
    "indexOptions": {

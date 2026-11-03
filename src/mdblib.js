@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "1.2.0"
+ *  Version: "1.3.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,7 +17,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "1.2.0"
+      "version": "1.3.0"
    });
 
 /*  Notes:
@@ -2668,12 +2668,16 @@ function $genPolygon(withHole) {
    /*
     *  one GeoJSON Polygon. The shell is a counterclockwise triangle
     *  from one southwest corner. withHole adds a clockwise hole inside it.
+    *  A hole stays at least one degree off either pole. On the sphere the
+    *  south edge otherwise stops containing that hole.
     */
    const hole = !!withHole;
    const east = $getRandNum(hole ? 1 : 0.1, hole ? 2 : 1);
    const north = $getRandNum(hole ? 1 : 0.1, hole ? 2 : 1);
+   const latLo = hole ? -89 : -90;
+   const latHi = hole ? 89 : 90;
    const lng = $geoNum($getRandNum(-180, 180 - east), -180, 180);
-   const lat = $geoNum($getRandNum(-90, 90 - north), -90, 90);
+   const lat = $geoNum($getRandNum(latLo, latHi - north), -90, 90);
    const lngE = $geoNum(lng + east, -180, 180);
    const latN = $geoNum(lat + north, -90, 90);
    const shell = [[lng, lat], [lngE, lat], [lng, latN], [lng, lat]];
@@ -2687,6 +2691,62 @@ function $genPolygon(withHole) {
       coordinates.push([a, b, c, [a[0], a[1]]]);
    }
    return { "type": "Polygon", "coordinates": coordinates };
+}
+
+function $geoCount(n) {
+   /*
+    *  how many parts a Multi* geometry holds
+    *  omitted or invalid is 2 to 4. An explicit count is capped at 8.
+    */
+   if (typeof n !== 'boolean' && n > 0 && Number.isFinite(+n))
+      return Math.min($floor(+n), 8);
+   return $getRandIntInc(2, 4);
+}
+
+function $genMultiPoint(n) {
+   /*
+    *  one GeoJSON MultiPoint. Each position is inside the
+    *  longitude and latitude bounds, the way $genPoint places one.
+    *  Omitted n is 2 to 4 positions. An explicit count is capped at 8.
+    */
+   const coordinates = [];
+   const count = $geoCount(n);
+   for (let i = 0; i < count; i++)
+      coordinates.push($genPoint().coordinates);
+   return { "type": "MultiPoint", "coordinates": coordinates };
+}
+
+function $genMultiLineString(n) {
+   /*
+    *  one GeoJSON MultiLineString. Each line is short and both
+    *  ends share one corner, the way $genLine does.
+    *  Omitted n is 2 to 4 lines. An explicit count is capped at 8.
+    */
+   const coordinates = [];
+   const count = $geoCount(n);
+   for (let i = 0; i < count; i++)
+      coordinates.push($genLine().coordinates);
+   return { "type": "MultiLineString", "coordinates": coordinates };
+}
+
+function $genMultiPolygon(n, withHole) {
+   /*
+    *  one GeoJSON MultiPolygon. Each polygon is a counterclockwise
+    *  triangle from one southwest corner, the way $genPolygon winds it.
+    *  $genMultiPolygon(true) adds a clockwise hole inside each triangle.
+    *  Omitted n is 2 to 4 polygons. An explicit count is capped at 8.
+    */
+   let count = n;
+   let hole = !!withHole;
+   if (typeof n === 'boolean') {
+      hole = n;
+      count = null;
+   }
+   const coordinates = [];
+   const polygons = $geoCount(count);
+   for (let i = 0; i < polygons; i++)
+      coordinates.push($genPolygon(hole).coordinates);
+   return { "type": "MultiPolygon", "coordinates": coordinates };
 }
 
 function $genRandAlpha(len = 1) {

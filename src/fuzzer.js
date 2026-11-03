@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.10.0"
+ *  Version: "1.11.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -25,7 +25,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.10.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.11.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -259,6 +259,7 @@
          // { "multiPoint": "2dsphere" },
          // { "multiLineString": "2dsphere" },
          // { "multiPolygon": "2dsphere" },
+         // { "multiPolygonHole": "2dsphere" },
          // { "geoCollection": "2dsphere" }
          // object.$** (fCV 4.2+) or object.oid is appended when neither key is listed
       ],
