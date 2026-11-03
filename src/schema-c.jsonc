@@ -2,6 +2,7 @@
 // A string that starts with "=" is an expression. Other strings, numbers, and null are literals.
 // Expressions may use the preamble names oid, date, ts, idioma, totalDocs, n, and draws.
 // $genPoint, $genLine, and $genPolygon draw the single geometries.
+// $genPoint() is uniform. A class subselects land, ocean, a major city, a regional city, or a port.
 // A polygon shares one southwest corner, so the ring stays counterclockwise.
 // $genPolygon(true) adds a clockwise hole inside that ring, at least one degree off either pole.
 // $genMultiPoint, $genMultiLineString, and $genMultiPolygon draw the multi geometries.
@@ -25,8 +26,14 @@
    "dB": "=+$genNormal(20, 10).toFixed(3)",
    "status": "=['Active', 'Inactive', null][$getRandRatioInt([80, 20, 1])]",
    "locality": "=$getRandCountry()['alpha-3 code']",
-   // GeoJSON Point
+   // GeoJSON Point. Uniform in range.
    "location": "=$genPoint()",
+   // Classed points. An unknown class stays uniform. Not shared across documents.
+   "land": "=$genPoint('land')",
+   "ocean": "=$genPoint('ocean')",
+   "majorCity": "=$genPoint('city')",
+   "regionalCity": "=$genPoint('regional')",
+   "port": "=$genPoint('port')",
    // GeoJSON LineString
    "lineString": "=$genLine()",
    // GeoJSON Polygon. One corner, counterclockwise.

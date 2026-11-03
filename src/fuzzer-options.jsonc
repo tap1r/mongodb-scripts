@@ -167,7 +167,12 @@
       // { "multiLineString": "2dsphere" },
       // { "multiPolygon": "2dsphere" },
       // { "multiPolygonHole": "2dsphere" },
-      // { "geoCollection": "2dsphere" }
+      // { "geoCollection": "2dsphere" },
+      // { "land": "2dsphere" },
+      // { "ocean": "2dsphere" },
+      // { "majorCity": "2dsphere" },
+      // { "regionalCity": "2dsphere" },
+      // { "port": "2dsphere" }
    ],
    "indexOptions": {
       // "background": true,

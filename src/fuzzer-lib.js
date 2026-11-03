@@ -195,10 +195,366 @@ function $geoNum(n, lo, hi) {
    return x;
 }
 
-function $genPoint() {
+/*
+ *  Coarse land mask for $genPoint("land") and $genPoint("ocean").
+ *  Each ring stays on one side of the antimeridian. Antarctica is two
+ *  rectangles. A listed city sits inside one ring. A port need not.
+ *  "at" is a tested interior point used when land rejection gives up.
+ */
+
+const geoLand = [
+   { // africa
+      "at": [20, 5],
+      "ring": [
+         [-17, 21], [-16, 13], [-10, 6.5], [-5, 5], [-2.2, 4.6], [0.2, 5.15],
+         [2.6, 6.05], [4.2, 5.9], [8.5, 4.2], [9.5, 1], [12, -6], [13, -12],
+         [12, -18], [14, -26], [18, -34.5], [26, -33.5], [32.5, -29],
+         [35.5, -22], [40, -15], [42, -12], [50.5, 10], [43, 11.5], [39, 15],
+         [43, 22], [39, 22], [34, 28], [32.5, 31.5], [25, 32], [10, 33],
+         [3, 37], [-2, 35.5], [-6, 35.5], [-10, 32], [-13, 27], [-17, 21]
+      ]
+   },
+   { // europe
+      "at": [10, 50],
+      "ring": [
+         [-9.5, 36.5], [-9.2, 42], [-10.5, 52], [-8, 55], [-6, 58.6],
+         [-3, 59], [5, 62], [16, 69], [25, 71], [32, 70], [40, 68], [44, 60],
+         [40, 47], [36, 45], [30.4, 41.4], [29, 40.85], [27, 40.5],
+         [20, 39.5], [16, 41], [12, 42], [10, 44], [7.4, 43.15], [5, 43.05],
+         [3.6, 43.45], [3, 43.3], [-1, 43.3], [-6, 43.3], [-9, 37],
+         [-9.5, 36.5]
+      ]
+   },
+   { // arabia
+      "at": [45, 24],
+      "ring": [
+         [34.6, 28], [36.5, 31.5], [40, 32], [48, 30], [56.6, 26.4],
+         [59.5, 22], [57, 17], [53, 16.5], [44, 12.6], [42.5, 16.5],
+         [38, 24], [34.8, 27.5]
+      ]
+   },
+   { // india
+      "at": [78, 22],
+      "ring": [
+         [66.2, 25.2], [67.2, 23.5], [69, 22], [72.4, 19], [72.6, 16],
+         [74, 12], [77, 8], [80.2, 8.5], [80.6, 13.2], [82, 16], [85, 20],
+         [87.5, 21.5], [89, 22], [88.5, 26.5], [84, 27], [80, 31], [75, 32],
+         [70, 30], [67, 28], [66.2, 25.2]
+      ]
+   },
+   { // indochina
+      "at": [102, 16],
+      "ring": [
+         [97.5, 8], [100, 6.5], [102, 8], [104.5, 10], [109.2, 13],
+         [109.4, 21.4], [106.5, 23.2], [102, 22.5], [100, 20], [97.5, 16],
+         [98, 10]
+      ]
+   },
+   { // singapore
+      "at": [103.85, 1.33],
+      "ring": [
+         [103.6, 1.2], [104.1, 1.2], [104.1, 1.48], [103.6, 1.48]
+      ]
+   },
+   { // china
+      "at": [105, 35],
+      "ring": [
+         [87, 28], [75, 37], [73, 40], [87, 49], [105, 53], [120, 53],
+         [135, 48], [131, 43], [126, 40], [122.4, 37], [122.2, 31],
+         [121.6, 30.5], [114.6, 22.1], [113.5, 22], [108, 21.4], [102, 22],
+         [98, 24], [92, 28], [87, 28]
+      ]
+   },
+   { // korea
+      "at": [127.5, 36.5],
+      "ring": [
+         [126, 34.2], [129, 34.6], [129.6, 35.4], [129.7, 37.2],
+         [128.4, 38.6], [126.4, 37.8], [126.1, 36], [126, 34.2]
+      ]
+   },
+   { // japan
+      "at": [137, 36],
+      "ring": [
+         [130, 31.2], [131.2, 32.5], [136, 34.5], [139.2, 34.8],
+         [140.2, 35.8], [141.2, 38], [142, 41], [145.5, 43.4], [145, 44],
+         [141.5, 45.5], [140, 42], [139.5, 38.5], [137, 36.5], [135, 35],
+         [133, 34], [131, 33.5], [130, 31.5]
+      ]
+   },
+   { // australia
+      "at": [134, -25],
+      "ring": [
+         [113.2, -22], [114.5, -28], [115, -34], [116, -35.2], [124, -34],
+         [130, -32], [135, -35], [140, -38.2], [147, -39], [150, -37.8],
+         [151.6, -34], [153.6, -28], [153.4, -24], [150, -20], [146, -16],
+         [142, -11], [136, -12], [128, -14], [122, -16], [114, -20],
+         [113.2, -22]
+      ]
+   },
+   { // newZealand
+      "at": [172, -41],
+      "ring": [
+         [166.3, -46.2], [168, -46.6], [171, -44], [172.8, -43.7],
+         [174.2, -41.5], [175.2, -41], [176.5, -37.8], [175.2, -36.6],
+         [174.4, -36.6], [172.5, -39], [171, -42], [168, -44], [166.3, -45]
+      ]
+   },
+   { // alaska
+      "at": [-152, 64],
+      "ring": [
+         [-168, 54.5], [-166, 66], [-162, 68], [-153, 71], [-141, 69.5],
+         [-141, 60.2], [-148, 60], [-158, 58], [-166, 54.5]
+      ]
+   },
+   { // northAmerica
+      "at": [-100, 40],
+      "ring": [
+         [-125.4, 49.4], [-130, 55], [-136, 58], [-140, 60], [-105, 68],
+         [-88, 68], [-70, 62], [-64, 47], [-66, 44], [-70, 42],
+         [-74.4, 40.5], [-75.6, 35.5], [-81, 25.2], [-90, 29], [-97.2, 25.8],
+         [-97.6, 20.8], [-96.5, 16.2], [-99.4, 15.8], [-104.2, 17.2],
+         [-106.2, 20.4], [-110, 23], [-112, 24], [-117.5, 32.4],
+         [-120, 34.2], [-124.5, 40], [-124.8, 48], [-123.6, 49.4]
+      ]
+   },
+   { // southAmerica
+      "at": [-60, -15],
+      "ring": [
+         [-81.2, -5], [-79.6, 8.6], [-77.2, 7], [-71, 12], [-60, 8],
+         [-50, 0], [-35.2, -4.5], [-34.7, -8.2], [-35.2, -12], [-39, -16],
+         [-40.5, -22], [-44, -23.2], [-48.2, -28], [-52, -32],
+         [-58.6, -34.8], [-65, -45], [-71, -55], [-75, -52], [-74, -40],
+         [-73, -18], [-70.9, -33.6], [-76, -15], [-77.3, -12.2], [-79, -8],
+         [-81.2, -5]
+      ]
+   },
+   { // greenland
+      "at": [-42, 72],
+      "ring": [
+         [-68, 60], [-73, 78], [-60, 82], [-20, 81], [-20, 70], [-43, 60],
+         [-68, 60]
+      ]
+   },
+   { // madagascar
+      "at": [47, -19],
+      "ring": [
+         [43.2, -25.6], [43.3, -16], [49, -12], [50.6, -15], [47.5, -25.2],
+         [44, -25.6]
+      ]
+   },
+   { // iceland
+      "at": [-19, 65],
+      "ring": [
+         [-24.6, 63.4], [-24.6, 66.5], [-13.5, 66.5], [-13.4, 64.8],
+         [-14.5, 63.4]
+      ]
+   },
+   { // antarcticaW
+      "at": [-90, -75],
+      "ring": [
+         [-180, -90], [0, -90], [0, -60], [-180, -60]
+      ]
+   },
+   { // antarcticaE
+      "at": [90, -75],
+      "ring": [
+         [0, -90], [180, -90], [180, -60], [0, -60]
+      ]
+   },
+   { // iberia
+      "at": [-3.7, 40.4],
+      "ring": [
+         [-9.6, 36.6], [-9.5, 42], [-8.2, 43.6], [-1.6, 43.5], [3.35, 42.4],
+         [3.15, 41.15], [1.6, 41.05], [-0.4, 38.6], [-5.4, 35.9],
+         [-7.8, 36.7], [-9.6, 36.6]
+      ]
+   }
+];
+
+// Major cities. The point is the listed coordinate, not a jitter.
+const geoCities = [
+   [-0.1276, 51.5072], // London
+   [2.3522, 48.8566], // Paris
+   [13.405, 52.52], // Berlin
+   [-3.7038, 40.4168], // Madrid
+   [12.4964, 41.9028], // Rome
+   [37.6173, 55.7558], // Moscow
+   [28.9784, 41.0082], // Istanbul
+   [31.2357, 30.0444], // Cairo
+   [3.3792, 6.5244], // Lagos
+   [28.0473, -26.2041], // Johannesburg
+   [36.8219, -1.2921], // Nairobi
+   [55.2708, 25.2048], // Dubai
+   [72.8777, 19.076], // Mumbai
+   [77.209, 28.6139], // Delhi
+   [100.5018, 13.7563], // Bangkok
+   [103.8198, 1.3521], // Singapore
+   [114.1694, 22.3193], // Hong Kong
+   [121.4737, 31.2304], // Shanghai
+   [116.4074, 39.9042], // Beijing
+   [139.6917, 35.6895], // Tokyo
+   [126.978, 37.5665], // Seoul
+   [151.2093, -33.8688], // Sydney
+   [174.7633, -36.8485], // Auckland
+   [-118.2437, 34.0522], // Los Angeles
+   [-74.006, 40.7128], // New York
+   [-87.6298, 41.8781], // Chicago
+   [-79.3832, 43.6532], // Toronto
+   [-99.1332, 19.4326], // Mexico City
+   [-46.6333, -23.5505], // Sao Paulo
+   [-58.3816, -34.6037] // Buenos Aires
+];
+
+// Regional cities.
+const geoRegional = [
+   [-2.2426, 53.4808], // Manchester
+   [4.8357, 45.764], // Lyon
+   [9.9937, 53.5511], // Hamburg
+   [2.1734, 41.3874], // Barcelona
+   [9.19, 45.4642], // Milan
+   [19.945, 50.0647], // Krakow
+   [5.3698, 43.2965], // Marseille
+   [-7.5898, 33.5731], // Casablanca
+   [-0.187, 5.6037], // Accra
+   [38.7578, 9.032], // Addis Ababa
+   [18.4241, -33.9249], // Cape Town
+   [51.531, 25.2854], // Doha
+   [67.0011, 24.8607], // Karachi
+   [80.2707, 13.0827], // Chennai
+   [105.8342, 21.0278], // Hanoi
+   [135.5023, 34.6937], // Osaka
+   [129.0756, 35.1796], // Busan
+   [144.9631, -37.8136], // Melbourne
+   [115.8605, -31.9505], // Perth
+   [153.0251, -27.4698], // Brisbane
+   [-123.1207, 49.2827], // Vancouver
+   [-73.5673, 45.5017], // Montreal
+   [-104.9903, 39.7392], // Denver
+   [-84.388, 33.749], // Atlanta
+   [-103.3496, 20.6597], // Guadalajara
+   [-77.0428, -12.0464], // Lima
+   [-70.6693, -33.4489], // Santiago
+   [-75.5636, 6.2518], // Medellin
+   [-34.877, -8.0476], // Recife
+   [172.6362, -43.5321] // Christchurch
+];
+
+// Harbors. A port need not sit inside the land mask.
+const geoPorts = [
+   [4.4792, 51.9225], // Rotterdam
+   [4.4025, 51.2194], // Antwerp
+   [9.9667, 53.5461], // Hamburg
+   [8.9463, 44.4056], // Genoa
+   [23.6465, 37.942], // Piraeus
+   [-5.7998, 35.7595], // Tangier
+   [55.027, 25.011], // Jebel Ali
+   [39.6682, -4.0435], // Mombasa
+   [31.0218, -29.8587], // Durban
+   [79.8612, 6.9271], // Colombo
+   [103.85, 1.2644], // Singapore
+   [114.15, 22.29], // Hong Kong
+   [122.0667, 30.6167], // Yangshan
+   [139.638, 35.4437], // Yokohama
+   [129.04, 35.1], // Busan
+   [106.88, -6.104], // Tanjung Priok
+   [151.21, -33.97], // Port Botany
+   [-118.1937, 33.7701], // Long Beach
+   [-95.015, 29.73], // Houston
+   [-90.07, 29.95], // New Orleans
+   [-79.566, 8.95], // Balboa
+   [-46.333, -23.96], // Santos
+   [-71.627, -33.046], // Valparaiso
+   [-77.15, -12.05] // Callao
+];
+
+function $geoContains(ring, lng, lat) {
    /*
-    *  one GeoJSON Point inside the longitude and latitude bounds
+    *  ray cast. A horizontal edge is skipped before the division.
     */
+   let inside = false;
+   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const xi = ring[i][0];
+      const yi = ring[i][1];
+      const xj = ring[j][0];
+      const yj = ring[j][1];
+      if ((yi > lat) === (yj > lat))
+         continue;
+      if (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)
+         inside = !inside;
+   }
+   return inside;
+}
+
+function $geoOnLand(lng, lat) {
+   /*
+    *  true when the coordinate sits inside one land ring
+    */
+   for (let i = 0; i < geoLand.length; i++) {
+      if ($geoContains(geoLand[i].ring, lng, lat))
+         return true;
+   }
+   return false;
+}
+
+function $geoPoint(lng, lat) {
+   /*
+    *  one GeoJSON Point from a longitude and a latitude
+    */
+   return {
+      "type": "Point",
+      "coordinates": [
+         $geoNum(lng, -180, 180),
+         $geoNum(lat, -90, 90)
+      ]
+   };
+}
+
+function $geoListedPoint(list) {
+   /*
+    *  one listed coordinate, passed through $geoNum
+    */
+   const pick = list[$getRandInt(0, list.length)];
+   return $geoPoint(pick[0], pick[1]);
+}
+
+function $geoAreaPoint(wantLand) {
+   /*
+    *  rejection sample in the same uniform measure as $genPoint().
+    *  The test uses the four-decimal coordinate that is stored.
+    *  After 64 misses, land uses a tested interior point and ocean
+    *  uses the mid-Pacific.
+    */
+   for (let i = 0; i < 64; i++) {
+      const lng = $geoNum($getRandNum(-180, 180), -180, 180);
+      const lat = $geoNum($getRandNum(-90, 90), -90, 90);
+      if ($geoOnLand(lng, lat) === wantLand)
+         return $geoPoint(lng, lat);
+   }
+   if (wantLand) {
+      const at = geoLand[$getRandInt(0, geoLand.length)].at;
+      return $geoPoint(at[0], at[1]);
+   }
+   return $geoPoint(-150, 0);
+}
+
+function $genPoint(place) {
+   /*
+    *  one GeoJSON Point inside the longitude and latitude bounds.
+    *  No class, or an unknown class, stays that uniform draw.
+    *  "land" and "ocean" reject against the coarse mask.
+    *  "city", "regional", and "port" are listed coordinates.
+    *  Lines, polygons, and the multi helpers stay uniform.
+    */
+   if (place === 'land')
+      return $geoAreaPoint(true);
+   if (place === 'ocean')
+      return $geoAreaPoint(false);
+   if (place === 'city')
+      return $geoListedPoint(geoCities);
+   if (place === 'regional')
+      return $geoListedPoint(geoRegional);
+   if (place === 'port')
+      return $geoListedPoint(geoPorts);
    return {
       "type": "Point",
       "coordinates": [
