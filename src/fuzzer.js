@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.14.1"
+ *  Version: "1.14.2"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -26,7 +26,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.14.1" };
+   const __script = { "name": "fuzzer.js", "version": "1.14.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -228,15 +228,19 @@
             // "sparsity": 0,            // 0-100%
             // "weighting": 50           // 0-100%
          // },
-         // Named draws. A values list, or a distribution, optionally pooled.
+         // Named draws. A values list, a distribution, or a point class, optionally pooled.
          // span is how many consecutive documents share one value. Omitted, it is 1.
          // with names one parent. correlation is 0 through 1. Omitted on a child, it is 1.
          // follow "n" walks the pool by group. Schema fields read draws.<name>.
          // pareto and exponential take bound as the truncation window. span is the group.
+         // point is land, ocean, city, regional, or port. The value is one GeoJSON Point.
+         // A point correlation reuses that point or draws another of the same class.
          // "draws": {
          //    "sku": { "pool": 50, "distribution": "uniform", "lo": 1000, "hi": 9999, "span": 20 },
          //    "tier": { "values": ["a", "b", "c"], "follow": "n", "span": 20 },
-         //    "price": { "distribution": "normal", "mu": 10, "sigma": 2, "with": "sku", "correlation": 0.8 }
+         //    "price": { "distribution": "normal", "mu": 10, "sigma": 2, "with": "sku", "correlation": 0.8 },
+         //    "place": { "point": "city", "span": 20 },
+         //    "nearby": { "point": "regional", "with": "place", "correlation": 0.8 }
          // },
          "draws": {},
          "schemas": [
@@ -1332,7 +1336,9 @@
    }
 
    const DRAW_NAMES = ['uniform', 'normal', 'bimodal', 'pareto', 'exponential', 'poisson'];
+   const POINT_CLASSES = ['land', 'ocean', 'city', 'regional', 'port'];
    const VALUE_KEYS = ['values', 'follow', 'span', 'with', 'correlation'];
+   const POINT_KEYS = ['point', 'pool', 'follow', 'span', 'with', 'correlation'];
    // span is the document group. Pareto and exponential use bound for the window.
    const DRAW_KEYS = {
       uniform: ['distribution', 'lo', 'hi', 'pool', 'follow', 'span', 'with', 'correlation'],
@@ -1427,6 +1433,30 @@
       }
 
       // A child takes its group from the parent, so span there is an error.
+      function readPoint(spec, name) {
+         if (typeof spec.point !== 'string') {
+            errors.push(`fuzzer.draws.${name}.point must name a class`);
+            return null;
+         }
+         const folded = spec.point.toLowerCase();
+         if (!POINT_CLASSES.includes(folded)) {
+            errors.push(`fuzzer.draws.${name}.point "${spec.point}" is not a class. Use land, ocean, city, regional, or port`);
+            return null;
+         }
+         return folded;
+      }
+
+      function readPool(spec, name) {
+         if (!hasOwn(spec, 'pool') || spec.pool == null || spec.pool === '')
+            return null;
+         const p = spec.pool;
+         if (typeof p !== 'number' || !Number.isSafeInteger(p) || p < 1 || p > 1000000) {
+            errors.push(`fuzzer.draws.${name}.pool must be an integer from 1 through 1000000`);
+            return null;
+         }
+         return p;
+      }
+
       function readSpan(spec, name, parent) {
          const present = hasOwn(spec, 'span') && spec.span != null && spec.span !== '';
          if (!present)
@@ -1450,12 +1480,14 @@
          }
          const hasValues = hasOwn(spec, 'values');
          const hasDistribution = hasOwn(spec, 'distribution') && spec.distribution != null && spec.distribution !== '';
-         if (hasValues && hasDistribution) {
-            errors.push(`fuzzer.draws.${name} accepts values or distribution, not both`);
+         const hasPoint = hasOwn(spec, 'point') && spec.point != null && spec.point !== '';
+         const modes = (hasValues ? 1 : 0) + (hasDistribution ? 1 : 0) + (hasPoint ? 1 : 0);
+         if (modes > 1) {
+            errors.push(`fuzzer.draws.${name} accepts values, distribution, or point, not more than one`);
             return;
          }
-         if (!hasValues && !hasDistribution) {
-            errors.push(`fuzzer.draws.${name} needs a values list or a distribution`);
+         if (modes === 0) {
+            errors.push(`fuzzer.draws.${name} needs a values list, a distribution, or a point class`);
             return;
          }
          if (hasValues) {
@@ -1484,6 +1516,32 @@
             }
             return;
          }
+         if (hasPoint) {
+            Object.keys(spec).forEach(key => {
+               if (!POINT_KEYS.includes(key))
+                  errors.push(`fuzzer.draws.${name}.${key} does not apply to a point`);
+            });
+            const point = readPoint(spec, name);
+            const pool = readPool(spec, name);
+            const follow = readFollow(spec, name, pool != null);
+            const parent = readWith(spec, name);
+            const correlation = readCorrelation(spec, name, parent);
+            const span = readSpan(spec, name, parent);
+            if (errors.length === before && point) {
+               names.push(name);
+               specs[name] = {
+                  "kind": 'point',
+                  point,
+                  pool,
+                  follow,
+                  "slots": pool,
+                  span,
+                  "with": parent,
+                  correlation
+               };
+            }
+            return;
+         }
 
          const requested = String(spec.distribution);
          const folded = requested.toLowerCase();
@@ -1495,14 +1553,7 @@
             if (!DRAW_KEYS[folded].includes(key))
                errors.push(`fuzzer.draws.${name}.${key} does not apply to ${folded}`);
          });
-         let pool = null;
-         if (hasOwn(spec, 'pool') && spec.pool != null && spec.pool !== '') {
-            const p = spec.pool;
-            if (typeof p !== 'number' || !Number.isSafeInteger(p) || p < 1 || p > 1000000)
-               errors.push(`fuzzer.draws.${name}.pool must be an integer from 1 through 1000000`);
-            else
-               pool = p;
-         }
+         const pool = readPool(spec, name);
          const follow = readFollow(spec, name, pool != null);
          const item = {
             "kind": 'distribution',
@@ -1567,6 +1618,17 @@
       return { errors, names, specs };
    }
 
+   function drawPoint(item) {
+      return $genPoint(item.point);
+   }
+
+   function copyPoint(point) {
+      return {
+         "type": point.type,
+         "coordinates": point.coordinates.slice()
+      };
+   }
+
    function drawDistribution(item) {
       switch (item.distribution) {
          case 'uniform':
@@ -1593,7 +1655,7 @@
          if (item.kind === 'values')
             drawPools[name] = item.list.slice();
          else if (item.pool)
-            drawPools[name] = Array.from({ "length": item.pool }, () => drawDistribution(item));
+            drawPools[name] = Array.from({ "length": item.pool }, () => item.kind === 'point' ? drawPoint(item) : drawDistribution(item));
          else
             drawPools[name] = null;
          drawGroups[name] = {};
@@ -1611,7 +1673,9 @@
       if (list) {
          const at = item.follow ? (groupId % list.length) : $getRandInt(0, list.length);
          value = list[at];
-      } else
+      } else if (item.kind === 'point')
+         value = drawPoint(item);
+      else
          value = drawDistribution(item);
       groups[groupId] = value;
       return value;
@@ -1620,17 +1684,20 @@
    function freshValue(item, list) {
       if (list)
          return list[$getRandInt(0, list.length)];
+      if (item.kind === 'point')
+         return drawPoint(item);
       return drawDistribution(item);
    }
 
    // correlation 1 returns the stored value. 0 draws again. A values list
-   // keeps the stored value when a uniform draw is below the correlation.
+   // or a point keeps the stored value when a uniform draw is below the
+   // correlation. A point draws another of the same class. It is not blended.
    // A numeric distribution blends in the child's units. Poisson rounds.
    function correlated(item, list, stored) {
       const correlation = item.correlation;
       if (!(correlation < 1))
          return stored;
-      if (item.kind === 'values') {
+      if (item.kind === 'values' || item.kind === 'point') {
          if (correlation > 0 && $rand() < correlation)
             return stored;
          return freshValue(item, list);
@@ -1659,15 +1726,18 @@
          else
             roots.push(name);
       });
+      function publish(name, value) {
+         out[name] = spec.specs[name].kind === 'point' ? copyPoint(value) : value;
+      }
       roots.forEach(name => {
          const item = spec.specs[name];
-         out[name] = groupValue(name, Math.floor(index / item.span));
+         publish(name, groupValue(name, Math.floor(index / item.span)));
       });
       children.forEach(name => {
          const item = spec.specs[name];
          const parent = spec.specs[item.with];
          const groupId = Math.floor(index / parent.span);
-         out[name] = correlated(item, drawPools[name], groupValue(name, groupId));
+         publish(name, correlated(item, drawPools[name], groupValue(name, groupId)));
       });
       return out;
    }
@@ -1683,6 +1753,8 @@
             parts.push(`[blue]${name}[/]×[blue]${grouped(item.slots)}[/]`);
          else
             parts.push(`[blue]${name}[/]`);
+         if (item.point)
+            parts.push(`[dim]${item.point}[/]`);
          if (!item.with && item.span > 1)
             parts.push(`every [blue]${grouped(item.span)}[/]`);
          if (item.with)

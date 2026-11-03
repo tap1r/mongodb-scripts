@@ -28,7 +28,8 @@
    "locality": "=$getRandCountry()['alpha-3 code']",
    // GeoJSON Point. Uniform in range.
    "location": "=$genPoint()",
-   // Classed points. An unknown class stays uniform. Not shared across documents.
+   // Classed points. An unknown class stays uniform.
+   // A shared point is a named draw, =draws.place, with { "point": "city", "span": 20 }.
    "land": "=$genPoint('land')",
    "ocean": "=$genPoint('ocean')",
    "majorCity": "=$genPoint('city')",
