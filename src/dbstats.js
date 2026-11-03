@@ -1058,7 +1058,7 @@
    function rollupDatabaseFromCollections(database) {
       /*
        *  Fallback when $stats is unusable. Listed collections are a lower
-       *  bound; never G() mass.
+       *  bound.
        */
       const collections = database.collections || [];
       const views = database.views || [];
