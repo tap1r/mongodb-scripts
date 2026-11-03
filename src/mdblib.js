@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "1.1.6"
+ *  Version: "1.2.0"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,7 +17,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "1.1.6"
+      "version": "1.2.0"
    });
 
 /*  Notes:
@@ -118,6 +118,7 @@ function isMongosh() {
  *  Layer: defaults → file → --eval overlay. Missing default file is not an error.
  *  Plain objects deep-merge; arrays and scalars replace. JSON has no RegExp —
  *  callers pass revive paths (dbstats filter.db / filter.collection).
+ *  optionsVersion opts into a contract warning. Callers that omit it are unchanged.
  */
 
 function isPlainObject(value) {
@@ -327,6 +328,62 @@ function reviveRegex(value) {
    }
 }
 
+function optionsOwn(obj, key) {
+   return !!obj && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function optionsJoinPath(prefix, key) {
+   return prefix ? `${prefix}.${key}` : key;
+}
+
+function optionsVersionText(value) {
+   if (typeof value === 'number' || typeof value === 'boolean')
+      return String(value);
+   if (typeof value === 'string')
+      return `"${value}"`;
+   return 'a non-number';
+}
+
+function optionsVersionProblem(layer, expected, label, requireVersion) {
+   if (!isPlainObject(layer))
+      return null;
+   if (!optionsOwn(layer, 'optionsVersion')) {
+      if (!requireVersion)
+         return null;
+      return `${label} has no optionsVersion. This script expects optionsVersion ${expected}`;
+   }
+   if (layer.optionsVersion !== expected)
+      return `${label} optionsVersion ${optionsVersionText(layer.optionsVersion)} does not match optionsVersion ${expected}`;
+   return null;
+}
+
+function optionsUnknownKeys(layer, contract, open, label, warnings) {
+   const openPaths = Array.isArray(open) ? open : [];
+   function walk(over, base, prefix) {
+      if (!isPlainObject(over))
+         return;
+      Object.keys(over).forEach(key => {
+         const path = optionsJoinPath(prefix, key);
+         if (!isPlainObject(base) || !optionsOwn(base, key)) {
+            warnings.push({
+               "code": 'optionsKey',
+               "message": `${label} key "${path}" is not in the options contract`
+            });
+            return;
+         }
+         if (openPaths.indexOf(path) !== -1)
+            return;
+         const child = over[key];
+         const baseChild = base[key];
+         if (Array.isArray(child) || Array.isArray(baseChild))
+            return;
+         if (isPlainObject(child) && isPlainObject(baseChild))
+            walk(child, baseChild, path);
+      });
+   }
+   walk(layer, contract, '');
+}
+
 function resolveOptions({
    defaults = {},
    file = null,
@@ -334,7 +391,10 @@ function resolveOptions({
    overlay = null,
    argv = (typeof process !== 'undefined' && process.argv) || [],
    revive = {},
-   aliases = {}
+   aliases = {},
+   optionsVersion = null,
+   contract = null,
+   open = null
 } = {}) {
    const warnings = [];
    const flags = parseScriptArgv(argv);
@@ -377,6 +437,24 @@ function resolveOptions({
       }
       optionsSetPath(options, path, next);
    });
+
+   if (typeof optionsVersion === 'number' && Number.isFinite(optionsVersion)) {
+      const accepted = isPlainObject(contract) ? contract : defaults;
+      if (!loaded.error && isPlainObject(loaded.value)) {
+         const fileLabel = `Options file "${loaded.path}"`;
+         const versionMessage = optionsVersionProblem(loaded.value, optionsVersion, fileLabel, true);
+         if (versionMessage)
+            warnings.push({ "code": 'optionsVersion', "message": versionMessage });
+         optionsUnknownKeys(loaded.value, accepted, open, fileLabel, warnings);
+      }
+      if (overlayObj) {
+         const overlayLabel = 'Options overlay';
+         const versionMessage = optionsVersionProblem(overlayObj, optionsVersion, overlayLabel, false);
+         if (versionMessage)
+            warnings.push({ "code": 'optionsVersion', "message": versionMessage });
+         optionsUnknownKeys(overlayObj, accepted, open, overlayLabel, warnings);
+      }
+   }
 
    return {
       "ok": !loaded.error,

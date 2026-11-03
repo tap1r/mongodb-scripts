@@ -16,7 +16,9 @@
 // storageEngine is applied by the script when idxCompressor is not "default".
 // Sample schemas are pluggable files. genDocument picks one, then builds only that document.
 // A schema string that starts with "=" is an expression. Other strings are literals.
+// optionsVersion must match fuzzer.js. A mismatch or an unknown key warns. The run continues.
 {
+   "optionsVersion": 1,
    "dbName": "database",
    "collName": "collection",
    "totalDocsExp": 3.5,
@@ -90,7 +92,6 @@
       "id": "ts", // ["ts"|"oid"]
       "range": 365.2422,
       "offset": -300,
-      "interval": 7,
       // offset and range may also be set on distributionParams. Omitted, they use the values above.
       // uniform fills [offset, offset + range].
       // normal: mu, sigma (days). Defaults are the window center and range/2. Tails are not cut.

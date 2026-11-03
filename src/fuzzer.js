@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.9.0"
+ *  Version: "1.10.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -11,6 +11,7 @@
 
 // Usage: mongosh [connection options] [--quiet] [--eval 'var options = {...};'] [-f|--file] </path/to/>fuzzer.js
 // Overlay: fuzzer-options.jsonc (cwd, --file dir, $MDBLIB, ~/.mongodb) then var options. Missing default is silent.
+// optionsVersion must match OPTIONS_VERSION. A mismatch or an unknown key warns. The run continues.
 // Explicit path: var optionsFile = "PATH". --eval var options overlays the file.
 // JSONC parse/search lives in mdblib resolveOptions.
 // Sample schemas: schema-a.jsonc, schema-b.jsonc, schema-c.jsonc
@@ -24,7 +25,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.9.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.10.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -128,7 +129,9 @@
     *  fuzzer.schemas points at the sample plug-ins genDocument realises.
     */
 
+   const OPTIONS_VERSION = 1;
    const optionDefaults = {
+      "optionsVersion": OPTIONS_VERSION, // a loaded file must match. A mismatch warns.
       "dbName": 'database',             // database name
       "collName": 'collection',         // collection name
       "totalDocsExp": 3.5,              // totalDocs = $getRandExp(totalDocsExp) unless the overlay sets totalDocs
@@ -192,7 +195,6 @@
          "id": "ts",                    // ["ts"|"oid"] - timeseries OID | client generated OID
          "range": 365.2422,             // date range in days
          "offset": -300,                // date offset in days from now() (negative = past, positive = future)
-         "interval": 7,                 // date interval in days
          // offset and range may also be set on distributionParams. Omitted, they use the values above.
          // uniform fills [offset, offset + range].
          // normal: mu, sigma (days). Defaults are the window center and range/2. Tails are not cut.
@@ -321,7 +323,64 @@
       "defaults": optionDefaults,
       "file": OPTIONS_FILE,
       "optionsFile": explicitFile,
-      overlay
+      overlay,
+      "optionsVersion": OPTIONS_VERSION,
+      "contract": deepMergeOptions(optionDefaults, {
+         "totalDocs": 0,
+         "writeConcern": { "w": 1, "wtimeout": 0 },
+         "collation": {
+            "caseLevel": false,
+            "caseFirst": "off",
+            "strength": 3,
+            "numericOrdering": false,
+            "alternate": "non-ignorable",
+            "maxVariable": "punct",
+            "backwards": false
+         },
+         "indexPrefs": { "commitQuorum": 1 },
+         "create": {
+            "clusteredIndex": { "key": {}, "unique": true, "name": "" },
+            "changeStreamPreAndPostImages": { "enabled": false },
+            "validator": {},
+            "validationLevel": "off",
+            "validationAction": "error",
+            "indexOptionDefaults": {},
+            "viewOn": "",
+            "pipeline": []
+         },
+         "fuzzer": {
+            "distributionParams": {
+               "offset": 0,
+               "range": 1,
+               "mu": 0,
+               "sigma": 1,
+               "mix": 0.5,
+               "mu1": 0,
+               "sigma1": 1,
+               "mu2": 0,
+               "sigma2": 1,
+               "alpha": 1.161,
+               "scale": 1,
+               "origin": "start",
+               "lambda": 1,
+               "mean": 1
+            }
+         },
+         "shardedOptions": {
+            "presplitHashedZones": false,
+            "zones": []
+         }
+      }),
+      "open": [
+         "shardedOptions.key",
+         "indexOptions",
+         "hashedIndexOptions",
+         "indexes2dOptions",
+         "textIndexOptions",
+         "create.validator",
+         "create.indexOptionDefaults",
+         "create.clusteredIndex.key"
+      ]
    });
    const opt = resolved.options;
    const wc = isPlainObject(opt.writeConcern) ? opt.writeConcern : {};
@@ -1157,6 +1216,9 @@
          console.log(`\n[red][ERROR][/] ${msg}`);
          return;
       }
+      resolved.warnings.forEach(warning => {
+         console.log(`\n[red][WARN] [yellow]${warning.message}[/]`);
+      });
       if (schemaFileErrors.length > 0) {
          schemaFileErrors.forEach(reason => console.log(`\n[red][ERROR][/] ${reason}`));
          return;
