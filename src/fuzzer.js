@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.13.1"
+ *  Version: "1.14.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -21,11 +21,12 @@
 
 /*
  *  Load helper mdblib.js (https://github.com/tap1r/mongodb-scripts/blob/master/src/mdblib.js)
+ *  then fuzzer-lib.js on the same $MDBLIB / ~/.mongodb / . search.
  *  Save libs to the $MDBLIB or other valid search path
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.13.1" };
+   const __script = { "name": "fuzzer.js", "version": "1.14.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -35,13 +36,24 @@
       __lib.path = `${__lib.paths.find(path => fs.existsSync(`${path}/${__lib.name}`))}/${__lib.name}`;
       load(__lib.path);
    }
+   if (typeof __fuzzerLib === 'undefined') {
+      /*
+       *  Load fuzzer-lib.js after mdblib.js. Same search path.
+       *  Schema "=" expressions need these $ names as globals.
+       */
+      let __fuzzerLib = { "name": "fuzzer-lib.js", "paths": null, "path": null };
+      __fuzzerLib.paths = [process.env.MDBLIB, `${process.env.HOME}/.mongodb`, '.'];
+      __fuzzerLib.path = `${__fuzzerLib.paths.find(path => fs.existsSync(`${path}/${__fuzzerLib.name}`))}/${__fuzzerLib.name}`;
+      load(__fuzzerLib.path);
+   }
    let __comment = `#### Running script ${__script.name} v${__script.version}`;
    __comment += ` with ${__lib.name} v${__lib.version}`;
+   __comment += ` and ${__fuzzerLib.name}`;
    __comment += ` on shell v${version()}`;
    function isFuzzerCliFile() {
       /*
        *  mongosh --file/-f (or positional *.js) targeting this script.
-       *  load() from a REPL or another --file is quiet. mdblib still loads.
+       *  load() from a REPL or another --file is quiet. mdblib and fuzzer-lib still load.
        */
       const argv = (typeof process !== 'undefined' && Array.isArray(process.argv)) ? process.argv : [];
       const files = [];
