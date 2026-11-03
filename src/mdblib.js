@@ -1,6 +1,6 @@
 /*
  *  Name: "mdblib.js"
- *  Version: "1.1.5"
+ *  Version: "1.1.6"
  *  Description: mongosh shell helper library
  *  Disclaimer: https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -17,7 +17,7 @@
 if (typeof __lib === 'undefined') (
    __lib = {
       "name": "mdblib.js",
-      "version": "1.1.5"
+      "version": "1.1.6"
    });
 
 /*  Notes:
@@ -2630,9 +2630,9 @@ function $genRandSymbol() {
 
 function $genRandCurrency() {
    /*
-    *  generate random curreny symbol
+    *  one currency symbol. Peso and zloty are separate entries.
     */
-   const currencies = ['$', '€', '₡', '£', '₪', '₹', '¥', '₩', '₦', '₱zł', '₲', '฿', '₴', '₫'];
+   const currencies = ['$', '€', '₡', '£', '₪', '₹', '¥', '₩', '₦', '₱', 'zł', '₲', '฿', '₴', '₫'];
 
    return currencies[$getRandInt(0, currencies.length)];
 }
@@ -2644,30 +2644,6 @@ function $genArrayElements(len) {
    const array = [];
    for (let i = 0; i < len; i++) {
       array.push($genRandStr($getRandIntInc(4, 12)));
-   }
-
-   return array;
-}
-
-function $genArrayStrings(len) {
-   /*
-    *  generate array of random strings
-    */
-   const array = [];
-   for (let i = 0; i < len; i++) {
-      array.push($genRandStr($getRandIntInc(6, 24)));
-   }
-
-   return array;
-}
-
-function $genArrayInts(len) {
-   /*
-    *  generate array of random integers
-    */
-   const array = [];
-   for (let i = 0; i < len; i++) {
-      array.push($getRandIntInc(1, 1000));
    }
 
    return array;
@@ -2685,13 +2661,38 @@ function $genRandIncPareto(min, alpha = 1.161) {
 
 function $genRandIntIncPareto(min, max, alpha = 1.161) {
    /*
-    *  min is the lowest possible value that can be returned
-    *  alpha controls the "shape" of the distribution
+    *  integer in [min, max]
+    *  alpha controls the shape. A smaller alpha stretches the tail toward max.
+    *  min below 1 has no Pareto xmin, so that draw is uniform on the bounds.
     */
-   const k = max * (1.0 - $rand()) + min;
-   const v = Math.pow(k, alpha);
-
-   return v + min;
+   min = $floor(+min);
+   max = $floor(+max);
+   if (!Number.isFinite(min))
+      min = 1;
+   if (!Number.isFinite(max))
+      max = min;
+   if (max < min) {
+      const swap = min;
+      min = max;
+      max = swap;
+   }
+   if (min === max)
+      return min;
+   if (!(alpha > 0) || !Number.isFinite(+alpha))
+      alpha = 1.161;
+   if (!(min > 0))
+      return $getRandIntInc(min, max);
+   // Truncated Pareto on [min, max + 1), then floor, so max is included.
+   const u = $rand();
+   const hi = max + 1;
+   const cut = 1 - Math.pow(min / hi, alpha);
+   const x = min / Math.pow(1 - u * cut, 1 / alpha);
+   let k = $floor(x);
+   if (k < min)
+      k = min;
+   if (k > max)
+      k = max;
+   return k;
 }
 
 function $genNormal(mu, sigma) {
@@ -2713,34 +2714,26 @@ function $genExponential(lambda = 1) {
 
 function $genLuhnNumber(input) {
    /*
-    *  generate number with Luhn check digit
+    *  append a Luhn check digit
+    *  the rightmost payload digit is doubled, because the check digit sits to its right
     */
-
-   // Step 1: Remove the last digit from the input
-   // const inputWithoutLastDigit = input.toString().slice(0, -1);
-
-   // Step 2: Double every second digit, starting from the right
-   // const digits = inputWithoutLastDigit.split('').map(Number);
-   let digits = input.split('').map(Number),
-      sum = 0,
-      shouldDouble = false;
+   const digits = String(input).split('').map(Number);
+   let sum = 0;
+   let shouldDouble = true;
 
    for (let i = digits.length - 1; i >= 0; i--) {
       let digit = digits[i];
       if (shouldDouble) {
          digit *= 2;
-         if (digit > 9) digit -= 9;
+         if (digit > 9)
+            digit -= 9;
       }
       sum += digit;
       shouldDouble = !shouldDouble;
    }
 
-   // Step 3: Calculate the check digit
    const checkDigit = (10 - (sum % 10)) % 10;
-
-   // Step 4: Return the input with the check digit appended
-   // return inputWithoutLastDigit + checkDigit;
-   return input + checkDigit;
+   return String(input) + checkDigit;
 }
 
 function $genIin({ iin }) {
@@ -2752,12 +2745,17 @@ function $genIin({ iin }) {
    return ((iin[$getRandIntInc(0, (iin.length - 1))]).toString() + countryCode.replace(/^0+/, '') + $getRandInt(0, Math.pow(10, 6))).toString().padEnd(8, '0').substring(0, 8);
 }
 
-function $genPan() {
+function $genPan(len = 7) {
    /*
-    *  basic fake PAN generator
+    *  fake PAN of len digits, including leading zeros
     */
-
-   return ($getRandInt(0, Math.pow(10, 7))).toString().padStart(7, '0').substring(0, 7);
+   let n = $floor(+len);
+   if (!(n > 0))
+      n = 7;
+   let pan = '';
+   for (let i = 0; i < n; i++)
+      pan += $getRandInt(0, 10);
+   return pan;
 }
 
 function $genRandCardNumber(type = 'rnd', card = '') {
@@ -2773,16 +2771,17 @@ function $genRandCardNumber(type = 'rnd', card = '') {
    ];
 
    if (type == 'rnd') {
-      type = ['amex', 'discover', 'mastercard', 'visa'][
-         $getRandRatioInt([10, 5, 25, 50])
-      ];
+      type = cards[$getRandRatioInt(cards.map(entry => entry.weight))].type;
    }
-   card = cards.find(card => card.type == type);
-   // Card format = BIN prefix (IIN + country code padded to 8) + PAN (pad to card length -1) + luhn check digit
-
+   card = cards.find(entry => entry.type == type);
+   // BIN prefix (IIN + country code, 8 digits) + PAN + Luhn check digit.
+   // The PAN fills card.digits, so amex is 15 and the others are 16.
    const iin = $genIin(card);
-   const pan = $genPan();
-   return $genLuhnNumber(iin + pan);
+   const digits = (card.digits > 0) ? $floor(+card.digits) : iin.length + 8;
+   const bodyLen = (digits > iin.length) ? digits - 1 : iin.length;
+   const panLen = bodyLen - iin.length;
+   const pan = panLen > 0 ? $genPan(panLen) : '';
+   return $genLuhnNumber((iin + pan).slice(0, bodyLen));
 }
 
 function $range(start, stop, step) {
