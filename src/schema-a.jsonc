@@ -37,15 +37,16 @@
       "nestedArray": "=$genArrayElements($getRandIntInc(0, 4))"
    },
    "array": "=$genArrayElements($getRandIntInc(0, 4))",
-   // "objectArray": [
-   //    { "nestedArray": "=$genArrayElements($getRandIntInc(0, 10))" }
-   // ],
-   // "1dArray": [
-   //    { "2dArray": "=$genArrayElements($getRandIntInc(1, 10))" }
-   // ],
+   "objectArray": [
+      { "nestedArray": "=$genArrayElements($getRandIntInc(0, 10))" }
+   ],
+   "1dArray": [
+      { "2dArray": "=$genArrayElements($getRandIntInc(1, 10))" }
+   ],
    "boolean": "=$bool()",
-   // "code": "Code('() => {}')",
-   // "codeScoped": "Code('() => {}', {})",
+   // JavaScript (type 13). JavaScript with scope (type 15) is deprecated and still stored.
+   "code": "=$genCode()",
+   "codeScoped": "=$genCodeWithScope()",
    "date": "=date",
    "dateString": "=date.toISOString()",
    "timestamp": "=ts",
@@ -59,27 +60,11 @@
    "uuid": "=UUID()",
    "md5": "=MD5($genRandHex(32))",
    "fle": "=BinData(6, UUID().base64())",
-   // "columnStore": fCV(5.2)
-   //              ? BinData(7, $getRandIntInc(0, Math.pow(10, 4)),
-   //                {
-   //                   "unit": +$getRandNum(0, Math.pow(10, 6)).toFixed(2),
-   //                   "qty": $getRandIntInc(0, Math.pow(10, 4)),
-   //                   "price": [
-   //                      +$getRandNum(0, Math.pow(10, 4)).toFixed(2),
-   //                      $genRandCurrency()
-   //                   ]
-   //                })
-   //              : 'requires v5.2+',
-   // "sensitive": fCV(7.0)
-   //            ? BinData(8, window.crypto.subtle.generateKey(
-   //                {
-   //                   "name": "HMAC",
-   //                   "hash": { "name": "SHA-512" },
-   //                },
-   //                true,
-   //                ["sign", "verify"],
-   //                ))
-   //            : 'requires v7.0+',
+   // Subtype 7 is a BSON column of int32 literals. Subtype 8 is redacted in server logs.
+   // Subtype 9 is a vector (float32, int8, or packed bits), listed on the v8 type table.
+   "columnStore": "=$genColumn()",
+   "sensitive": "=$genSensitive()",
+   "vector": "=$genVector()",
    "random": "=+$getRandNum(0, totalDocs).toFixed(4)",
    "symbol": "=$genRandSymbol()",
    "credit card": "=$genRandCardNumber()"

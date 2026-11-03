@@ -706,6 +706,96 @@ function $genArrayElements(len) {
    return array;
 }
 
+function $genBinData(subtype, len) {
+   /*
+    *  random bytes as BinData. subtype is 0 through 255.
+    */
+   const sub = (subtype >= 0 && subtype <= 255 && subtype === $floor(subtype)) ? subtype : 0;
+   const n = (len > 0 && Number.isFinite(+len)) ? $ceil(+len) : 16;
+   const buf = Buffer.allocUnsafe(n);
+   for (let i = 0; i < n; i++)
+      buf[i] = $floor($rand() * 256);
+   return BinData(sub, buf.toString('base64'));
+}
+
+function $genCode() {
+   /*
+    *  BSON JavaScript (type 13). The source changes each call.
+    */
+   return Code('function () { return ' + JSON.stringify($genRandPhrase(1)) + '; }');
+}
+
+function $genCodeWithScope() {
+   /*
+    *  BSON JavaScript with scope (type 15). Deprecated, and the server still stores it.
+    */
+   const name = $genRandAlpha($getRandIntInc(3, 8));
+   const scope = {};
+   scope[name] = $getRandIntInc(0, 1000);
+   return Code('function () { return ' + name + '; }', scope);
+}
+
+function $genColumn(n) {
+   /*
+    *  BSON column (binary subtype 7). Uncompressed int32 literals and a trailing EOO.
+    *  A random byte string of this subtype is rejected as an invalid column.
+    */
+   const count = (n > 0 && Number.isFinite(+n)) ? $ceil(+n) : $getRandIntInc(1, 4);
+   const buf = Buffer.alloc(count * 6 + 1);
+   for (let i = 0; i < count; i++) {
+      const off = i * 6;
+      buf[off] = 0x10;
+      buf[off + 1] = 0x00;
+      buf.writeInt32LE($getRandIntInc(-1000, 1000), off + 2);
+   }
+   buf[count * 6] = 0;
+   return BinData(7, buf.toString('base64'));
+}
+
+function $genSensitive(len) {
+   /*
+    *  binary subtype 8. The server redacts this subtype in logs.
+    */
+   return $genBinData(8, (len > 0 && Number.isFinite(+len)) ? len : 32);
+}
+
+function $genVector(dtype, n) {
+   /*
+    *  binary subtype 9. dtype is float32, int8, or bit. Omitted, one of the three.
+    *  float32 and int8 count elements. bit counts packed bytes, and the low padding bits are 0.
+    */
+   const names = ['float32', 'int8', 'bit'];
+   const asked = (typeof dtype === 'string') ? dtype.toLowerCase() : '';
+   const kind = (names.indexOf(asked) >= 0) ? asked : names[$getRandInt(0, names.length)];
+   const count = (n > 0 && Number.isFinite(+n)) ? $ceil(+n) : 8;
+   let payload;
+   let padding = 0;
+   let dtypeByte = 0x27;
+   if (kind === 'int8') {
+      dtypeByte = 0x03;
+      payload = Buffer.allocUnsafe(count);
+      for (let i = 0; i < count; i++)
+         payload.writeInt8($getRandIntInc(-128, 127), i);
+   } else if (kind === 'bit') {
+      dtypeByte = 0x10;
+      payload = Buffer.allocUnsafe(count);
+      padding = $getRandIntInc(0, 7);
+      for (let i = 0; i < count; i++)
+         payload[i] = $floor($rand() * 256);
+      if (padding > 0)
+         payload[count - 1] = payload[count - 1] & ((0xff << padding) & 0xff);
+   } else {
+      payload = Buffer.allocUnsafe(count * 4);
+      for (let i = 0; i < count; i++)
+         payload.writeFloatLE($getRandNum(-1, 1), i * 4);
+   }
+   const buf = Buffer.alloc(2 + payload.length);
+   buf[0] = dtypeByte;
+   buf[1] = padding;
+   payload.copy(buf, 2);
+   return BinData(9, buf.toString('base64'));
+}
+
 function $genLuhnNumber(input) {
    /*
     *  append a Luhn check digit
