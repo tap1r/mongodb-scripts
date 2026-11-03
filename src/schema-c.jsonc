@@ -5,7 +5,8 @@
 // A polygon shares one southwest corner, so the ring stays counterclockwise.
 // $genPolygon(true) adds a clockwise hole inside that ring, at least one degree off either pole.
 // $genMultiPoint, $genMultiLineString, and $genMultiPolygon draw the multi geometries.
-// Each part uses that same corner and winding. An omitted count is 2 to 4.
+// Each line and each polygon uses one southwest corner, the way the single helpers do.
+// An omitted count is 2 to 4.
 // $genMultiPolygon(true) adds a clockwise hole inside each triangle.
 {
    "_id": "=oid",
