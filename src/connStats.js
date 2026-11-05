@@ -1,13 +1,13 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.2.3"
+    *  Version: "0.2.4"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Legacy archive line: v0.1.14 is the snapshot for the whole-tree freeze.
-    *  Live mongosh line is v0.2.3. Handshake labels are in
+    *  Live mongosh line is v0.2.4. Handshake labels are in
     *  "Client handshake metadata.md".
     *
     *  v0.2.0 summary tag:
@@ -32,6 +32,9 @@
     *
     *  v0.2.3: unauth follows the same user@db string as authenticatedUsers.
     *  An empty effectiveUsers array is unprivileged, not authenticated.
+    *
+    *  v0.2.4 names the group's monitor mode before the per-socket rule:
+    *  internal, streaming, poll, or quiet. The counts are unchanged.
     */
 
    /*
@@ -56,7 +59,7 @@
 
    const namespace = db.getSiblingDB('admin'),
       aggOpts = {
-         "comment": "connStats.js v0.2.3"
+         "comment": "connStats.js v0.2.4"
       },
       pipeline = [
          { "$currentOp": {
@@ -332,17 +335,30 @@
          } },
          { "$set": {
             /*
-             *  Client rows only. Internal rows stay a pool of that class,
-             *  including a pool tagged from an internal system user.
-             *  Their hellos are not driver SDAM or RTT.
-             *  - any streaming socket: those are sdam. Other unauthenticated
-             *    sockets are idle RTT when the group also has an authenticated
-             *    user; otherwise only a bare hello is RTT.
-             *  - no streaming socket, group has an authenticated user: every
-             *    unauthenticated socket is a poll-mode monitor.
-             *  - no streaming socket, no authenticated user: only a bare hello
-             *    is a monitor. Idle sockets stay in the pool.
+             *  One mode for the group, named before the per-socket rule.
+             *  - internal: egress, or a pool that authenticates only as a
+             *    system user. Hellos are not driver SDAM or RTT, so pools is 0.
+             *  - streaming: any socket is an awaitable hello, or purpose sdam.
+             *    Those sockets are sdam. Other unauthenticated sockets are
+             *    idle RTT when the group also has an authenticated user;
+             *    otherwise only a bare hello is RTT.
+             *  - poll: nothing streaming, and the group has an authenticated
+             *    user. Every unauthenticated socket is a poll-mode monitor.
+             *  - quiet: nothing streaming and no authenticated user. Only a
+             *    bare hello is a monitor. Idle sockets stay in the pool.
              */
+            "mode": {
+               "$switch": {
+                  "branches": [
+                     { "case": "$internal", "then": "internal" },
+                     { "case": "$hasStreaming", "then": "streaming" },
+                     { "case": "$hasAuth", "then": "poll" }
+                  ],
+                  "default": "quiet"
+               }
+            }
+         } },
+         { "$set": {
             "rows": {
                "$map": {
                   "input": "$connections",
@@ -350,26 +366,30 @@
                   "in": {
                      "$mergeObjects": [
                         "$$connection",
-                        { "$cond": [
-                           "$internal",
-                           { "sdam": false, "rtt": false },
-                           { "$cond": [
-                              "$hasStreaming",
+                        { "$switch": {
+                           "branches": [
                               {
-                                 "sdam": "$$connection.streaming",
-                                 "rtt": { "$and": [
-                                    "$$connection.unauth",
-                                    { "$not": "$$connection.streaming" },
-                                    { "$or": ["$hasAuth", "$$connection.bare"] }
-                                 ] }
+                                 "case": { "$eq": ["$mode", "internal"] },
+                                 "then": { "sdam": false, "rtt": false }
                               },
-                              { "$cond": [
-                                 "$hasAuth",
-                                 { "sdam": "$$connection.unauth", "rtt": false },
-                                 { "sdam": "$$connection.bare", "rtt": false }
-                              ] }
-                           ] }
-                        ] }
+                              {
+                                 "case": { "$eq": ["$mode", "streaming"] },
+                                 "then": {
+                                    "sdam": "$$connection.streaming",
+                                    "rtt": { "$and": [
+                                       "$$connection.unauth",
+                                       { "$not": "$$connection.streaming" },
+                                       { "$or": ["$hasAuth", "$$connection.bare"] }
+                                    ] }
+                                 }
+                              },
+                              {
+                                 "case": { "$eq": ["$mode", "poll"] },
+                                 "then": { "sdam": "$$connection.unauth", "rtt": false }
+                              }
+                           ],
+                           "default": { "sdam": "$$connection.bare", "rtt": false }
+                        } }
                      ]
                   }
                }
@@ -513,7 +533,7 @@
             // "secs_running": { "$gte": 0 }
          // } },
          { "$sort": { "totalConnections": -1 } },
-         { "$unset": ["_id", "connections", "rows", "internal", "internalByUser", "hasStreaming", "hasAuth"] }
+         { "$unset": ["_id", "connections", "rows", "internal", "internalByUser", "hasStreaming", "hasAuth", "mode"] }
       ];
 
    /*
