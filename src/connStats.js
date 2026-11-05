@@ -1,13 +1,13 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.2.2"
+    *  Version: "0.2.3"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Legacy archive line: v0.1.14 is the snapshot for the whole-tree freeze.
-    *  Live mongosh line is v0.2.2. Handshake labels are in
+    *  Live mongosh line is v0.2.3. Handshake labels are in
     *  "Client handshake metadata.md".
     *
     *  v0.2.0 summary tag:
@@ -29,6 +29,9 @@
     *  ("arg=<name> isn't allowed"). That option is dropped and the aggregate
     *  runs again. allUsers and idleConnections stay on when accepted.
     *  A missing inprog privilege still falls back to allUsers: false.
+    *
+    *  v0.2.3: unauth follows the same user@db string as authenticatedUsers.
+    *  An empty effectiveUsers array is unprivileged, not authenticated.
     */
 
    /*
@@ -53,7 +56,7 @@
 
    const namespace = db.getSiblingDB('admin'),
       aggOpts = {
-         "comment": "connStats.js v0.2.2"
+         "comment": "connStats.js v0.2.3"
       },
       pipeline = [
          { "$currentOp": {
@@ -163,7 +166,21 @@
             }
          } },
          { "$set": {
-            "unauth": { "$not": { "$ifNull": ["$effectiveUsers.user", false] } },
+            /*
+             *  One user@db string. $concat is null when user or db is missing,
+             *  including an empty effectiveUsers array, so that socket is
+             *  unprivileged. unauth below is this string, not the raw path.
+             */
+            "user": {
+               "$ifNull": [
+                  { "$concat": [
+                     { "$first": "$effectiveUsers.user" },
+                     "@",
+                     { "$first": "$effectiveUsers.db" }
+                  ] },
+                  "unprivileged"
+               ]
+            },
             "hello": {
                "$or": [
                   "$command.hello",
@@ -173,6 +190,9 @@
             },
             "awaiting": { "$ifNull": ["$command.maxAwaitTimeMS", false] },
             "purpose": { "$ifNull": ["$clientMetadata.purpose", null] }
+         } },
+         { "$set": {
+            "unauth": { "$eq": ["$user", "unprivileged"] }
          } },
          { "$set": {
             // purpose wins over the command shape. ping is not a driver RTT signal.
@@ -227,15 +247,7 @@
                   "streaming": "$streaming",
                   "bare": "$bare",
                   "unauth": "$unauth",
-                  "user": {
-                     "$ifNull": [
-                        { "$concat": [
-                           { "$first": "$effectiveUsers.user" },
-                           "@",
-                           { "$first": "$effectiveUsers.db" }
-                        ] },
-                        "unprivileged"
-                  ] }
+                  "user": "$user"
             } }
          } },
          { "$set": {
