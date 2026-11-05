@@ -43,7 +43,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | **`schema-sampler.js`** | **v0.2.16** (dual-shell lite) | No mdblib. Dropped `Mongo.setReadPref`; `$sample` per-command RP (mongosh `options.readPreference`; mongo `cursor.readPref`). `listDatabases`/`getCollectionInfos` stay on the connected node. Further work (mdblib, `filter.db` actually applied, `--eval` overlay) is **mongosh-line**. Header documents this freeze. |
 | **`schema-import.js`** | **v0.1.8** (mongosh-only) | Companion stub to schema-sampler. Dropped `Mongo.setReadPref`. `fs.readFileSync` schema JSON; create collection/index/view still commented. In-file `const userOptions` is not an `--eval` overlay. Further work (apply sampler JSON) is **mongosh-line**. Header documents this freeze. |
 | **`indexCacheUtil.js`** | **v0.1.5** (mongosh-only) | Not dual-shell (`async` IIFE, `Promise.allSettled`). `$collStats` index cache bytes vs WT `serverStatus` cache. Do not top-level-await. Further work (sharding, `runCommand`, admin/config/local scope) is **mongosh-line**. The live line shipped the pool, `$listCatalog`, and the bracketed cache sample in **v1.0.0**, and the per-index lines, collection-btree bytes, and non-page-image gap in **v1.1.0**. **v1.2.0** includes `admin` / `config` / `local` and `system.*` / `replset.*` where authz allows. Header documents this freeze. |
-| **`connStats.js`** | **v0.1.14** (mongosh-only) | `$currentOp` pool stats with inprog fallback (`allUsers: false`). IPv6-bracket client parse. Further work (`whatsmyuri`, DRIVERS-3027, monitor classification, mongos `targetAllNodes`) is **mongosh-line**. Header documents this freeze. |
+| **`connStats.js`** | **v0.1.14** (mongosh-only) | `$currentOp` pool stats with inprog fallback (`allUsers: false`). IPv6-bracket client parse. Live **v0.2.0** tags each row `client` or `internal` and splits internal egress by class. Further work (`whatsmyuri`, mongos `targetAllNodes`) is **mongosh-line**. Header documents this freeze. |
 | **`mdblib.js`** | **v0.15.10** | Dual-shell library snapshot. `fCV()` → `serverVer()` on Atlas M0/Flex is **by design** (`getParameter` FCV restricted; Atlas not on a lagging FCV). `slaveOk()` mongosh path can `setReadPref` (callers use per-command RP). `shellVer`/`serverVer` `+"x.y"` (2.10 ≡ 2.1) stays. Further work (`for(db)`, MetaStats, integer version parse) is **mongosh-line**. Header documents this freeze. |
 | **`discovery.js`** | **v0.2.1** (mongosh-only) | Not dual-shell (`async` IIFE, named capture groups). Topology fan-out stub; cmd profiles TBA. Do not top-level-await. Do not strip `(?<setName>)` for mongo. Further work (standalone/LB/arbiters, pool/jitter, primary-vs-secondary targeting) is **mongosh-line**. Header documents this freeze. |
 | **`niceDeleteMany.js`** | **v0.4.11** (mongosh-only) | Not dual-shell (`async` IIFE, `?.`). `--eval var` overlay (`typeof` probes; no in-file `const dbName`). Per-command RP (no `setReadPref`). Further work (per-shard WT via discovery) is **mongosh-line**. Header documents this freeze. |
@@ -104,7 +104,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `compact.js` | 0.2.15 | **removed** (archive only) |
 | `batchUpdater.js` | 0.1.6 | **removed** (archive only) |
 
-Unchanged vs freeze (still in live `src/`): `connStats` 0.1.14, `oidGenerator` 0.2.7, `oidFunction` 0.1.5, `modifiedCountDocumentsByKey` 0.1.7.
+Unchanged vs freeze (still in live `src/`): `oidGenerator` 0.2.7, `oidFunction` 0.1.5, `modifiedCountDocumentsByKey` 0.1.7. Live `connStats` is **0.2.0** (archive stays 0.1.14).
 
 #### 3. After the cut — strip and streamline
 
@@ -413,31 +413,19 @@ Range-deleter throttle is in the file at v0.13.1 (`shardingStatistics.rangeDelet
 
 ### `connStats.js`
 
-**Legacy archive line: v0.1.14** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Inprog fallback stays. Post-freeze feature work proceeds on the mongosh line only. Handshake shapes and the server labels are in [Client handshake metadata](Client%20handshake%20metadata.md). Do not edit the classifier in v0.1.14 as part of that note.
+**Live: v0.2.0.** **Legacy archive line: v0.1.14** (mongosh-only; still the demarked snapshot for the whole-tree freeze — see [Legacy mongo shell retirement](#legacy-mongo-shell-retirement) §1). Inprog fallback stays. Post-freeze feature work proceeds on the mongosh line only. Handshake shapes and the server labels are in [Client handshake metadata](Client%20handshake%20metadata.md).
+
+**Shipped in 0.2.0:**
+
+- Each row has `tag` `client` or `internal`. `class` is null on a client row. On an internal row it is the unique class: the full `NetworkInterfaceTL-*` driver name, or the `MongoDB Internal Client` application name (`MongoDB Shell`, `OplogFetcher`, `BenchRun`, `{binary}-GRPCClient`). `appName` on an internal row is that class. `pools` stays a MongoClient count, so it is 0 on an internal row. Those sockets are not counted as driver SDAM or RTT.
+- Application drivers still group by endpoint, normalized `driver.version`, `platform`, and `os`. Empty `|` segments are dropped first, so async PyMongo monitors join the operation pool. Kotlin and Scala omit an unset version, so their `driver.version` stays the single Java version; their `platform` suffix already keeps them apart from plain Java.
+- `client.purpose` `"sdam"` or `"rtt"` wins when present. Otherwise a streaming hello (`hello` / `isMaster` / `ismaster` plus `maxAwaitTimeMS`, unauthenticated) is SDAM. A bare hello is the poll or RTT signal. `ping` and a missing command are not. When the group has a streaming socket and an authenticated user, other unauthenticated sockets are idle RTT. When nothing is streaming and the group has an authenticated user, every unauthenticated socket is a poll-mode monitor (`pools` can be double for libmongoc poll mode until `purpose` distinguishes the RTT socket). When the group has no authenticated user, only a bare hello is a monitor.
+- `appName` on a client row comes from connections that are not monitors. A monitors-only group falls back to any name whose driver name does not start with `NetworkInterfaceTL`.
 
 Remaining mongosh-line work (do not block the archive):
 
 - `whatsmyuri` for “this client” vs the pool.
-- DRIVERS-3027 when it lands (`client.purpose` `"sdam"` or `"rtt"`; leave `application.name`, `driver.name`, `driver.version`, `platform`, and `os` identical to the pool).
-- Monitor classification, below. Not applied.
 - Later: `targetAllNodes` on mongos (commented TBA).
-
-**Planned classification (not in v0.1.14).** The live predicates compare `driver.name` to the exact string `NetworkInterfaceTL`, require `maxAwaitTimeMS` for `sdam`, and treat a missing command, `ping`, or that exact driver name as `rtt`. The wire value is `NetworkInterfaceTL-` plus an instance name, so the equality matches nothing current. `MongoDB Internal Client` is a different driver name (`MongoDB Shell`, `OplogFetcher`, `BenchRun`, `{binary}-GRPCClient`). The `appName` `$max` drops only the bare string, and `$ifNull` falls back to `driver.name` when `application.name` is absent, so one suffix becomes the label for every internal executor that shares the server version and the server `os` / `platform`. `sdam` misses poll-mode monitors and any streaming socket sampled between rounds. `rtt` counts idle unauthenticated pool sockets and poll-mode monitors, and misses a real RTT socket unless the missing-command arm fires. A future `application.name` such as `java-driver-sdam` sorts above the real application name and wins `$max`. Async PyMongo’s monitor `driver.version` omits the extra empty `|` segment, so that client splits rows. Encoding the role in `application.name` is unsafe on its own: the server limit is 128 bytes, and this Node driver keeps the leading bytes.
-
-Next edit, still on the same group key (endpoint, `driver.version`, `platform`, `os`) for application drivers:
-
-- Normalize `driver.version` before grouping: split on `|`, drop empty segments, rejoin with `|`, so the async PyMongo monitor joins its pool. Kotlin and Scala do not need that. They omit an unset version, so `driver.version` stays the single Java version while `driver.name` is `mongo-java-driver|kotlin|sync`, `mongo-java-driver|kotlin|reactive-streams`, or `mongo-java-driver|scala|reactive-streams`. Their `platform` gains `kotlin/<stdlib>` or `Scala/version <number>`. `platform` is already in the group key, so each of those clients stays one row and stays apart from a plain Java client.
-- Keep internal egress in its own rows. A `driver.name` prefix `NetworkInterfaceTL` (the same prefix admission uses) or the exact name `MongoDB Internal Client` is that family. Group that family by `driver.name` as well, so each suffix is its own row. Application drivers stay off `driver.name` and `application.name`, because those can already differ inside one `MongoClient`.
-- Drop `ping`, drop the missing-command arm, and drop the exact `NetworkInterfaceTL` equality from the hello test. The replica-set monitor’s `ping` belongs to `NetworkInterfaceTL-ReplicaSetMonitor-TaskExecutor`, not to a driver RTT socket.
-- Per connection, three flags. `client.purpose` wins when present (absent until DRIVERS-3027). Ruby’s internal purpose symbols are not that field until a driver serializes them.
-  - `streaming`: no `effectiveUsers.user`, command is `hello` / `isMaster` / `ismaster`, and `maxAwaitTimeMS` is present. Also when `purpose` is `"sdam"`.
-  - `bareHello`: unauthenticated hello-family, no `maxAwaitTimeMS`. Also when `purpose` is `"rtt"`.
-  - `unauth`: no effective user.
-- After the group, with the connections still in hand:
-  - Any `streaming` connection: those are `sdam`, and `pools` is that count (MongoClients from that endpoint to this mongod). When the group also has an authenticated user, every other unauthenticated connection is idle RTT. When the group has no authenticated user, `rtt` is only `bareHello`, and idle sockets stay in the pool.
-  - Nothing streaming, and the group has an authenticated user: every unauthenticated connection is a poll-mode monitor, and `pools` is that count. libmongoc poll mode on 4.4+ has two of those per client (SDAM poll and RTT), so `pools` is double until `purpose` distinguishes them.
-  - Nothing streaming, and the group has no authenticated user: only `bareHello` is a monitor. Idle sockets stay in the pool. Poll-mode clients are undercounted. One `$currentOp` sample cannot fix that without counting the idle pool as monitors.
-- `appName`: from connections not classified as monitors. A monitors-only group falls back to any name whose `driver.name` does not start with `NetworkInterfaceTL`. A future `java-driver-sdam` label then loses to the pool’s real application name.
 
 ### `indexCacheUtil.js`
 

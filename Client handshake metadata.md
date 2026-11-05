@@ -61,7 +61,7 @@ On one mongod, the streaming-hello count from one client endpoint is the number 
 
 ## `NetworkInterfaceTL-*`
 
-`NetworkInterfaceTL` is the C++ egress task-executor transport. The handshake string is the instance name with a prefix. `executor::makeInstanceName` returns `NetworkInterfaceTL-` plus that name, and the async client writes it as `client.driver.name` (`AsyncDBClient::_buildHelloRequest`, the three-argument `ClientMetadata::serialize`). `client.driver.version` is the server’s own version. Production handshakes on this path omit `client.application.name`. With the testing proctor enabled, `application.name` is the process name, truncated to 128 bytes.
+`NetworkInterfaceTL` is the C++ egress task-executor transport. The handshake string is the instance name with a prefix. `executor::makeInstanceName` returns `NetworkInterfaceTL-` plus that name, and the async client writes it as `client.driver.name` (`AsyncDBClient::_buildHelloRequest`, the three-argument `ClientMetadata::serialize`). `client.driver.version` is the server’s own version. Production handshakes on this path omit `client.application.name` and `platform`. The document is `driver` plus `os`. With the testing proctor enabled, `application.name` is the process name, truncated to 128 bytes.
 
 When auth is on, the pool authenticates as the internal client, unless the pool was built with `skipAuthentication` (the mongot and search-index pools can). These sockets are the process’s own egress. A driver’s SDAM and RTT sockets use that driver’s name and stay unauthenticated.
 
@@ -118,7 +118,7 @@ Other production instance names in this tree:
 
 Primary-only services append `Network` to the service name: `NetworkInterfaceTL-ShardingDDLCoordinatorNetwork`, `NetworkInterfaceTL-ConfigsvrCoordinatorServiceNetwork`, `NetworkInterfaceTL-RenameCollectionParticipantServiceNetwork`, `NetworkInterfaceTL-ReshardingCoordinatorServiceNetwork`, `NetworkInterfaceTL-ReshardingDonorServiceNetwork`, `NetworkInterfaceTL-ReshardingRecipientServiceNetwork`, `NetworkInterfaceTL-MultiUpdateCoordinatorServiceNetwork`.
 
-Several of these executors share the server version and the server `os` and `platform`. A group key of endpoint + `driver.version` + `platform` + `os` collapses them into one row. `driver.name` is the field that tells them apart.
+Several of these executors share the server version and the server `os`, and they omit `platform`. A group key of endpoint + `driver.version` + `platform` + `os` collapses them into one row. `driver.name`, or the `MongoDB Internal Client` application name, is what tells them apart.
 
 ## `MongoDB Internal Client`
 
@@ -150,21 +150,43 @@ Other application names on `MongoDB Internal Client`:
 3. Any other `driver.name` is an application driver. The `client` document matches across that client’s pool and its monitoring sockets, aside from the async PyMongo `driver.version` split. Monitoring sockets are unauthenticated. The streaming monitor is the hello that carries `maxAwaitTimeMS`. A poll monitor and an RTT socket are a hello without it.
 
 ```javascript
-db.adminCommand({ currentOp: 1, idleConnections: true, allUsers: true }).inprog
-  .filter(op => op.clientMetadata)
-  .map(op => ({
-    client: op.client,
-    driver: op.clientMetadata.driver,
-    app: op.clientMetadata.application,
-    cmd: op.command && Object.keys(op.command).find(k =>
-      k === 'hello' || k === 'isMaster' || k === 'ismaster' || k === 'ping'),
-    awaitMS: op.command && op.command.maxAwaitTimeMS,
-    user: op.effectiveUsers
-  }))
+db.adminCommand({
+  aggregate: 1,
+  cursor: {},
+  pipeline: [
+    { $currentOp: { allUsers: true, idleConnections: true } },
+    { $match: { clientMetadata: { $exists: true } } },
+    { $project: {
+        client: 1,
+        driver: "$clientMetadata.driver",
+        app: "$clientMetadata.application",
+        platform: "$clientMetadata.platform",
+        cmd: { $map: {
+          input: { $objectToArray: { $ifNull: ["$command", {}] } },
+          as: "kv",
+          in: "$$kv.k"
+        } },
+        awaitMS: "$command.maxAwaitTimeMS",
+        user: "$effectiveUsers"
+    } }
+  ]
+})
 ```
+
+The aggregate `$currentOp` stage is the form that returns the handshake document. The sample is the process you ran it on.
 
 ## `connStats.js`
 
-v0.1.14 groups by endpoint, `driver.version`, `platform`, and `os`, and compares `driver.name` to the exact string `NetworkInterfaceTL`. That comparison matches none of the prefixed names above, and `MongoDB Internal Client` is a different driver name. The displayed `appName` drops only that same exact string, then falls back to `driver.name` when `application.name` is absent, so one prefixed suffix can become the label for a collapsed internal row.
+v0.2.0 (`src/connStats.js`) tags each grouped row `client` or `internal`.
 
-The classification change is planned and is not in v0.1.14. It is written under [`connStats.js`](ROADMAP.md#connstatsjs) in the roadmap.
+`class` is null on a client row. On an internal row it is one `NetworkInterfaceTL-*` driver name, or the `MongoDB Internal Client` application name (`MongoDB Shell`, `OplogFetcher`, `BenchRun`, `{binary}-GRPCClient`). `appName` on that row is the class. `pools` is 0, and those sockets are not counted as driver SDAM or RTT.
+
+The row is incoming to the process the script is run on. A mongos sample shows clients of that mongos. Member and mongos egress show up on the mongod that accepted the connection. On a shard primary the classes come out separately, including `NetworkInterfaceTL-ReplicaSetMonitor-TaskExecutor`, `NetworkInterfaceTL-ReplNetwork`, `NetworkInterfaceTL-ReplCoordExternNetwork`, `NetworkInterfaceTL-TaskExecutorPool-0`, `NetworkInterfaceTL-Sharding-Fixed`, and `OplogFetcher`.
+
+Internal rows have no `platform`. They group on the client endpoint, the server version, and `os`. `authenticatedUsers` comes from `effectiveUsers` on the sampled ops. Idle sockets often have none, so an internal row can list no user while an active socket in that class shows `__system@local`.
+
+A client row still groups by endpoint, normalized `driver.version`, `platform`, and `os`. Empty `|` segments are dropped, so an async PyMongo monitor joins its pool. When the sample has an authenticated user and no streaming hello, every unauthenticated socket in that group counts as a poll-mode monitor. A mongosh session in that state reported `pools: 3`: one authenticated command connection and three idle sockets with no command in flight. A streaming hello is the SDAM socket while `maxAwaitTimeMS` is set.
+
+v0.1.14 compared `driver.name` to the exact string `NetworkInterfaceTL` and collapsed every prefixed executor that shared the server version into one row.
+
+`whatsmyuri` and mongos `targetAllNodes` remain later work. See [`connStats.js`](ROADMAP.md#connstatsjs) in the roadmap.
