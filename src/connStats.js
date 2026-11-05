@@ -487,7 +487,7 @@
                            { "$or": ["$$connection.sdam", "$$connection.rtt"] },
                            1, 0
             ] } } } },
-            "pools": { // distinct MongoClient() instances; 0 on an internal row
+            "pools": { // SDAM sockets; poll mode can count two; 0 on an internal row
                "$sum": {
                   "$map": {
                      "input": "$rows",
