@@ -426,26 +426,7 @@
                         "$cond": [
                            { "$gt": [{ "$size": "$$pooled" }, 0] },
                            { "$max": "$$pooled" },
-                           { "$max": {
-                              "$map": {
-                                 "input": {
-                                    "$filter": {
-                                       "input": "$rows",
-                                       "as": "connection",
-                                       "cond": {
-                                          "$not": {
-                                             "$regexMatch": {
-                                                "input": { "$ifNull": ["$$connection.driverName", ""] },
-                                                "regex": /^NetworkInterfaceTL/
-                                             }
-                                          }
-                                       }
-                                    }
-                                 },
-                                 "as": "connection",
-                                 "in": "$$connection.applicationName"
-                              }
-                           } }
+                           { "$max": "$rows.applicationName" }
                         ]
                      }
                   } }
