@@ -1,13 +1,13 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.2.1"
+    *  Version: "0.2.2"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Legacy archive line: v0.1.14 is the snapshot for the whole-tree freeze.
-    *  Live mongosh line is v0.2.1. Handshake labels are in
+    *  Live mongosh line is v0.2.2. Handshake labels are in
     *  "Client handshake metadata.md".
     *
     *  v0.2.0 summary tag:
@@ -24,12 +24,18 @@
     *  A pool whose authenticated users are only those users is internal.
     *  "class" is that user when the handshake did not already set one.
     *  A pool that also has an application user stays "client".
+    *
+    *  v0.2.2 retries $currentOp when the server rejects an option
+    *  ("arg=<name> isn't allowed"). That option is dropped and the aggregate
+    *  runs again. allUsers and idleConnections stay on when accepted.
+    *  A missing inprog privilege still falls back to allUsers: false.
     */
 
    /*
     *  Notes:
     *  - mongosh only
     *  - requires "inprog" privileges to capture all connections, but supports fallback
+    *  - a server that rejects a $currentOp option by name is retried without it
     *  - statistics are per mongos/mongod as determined by the connection URI and readPreference
     *  - $currentOp client addresses: IPv4/hostname as host:port; IPv6 always bracketed as [addr]:port
     *  - empty "|" segments are dropped from driver.version before grouping, so an
@@ -47,12 +53,8 @@
 
    const namespace = db.getSiblingDB('admin'),
       aggOpts = {
-         "comment": "connStats.js v0.2.1"
+         "comment": "connStats.js v0.2.2"
       },
-      inprog = [
-         { "$currentOp": { "allUsers": true } },
-         { "$limit": 1 }
-      ],
       pipeline = [
          { "$currentOp": {
             "allUsers": true,
@@ -502,24 +504,68 @@
          { "$unset": ["_id", "connections", "rows", "internal", "internalByUser", "hasStreaming", "hasAuth"] }
       ];
 
-   function hasInprog() {
-      try {
-         namespace.aggregate(inprog, aggOpts).toArray();
-         return true;
-      } catch(e) {
-         return false;
+   /*
+    *  Atlas shared tiers name the rejected $currentOp field:
+    *  "arg=<name> isn't allowed in this atlas tier".
+    *  Drop that field and retry. Leave every other option in place.
+    */
+   function errorText(error) {
+      return String((error && (error.errmsg || error.message)) || error);
+   }
+
+   function disallowedCurrentOpArg(error) {
+      const found = errorText(error).match(/arg=([A-Za-z]+) isn't allowed/);
+      if (!found) return null;
+      const arg = found[1];
+      if (!Object.prototype.hasOwnProperty.call(pipeline[0].$currentOp, arg)) return null;
+      return arg;
+   }
+
+   function lacksInprog(error) {
+      if (error && (error.code === 13 || error.codeName === "Unauthorized")) return true;
+      const text = errorText(error);
+      return /not authorized/i.test(text) || /requires authentication/i.test(text);
+   }
+
+   const omitted = [];
+   let ownOpsOnly = false;
+
+   /*
+    *  The server validates $currentOp when the cursor is read.
+    *  Assign toArray() inside the try. Returning the call lets mongosh
+    *  await that promise outside the catch, so the retry never sees it.
+    */
+   function loadDocs() {
+      const seen = {};
+      for (;;) {
+         try {
+            const docs = namespace.aggregate(pipeline, aggOpts).toArray();
+            return docs;
+         } catch (error) {
+            const arg = disallowedCurrentOpArg(error);
+            if (arg && !seen[arg]) {
+               seen[arg] = true;
+               delete pipeline[0].$currentOp[arg];
+               omitted.push(arg);
+               console.error("$currentOp option " + arg + " is not allowed on this tier, retrying without it");
+               continue;
+            }
+            if (pipeline[0].$currentOp.allUsers === true && lacksInprog(error)) {
+               pipeline[0].$currentOp.allUsers = false;
+               ownOpsOnly = true;
+               console.error('User has no inprog privilege, falling back to { "allUsers": false }');
+               continue;
+            }
+            throw error;
+         }
       }
    }
 
-   const allUsers = hasInprog();
-   if (!allUsers) {
-      console.error('User has no inprog privilege, falling back to { "allUsers": false }');
-      console.log('PARTIAL: own ops only');
-      pipeline[0].$currentOp.allUsers = false;
-   }
-
-   const scope = allUsers ? "allUsers" : "ownOps";
-   namespace.aggregate(pipeline, aggOpts).forEach(doc => {
+   const docs = loadDocs();
+   if (ownOpsOnly) console.log("PARTIAL: own ops only");
+   if (omitted.length) console.log("PARTIAL: omitted " + omitted.join(", "));
+   const scope = pipeline[0].$currentOp.allUsers === true ? "allUsers" : "ownOps";
+   docs.forEach(doc => {
       console.log({ scope, ...doc });
    });
 })();
