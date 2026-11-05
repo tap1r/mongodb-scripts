@@ -33,6 +33,7 @@ Live scripts are in [`src/`](src/). They run under **mongosh** 1.10 / 2.10+ (`mo
 * [BI Connector reproductions](BI%20Connector%20reproductions.md) — mongosqld 2.13.1 startup and MySQL connection strings, with and without SSL and auth.
 * [DNS over HTTPS](DoH.md) — turn on DNS over HTTPS on macOS, including a local resolver on port 53.
 * [VM ballooning detection](VM%20ballooning%20driver%20detection.md) — detect the hypervisor and whether a ballooning driver is present.
+* [Client handshake metadata](Client%20handshake%20metadata.md) — driver monitoring sockets, and the `NetworkInterfaceTL-*` and `MongoDB Internal Client` labels.
 
 ### Operations
 
