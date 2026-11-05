@@ -1,13 +1,13 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.2.4"
+    *  Version: "0.2.5"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Legacy archive line: v0.1.14 is the snapshot for the whole-tree freeze.
-    *  Live mongosh line is v0.2.4. Handshake labels are in
+    *  Live mongosh line is v0.2.5. Handshake labels are in
     *  "Client handshake metadata.md".
     *
     *  v0.2.0 summary tag:
@@ -16,14 +16,10 @@
     *    name, or the MongoDB Internal Client application name (MongoDB Shell,
     *    OplogFetcher, BenchRun, mongod-GRPCClient, mongos-GRPCClient, …)
     *
-    *  v0.2.1 internal system users, the srvatlas.sh hello probe users
-    *  (stored there as db.user, stored here as user@db):
-    *  - __system@local — on-prem replication (local.__system)
-    *  - mms-automation@admin — Atlas and Atlas-gov automation
-    *    (admin.mms-automation)
-    *  A pool whose authenticated users are only those users is internal.
-    *  "class" is that user when the handshake did not already set one.
-    *  A pool that also has an application user stays "client".
+    *  v0.2.1: a pool whose authenticated users are only the srvatlas.sh
+    *  hello probe users is internal. "class" is that user when the
+    *  handshake did not already set one. A pool that also has an
+    *  application user stays "client".
     *
     *  v0.2.2 retries $currentOp when the server rejects an option
     *  ("arg=<name> isn't allowed"). That option is dropped and the aggregate
@@ -35,6 +31,9 @@
     *
     *  v0.2.4 names the group's monitor mode before the per-socket rule:
     *  internal, streaming, poll, or quiet. The counts are unchanged.
+    *
+    *  v0.2.5 keeps those probe users in internalUsers, the one array
+    *  $setIsSubset checks. The classification is unchanged.
     */
 
    /*
@@ -58,8 +57,15 @@
    // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>connStats.js
 
    const namespace = db.getSiblingDB('admin'),
+      /*
+       *  srvatlas.sh hello probe users, stored here as user@db.
+       *  __system@local is on-prem replication (local.__system).
+       *  mms-automation@admin is Atlas and Atlas-gov automation
+       *  (admin.mms-automation).
+       */
+      internalUsers = ["__system@local", "mms-automation@admin"],
       aggOpts = {
-         "comment": "connStats.js v0.2.4"
+         "comment": "connStats.js v0.2.5"
       },
       pipeline = [
          { "$currentOp": {
@@ -285,17 +291,16 @@
          } },
          { "$set": {
             /*
-             *  srvatlas.sh probes local.__system on-prem and
-             *  admin.mms-automation on Atlas and Atlas-gov. A pool that
-             *  authenticates only as those users is an internal system.
-             *  An application user in the same pool keeps the client tag.
+             *  A pool that authenticates only as internalUsers is an
+             *  internal system. An application user in the same pool
+             *  keeps the client tag.
              */
             "internalByUser": {
                "$and": [
                   { "$gt": [{ "$size": "$authenticatedUsers" }, 0] },
                   { "$setIsSubset": [
                      "$authenticatedUsers",
-                     ["__system@local", "mms-automation@admin"]
+                     internalUsers
                   ] }
                ]
             }
