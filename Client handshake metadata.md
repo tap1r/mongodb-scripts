@@ -177,13 +177,13 @@ The aggregate `$currentOp` stage is the form that returns the handshake document
 
 ## `connStats.js`
 
-v0.2.0 (`src/connStats.js`) tags each grouped row `client` or `internal`.
+v0.2.1 (`src/connStats.js`) tags each grouped row `client` or `internal`.
 
-`class` is null on a client row. On an internal row it is one `NetworkInterfaceTL-*` driver name, or the `MongoDB Internal Client` application name (`MongoDB Shell`, `OplogFetcher`, `BenchRun`, `{binary}-GRPCClient`). `appName` on that row is the class. `pools` is 0, and those sockets are not counted as driver SDAM or RTT.
+`class` is null on a client row. On an internal row it is one `NetworkInterfaceTL-*` driver name, or the `MongoDB Internal Client` application name (`MongoDB Shell`, `OplogFetcher`, `BenchRun`, `{binary}-GRPCClient`). A pool is also internal when every authenticated user is an internal system user. Those are the users `srvatlas.sh` probes with `saslSupportedMechs`: `__system@local` (`local.__system`, the on-prem replication user) and `mms-automation@admin` (`admin.mms-automation`, Atlas and Atlas-gov automation). When the handshake did not already set a class, `class` is that user. `appName` on an internal row is the class. `pools` is 0, and those sockets are not counted as driver SDAM or RTT. A pool that also has an application user stays a client row.
 
 The row is incoming to the process the script is run on. A mongos sample shows clients of that mongos. Member and mongos egress show up on the mongod that accepted the connection. On a shard primary the classes come out separately, including `NetworkInterfaceTL-ReplicaSetMonitor-TaskExecutor`, `NetworkInterfaceTL-ReplNetwork`, `NetworkInterfaceTL-ReplCoordExternNetwork`, `NetworkInterfaceTL-TaskExecutorPool-0`, `NetworkInterfaceTL-Sharding-Fixed`, and `OplogFetcher`.
 
-Internal rows have no `platform`. They group on the client endpoint, the server version, and `os`. `authenticatedUsers` comes from `effectiveUsers` on the sampled ops. Idle sockets often have none, so an internal row can list no user while an active socket in that class shows `__system@local`.
+Internal handshake rows have no `platform`. They group on the client endpoint, the server version, and `os`. `authenticatedUsers` comes from `effectiveUsers` on the sampled ops. Idle sockets often have none, so a handshake class can list no user while an active socket in that class shows `__system@local`. A pool whose handshake is an application driver stays a client row until a sampled op shows only an internal system user. The unauthenticated sockets in that same pool then stay on the internal row, because they share the handshake group.
 
 A client row still groups by endpoint, normalized `driver.version`, `platform`, and `os`. Empty `|` segments are dropped, so an async PyMongo monitor joins its pool. When the sample has an authenticated user and no streaming hello, every unauthenticated socket in that group counts as a poll-mode monitor. A mongosh session in that state reported `pools: 3`: one authenticated command connection and three idle sockets with no command in flight. A streaming hello is the SDAM socket while `maxAwaitTimeMS` is set.
 

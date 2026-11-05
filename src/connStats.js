@@ -1,13 +1,13 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.2.0"
+    *  Version: "0.2.1"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Legacy archive line: v0.1.14 is the snapshot for the whole-tree freeze.
-    *  Live mongosh line is v0.2.0. Handshake labels are in
+    *  Live mongosh line is v0.2.1. Handshake labels are in
     *  "Client handshake metadata.md".
     *
     *  v0.2.0 summary tag:
@@ -15,6 +15,15 @@
     *  - "internal": cluster egress. "class" is one NetworkInterfaceTL-* driver
     *    name, or the MongoDB Internal Client application name (MongoDB Shell,
     *    OplogFetcher, BenchRun, mongod-GRPCClient, mongos-GRPCClient, …)
+    *
+    *  v0.2.1 internal system users, the srvatlas.sh hello probe users
+    *  (stored there as db.user, stored here as user@db):
+    *  - __system@local — on-prem replication (local.__system)
+    *  - mms-automation@admin — Atlas and Atlas-gov automation
+    *    (admin.mms-automation)
+    *  A pool whose authenticated users are only those users is internal.
+    *  "class" is that user when the handshake did not already set one.
+    *  A pool that also has an application user stays "client".
     */
 
    /*
@@ -38,7 +47,7 @@
 
    const namespace = db.getSiblingDB('admin'),
       aggOpts = {
-         "comment": "connStats.js v0.2.0"
+         "comment": "connStats.js v0.2.1"
       },
       inprog = [
          { "$currentOp": { "allUsers": true } },
@@ -233,7 +242,19 @@
             "driverVersion": "$_id.client.driverVersion",
             "platform": "$_id.client.platform",
             "os": "$_id.client.os",
-            "internal": { "$ne": ["$_id.client.class", null] },
+            /*
+             *  user@db from the sampled op. Idle sockets often have no
+             *  effectiveUsers, so they stay "unprivileged" and drop out here.
+             */
+            "authenticatedUsers": {
+               "$setDifference": [
+                  { "$setIntersection": [
+                     "$connections.user",
+                     "$connections.user"
+                  ] },
+                  ["unprivileged"]
+               ]
+            },
             "hasStreaming": { "$anyElementTrue": "$connections.streaming" },
             "hasAuth": {
                "$anyElementTrue": {
@@ -247,8 +268,59 @@
          } },
          { "$set": {
             /*
-             *  Client rows only. Internal rows stay a pool of that class:
-             *  their hellos are not driver SDAM or RTT.
+             *  srvatlas.sh probes local.__system on-prem and
+             *  admin.mms-automation on Atlas and Atlas-gov. A pool that
+             *  authenticates only as those users is an internal system.
+             *  An application user in the same pool keeps the client tag.
+             */
+            "internalByUser": {
+               "$and": [
+                  { "$gt": [{ "$size": "$authenticatedUsers" }, 0] },
+                  { "$setIsSubset": [
+                     "$authenticatedUsers",
+                     ["__system@local", "mms-automation@admin"]
+                  ] }
+               ]
+            }
+         } },
+         { "$set": {
+            "internal": {
+               "$or": [
+                  { "$ne": ["$_id.client.class", null] },
+                  "$internalByUser"
+               ]
+            },
+            /*
+             *  Handshake class wins. Otherwise the internal user is the class.
+             *  One user is the usual case. Several join in sample order.
+             */
+            "class": {
+               "$cond": [
+                  { "$ne": ["$_id.client.class", null] },
+                  "$_id.client.class",
+                  { "$cond": [
+                     "$internalByUser",
+                     { "$reduce": {
+                        "input": "$authenticatedUsers",
+                        "initialValue": "",
+                        "in": {
+                           "$cond": [
+                              { "$eq": ["$$value", ""] },
+                              "$$this",
+                              { "$concat": ["$$value", ",", "$$this"] }
+                           ]
+                        }
+                     } },
+                     null
+                  ] }
+               ]
+            }
+         } },
+         { "$set": {
+            /*
+             *  Client rows only. Internal rows stay a pool of that class,
+             *  including a pool tagged from an internal system user.
+             *  Their hellos are not driver SDAM or RTT.
              *  - any streaming socket: those are sdam. Other unauthenticated
              *    sockets are idle RTT when the group also has an authenticated
              *    user; otherwise only a bare hello is RTT.
@@ -291,11 +363,10 @@
          } },
          { "$set": {
             "tag": { "$cond": ["$internal", "internal", "client"] },
-            "class": { "$cond": ["$internal", "$_id.client.class", null] },
             "appName": {
                "$cond": [
                   "$internal",
-                  "$_id.client.class",
+                  "$class",
                   { "$let": {
                      "vars": {
                         "pooled": {
@@ -341,14 +412,6 @@
                   } }
                ]
             },
-            "authenticatedUsers": {
-               "$setDifference": [
-                  { "$setIntersection": [
-                     "$connections.user",
-                     "$connections.user"
-                  ] },
-                  ["unprivileged"]
-            ] },
             "activePooledConnections": {
                "$sum": {
                   "$map": {
@@ -436,7 +499,7 @@
             // "secs_running": { "$gte": 0 }
          // } },
          { "$sort": { "totalConnections": -1 } },
-         { "$unset": ["_id", "connections", "rows", "internal", "hasStreaming", "hasAuth"] }
+         { "$unset": ["_id", "connections", "rows", "internal", "internalByUser", "hasStreaming", "hasAuth"] }
       ];
 
    function hasInprog() {
