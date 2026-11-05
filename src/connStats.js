@@ -510,13 +510,11 @@
             } },
             "totalConnections": { "$size": "$connections" }
          } },
-         // { "$match": { // post filter recommended on derived pool metrics
+         // { "$match": { // post filter on the output document
             // "tag": "client",
             // "class": "NetworkInterfaceTL-ReplCoordExternNetwork",
             // "appName": { "$in": [/^greedyApp/, null] },
-            // "appName": { "$in": [/^(?:mongosh|MongoDB Shell)/, null] },
-            // "ns": /^admin/,
-            // "secs_running": { "$gte": 0 }
+            // "appName": { "$in": [/^(?:mongosh|MongoDB Shell)/, null] }
          // } },
          { "$sort": { "totalConnections": -1 } },
          { "$unset": ["_id", "connections", "rows", "internal", "internalByUser", "hasStreaming", "hasAuth", "mode"] }
