@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.2.8"
+    *  Version: "0.2.9"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -36,6 +36,12 @@
        */
       internalUsers = ["__system@local", "mms-automation@admin"],
       /*
+       *  Handshake class for an application driver. Internal egress replaces
+       *  it with the NetworkInterfaceTL name or the Internal Client role.
+       *  The user rule can still replace the printed class with the user.
+       */
+      applicationClass = "application",
+      /*
        *  The monitor handshake makes the server selectable, then the driver
        *  waits minHeartbeatFrequencyMS (default 500) before the awaitable
        *  hello. This script can run in that gap. Poll until that hello is
@@ -44,7 +50,7 @@
       monitorWaitMs = 1500,
       monitorPollMs = 100,
       aggOpts = {
-         "comment": "connStats.js v0.2.8"
+         "comment": "connStats.js v0.2.9"
       },
       pipeline = [
          {
@@ -128,10 +134,10 @@
                   }
                },
                /*
-                *  null for an application driver. A string splits cluster egress
-                *  into one row per class. NetworkInterfaceTL is a prefix, not an
-                *  exact driver name. MongoDB Internal Client classes differ by
-                *  application name.
+                *  "application" for an application driver. Any other string
+                *  splits cluster egress into one row per class.
+                *  NetworkInterfaceTL is a prefix, not an exact driver name.
+                *  MongoDB Internal Client classes differ by application name.
                 */
                "poolClass": {
                   "$let": {
@@ -160,7 +166,7 @@
                                  }
                               }
                            ],
-                           "default": null
+                           "default": applicationClass
                         }
                      }
                   }
@@ -243,10 +249,10 @@
                      "platform": "$clientMetadata.platform",
                      "os": "$clientMetadata.os",
                      /*
-                      *  Application drivers omit class. driver.name and
+                      *  Application drivers share class "application". driver.name and
                       *  application.name can already differ inside one MongoClient,
                       *  and must not split the pool from its monitors.
-                      *  Internal egress sets class, so each server pool stays its own row.
+                      *  Internal egress sets its own class, so each server pool stays its own row.
                       */
                      "class": "$poolClass"
                   }
@@ -310,7 +316,7 @@
                   "host": "$_id.host",
                   "client": "$_id.client",
                   /*
-                   *  A user-rule internal pool has no handshake class. mongot's
+                   *  A user-rule internal pool has class "application". mongot's
                    *  Java clients share endpoint, version, platform, and os, and
                    *  differ by application name. Split those pools on that name.
                    *  A handshake class, or a pool with an application user, stays
@@ -321,7 +327,7 @@
                         {
                            "$and": [
                               "$internalByUser",
-                              { "$eq": ["$_id.client.class", null] }
+                              { "$eq": ["$_id.client.class", applicationClass] }
                            ]
                         },
                         "$connections.applicationName",
@@ -392,15 +398,17 @@
             "$set": {
                "internal": {
                   "$or": [
-                     { "$ne": ["$_id.client.class", null] },
+                     { "$ne": ["$_id.client.class", applicationClass] },
                      "$internalByUser",
                      "$parentInternalByUser"
                   ]
                },
                /*
-                *  Handshake class wins. Otherwise the internal user is the class.
-                *  A split row whose own sockets are idle keeps the parent users.
-                *  One user is the usual case. Several join in sample order.
+                *  An internal handshake class wins. "application" is not one.
+                *  Otherwise the internal user is the class. A split row whose
+                *  own sockets are idle keeps the parent users. One user is
+                *  the usual case. Several join in sample order. A client row
+                *  stays "application".
                 */
                "class": {
                   "$let": {
@@ -421,7 +429,7 @@
                      },
                      "in": {
                         "$cond": [
-                           { "$ne": ["$_id.client.class", null] },
+                           { "$ne": ["$_id.client.class", applicationClass] },
                            "$_id.client.class",
                            {
                               "$cond": [
@@ -439,7 +447,7 @@
                                        }
                                     }
                                  },
-                                 null
+                                 applicationClass
                               ]
                            }
                         ]
