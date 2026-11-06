@@ -1,13 +1,13 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.2.5"
+    *  Version: "0.2.6"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Legacy archive line: v0.1.14 is the snapshot for the whole-tree freeze.
-    *  Live mongosh line is v0.2.5. Handshake labels are in
+    *  Live mongosh line is v0.2.6. Handshake labels are in
     *  "Client handshake metadata.md".
     *
     *  v0.2.0 summary tag:
@@ -34,6 +34,9 @@
     *
     *  v0.2.5 keeps those probe users in internalUsers, the one array
     *  $setIsSubset checks. The classification is unchanged.
+    *
+    *  v0.2.6 waits until this client's awaitable hello is visible, so the
+    *  sample includes that socket's opid. The wait is bounded.
     */
 
    /*
@@ -64,8 +67,16 @@
        *  (admin.mms-automation).
        */
       internalUsers = ["__system@local", "mms-automation@admin"],
+      /*
+       *  The monitor handshake makes the server selectable, then the driver
+       *  waits minHeartbeatFrequencyMS (default 500) before the awaitable
+       *  hello. This script can run in that gap. Poll until that hello is
+       *  visible so its opid is in the sample.
+       */
+      monitorWaitMs = 1500,
+      monitorPollMs = 100,
       aggOpts = {
-         "comment": "connStats.js v0.2.5"
+         "comment": "connStats.js v0.2.6"
       },
       pipeline = [
          { "$currentOp": {
@@ -545,6 +556,73 @@
 
    const omitted = [];
    let ownOpsOnly = false;
+
+   function clientEndpoint(client) {
+      const text = String(client || "");
+      const bracket = text.match(/^\[([^\]]+)\]/);
+      if (bracket) return bracket[1];
+      const host = text.match(/^([^:]+)/);
+      return host ? host[1] : "";
+   }
+
+   function sameHandshake(doc, self) {
+      const left = doc.clientMetadata || {};
+      const right = self.clientMetadata || {};
+      const leftDriver = left.driver || {};
+      const rightDriver = right.driver || {};
+      const leftApp = left.application || {};
+      const rightApp = right.application || {};
+      return leftDriver.name === rightDriver.name
+         && leftDriver.version === rightDriver.version
+         && leftApp.name === rightApp.name
+         && left.platform === right.platform
+         && clientEndpoint(doc.client) === clientEndpoint(self.client);
+   }
+
+   function awaitableHello(doc) {
+      const command = doc.command || {};
+      if (command.maxAwaitTimeMS == null) return false;
+      return !!(command.hello || command.isMaster || command.ismaster);
+   }
+
+   /*
+    *  The probe is a separate aggregate so its comment identifies this
+    *  client. Assign toArray() inside the try, same as the sample below.
+    *  A tier or privilege error skips the wait; the sample retries it.
+    */
+   function ownMonitorIsWaiting() {
+      let docs;
+      try {
+         docs = namespace.aggregate(
+            [{ "$currentOp": pipeline[0].$currentOp }],
+            { "comment": aggOpts.comment + " wait" }
+         ).toArray();
+      } catch (error) {
+         return null;
+      }
+      const mark = aggOpts.comment + " wait";
+      const self = docs.find(doc => doc.command && doc.command.comment === mark);
+      if (!self) return false;
+      return docs.some(doc => doc !== self && sameHandshake(doc, self) && awaitableHello(doc));
+   }
+
+   function waitForOwnMonitor() {
+      const deadline = Date.now() + monitorWaitMs;
+      for (;;) {
+         const waiting = ownMonitorIsWaiting();
+         if (waiting === null || waiting === true) return;
+         if (Date.now() >= deadline) {
+            console.error(
+               "awaitable hello for this client was not visible within "
+               + monitorWaitMs + "ms, sampling anyway"
+            );
+            return;
+         }
+         sleep(monitorPollMs);
+      }
+   }
+
+   waitForOwnMonitor();
 
    /*
     *  The server validates $currentOp when the cursor is read.
