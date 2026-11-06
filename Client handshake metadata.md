@@ -143,6 +143,22 @@ Other application names on `MongoDB Internal Client`:
 | `OplogFetcher` | replication oplog fetcher. This is an application name. It is not a `NetworkInterfaceTL-` driver name |
 | `{binaryName}-GRPCClient` | mongod and mongos gRPC client metadata, usually `mongod-GRPCClient` or `mongos-GRPCClient`. Test egress uses `Test-GRPCClient` |
 
+## mongot clients
+
+mongot opens its own clients into `mongod`. These are Java handshakes, not `NetworkInterfaceTL-*` and not `MongoDB Internal Client`. On the Atlas local 8 image the driver version is `4.11.5` and the platform is `Java/Eclipse Adoptium/21.0.3+9-LTS`. The clients share that version, platform, and `os`, so without the application-name split they are one `__system@local` row.
+
+| `application.name` | `driver.name` |
+| --- | --- |
+| `mongot steady state sync` | `mongo-java-driver\|mongot-sync` |
+| `mongot initial sync and session refresh` | `mongo-java-driver\|sync` |
+| `mongot server info resolver` | `mongo-java-driver\|sync` |
+| `mongot periodic optime fetcher` | `mongo-java-driver\|sync` |
+| `mongot database metadata resolver` | `mongo-java-driver\|sync` |
+| `mongot Lease Manager mongo client` | `mongo-java-driver\|sync` |
+| `mongot AutoEmbedding Materialized View Writer` | `mongo-java-driver\|sync` |
+
+Monitoring sockets are unauthenticated. Operation sockets authenticate as `__system` on `local`. `mongod`'s own egress to mongot stays `NetworkInterfaceTL-MongotExecutor` and `NetworkInterfaceTL-SearchIndexMgmtExecutor`.
+
 ## Reading one connection
 
 1. `driver.name` starts with `NetworkInterfaceTL-`. Server or legacy-shell egress. The suffix is the subsystem. `driver.version` is the server version. `application.name` is absent in production. The socket authenticates internally (mongot and search can skip that). A `ping` on `NetworkInterfaceTL-ReplicaSetMonitor-TaskExecutor` is the server’s ping monitor.
@@ -177,9 +193,9 @@ The aggregate `$currentOp` stage is the form that returns the handshake document
 
 ## `connStats.js`
 
-v0.2.6 (`src/connStats.js`) tags each grouped row `client` or `internal`. Before the sample it polls until this client's awaitable hello is visible, or until 1500 ms, so that hello's opid is included. The two internal system users are the `internalUsers` array. Each group is named `internal`, `streaming`, `poll`, or `quiet` before each socket is marked SDAM or RTT. If the server rejects a `$currentOp` option by name (`arg=<name> isn't allowed`), that option is dropped and the aggregate runs again. `allUsers` and `idleConnections` stay on when the server accepts them. A missing `inprog` privilege still falls back to own ops. A socket is unauthenticated when its `user@db` string is `unprivileged`. An empty `effectiveUsers` array is that case.
+v0.2.7 (`src/connStats.js`) tags each grouped row `client` or `internal`. A pool that is internal only because its users are internal system users is split by application name, and that name stays on the row. Before the sample it polls until this client's awaitable hello is visible, or until 1500 ms, so that hello's opid is included. The two internal system users are the `internalUsers` array. Each group is named `internal`, `streaming`, `poll`, or `quiet` before each socket is marked SDAM or RTT. If the server rejects a `$currentOp` option by name (`arg=<name> isn't allowed`), that option is dropped and the aggregate runs again. `allUsers` and `idleConnections` stay on when the server accepts them. A missing `inprog` privilege still falls back to own ops. A socket is unauthenticated when its `user@db` string is `unprivileged`. An empty `effectiveUsers` array is that case.
 
-`class` is null on a client row. On an internal row it is one `NetworkInterfaceTL-*` driver name, or the `MongoDB Internal Client` application name (`MongoDB Shell`, `OplogFetcher`, `BenchRun`, `{binary}-GRPCClient`). A pool is also internal when every authenticated user is an internal system user. Those are the users `srvatlas.sh` probes with `saslSupportedMechs`: `__system@local` (`local.__system`, the on-prem replication user) and `mms-automation@admin` (`admin.mms-automation`, Atlas and Atlas-gov automation). When the handshake did not already set a class, `class` is that user. `appName` on an internal row is the class. `pools` is 0, and those sockets are not counted as driver SDAM or RTT. A pool that also has an application user stays a client row.
+`class` is null on a client row. On an internal row it is one `NetworkInterfaceTL-*` driver name, or the `MongoDB Internal Client` application name (`MongoDB Shell`, `OplogFetcher`, `BenchRun`, `{binary}-GRPCClient`). A pool is also internal when every authenticated user is an internal system user. Those are the users `srvatlas.sh` probes with `saslSupportedMechs`: `__system@local` (`local.__system`, the on-prem replication user) and `mms-automation@admin` (`admin.mms-automation`, Atlas and Atlas-gov automation). When the handshake did not already set a class, `class` is that user, and the pool is split by application name so clients that share a version, platform, and `os` stay apart. `appName` on those rows is that application name. A split row whose own sockets are idle keeps the parent user as `class`. On a handshake-class row, `appName` is the class. `pools` is 0, and those sockets are not counted as driver SDAM or RTT. A pool that also has an application user stays a client row.
 
 The row is incoming to the process the script is run on. A mongos sample shows clients of that mongos. Member and mongos egress show up on the mongod that accepted the connection. On a shard primary the classes come out separately, including `NetworkInterfaceTL-ReplicaSetMonitor-TaskExecutor`, `NetworkInterfaceTL-ReplNetwork`, `NetworkInterfaceTL-ReplCoordExternNetwork`, `NetworkInterfaceTL-TaskExecutorPool-0`, `NetworkInterfaceTL-Sharding-Fixed`, and `OplogFetcher`.
 

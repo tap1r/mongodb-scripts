@@ -1,13 +1,13 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.2.6"
+    *  Version: "0.2.7"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
     *
     *  Legacy archive line: v0.1.14 is the snapshot for the whole-tree freeze.
-    *  Live mongosh line is v0.2.6. Handshake labels are in
+    *  Live mongosh line is v0.2.7. Handshake labels are in
     *  "Client handshake metadata.md".
     *
     *  v0.2.0 summary tag:
@@ -37,6 +37,10 @@
     *
     *  v0.2.6 waits until this client's awaitable hello is visible, so the
     *  sample includes that socket's opid. The wait is bounded.
+    *
+    *  v0.2.7 splits a user-rule internal pool by application name. Those
+    *  rows keep that name as appName. class stays the internal user.
+    *  A handshake class is not split.
     */
 
    /*
@@ -76,7 +80,7 @@
       monitorWaitMs = 1500,
       monitorPollMs = 100,
       aggOpts = {
-         "comment": "connStats.js v0.2.6"
+         "comment": "connStats.js v0.2.7"
       },
       pipeline = [
          { "$currentOp": {
@@ -271,6 +275,60 @@
             } }
          } },
          { "$set": {
+            /*
+             *  Decide the user-rule split before the sockets are separated.
+             *  Idle mongot sockets omit effectiveUsers, so the split keeps
+             *  the parent user list for those rows.
+             */
+            "authenticatedUsers": {
+               "$setDifference": [
+                  { "$setIntersection": [
+                     "$connections.user",
+                     "$connections.user"
+                  ] },
+                  ["unprivileged"]
+               ]
+            }
+         } },
+         { "$set": {
+            "internalByUser": {
+               "$and": [
+                  { "$gt": [{ "$size": "$authenticatedUsers" }, 0] },
+                  { "$setIsSubset": [
+                     "$authenticatedUsers",
+                     internalUsers
+                  ] }
+               ]
+            }
+         } },
+         { "$unwind": "$connections" },
+         { "$group": {
+            "_id": {
+               "host": "$_id.host",
+               "client": "$_id.client",
+               /*
+                *  A user-rule internal pool has no handshake class. mongot's
+                *  Java clients share endpoint, version, platform, and os, and
+                *  differ by application name. Split those pools on that name.
+                *  A handshake class, or a pool with an application user, stays
+                *  one row so a custom appName does not separate its monitors.
+                */
+               "applicationName": {
+                  "$cond": [
+                     { "$and": [
+                        "$internalByUser",
+                        { "$eq": ["$_id.client.class", null] }
+                     ] },
+                     "$connections.applicationName",
+                     null
+                  ]
+               }
+            },
+            "connections": { "$push": "$connections" },
+            "parentInternalByUser": { "$first": "$internalByUser" },
+            "parentUsers": { "$first": "$authenticatedUsers" }
+         } },
+         { "$set": {
             "host": "$_id.host",
             "srcIP": "$_id.client.endpoint",
             "driverVersion": "$_id.client.driverVersion",
@@ -320,33 +378,52 @@
             "internal": {
                "$or": [
                   { "$ne": ["$_id.client.class", null] },
-                  "$internalByUser"
+                  "$internalByUser",
+                  "$parentInternalByUser"
                ]
             },
             /*
              *  Handshake class wins. Otherwise the internal user is the class.
+             *  A split row whose own sockets are idle keeps the parent users.
              *  One user is the usual case. Several join in sample order.
              */
             "class": {
-               "$cond": [
-                  { "$ne": ["$_id.client.class", null] },
-                  "$_id.client.class",
-                  { "$cond": [
-                     "$internalByUser",
-                     { "$reduce": {
-                        "input": "$authenticatedUsers",
-                        "initialValue": "",
-                        "in": {
-                           "$cond": [
-                              { "$eq": ["$$value", ""] },
-                              "$$this",
-                              { "$concat": ["$$value", ",", "$$this"] }
-                           ]
-                        }
-                     } },
-                     null
-                  ] }
-               ]
+               "$let": {
+                  "vars": {
+                     "users": {
+                        "$cond": [
+                           "$internalByUser",
+                           "$authenticatedUsers",
+                           { "$cond": [
+                              "$parentInternalByUser",
+                              "$parentUsers",
+                              []
+                           ] }
+                        ]
+                     }
+                  },
+                  "in": {
+                     "$cond": [
+                        { "$ne": ["$_id.client.class", null] },
+                        "$_id.client.class",
+                        { "$cond": [
+                           { "$gt": [{ "$size": "$$users" }, 0] },
+                           { "$reduce": {
+                              "input": "$$users",
+                              "initialValue": "",
+                              "in": {
+                                 "$cond": [
+                                    { "$eq": ["$$value", ""] },
+                                    "$$this",
+                                    { "$concat": ["$$value", ",", "$$this"] }
+                                 ]
+                              }
+                           } },
+                           null
+                        ] }
+                     ]
+                  }
+               }
             }
          } },
          { "$set": {
@@ -416,7 +493,7 @@
             "appName": {
                "$cond": [
                   "$internal",
-                  "$class",
+                  { "$ifNull": ["$_id.applicationName", "$class"] },
                   { "$let": {
                      "vars": {
                         "pooled": {
@@ -528,7 +605,7 @@
             // "appName": { "$in": [/^(?:mongosh|MongoDB Shell)/, null] }
          // } },
          { "$sort": { "totalConnections": -1 } },
-         { "$unset": ["_id", "connections", "rows", "internal", "internalByUser", "hasStreaming", "hasAuth", "mode"] }
+         { "$unset": ["_id", "connections", "rows", "internal", "internalByUser", "parentInternalByUser", "parentUsers", "hasStreaming", "hasAuth", "mode"] }
       ];
 
    /*
