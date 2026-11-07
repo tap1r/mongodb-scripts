@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.2.14"
+    *  Version: "0.2.15"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -41,8 +41,9 @@
     *  - a pool that authenticates only as __system@local is cluster, unless the
     *    handshake already said fabric. mms-automation@admin alone is fabric
     *  - a non-interactive application client sourced from this process is fabric.
-    *    The address list is hello.me, this member's host and horizons, non-wildcard
-    *    bindIp, and loopback. Peer members are omitted. Hostnames are not resolved.
+    *    The address list is hello.me, the rs.status() member with self:true,
+    *    non-wildcard bindIp, and loopback. Peer members are omitted.
+    *    Hostnames are not resolved.
     *    mongosh, MongoDB Shell, and Compass stay client
     *  - a cluster row forces pools to 0. A fabric row keeps driver SDAM
     *
@@ -76,12 +77,14 @@
    }
 
    /*
-    *  Addresses of this process only. hello.me selects the rs.conf member;
-    *  other members stay out of the list. A hostname is stored as written.
-    *  Resolving it here would use the shell's DNS view, which is not the
-    *  server's private address when the shell is remote. getCmdLineOpts and
-    *  rs.conf() are optional. A failure leaves loopback, and metadata still
-    *  classifies the row. bindIpAll does not enumerate interface addresses.
+    *  Addresses of this process only. rs.status() selects the member with
+    *  self:true; other members stay out of the list. A hostname is stored
+    *  as written. Resolving it here would use the shell's DNS view, which
+    *  is not the server's private address when the shell is remote.
+    *  rs.status() is replSetGetStatus, which does not need replSetGetConfig.
+    *  getCmdLineOpts is optional. A failure leaves loopback, and metadata
+    *  still classifies the row. bindIpAll does not enumerate interface
+    *  addresses.
     */
    function discoverLocalAddrs() {
       const found = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -105,18 +108,19 @@
          // unauthorized or unsupported
       }
       try {
-         const conf = rs.conf();
-         const members = (conf && conf.members) || [];
-         const self = me
-            ? members.find(member => member && String(member.host).toLowerCase() === me.toLowerCase())
-            : null;
+         const status = rs.status();
+         const members = (status && status.members) || [];
+         const self = members.find(member => member && member.self)
+            || (me
+               ? members.find(member => member && String(member.name).toLowerCase() === me.toLowerCase())
+               : null);
          if (self) {
-            addAddr(found, self.host);
+            addAddr(found, self.name || self.host);
             const horizons = self.horizons || {};
             Object.keys(horizons).forEach(name => addAddr(found, horizons[name]));
          }
       } catch (error) {
-         // mongos and standalones have no replica set config
+         // mongos, standalones, and tiers that reject replSetGetStatus
       }
       return [...found];
    }
@@ -175,7 +179,7 @@
        */
       localAddrs = discoverLocalAddrs(),
       aggOpts = {
-         "comment": "connStats.js v0.2.14"
+         "comment": "connStats.js v0.2.15"
       },
       pipeline = [
          {
