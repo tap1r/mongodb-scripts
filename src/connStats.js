@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.2.13"
+    *  Version: "0.2.14"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -26,13 +26,25 @@
     *    active channel. "sockets" still includes the channel. "streams" counts
     *    the shared rows. A row alone is a socket and not a channel.
     *    "totalConnections" remains the row count
-    *  - application name "MongoDB Shell" on driver "MongoDB Internal Client" is an
-    *    application client. Other Internal Client names stay internal classes
-    *  - a product library appended to driver.name is an internal class: the
-    *    segment from mongo-spark, mongo-spark-connector, or mongo-kafka through
-    *    the end of the name. Database tools are internal by application name:
+    *  - tag is cluster, fabric, or client. cluster is native mongos/mongod
+    *    sharding and replication. fabric is an in-deployment service.
+    *    A rollup sums sockets for the sample and for each tag
+    *  - application name "MongoDB Shell" on driver "MongoDB Internal Client" is
+    *    a client. Other Internal Client names are cluster classes
+    *  - an application name "mongot" or "mongot …", or a driver.name segment
+    *    mongot-sync, is fabric. The class is the application name when set
+    *  - Spark, Kafka, and the database tools keep a named class and are tagged
+    *    client: the segment from mongo-spark, mongo-spark-connector, or
+    *    mongo-kafka through the end of driver.name, or the application name
     *    mongodump, mongorestore, mongoexport, mongoimport, mongostat, mongotop,
     *    mongofiles. mongosh and Compass stay application clients
+    *  - a pool that authenticates only as __system@local is cluster, unless the
+    *    handshake already said fabric. mms-automation@admin alone is fabric
+    *  - a non-interactive application client sourced from this process is fabric.
+    *    The address list is hello.me, this member's host and horizons, non-wildcard
+    *    bindIp, and loopback. Peer members are omitted. Hostnames are not resolved.
+    *    mongosh, MongoDB Shell, and Compass stay client
+    *  - a cluster row forces pools to 0. A fabric row keeps driver SDAM
     *
     *  TODO:
     *  - incorporate db.runCommand({ "whatsmyuri": 1}).you;
@@ -41,18 +53,98 @@
 
    // Usage: mongosh [connection options] [--quiet] [-f|--file] </path/to/>connStats.js
 
+   /*
+    *  Host or host:port, or a bracketed IPv6 address. Wildcard binds are not
+    *  this process. localhost and 127.0.0.1 name the same loopback source.
+    */
+   function endpointHost(value) {
+      const text = String(value || "").trim();
+      if (!text) return "";
+      const bracket = text.match(/^\[([^\]]+)\](?::\d+)?$/);
+      if (bracket) return bracket[1];
+      const single = text.match(/^([^:]+):(\d+)$/);
+      if (single) return single[1];
+      return text;
+   }
+
+   function addAddr(found, value) {
+      const host = endpointHost(value).toLowerCase();
+      if (!host || host === "0.0.0.0" || host === "::" || host === "*") return;
+      found.add(host);
+      if (host === "localhost") found.add("127.0.0.1");
+      if (host === "127.0.0.1") found.add("localhost");
+   }
+
+   /*
+    *  Addresses of this process only. hello.me selects the rs.conf member;
+    *  other members stay out of the list. A hostname is stored as written.
+    *  Resolving it here would use the shell's DNS view, which is not the
+    *  server's private address when the shell is remote. getCmdLineOpts and
+    *  rs.conf() are optional. A failure leaves loopback, and metadata still
+    *  classifies the row. bindIpAll does not enumerate interface addresses.
+    */
+   function discoverLocalAddrs() {
+      const found = new Set(["127.0.0.1", "::1", "localhost"]);
+      let me = "";
+      try {
+         me = String((db.hello() || {}).me || "");
+         addAddr(found, me);
+      } catch (error) {
+         me = "";
+      }
+      try {
+         const opts = db.adminCommand({ "getCmdLineOpts": 1 });
+         const net = (opts && opts.parsed && opts.parsed.net) || {};
+         const bindIp = net.bindIp;
+         if (typeof bindIp === "string") {
+            bindIp.split(/[,\s]+/).forEach(part => addAddr(found, part));
+         } else if (Array.isArray(bindIp)) {
+            bindIp.forEach(part => addAddr(found, part));
+         }
+      } catch (error) {
+         // unauthorized or unsupported
+      }
+      try {
+         const conf = rs.conf();
+         const members = (conf && conf.members) || [];
+         const self = me
+            ? members.find(member => member && String(member.host).toLowerCase() === me.toLowerCase())
+            : null;
+         if (self) {
+            addAddr(found, self.host);
+            const horizons = self.horizons || {};
+            Object.keys(horizons).forEach(name => addAddr(found, horizons[name]));
+         }
+      } catch (error) {
+         // mongos and standalones have no replica set config
+      }
+      return [...found];
+   }
+
    const namespace = db.getSiblingDB('admin'),
       /*
        *  srvatlas.sh hello probe users, stored here as user@db.
        *  __system@local is on-prem replication (local.__system).
-       *  mms-automation@admin is Atlas and Atlas-gov automation
-       *  (admin.mms-automation).
+       *  A pool that authenticates only as this user is cluster when the
+       *  handshake did not already say fabric.
        */
-      internalUsers = ["__system@local", "mms-automation@admin"],
+      clusterUsers = ["__system@local"],
       /*
-       *  Handshake class for an application driver. Internal egress replaces
+       *  mms-automation@admin is Atlas and Atlas-gov automation
+       *  (admin.mms-automation). Alone, that pool is fabric.
+       */
+      fabricUsers = ["mms-automation@admin"],
+      /*
+       *  Either system user still splits an application pool by name.
+       *  A pool that also has an application user stays a client.
+       */
+      systemUsers = clusterUsers.concat(fabricUsers),
+      /*
+       *  Handshake class for an application driver. Cluster egress replaces
        *  it with the NetworkInterfaceTL name or the Internal Client role.
-       *  The user rule can still replace the printed class with the user.
+       *  Fabric metadata replaces it with the mongot application name.
+       *  The user rule can still replace the printed class with the user
+       *  when the handshake class stays application.
        */
       applicationClass = "application",
       /*
@@ -76,8 +168,14 @@
        */
       monitorWaitMs = 1500,
       monitorPollMs = 100,
+      /*
+       *  This process's own addresses. A non-interactive application client
+       *  sourced from one of these is fabric. Peer replica-set members are
+       *  not included. Hostnames are kept as written and are not resolved.
+       */
+      localAddrs = discoverLocalAddrs(),
       aggOpts = {
-         "comment": "connStats.js v0.2.13"
+         "comment": "connStats.js v0.2.14"
       },
       pipeline = [
          {
@@ -161,17 +259,18 @@
                   }
                },
                /*
-                *  "application" for an application driver. Any other string
-                *  splits cluster egress into one row per class.
+                *  class splits one endpoint into rows. kind is cluster, fabric,
+                *  or client, and rides along because a class string can be reused.
                 *  NetworkInterfaceTL is a prefix, not an exact driver name.
                 *  MongoDB Internal Client classes differ by application name.
-                *  The legacy shell's default name, "MongoDB Shell", is an
-                *  application client. A URI appName on that shell is not this name.
-                *  Spark and Kafka append their library to driver.name. The class
-                *  is that segment through the end of the name. Database tools
-                *  are the application name they force.
+                *  The legacy shell's default name, "MongoDB Shell", is a client.
+                *  A URI appName on that shell is not this name.
+                *  mongot is the application name, or the mongot-sync segment when
+                *  the name is absent. "|sync" is the Java sync driver, not mongot.
+                *  Spark and Kafka keep the driver.name segment as class. Database
+                *  tools keep the application name they force. Both are clients.
                 */
-               "poolClass": {
+               "pool": {
                   "$let": {
                      "vars": {
                         "driverName": { "$ifNull": ["$clientMetadata.driver.name", ""] },
@@ -180,6 +279,12 @@
                               "$clientMetadata.application.name",
                               "MongoDB Internal Client"
                            ]
+                        },
+                        "mongotMatch": {
+                           "$regexFind": {
+                              "input": { "$ifNull": ["$clientMetadata.driver.name", ""] },
+                              "regex": /(?:^|\|)(mongot-sync)(\|.*)?$/
+                           }
                         },
                         "productMatch": {
                            "$regexFind": {
@@ -191,6 +296,23 @@
                      "in": {
                         "$let": {
                            "vars": {
+                              "mongotClass": {
+                                 "$cond": [
+                                    { "$eq": ["$$mongotMatch", null] },
+                                    null,
+                                    {
+                                       "$concat": [
+                                          { "$arrayElemAt": ["$$mongotMatch.captures", 0] },
+                                          {
+                                             "$ifNull": [
+                                                { "$arrayElemAt": ["$$mongotMatch.captures", 1] },
+                                                ""
+                                             ]
+                                          }
+                                       ]
+                                    }
+                                 ]
+                              },
                               "productClass": {
                                  "$cond": [
                                     { "$eq": ["$$productMatch", null] },
@@ -219,7 +341,7 @@
                                              "regex": /^NetworkInterfaceTL/
                                           }
                                        },
-                                       "then": "$$driverName"
+                                       "then": { "class": "$$driverName", "kind": "cluster" }
                                     },
                                     {
                                        "case": {
@@ -228,24 +350,48 @@
                                              { "$ne": ["$$applicationName", "MongoDB Shell"] }
                                           ]
                                        },
-                                       "then": "$$applicationName"
+                                       "then": { "class": "$$applicationName", "kind": "cluster" }
+                                    },
+                                    {
+                                       "case": {
+                                          "$regexMatch": {
+                                             "input": {
+                                                "$ifNull": ["$clientMetadata.application.name", ""]
+                                             },
+                                             "regex": /^mongot( |$)/
+                                          }
+                                       },
+                                       "then": {
+                                          "class": "$clientMetadata.application.name",
+                                          "kind": "fabric"
+                                       }
+                                    },
+                                    {
+                                       "case": { "$ne": ["$$mongotClass", null] },
+                                       "then": { "class": "$$mongotClass", "kind": "fabric" }
                                     },
                                     {
                                        "case": { "$ne": ["$$productClass", null] },
-                                       "then": "$$productClass"
+                                       "then": { "class": "$$productClass", "kind": "client" }
                                     },
                                     {
                                        "case": { "$in": ["$$applicationName", productAppNames] },
-                                       "then": "$$applicationName"
+                                       "then": { "class": "$$applicationName", "kind": "client" }
                                     }
                                  ],
-                                 "default": applicationClass
+                                 "default": { "class": applicationClass, "kind": "client" }
                               }
                            }
                         }
                      }
                   }
                }
+            }
+         },
+         {
+            "$set": {
+               "poolClass": "$pool.class",
+               "poolKind": "$pool.kind"
             }
          },
          {
@@ -327,9 +473,12 @@
                       *  Application drivers share class "application". driver.name and
                       *  application.name can already differ inside one MongoClient,
                       *  and must not split the pool from its monitors.
-                      *  Internal egress sets its own class, so each server pool stays its own row.
+                      *  Cluster and fabric egress set their own class, so each of
+                      *  those pools stays its own row. kind travels with the class
+                      *  because the printed class string is not the tag.
                       */
-                     "class": "$poolClass"
+                     "class": "$poolClass",
+                     "kind": "$poolKind"
                   }
                },
                "connections": {
@@ -371,13 +520,13 @@
          },
          {
             "$set": {
-               "internalByUser": {
+               "systemByUser": {
                   "$and": [
                      { "$gt": [{ "$size": "$authenticatedUsers" }, 0] },
                      {
                         "$setIsSubset": [
                            "$authenticatedUsers",
-                           internalUsers
+                           systemUsers
                         ]
                      }
                   ]
@@ -391,17 +540,18 @@
                   "host": "$_id.host",
                   "client": "$_id.client",
                   /*
-                   *  A user-rule internal pool has class "application". mongot's
-                   *  Java clients share endpoint, version, platform, and os, and
-                   *  differ by application name. Split those pools on that name.
-                   *  A handshake class, or a pool with an application user, stays
-                   *  one row so a custom appName does not separate its monitors.
+                   *  A user-rule pool has class "application" and only system
+                   *  users. Those clients can share endpoint, version, platform,
+                   *  and os, and differ by application name. Split them on that
+                   *  name. A handshake class, including mongot, or a pool with an
+                   *  application user, stays one row so a custom appName does not
+                   *  separate its monitors.
                    */
                   "applicationName": {
                      "$cond": [
                         {
                            "$and": [
-                              "$internalByUser",
+                              "$systemByUser",
                               { "$eq": ["$_id.client.class", applicationClass] }
                            ]
                         },
@@ -411,7 +561,7 @@
                   }
                },
                "connections": { "$push": "$connections" },
-               "parentInternalByUser": { "$first": "$internalByUser" },
+               "parentSystemByUser": { "$first": "$systemByUser" },
                "parentUsers": { "$first": "$authenticatedUsers" }
             }
          },
@@ -446,86 +596,39 @@
                         "in": { "$not": "$$connection.unauth" }
                      }
                   }
-               }
-            }
-         },
-         {
-            "$set": {
-               /*
-                *  A pool that authenticates only as internalUsers is an
-                *  internal system. An application user in the same pool
-                *  keeps the client tag.
-                */
-               "internalByUser": {
-                  "$and": [
-                     { "$gt": [{ "$size": "$authenticatedUsers" }, 0] },
-                     {
-                        "$setIsSubset": [
-                           "$authenticatedUsers",
-                           internalUsers
-                        ]
-                     }
-                  ]
-               }
-            }
-         },
-         {
-            "$set": {
-               "internal": {
-                  "$or": [
-                     { "$ne": ["$_id.client.class", applicationClass] },
-                     "$internalByUser",
-                     "$parentInternalByUser"
-                  ]
                },
                /*
-                *  An internal handshake class wins. "application" is not one.
-                *  Otherwise the internal user is the class. A split row whose
-                *  own sockets are idle keeps the parent users. One user is
-                *  the usual case. Several join in sample order. A client row
-                *  stays "application".
+                *  Interactive clients stay client even when they connect to
+                *  this process. One matching socket covers the group.
                 */
-               "class": {
-                  "$let": {
-                     "vars": {
-                        "users": {
-                           "$cond": [
-                              "$internalByUser",
-                              "$authenticatedUsers",
+               "interactive": {
+                  "$anyElementTrue": {
+                     "$map": {
+                        "input": "$connections",
+                        "as": "connection",
+                        "in": {
+                           "$or": [
                               {
-                                 "$cond": [
-                                    "$parentInternalByUser",
-                                    "$parentUsers",
-                                    []
-                                 ]
+                                 "$regexMatch": {
+                                    "input": { "$ifNull": ["$$connection.driverName", ""] },
+                                    "regex": /(?:^|\|)mongosh(?:\||$)/
+                                 }
+                              },
+                              { "$eq": ["$$connection.applicationName", "MongoDB Shell"] },
+                              {
+                                 "$regexMatch": {
+                                    "input": { "$ifNull": ["$$connection.applicationName", ""] },
+                                    "regex": /^mongosh( |$)/
+                                 }
+                              },
+                              {
+                                 "$regexMatch": {
+                                    "input": { "$ifNull": ["$$connection.applicationName", ""] },
+                                    "regex": /^MongoDB Compass/
+                                 }
                               }
                            ]
                         }
-                     },
-                     "in": {
-                        "$cond": [
-                           { "$ne": ["$_id.client.class", applicationClass] },
-                           "$_id.client.class",
-                           {
-                              "$cond": [
-                                 { "$gt": [{ "$size": "$$users" }, 0] },
-                                 {
-                                    "$reduce": {
-                                       "input": "$$users",
-                                       "initialValue": "",
-                                       "in": {
-                                          "$cond": [
-                                             { "$eq": ["$$value", ""] },
-                                             "$$this",
-                                             { "$concat": ["$$value", ",", "$$this"] }
-                                          ]
-                                       }
-                                    }
-                                 },
-                                 applicationClass
-                              ]
-                           }
-                        ]
                      }
                   }
                }
@@ -534,13 +637,163 @@
          {
             "$set": {
                /*
+                *  A pool that authenticates only as systemUsers is a system
+                *  pool. An application user in the same pool keeps the client
+                *  tag unless a later rule says otherwise.
+                */
+               "systemByUser": {
+                  "$and": [
+                     { "$gt": [{ "$size": "$authenticatedUsers" }, 0] },
+                     {
+                        "$setIsSubset": [
+                           "$authenticatedUsers",
+                           systemUsers
+                        ]
+                     }
+                  ]
+               }
+            }
+         },
+         {
+            "$set": {
+               /*
+                *  Idle split rows omit effectiveUsers. Keep the parent users
+                *  so the kind and the printed class still see them.
+                */
+               "ruleUsers": {
+                  "$cond": [
+                     "$systemByUser",
+                     "$authenticatedUsers",
+                     {
+                        "$cond": [
+                           "$parentSystemByUser",
+                           "$parentUsers",
+                           []
+                        ]
+                     }
+                  ]
+               }
+            }
+         },
+         {
+            "$set": {
+               /*
+                *  A handshake class wins. "application" is not one.
+                *  Otherwise the system user is the class. A split row whose
+                *  own sockets are idle keeps the parent users. One user is
+                *  the usual case. Several join in sample order. A client row
+                *  stays "application".
+                */
+               "class": {
+                  "$cond": [
+                     { "$ne": ["$_id.client.class", applicationClass] },
+                     "$_id.client.class",
+                     {
+                        "$cond": [
+                           { "$gt": [{ "$size": "$ruleUsers" }, 0] },
+                           {
+                              "$reduce": {
+                                 "input": "$ruleUsers",
+                                 "initialValue": "",
+                                 "in": {
+                                    "$cond": [
+                                       { "$eq": ["$$value", ""] },
+                                       "$$this",
+                                       { "$concat": ["$$value", ",", "$$this"] }
+                                    ]
+                                 }
+                              }
+                           },
+                           applicationClass
+                        ]
+                     }
+                  ]
+               }
+            }
+         },
+         {
+            "$set": {
+               /*
+                *  Handshake kind wins, so mongot stays fabric while it
+                *  authenticates as __system@local. A remaining application
+                *  pool is cluster when any user is __system@local, fabric when
+                *  the only user is mms-automation@admin, and fabric when the
+                *  source is this process and the client is not interactive.
+                */
+               "kind": {
+                  "$switch": {
+                     "branches": [
+                        {
+                           "case": { "$eq": ["$_id.client.kind", "cluster"] },
+                           "then": "cluster"
+                        },
+                        {
+                           "case": { "$eq": ["$_id.client.kind", "fabric"] },
+                           "then": "fabric"
+                        },
+                        {
+                           "case": {
+                              "$and": [
+                                 { "$eq": ["$_id.client.class", applicationClass] },
+                                 { "$gt": [{ "$size": "$ruleUsers" }, 0] },
+                                 { "$setIsSubset": ["$ruleUsers", systemUsers] },
+                                 {
+                                    "$gt": [
+                                       {
+                                          "$size": {
+                                             "$setIntersection": ["$ruleUsers", clusterUsers]
+                                          }
+                                       },
+                                       0
+                                    ]
+                                 }
+                              ]
+                           },
+                           "then": "cluster"
+                        },
+                        {
+                           "case": {
+                              "$and": [
+                                 { "$eq": ["$_id.client.class", applicationClass] },
+                                 { "$gt": [{ "$size": "$ruleUsers" }, 0] },
+                                 { "$setIsSubset": ["$ruleUsers", fabricUsers] }
+                              ]
+                           },
+                           "then": "fabric"
+                        },
+                        {
+                           "case": {
+                              "$and": [
+                                 { "$eq": ["$_id.client.class", applicationClass] },
+                                 { "$not": "$interactive" },
+                                 {
+                                    "$in": [
+                                       { "$toLower": { "$ifNull": ["$srcIP", ""] } },
+                                       localAddrs
+                                    ]
+                                 }
+                              ]
+                           },
+                           "then": "fabric"
+                        }
+                     ],
+                     "default": "client"
+                  }
+               }
+            }
+         },
+         {
+            "$set": {
+               /*
                 *  One mode for the group, named before the per-socket rule.
-                *  - internal: egress, or a pool that authenticates only as a
-                *    system user. Hellos are not driver SDAM or RTT, so pools is 0.
+                *  - cluster: native sharding and replication, or a pool that
+                *    authenticates only as __system@local. Hellos are not driver
+                *    SDAM or RTT, so pools is 0.
                 *  - streaming: any socket is an awaitable hello, or purpose sdam.
                 *    Those sockets are sdam. Other unauthenticated sockets are
                 *    idle RTT when the group also has an authenticated user;
-                *    otherwise only a bare hello is RTT.
+                *    otherwise only a bare hello is RTT. Fabric drivers use this
+                *    path, so their pools still count.
                 *  - poll: nothing streaming, and the group has an authenticated
                 *    user. Every unauthenticated socket is a poll-mode monitor.
                 *  - quiet: nothing streaming and no authenticated user. Only a
@@ -549,7 +802,7 @@
                "mode": {
                   "$switch": {
                      "branches": [
-                        { "case": "$internal", "then": "internal" },
+                        { "case": { "$eq": ["$kind", "cluster"] }, "then": "cluster" },
                         { "case": "$hasStreaming", "then": "streaming" },
                         { "case": "$hasAuth", "then": "poll" }
                      ],
@@ -584,7 +837,7 @@
                               "$switch": {
                                  "branches": [
                                     {
-                                       "case": { "$eq": ["$mode", "internal"] },
+                                       "case": { "$eq": ["$mode", "cluster"] },
                                        "then": { "sdam": false, "rtt": false }
                                     },
                                     {
@@ -651,10 +904,21 @@
          },
          {
             "$set": {
-               "tag": { "$cond": ["$internal", "internal", "client"] },
+               "tag": "$kind",
                "appName": {
                   "$cond": [
-                     "$internal",
+                     {
+                        "$or": [
+                           { "$eq": ["$kind", "cluster"] },
+                           {
+                              "$and": [
+                                 { "$eq": ["$kind", "fabric"] },
+                                 { "$ne": ["$class", applicationClass] }
+                              ]
+                           },
+                           { "$ne": ["$_id.applicationName", null] }
+                        ]
+                     },
                      { "$ifNull": ["$_id.applicationName", "$class"] },
                      {
                         "$let": {
@@ -743,7 +1007,7 @@
                      }
                   }
                },
-               "pools": { // SDAM sockets; poll mode can count two; 0 on an internal row. A gRPC channel is not a pool.
+               "pools": { // SDAM sockets; poll mode can count two; 0 on a cluster row. A gRPC channel is not a pool.
                   "$sum": {
                      "$map": {
                         "input": "$rows",
@@ -894,7 +1158,7 @@
          // "appName": { "$in": [/^(?:mongosh|MongoDB Shell)/, null] }
          // } },
          { "$sort": { "totalConnections": -1 } },
-         { "$unset": ["_id", "connections", "rows", "socketKeys", "channelKeys", "internal", "internalByUser", "parentInternalByUser", "parentUsers", "hasStreaming", "hasAuth", "mode"] }
+         { "$unset": ["_id", "connections", "rows", "socketKeys", "channelKeys", "kind", "systemByUser", "parentSystemByUser", "parentUsers", "ruleUsers", "interactive", "hasStreaming", "hasAuth", "mode"] }
       ];
 
    /*
@@ -1021,12 +1285,46 @@
       }
    }
 
+   function sumField(rows, key) {
+      let total = 0;
+      for (let i = 0; i < rows.length; i++) total += rows[i][key] || 0;
+      return total;
+   }
+
+   function categoryRollup(rows, tag) {
+      const matched = rows.filter(doc => doc.tag === tag);
+      return {
+         "rows": matched.length,
+         "sockets": sumField(matched, "sockets"),
+         "streams": sumField(matched, "streams"),
+         "totalConnections": sumField(matched, "totalConnections"),
+         "pools": sumField(matched, "pools")
+      };
+   }
+
    const docs = loadDocs();
    if (ownOpsOnly) console.log("PARTIAL: own ops only");
    if (omitted.length) console.log("PARTIAL: omitted " + omitted.join(", "));
    const scope = pipeline[0].$currentOp.allUsers === true ? "allUsers" : "ownOps";
    docs.forEach(doc => {
       console.log({ scope, ...doc });
+   });
+   /*
+    *  True total plus one slice per tag. sockets is the connection count.
+    *  totalConnections remains the $currentOp row count. The client slice is
+    *  the application traffic. It is not the Atlas NAT-border figure: this
+    *  sample includes the script's own connection and can omit idle sockets
+    *  on a shared tier.
+    */
+   console.log({
+      "scope": "rollup",
+      "sockets": sumField(docs, "sockets"),
+      "streams": sumField(docs, "streams"),
+      "totalConnections": sumField(docs, "totalConnections"),
+      "pools": sumField(docs, "pools"),
+      "cluster": categoryRollup(docs, "cluster"),
+      "fabric": categoryRollup(docs, "fabric"),
+      "client": categoryRollup(docs, "client")
    });
 })();
 
