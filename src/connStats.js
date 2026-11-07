@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.2.9"
+    *  Version: "0.2.11"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -19,6 +19,13 @@
     *  - client.purpose "sdam" / "rtt" wins when present (DRIVERS-3027). Absent today
     *  - libmongoc poll mode keeps two unauthenticated sockets per client until purpose
     *    distinguishes them, so "pools" can be double in that mode
+    *  - rows that share a client ephemeral port are gRPC streams on one channel.
+    *    "channels" counts those ports. A channel is not a pool, so its streams
+    *    are left out of activePooledConnections, idlePooledConnections,
+    *    adminConnections, and pools. A channel with any active stream is an
+    *    active channel. "sockets" still includes the channel. "streams" counts
+    *    the shared rows. A row alone is a socket and not a channel.
+    *    "totalConnections" remains the row count
     *
     *  TODO:
     *  - incorporate db.runCommand({ "whatsmyuri": 1}).you;
@@ -50,7 +57,7 @@
       monitorWaitMs = 1500,
       monitorPollMs = 100,
       aggOpts = {
-         "comment": "connStats.js v0.2.9"
+         "comment": "connStats.js v0.2.11"
       },
       pipeline = [
          {
@@ -493,6 +500,19 @@
                         "$mergeObjects": [
                            "$$connection",
                            {
+                              "socketKey": {
+                                 "$ifNull": [
+                                    { "$toString": "$$connection.ephemeralPort" },
+                                    {
+                                       "$concat": [
+                                          "conn:",
+                                          { "$toString": { "$ifNull": ["$$connection.connectionId", ""] } }
+                                       ]
+                                    }
+                                 ]
+                              }
+                           },
+                           {
                               "$switch": {
                                  "branches": [
                                     {
@@ -523,6 +543,41 @@
                         ]
                      }
                   }
+               }
+            }
+         },
+         {
+            "$set": {
+               /*
+                *  One socket is one client ephemeral port. Rows that share a port
+                *  are streams on one gRPC channel. A missing port stays its own
+                *  socket via connectionId, so it is not a channel.
+                */
+               "socketKeys": "$rows.socketKey",
+               "channelKeys": {
+                  "$setUnion": [
+                     {
+                        "$filter": {
+                           "input": "$rows.socketKey",
+                           "as": "key",
+                           "cond": {
+                              "$gt": [
+                                 {
+                                    "$size": {
+                                       "$filter": {
+                                          "input": "$rows.socketKey",
+                                          "as": "peer",
+                                          "cond": { "$eq": ["$$peer", "$$key"] }
+                                       }
+                                    }
+                                 },
+                                 1
+                              ]
+                           }
+                        }
+                     },
+                     []
+                  ]
                }
             }
          },
@@ -570,6 +625,7 @@
                            "$cond": [
                               {
                                  "$and": [
+                                    { "$not": { "$in": ["$$connection.socketKey", "$channelKeys"] } },
                                     { "$not": { "$or": ["$$connection.sdam", "$$connection.rtt"] } },
                                     "$$connection.active"
                                  ]
@@ -589,6 +645,7 @@
                            "$cond": [
                               {
                                  "$and": [
+                                    { "$not": { "$in": ["$$connection.socketKey", "$channelKeys"] } },
                                     { "$not": { "$or": ["$$connection.sdam", "$$connection.rtt"] } },
                                     { "$not": "$$connection.active" }
                                  ]
@@ -606,20 +663,91 @@
                         "as": "connection",
                         "in": {
                            "$cond": [
-                              { "$or": ["$$connection.sdam", "$$connection.rtt"] },
+                              {
+                                 "$and": [
+                                    { "$not": { "$in": ["$$connection.socketKey", "$channelKeys"] } },
+                                    { "$or": ["$$connection.sdam", "$$connection.rtt"] }
+                                 ]
+                              },
                               1, 0
                            ]
                         }
                      }
                   }
                },
-               "pools": { // SDAM sockets; poll mode can count two; 0 on an internal row
+               "pools": { // SDAM sockets; poll mode can count two; 0 on an internal row. A gRPC channel is not a pool.
                   "$sum": {
                      "$map": {
                         "input": "$rows",
                         "as": "connection",
-                        "in": { "$cond": ["$$connection.sdam", 1, 0] }
+                        "in": {
+                           "$cond": [
+                              {
+                                 "$and": [
+                                    { "$not": { "$in": ["$$connection.socketKey", "$channelKeys"] } },
+                                    "$$connection.sdam"
+                                 ]
+                              },
+                              1, 0
+                           ]
+                        }
                      }
+                  }
+               },
+               "channels": { "$size": { "$setUnion": ["$channelKeys", []] } },
+               "activeChannels": {
+                  "$size": {
+                     "$setUnion": [
+                        {
+                           "$map": {
+                              "input": {
+                                 "$filter": {
+                                    "input": "$rows",
+                                    "as": "connection",
+                                    "cond": {
+                                       "$and": [
+                                          { "$in": ["$$connection.socketKey", "$channelKeys"] },
+                                          "$$connection.active"
+                                       ]
+                                    }
+                                 }
+                              },
+                              "as": "connection",
+                              "in": "$$connection.socketKey"
+                           }
+                        },
+                        []
+                     ]
+                  }
+               },
+               "idleChannels": {
+                  "$size": {
+                     "$setDifference": [
+                        { "$setUnion": ["$channelKeys", []] },
+                        {
+                           "$setUnion": [
+                              {
+                                 "$map": {
+                                    "input": {
+                                       "$filter": {
+                                          "input": "$rows",
+                                          "as": "connection",
+                                          "cond": {
+                                             "$and": [
+                                                { "$in": ["$$connection.socketKey", "$channelKeys"] },
+                                                "$$connection.active"
+                                             ]
+                                          }
+                                       }
+                                    },
+                                    "as": "connection",
+                                    "in": "$$connection.socketKey"
+                                 }
+                              },
+                              []
+                           ]
+                        }
+                     ]
                   }
                },
                "MongoClientOpids": {
@@ -661,6 +789,33 @@
                      "in": "$$rtt.connectionId"
                   }
                },
+               "sockets": {
+                  "$size": {
+                     "$setUnion": ["$socketKeys", []]
+                  }
+               },
+               "streams": {
+                  "$size": {
+                     "$filter": {
+                        "input": "$socketKeys",
+                        "as": "key",
+                        "cond": {
+                           "$gt": [
+                              {
+                                 "$size": {
+                                    "$filter": {
+                                       "input": "$socketKeys",
+                                       "as": "peer",
+                                       "cond": { "$eq": ["$$peer", "$$key"] }
+                                    }
+                                 }
+                              },
+                              1
+                           ]
+                        }
+                     }
+                  }
+               },
                "totalConnections": { "$size": "$connections" }
             }
          },
@@ -671,7 +826,7 @@
          // "appName": { "$in": [/^(?:mongosh|MongoDB Shell)/, null] }
          // } },
          { "$sort": { "totalConnections": -1 } },
-         { "$unset": ["_id", "connections", "rows", "internal", "internalByUser", "parentInternalByUser", "parentUsers", "hasStreaming", "hasAuth", "mode"] }
+         { "$unset": ["_id", "connections", "rows", "socketKeys", "channelKeys", "internal", "internalByUser", "parentInternalByUser", "parentUsers", "hasStreaming", "hasAuth", "mode"] }
       ];
 
    /*
