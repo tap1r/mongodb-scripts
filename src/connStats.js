@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.2.11"
+    *  Version: "0.2.12"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -26,6 +26,8 @@
     *    active channel. "sockets" still includes the channel. "streams" counts
     *    the shared rows. A row alone is a socket and not a channel.
     *    "totalConnections" remains the row count
+    *  - application name "MongoDB Shell" on driver "MongoDB Internal Client" is an
+    *    application client. Other Internal Client names stay internal classes
     *
     *  TODO:
     *  - incorporate db.runCommand({ "whatsmyuri": 1}).you;
@@ -57,7 +59,7 @@
       monitorWaitMs = 1500,
       monitorPollMs = 100,
       aggOpts = {
-         "comment": "connStats.js v0.2.11"
+         "comment": "connStats.js v0.2.12"
       },
       pipeline = [
          {
@@ -145,11 +147,19 @@
                 *  splits cluster egress into one row per class.
                 *  NetworkInterfaceTL is a prefix, not an exact driver name.
                 *  MongoDB Internal Client classes differ by application name.
+                *  The legacy shell's default name, "MongoDB Shell", is an
+                *  application client. A URI appName on that shell is not this name.
                 */
                "poolClass": {
                   "$let": {
                      "vars": {
-                        "driverName": { "$ifNull": ["$clientMetadata.driver.name", ""] }
+                        "driverName": { "$ifNull": ["$clientMetadata.driver.name", ""] },
+                        "applicationName": {
+                           "$ifNull": [
+                              "$clientMetadata.application.name",
+                              "MongoDB Internal Client"
+                           ]
+                        }
                      },
                      "in": {
                         "$switch": {
@@ -164,13 +174,13 @@
                                  "then": "$$driverName"
                               },
                               {
-                                 "case": { "$eq": ["$$driverName", "MongoDB Internal Client"] },
-                                 "then": {
-                                    "$ifNull": [
-                                       "$clientMetadata.application.name",
-                                       "MongoDB Internal Client"
+                                 "case": {
+                                    "$and": [
+                                       { "$eq": ["$$driverName", "MongoDB Internal Client"] },
+                                       { "$ne": ["$$applicationName", "MongoDB Shell"] }
                                     ]
-                                 }
+                                 },
+                                 "then": "$$applicationName"
                               }
                            ],
                            "default": applicationClass
