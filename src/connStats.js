@@ -1,7 +1,7 @@
 (() => {
    /*
     *  Name: "connStats.js"
-    *  Version: "0.2.12"
+    *  Version: "0.2.13"
     *  Description: "report detailed connection pooling statistics"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -28,6 +28,11 @@
     *    "totalConnections" remains the row count
     *  - application name "MongoDB Shell" on driver "MongoDB Internal Client" is an
     *    application client. Other Internal Client names stay internal classes
+    *  - a product library appended to driver.name is an internal class: the
+    *    segment from mongo-spark, mongo-spark-connector, or mongo-kafka through
+    *    the end of the name. Database tools are internal by application name:
+    *    mongodump, mongorestore, mongoexport, mongoimport, mongostat, mongotop,
+    *    mongofiles. mongosh and Compass stay application clients
     *
     *  TODO:
     *  - incorporate db.runCommand({ "whatsmyuri": 1}).you;
@@ -51,6 +56,19 @@
        */
       applicationClass = "application",
       /*
+       *  Database tools force this application name (mongo-tools options.New).
+       *  A customer URI that copies one of these names takes the same class.
+       */
+      productAppNames = [
+         "mongodump",
+         "mongorestore",
+         "mongoexport",
+         "mongoimport",
+         "mongostat",
+         "mongotop",
+         "mongofiles"
+      ],
+      /*
        *  The monitor handshake makes the server selectable, then the driver
        *  waits minHeartbeatFrequencyMS (default 500) before the awaitable
        *  hello. This script can run in that gap. Poll until that hello is
@@ -59,7 +77,7 @@
       monitorWaitMs = 1500,
       monitorPollMs = 100,
       aggOpts = {
-         "comment": "connStats.js v0.2.12"
+         "comment": "connStats.js v0.2.13"
       },
       pipeline = [
          {
@@ -149,6 +167,9 @@
                 *  MongoDB Internal Client classes differ by application name.
                 *  The legacy shell's default name, "MongoDB Shell", is an
                 *  application client. A URI appName on that shell is not this name.
+                *  Spark and Kafka append their library to driver.name. The class
+                *  is that segment through the end of the name. Database tools
+                *  are the application name they force.
                 */
                "poolClass": {
                   "$let": {
@@ -159,31 +180,68 @@
                               "$clientMetadata.application.name",
                               "MongoDB Internal Client"
                            ]
+                        },
+                        "productMatch": {
+                           "$regexFind": {
+                              "input": { "$ifNull": ["$clientMetadata.driver.name", ""] },
+                              "regex": /(?:^|\|)(mongo-spark-connector|mongo-spark|mongo-kafka)(\|.*)?$/
+                           }
                         }
                      },
                      "in": {
-                        "$switch": {
-                           "branches": [
-                              {
-                                 "case": {
-                                    "$regexMatch": {
-                                       "input": "$$driverName",
-                                       "regex": /^NetworkInterfaceTL/
+                        "$let": {
+                           "vars": {
+                              "productClass": {
+                                 "$cond": [
+                                    { "$eq": ["$$productMatch", null] },
+                                    null,
+                                    {
+                                       "$concat": [
+                                          { "$arrayElemAt": ["$$productMatch.captures", 0] },
+                                          {
+                                             "$ifNull": [
+                                                { "$arrayElemAt": ["$$productMatch.captures", 1] },
+                                                ""
+                                             ]
+                                          }
+                                       ]
                                     }
-                                 },
-                                 "then": "$$driverName"
-                              },
-                              {
-                                 "case": {
-                                    "$and": [
-                                       { "$eq": ["$$driverName", "MongoDB Internal Client"] },
-                                       { "$ne": ["$$applicationName", "MongoDB Shell"] }
-                                    ]
-                                 },
-                                 "then": "$$applicationName"
+                                 ]
                               }
-                           ],
-                           "default": applicationClass
+                           },
+                           "in": {
+                              "$switch": {
+                                 "branches": [
+                                    {
+                                       "case": {
+                                          "$regexMatch": {
+                                             "input": "$$driverName",
+                                             "regex": /^NetworkInterfaceTL/
+                                          }
+                                       },
+                                       "then": "$$driverName"
+                                    },
+                                    {
+                                       "case": {
+                                          "$and": [
+                                             { "$eq": ["$$driverName", "MongoDB Internal Client"] },
+                                             { "$ne": ["$$applicationName", "MongoDB Shell"] }
+                                          ]
+                                       },
+                                       "then": "$$applicationName"
+                                    },
+                                    {
+                                       "case": { "$ne": ["$$productClass", null] },
+                                       "then": "$$productClass"
+                                    },
+                                    {
+                                       "case": { "$in": ["$$applicationName", productAppNames] },
+                                       "then": "$$applicationName"
+                                    }
+                                 ],
+                                 "default": applicationClass
+                              }
+                           }
                         }
                      }
                   }
