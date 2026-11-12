@@ -91,7 +91,7 @@ No further dual-shell feature work on the archived line. Operators who still hav
 | `schema-sampler.js` | 0.2.16 | **0.4.2** |
 | `sleepy.js` | 0.2.6 | **0.2.7** |
 | `docSizes.js` | 0.1.34 | **0.1.36** |
-| `niceDeleteMany.js` | 0.4.11 | **1.0.1** |
+| `niceDeleteMany.js` | 0.4.11 | **1.1.0** |
 | `congestionMonitor.js` | 0.2.13 | **0.5.1** |
 | `onlineDefrag.js` | 0.1.4 | **1.8.0** |
 | `indexCacheUtil.js` | 0.1.5 | **1.2.0** |
@@ -403,7 +403,9 @@ Remaining mongosh-line work (do not block the archive): none.
 
 ### `niceDeleteMany.js`
 
-**Live: v1.0.1.** **Archive: v0.4.11.** `--eval` must use `var`. Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`. Header tags this file as requiring this roadmap. Shared AIMD (`maxInFlight` MD/AI) for WT and paceMaker; WT FSM vs pace delay stay separate gates. `hasUserHint` / `hasUserCollation` collapsed to `hasNonEmptyDoc`. Policy A is `POLICY_A_STEPS` (C1 cannotSpill scan, C2–C3 user hint, C4/C7 unhinted planner then Policy B, C6 `_id` scan). MongoDB 9.0 supported as of 1.0.1: the script walk/delete path is not dotted-path-null-sensitive; user filters follow the server matcher (9.0.2 factory default of `internalQueryLegacyDottedPathNullSemantics` is pre-9). Do not re-propose a filter/curation refactor for that matcher.
+**Live: v1.1.0.** **Archive: v0.4.11.** `--eval` must use `var`. Do not declare `dbName`/`collName`/`filter` in-file. Do not top-level-await. Do not restore `Mongo.setReadPref`. Header tags this file as requiring this roadmap. Shared AIMD (`maxInFlight` MD/AI) for WT and paceMaker; WT FSM vs pace delay stay separate gates. `hasUserHint` / `hasUserCollation` collapsed to `hasNonEmptyDoc`. Policy A is `POLICY_A_STEPS` (C1 cannotSpill tries the natural window then scan, C2–C3 user hint, C3nat hinted natural, C4/C7 unhinted planner then Policy B, C5 natural, C6 `_id` scan). MongoDB 9.0 supported as of 1.0.1: the script walk/delete path is not dotted-path-null-sensitive; user filters follow the server matcher (9.0.2 factory default of `internalQueryLegacyDottedPathNullSemantics` is pre-9). Do not re-propose a filter/curation refactor for that matcher.
+
+**Shipped in 1.1.0:** the bucket window is `$_internalSetWindowFields` (`partitionBy` `$bucketId`, `sortBy: {}`), so a monotonic `bucketId` is not sorted again. The ordinal stage stays public `$setWindowFields` with `$documentNumber` after `$match` + `$sort`. A selective index scan that cannot absorb `$sort` uses the internal stage in arrival order (running `$sum: 1`, no `$sort`). `SORT_KEY_GENERATOR` over an index scan is index order, not a blocking `SORT`. A real `SORT`, a `COLLSCAN`, and a leftover `$sort` (`sortPattern` or `sortKey`) still take the hinted `{_id:1}` `readOnce` walk. Atlas M0/Flex still skip the ordered window; they may take the natural window and omit `noCursorTimeout`.
 
 **TABLED:** MongoDB 9.0 optimisation of this script, including admission-controller use of [backpressure-aware driver](https://www.mongodb.com/docs/atlas/overload-errors/?interface=driver&language=python) features for Atlas Load Shedding / Intelligent Workload Management. Detect `SystemOverloadedError` (safe retry only with `RetryableError` / `NoWritesPerformed`); exponential backoff with jitter; cap retries (docs: at most two for latency-sensitive work); persistent overload is shed/pace, not a blind retry storm. Needs a mongosh that ships Node.js driver ≥ 7.6. Application still owns how long to retry and when to abandon. AIMD stays off execution-control metrics. Do not re-propose as the next leftover.
 

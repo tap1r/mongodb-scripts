@@ -413,8 +413,8 @@ const report = await load('dbstats.js');
 Safer approach for “is this plan a collection scan / blocking sort?” checks:
 
 - Walk **`queryPlanner.winningPlan`** (and shard-local winning plans / `$cursor.queryPlanner.winningPlan`).
-- Treat classic stages such as `COLLSCAN`, `SORT`, `SORT_KEY_GENERATOR` as signals.
-- Only treat a top-level aggregation `$sort` stage as blocking when it looks like an explain stage (for example includes `sortPattern`), not a bare sort-key document echoed from the command.
+- Treat classic stages such as `COLLSCAN` and `SORT` as signals. `SORT_KEY_GENERATOR` over an index scan is the index attaching sort-key metadata (9.0 often shows `FETCH` → `SORT_KEY_GENERATOR` → `IXSCAN`). It is not itself a blocking `SORT`.
+- Only treat a top-level aggregation `$sort` stage as blocking when it looks like an explain stage (for example includes `sortPattern` or `sortKey`), not a bare sort-key document echoed from the command.
 
 Used by scripts that choose an index-friendly sort key for windowed / ordered batching (e.g. deriving sort from the filter, falling back to `{ _id: 1 }` when the plan is unsafe).
 

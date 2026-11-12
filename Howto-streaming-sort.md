@@ -2,14 +2,14 @@
 
 How to keep an ordered walk **streaming** (non-blocking) when you need a stable sort key for windowed or bucketed work — as used by `src/niceDeleteMany.js` to emit fixed-size `_id` buckets for concurrent deletes.
 
-This is the documented evolution of the pipeline history (v1 → v2 → v3). `src/niceDeleteMany.js` is the reference implementation. v3 is two modes: an index-ordered aggregation, or a hinted `{_id:1}` find command with in-process buckets.
+This is the documented evolution of the pipeline history (v1 → v2 → v3). `src/niceDeleteMany.js` is the reference implementation. As of 1.1.0 the current pattern has three modes: an index-ordered aggregation, a natural index-scan aggregation with no `$sort`, or a hinted `{_id:1}` find command with in-process buckets.
 
 ## Goal
 
 1. `$match` a filter.
 2. Walk matching documents in a **stable sort order**.
 3. Derive fixed-size **buckets** of `_id`s (typically 100) and yield them so a client can prefetch and process concurrently.
-4. Use an index-ordered `$match` + `$sort` when Policy A confirms an index-ordered plan without a blocking SORT and the host can spill. Otherwise walk a hinted `{_id:1}` find command (`readOnce`) with residual FETCH and in-process buckets. Window aggregation sets `allowDiskUse: false` so a leftover SORT fails closed. Atlas M0/Flex (`pace` with no WiredTiger vitals) take scan without opening that cursor. mongos `pace` stays on the window path: those shards can spill.
+4. Use an index-ordered `$match` + `$sort` when Policy A confirms an index-ordered plan without a blocking SORT and the host can spill. When no index absorbs that sort but `$match` is still a selective index scan, bucket in index arrival order with `$_internalSetWindowFields` and no `$sort`. Otherwise walk a hinted `{_id:1}` find command (`readOnce`) with residual FETCH and in-process buckets. Window aggregation sets `allowDiskUse: false` so a leftover SORT fails closed. Atlas M0/Flex (`pace` with no WiredTiger vitals) skip the ordered window; a selective index scan may still use the natural window, and that cursor omits `noCursorTimeout`. mongos `pace` stays on the ordered window: those shards can spill.
 
 Related MongoDB docs:
 
@@ -25,20 +25,23 @@ Related MongoDB docs:
 
 [`$setWindowFields.sortBy`](https://www.mongodb.com/docs/manual/reference/operator/aggregation/setWindowFields/#std-label-setWindowFields-sortBy) uses the **same syntax as `$sort`**. Index absorption is documented for [`$sort` after `$match`](https://www.mongodb.com/docs/manual/reference/operator/aggregation/sort/#-sort-operator-and-performance); window `sortBy` is **not** fused into `$cursor` the same way.
 
-v3 therefore puts an explicit **`$sort` immediately after `$match`**. When that `$sort` is absorbed, `$cursor` is `FETCH` → `IXSCAN` (no `SORT`) and `$setWindowFields` consumes an already-ordered stream. `$setWindowFields` is still a blocking accumulator, limited to the stage window — semi-blocking is the accurate term.
+v3 therefore puts an explicit **`$sort` immediately after `$match`**. When that `$sort` is absorbed, `$cursor` is `FETCH` → `IXSCAN` (no `SORT`) and the ordinal window consumes an already-ordered stream. On 9.0 that absorbed window often explains as `FETCH` → `SORT_KEY_GENERATOR` → `IXSCAN`. The generator attaches sort-key metadata. It is not a blocking `SORT`.
 
-A `$setWindowFields` whose `sortBy` is the first ordering stage injects a physical **`SORT`** (often on `COLLSCAN` or an unordered index scan). That SORT materializes keys in the aggregation blocking-sort budget, `internalQueryMaxBlockingSortMemoryUsageBytes`, default **100MiB**. Atlas M0 / Flex ignore `allowDiskUse` and do not spill. Policy A treats that as a failed plan.
+A `$setWindowFields` whose `sortBy` is the first ordering stage injects a physical **`SORT`** (often on `COLLSCAN` or an unordered index scan). That SORT materializes keys in the aggregation blocking-sort budget, `internalQueryMaxBlockingSortMemoryUsageBytes`, default **100MiB**. Atlas M0 / Flex ignore `allowDiskUse` and do not spill. Policy A treats that as a failed ordered plan.
+
+`partitionBy` on the public stage always adds the partition field to a `$sort`, even when `sortBy` is `{}` and `bucketId` is already one contiguous run. That second sort is the 100MiB / code-292 path. `$_internalSetWindowFields` does not sort. `sortBy` only describes the order the input already has, and `{}` adds no `$sort`. Boundaries are runs of equal keys; the stage does not regroup interleaved keys. Document bounds still require the field (error 5339901). `$documentNumber` rejects an empty `sortBy` (error 5371602); a running `$sum: 1` over documents `[unbounded, current]` is the ordinal that accepts `{}`. `sortBy: {}` is server behaviour, not a documented contract. An explain failure or code 292 still falls back to the `_id` walk.
 
 **Choosing `sortBy` is the plan.** It must be a key an index can satisfy. `resolveCurationOrder` walks `POLICY_A_STEPS`. The first non-null result wins.
 
 1. Derive `sortBy` from the filter (`{}` / non-field predicates → `_id`).
-2. **C1.** Atlas M0/Flex (`pace` with reason `no-wt`) take **scan** immediately and skip `listCurationIndexes`. `queryPlanner` can look index-ordered while a live `$setWindowFields` still injects a SORT, and these tiers cannot spill. mongos `pace` leaves `cannotSpill` false, so window mode stays eligible.
-3. **User hint (C2, C3, then C3scan).** Explain the prefix and the full window pipeline with that hint. Window mode when both plans are index-ordered. Otherwise Policy B reuses the hint: hinted explains, no ranked fallback, cap 8. If those miss, WARN and take the `_id` scan. A user hint stops there. It does not continue into the unhinted planner.
-4. **C4, unhinted.** Explain `$match` + `$sort` (`queryPlanner`). If `winningPlan` is index-ordered, keep it with no hint. Else walk `rejectedPlans` in planner order and **hint** the first plan that is index-ordered on a window-safe btree (`listCurationIndexes`). Then explain the full v3 window pipeline with `allowDiskUse: false` and that hint, when one was picked.
-5. **Window** mode only when **both** plans are index-ordered: an index scan, no `COLLSCAN` / `COLLECTIONSCAN`, and no blocking `SORT` / `SORT_KEY_GENERATOR`. Index-scan stages are `IXSCAN`, `EXPRESS_IXSCAN`, `CLUSTERED_IXSCAN`, `IDHACK`, `COUNT_SCAN`, and `INDEXSCAN`. A leftover agg `stages[].$sort` with `sortPattern` is blocking.
+2. **C1.** Atlas M0/Flex (`pace` with reason `no-wt`) skip the ordered window and skip `listCurationIndexes`. The public ordinal stage can still inject a SORT, and these tiers cannot spill. They still explain the natural pipeline. A selective index scan uses that window and omits `noCursorTimeout`. A COLLSCAN takes scan. mongos `pace` leaves `cannotSpill` false, so the ordered window stays eligible.
+3. **User hint (C2, C3, C3nat, then C3scan).** Explain the prefix and the full ordered pipeline with that hint. Ordered window when both plans are index-ordered. Otherwise Policy B reuses the hint: hinted explains, no ranked fallback, cap 8. If those miss, explain the natural pipeline with the same hint. Natural window when that plan is a selective index scan. Otherwise WARN and take the `_id` scan. A user hint stops there. It does not continue into the unhinted planner.
+4. **C4, unhinted.** Explain `$match` + `$sort` (`queryPlanner`). If `winningPlan` is index-ordered, keep it with no hint. Else walk `rejectedPlans` in planner order and **hint** the first plan that is index-ordered on a window-safe btree (`listCurationIndexes`). Then explain the full ordered pipeline with `allowDiskUse: false` and that hint, when one was picked.
+5. **Ordered window** only when **both** plans are index-ordered: an index scan, no `COLLSCAN` / `COLLECTIONSCAN`, and no blocking `SORT`. Index-scan stages are `IXSCAN`, `EXPRESS_IXSCAN`, `CLUSTERED_IXSCAN`, `IDHACK`, `COUNT_SCAN`, and `INDEXSCAN`. `SORT_KEY_GENERATOR` over one of those stages is index-provided order, not a blocking sort. A leftover agg `stages[].$sort` with `sortPattern` or `sortKey` is blocking.
 6. **C7 Policy B.** When that first-field `sortBy` has no viable ranked plan, probe btree indexes whose prefix keys are **equality** fields of the filter: prefix keys in index order, then the next (trailing) key — ESR, Example D. Each unique `sortBy` uses the same unhinted ranked-plan matching. Cap 8.
-7. **C6 scan.** Hinted `{_id:1}` find command, residual filter as FETCH, buckets assembled in-process.
-8. **C8.** If a live window cursor still hits the sort budget (`QueryExceededMemoryLimitNoDiskUseAllowed`, code 292), close it and continue as scan.
+7. **C5 natural.** When no ordered candidate wins, explain the no-`$sort` pipeline with no hint. Natural window when the winning plan is a selective index scan (same index-scan stages, no `COLLSCAN`, no blocking `SORT`). Do not promote a rejected index the planner passed over. A COLLSCAN stays on the `_id` walk: aggregate cannot set `readOnce`, and a huge collection scan fills the WiredTiger cache.
+8. **C6 scan.** Hinted `{_id:1}` find command, residual filter as FETCH, buckets assembled in-process.
+9. **C8.** If a live window cursor still hits the sort budget (`QueryExceededMemoryLimitNoDiskUseAllowed`, code 292), close it and continue as scan.
 
 **Bucket vs batch:** pipeline fields stay `bucket*` (consistent with operators like `$bucketAuto`). “Batch” is the client/task-pool name for a yielded bucket once it enters the delete worker pool. Both modes yield the same document shape, **100 `_id`s per bucket** by default.
 
@@ -50,8 +53,8 @@ A `$setWindowFields` whose `sortBy` is the first ordering stage injects a physic
 | --------------------------- | ------------------------------------------------------------------------------------ |
 | `filter`                    | Match predicate                                                                      |
 | `$$bucketSizeLimit`         | Aggregation `let` / in-process height (typically 100)                                |
-| `sortBy` / `curationSortBy` | Sort key, e.g. `{ _id: 1 }` or `{ qty: 1 }` — **must be index-backed for window mode** |
-| `mode`                      | `window` (agg pipeline) or `scan` (hinted `{_id:1}` find command + in-process buckets) |
+| `sortBy` / `curationSortBy` | Sort key, e.g. `{ _id: 1 }` or `{ qty: 1 }` — **must be index-backed for the ordered window**. Natural mode has no sort key |
+| `mode`                      | `window` (index-ordered agg), `natural` (index scan, no `$sort`), or `scan` (hinted `{_id:1}` find command + in-process buckets) |
 | `buckets` (v1 only)         | Large `$bucketAuto` bucket count (historically near `2^31 - 1`)                      |
 
 ---
@@ -145,15 +148,15 @@ A `$setWindowFields` whose `sortBy` is the first ordering stage injects a physic
 ];
 ```
 
-### v3 — Partitioned windows, or hinted `_id` find (current pattern)
+### v3 — Partitioned windows, natural index scan, or hinted `_id` find (current pattern)
 
-**Intent:** Yield fixed-size `_id` buckets. Policy A picks **window** mode when `$match` + `$sort` is index-ordered, the full window pipeline stays an index scan without SORT, and the host can spill. Otherwise **scan** mode: hinted `{_id:1}` find command, residual FETCH, in-process buckets of the same shape. Atlas M0/Flex always take scan. mongos `pace` can still take the window.
+**Intent:** Yield fixed-size `_id` buckets. Policy A picks the **ordered window** when `$match` + `$sort` is index-ordered, the full pipeline stays an index scan without a blocking SORT, and the host can spill. The bucket stage is `$_internalSetWindowFields` with `sortBy: {}`, so a monotonic `bucketId` is not sorted again. When that ordered plan misses but `$match` is a selective index scan, the **natural window** buckets in index arrival order with no `$sort`. Otherwise **scan** mode: hinted `{_id:1}` find command, residual FETCH, in-process buckets of the same shape. Atlas M0/Flex skip the ordered window and may still take the natural window. mongos `pace` can still take the ordered window.
 
-**Trade-off:** No global remaining count (by design). Client may show elapsed, batch counts, and an **estimated** rate `(okBuckets × bucketSizeLimit) / elapsed`. Scan order is `_id` rather than a filter-aligned key; the filter is residual on FETCH.
+**Trade-off:** No global remaining count (by design). Client may show elapsed, batch counts, and an **estimated** rate `(okBuckets × bucketSizeLimit) / elapsed`. Natural order is the index's arrival order, so later `_id` deletes are not sequential; index order keeps them sequential. Scan order is `_id` and the filter is residual on FETCH. On a sharded collection the server runs `$_internalSetWindowFields` on the merging half, same as the desugared public stage. Buckets are one merged stream, not per shard.
 
 | Field         | Role                                                            |
 | ------------- | --------------------------------------------------------------- |
-| `ordinal`     | Document number in `curationSortBy` order (window mode)         |
+| `ordinal`     | `$documentNumber` in `curationSortBy` order (ordered window), or a running `$sum: 1` (natural window) |
 | `bucketId`    | `ceil(ordinal / bucketSizeLimit)` (window) or 1-based counter (scan) |
 | `cardinal`    | `1` per document for the bucket window sum                      |
 | `idsInBucket` | Running count **within** the bucket (match-only; not projected) |
@@ -166,9 +169,9 @@ Yielded document (both modes):
 { bucketId, bucketSize, bucketSizeLimit, ids }
 ```
 
-#### Window mode — `$match` + `$sort` + partitioned `$setWindowFields`
+#### Ordered window — `$match` + `$sort` + internal bucket stage
 
-`$sort` sits immediately after `$match` so an index can provide order. `$setWindowFields.sortBy` then matches that key. Aggregation options **fail closed**: `allowDiskUse: false`. Cursor `batchSize` is **1** because each agg document is already one bucket of `bucketSizeLimit` ids.
+`$sort` sits immediately after `$match` so an index can provide order. Keep that `$sort` immediately after `$match`: a `$project` between them left a real `$sort` on `_id`. The ordinal stage stays the public `$setWindowFields` with `$documentNumber`. The bucket stage is `$_internalSetWindowFields` (`partitionBy: "$bucketId"`, `sortBy: {}`). Aggregation options **fail closed**: `allowDiskUse: false`. Cursor `batchSize` is **1** because each agg document is already one bucket of `bucketSizeLimit` ids. `noCursorTimeout` is set only when the host can spill.
 
 ```javascript
 const aggOpts = {
@@ -196,9 +199,9 @@ const aggOpts = {
     }
   },
   {
-    $setWindowFields: {
+    $_internalSetWindowFields: {
       partitionBy: "$bucketId",
-      sortBy: curationSortBy,
+      sortBy: {}, // already one contiguous bucketId run; do not sort
       output: {
         idsInBucket: {
           $sum: "$cardinal",
@@ -226,9 +229,38 @@ const aggOpts = {
 ];
 ```
 
+#### Natural window — selective index scan, no `$sort`
+
+Used when no index absorbs the ordered `$sort`, and the `$match` winning plan is still an index scan. Arrival order follows that index, not `_id`. A hashed index is unordered and still qualifies: `listCurationIndexes` skips it for the ordered probes, and the natural explain accepts the `IXSCAN`. A natural COLLSCAN does not.
+
+```javascript
+[
+  { $match: filter },
+  { $project: { _id: 1 } },
+  {
+    $_internalSetWindowFields: {
+      sortBy: {},
+      output: {
+        ordinal: {
+          $sum: 1,
+          window: { documents: ["unbounded", "current"] }
+        }
+      }
+    }
+  },
+  {
+    $set: {
+      bucketId: { $ceil: { $divide: ["$ordinal", "$$bucketSizeLimit"] } },
+      cardinal: 1
+    }
+  }
+  // same $_internalSetWindowFields partition, last-row $match, and $project as the ordered window
+];
+```
+
 #### Scan mode — hinted `{_id:1}` find command + in-process buckets
 
-Used when the window plan would COLLSCAN or inject a blocking SORT, when a user hint misses, or when the host cannot spill. Residual filter is a FETCH (object scan). `batchSize` equals `bucketSizeLimit` so each batch is one yielded bucket.
+Used when the plan would COLLSCAN or inject a blocking SORT, when a user hint is not a selective index scan, or when explain / code 292 fails. Residual filter is a FETCH (object scan). `batchSize` equals `bucketSizeLimit` so each batch is one yielded bucket.
 
 mongosh `collection.find()` keeps known FindOptions. `readOnce` is a find-command field, so the walk sends the command through `database._runCursorCommand`. `find.batchSize` is the first batch. Later getMore size is `cursor._cursor.setBatchSize(bucketSizeLimit)`. Read preference on this cursor is a driver `ReadPreference` instance. Atlas M0/Flex reject `noCursorTimeout`, so that flag is set only when the host can spill.
 
@@ -263,28 +295,29 @@ namespace.find(filter, { _id: 1 }, {
 
 ### Progression at a glance
 
-|                    | v1            | v2           | v3 window                                         | v3 scan                                      |
-| ------------------ | ------------- | ------------ | ------------------------------------------------- | -------------------------------------------- |
-| Sort key           | `{ _id: 1 }`  | `{ _id: 1 }` | Policy A `curationSortBy` (index-ordered)         | `{ _id: 1 }` (hinted)                        |
-| Global match count | Yes           | No           | No                                                | No                                           |
-| Bucketing          | `$bucketAuto` | `$group`     | Partitioned windows + last-row emit               | In-process, 100 ids per bucket               |
-| Streaming          | Weak          | Better       | Strong when `$sort` is absorbed into `$cursor`    | Strong: hinted `_id` index scan + residual FETCH |
+|                    | v1            | v2           | v3 ordered window                                      | v3 natural                                      | v3 scan                                      |
+| ------------------ | ------------- | ------------ | ------------------------------------------------------ | ----------------------------------------------- | -------------------------------------------- |
+| Sort key           | `{ _id: 1 }`  | `{ _id: 1 }` | Policy A `curationSortBy` (index-ordered)              | none (index arrival order)                      | `{ _id: 1 }` (hinted)                        |
+| Global match count | Yes           | No           | No                                                     | No                                              | No                                           |
+| Bucketing          | `$bucketAuto` | `$group`     | Internal partition + last-row emit                     | Same tail, no `$sort`                           | In-process, 100 ids per bucket               |
+| Streaming          | Weak          | Better       | Strong when `$sort` is absorbed into `$cursor`         | Strong: selective IXSCAN, no blocking sort      | Strong: hinted `_id` index scan + residual FETCH |
 
 ```text
 v1  ordinal + IDsTotal + $bucketAuto + global windows
       ↓ drop global counts
 v2  ordinal → bucketId → $group → renumber
       ↓ drop $group; partition; Policy A sort
-v3  Policy A:
-      window: $match → $sort → ordinal SWF → bucketId → per-bucket window → emit last-in-bucket
-      scan:   hinted {_id:1} find command (readOnce) → residual FETCH → in-process 100-id buckets
+v3  Policy A (1.1.0 drops the bucketId sort):
+      ordered: $match → $sort → ordinal $setWindowFields → bucketId → $_internalSetWindowFields → emit last-in-bucket
+      natural: $match → $project {_id:1} → $_internalSetWindowFields ($sum: 1, sortBy {}) → same bucket tail
+      scan:    hinted {_id:1} find command (readOnce) → residual FETCH → in-process 100-id buckets
 ```
 
 ---
 
 ## Verifying order with `explain` (Policy A)
 
-Probe **before** the long cursor. On Atlas M0/Flex (no WT vitals) skip these probes and take **scan**. mongos `pace` still runs them. Elsewhere, window mode requires **both** probes to be index-ordered (an index-scan stage, no `COLLSCAN` / `COLLECTIONSCAN`, no blocking `SORT` / `SORT_KEY_GENERATOR`):
+Probe **before** the long cursor. On Atlas M0/Flex (no WT vitals) skip the ordered probes and try the natural pipeline; a COLLSCAN there takes **scan**. mongos `pace` still runs the ordered probes. Elsewhere, the ordered window requires **both** probes to be index-ordered (an index-scan stage, no `COLLSCAN` / `COLLECTIONSCAN`, no blocking `SORT`). `SORT_KEY_GENERATOR` over an index scan is not blocking:
 
 ```javascript
 // 1. Prefix — $sort after $match must be absorbed into $cursor
@@ -292,28 +325,38 @@ db.collection
   .explain("queryPlanner")
   .aggregate([{ $match: filter }, { $sort: sortBy }], explainOpts);
 
-// 2. Full v3 window pipeline (both $setWindowFields) — leftover $sort.sortPattern → scan
+// 2. Full ordered pipeline — leftover $sort sortPattern/sortKey, or a SORT stage → not ordered
 db.collection.explain("queryPlanner").aggregate(windowPipeline, {
+  ...explainOpts,
+  allowDiskUse: false,
+  let: { bucketSizeLimit: 100 }
+});
+
+// 3. Natural pipeline, only after the ordered probes miss — COLLSCAN → scan
+db.collection.explain("queryPlanner").aggregate(naturalPipeline, {
   ...explainOpts,
   allowDiskUse: false,
   let: { bucketSizeLimit: 100 }
 });
 ```
 
-Unhinted prefix explain also reads `rejectedPlans`. A COLLSCAN+SORT winner with a rejected index-ordered plan on a window-safe btree takes that `keyPattern` as the fallback hint. A user hint is tried before this unhinted walk, and a miss there takes the `_id` scan.
+Unhinted prefix explain also reads `rejectedPlans`. A COLLSCAN+SORT winner with a rejected index-ordered plan on a window-safe btree takes that `keyPattern` as the fallback hint. A user hint is tried before this unhinted walk. If the hint misses both the ordered window and the natural window, take the `_id` scan.
 
 `explainOpts` carry the candidate **hint** (when one is in play), **collation**, and the same per-command **readPreference** as the live cursor.
 
-**Window** mode when both winning plans are index-ordered and the host can spill. **Scan** mode otherwise: hinted `{_id:1}` find command. A live window cursor that still hits the 100MiB sort budget (`QueryExceededMemoryLimitNoDiskUseAllowed`, code 292) continues as scan.
+**Ordered window** when both winning plans are index-ordered and the host can spill. **Natural window** when the ordered probes miss and the no-`$sort` plan is a selective index scan. **Scan** otherwise: hinted `{_id:1}` find command. A live window cursor that still hits the 100MiB sort budget (`QueryExceededMemoryLimitNoDiskUseAllowed`, code 292) continues as scan.
 
-Inspect **`queryPlanner.winningPlan`** (or `$cursor.queryPlanner.winningPlan`, and each shard under `shards`). A `$sort` merely echoed from the command pipeline is not a blocking sort. A leftover agg `stages[].$sort` with `sortPattern` **is** blocking — that is the aggregation SORT `$setWindowFields` injects when order was not absorbed. The budget is `internalQueryMaxBlockingSortMemoryUsageBytes`, default 100MiB.
+Inspect **`queryPlanner.winningPlan`** (or `$cursor.queryPlanner.winningPlan`, and each shard under `shards`). A `$sort` merely echoed from the command pipeline is not a blocking sort. A leftover agg `stages[].$sort` with `sortPattern` or `sortKey` **is** blocking. The budget is `internalQueryMaxBlockingSortMemoryUsageBytes`, default 100MiB.
 
 | Signal | Meaning |
 | --- | --- |
-| `FETCH` → `IXSCAN`, `EXPRESS_IXSCAN`, `CLUSTERED_IXSCAN`, or `IDHACK` (no `SORT`) | Index provides order — window mode is eligible |
-| `SORT` → `COLLSCAN` or `COLLECTIONSCAN` (or `SORT` over an unordered scan) | Blocking — scan mode (hinted `{_id:1}` find command) |
+| `FETCH` → `IXSCAN`, `EXPRESS_IXSCAN`, `CLUSTERED_IXSCAN`, or `IDHACK` (no `SORT`) | Index provides order — ordered window is eligible |
+| `FETCH` → `SORT_KEY_GENERATOR` → `IXSCAN` | Same thing on 9.0: index-provided order, not a blocking sort |
+| `IXSCAN` on a no-`$sort` pipeline (no `COLLSCAN`, no `SORT`) | Selective index scan — natural window is eligible |
+| `SORT` → `COLLSCAN` or `COLLECTIONSCAN` (or `SORT` over an unordered scan) | Blocking ordered plan. Natural may still apply if `$match` alone is an index scan |
+| `COLLSCAN` / `COLLECTIONSCAN` on the natural pipeline | Not selective — scan mode (hinted `{_id:1}` find, `readOnce`) |
 | `keyPattern` on that index-scan stage | Index that served filter/order |
-| Agg `stages[].$sort` with `sortPattern` | Sort not absorbed into `$cursor` — scan mode |
+| Agg `stages[].$sort` with `sortPattern` or `sortKey` | Sort not absorbed into `$cursor` — not an ordered window |
 
 ### Example A — index-ordered `_id` (good)
 
@@ -334,7 +377,7 @@ db.collection
 // Observed shape: planStages [ 'SORT', 'COLLSCAN' ]
 ```
 
-Policy A takes **scan** mode: hinted `{_id:1}` find command (or create `{ qty: 1 }` / a suitable compound index to stay in window mode).
+With no index this is a COLLSCAN, so Policy A takes **scan** mode: hinted `{_id:1}` find command (or create `{ qty: 1 }` / a suitable compound index to stay in the ordered window). A selective index that cannot satisfy `{ qty: 1 }` — a hashed `{ qty: "hashed" }`, for example — takes the **natural** window instead of that `_id` walk.
 
 ### Example C — filter-aligned index (good)
 
@@ -365,7 +408,7 @@ Policy B in `niceDeleteMany.js` probes this when the first filter field is not a
 
 ### Example E — scan mode (hinted `{_id:1}` find command)
 
-When either probe fails (no supporting index, leftover `$sort.sortPattern` after `$cursor`, or a user hint that does not produce an index-ordered plan), or the host cannot spill (Atlas M0/Flex / no WT vitals), `niceDeleteMany.js` walks with `_runCursorCommand` as in the scan-mode section above. The explain probe is:
+Scan mode is this walk when the natural plan is a COLLSCAN: there is no selective index, or the user hint is neither index-ordered nor a selective index scan. A leftover `$sort` (`sortPattern` or `sortKey`) rejects the ordered window before that choice. Atlas M0/Flex use this walk only when the natural plan is not a selective index scan. The explain probe is:
 
 ```javascript
 db.collection.find(filter, { _id: 1 }, {
@@ -400,7 +443,8 @@ const wp =
   expl.queryPlanner?.winningPlan ||
   expl.stages?.[0]?.$cursor?.queryPlanner?.winningPlan;
 printjson(planStages(wp));
-// Dump the full v3 window pipeline the same way (both $setWindowFields stages).
+// Dump the full ordered pipeline the same way. SORT_KEY_GENERATOR over IXSCAN is index order.
+// A physical SORT, or a stages[].$sort with sortPattern or sortKey, is blocking.
 ```
 
 ---
