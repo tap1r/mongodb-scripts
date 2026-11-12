@@ -1,7 +1,7 @@
 (async() => {
    /*
     *  Name: "niceDeleteMany.js"
-    *  Version: "1.1.0"
+    *  Version: "1.1.1"
     *  Description: "nice concurrent/batch deleteMany() technique with admission control"
     *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
     *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -18,17 +18,17 @@
     *  - mongosh only. Do not top-level-await this IIFE.
     *  - --eval must use var (not let/const); probe typeof, do not declare
     *    dbName/collName/filter in this file.
-    *  - Window mode: index-ordered $match+$sort + $setWindowFields ordinal, then $_internalSetWindowFields buckets (no bucket sort)
-    *  - Natural window: selective index scan, $_internalSetWindowFields in arrival order (no $sort)
+    *  - Ordered find: hinted index scan with the absorbed sort, readOnce, in-process buckets
+    *  - Natural find: hinted selective index scan, no sort, readOnce, in-process buckets
     *  - Scan mode: hinted {_id:1} find with readOnce when the filter is not a selective index scan
-    *  - Policy A is POLICY_A_STEPS (C1 cannotSpill natural-or-scan, C2–C3 user hint, C3nat hinted natural, C4/C7 unhinted, C5 natural, C6 _id scan)
-    *  - User hint is kept for an index-ordered window or a selective index scan; otherwise WARN and _id scan
+    *  - Policy A is POLICY_A_STEPS (C2–C3 user hint, C3nat hinted natural, C4/C7 unhinted, C5 natural, C6 _id scan)
+    *  - User hint is kept for an index-ordered find or a selective index scan; otherwise WARN and _id scan
     *  - Policy B: compound equality prefix → trailing index sort when the first filter field is not index-ordered
-    *  - Unhinted window: if winningPlan is not IXSCAN-without-SORT, hint the first ranked rejectedPlan that is (planner order)
+    *  - Unhinted find: if winningPlan is not IXSCAN-without-SORT, hint the first ranked rejectedPlan that is (planner order)
     *  - Good for matching up to 2,147,483,647,000 documents
     *  - Advanced concurrency model with AIMD and adaptive concurrency to prevent resource starvation
     *  - MongoDB 9.0 supported. User filters follow the server dotted-path null matcher (9.0.2 factory default is pre-9). v9 optimisation and backpressure-aware admission are tabled
-    *  - Atlas M0/Flex (no WT vitals) skip the ordered window. A selective index scan may use the natural window (no noCursorTimeout); otherwise hinted {_id:1} find()
+    *  - Atlas M0/Flex (no WT vitals) still use the find walk. Those hosts reject noCursorTimeout; session idle bounds the cursor
     *  - On mongos: WT admission from collection-owning shard primaries (worst-shard fold, owners refreshed each sample); paceMaker if any of those shards is unreachable at attach, or after consecutive mid-run misses
     *  - "pace" admission mode when WT cache vitals are unavailable (unreachable shards / Atlas M0/Flex)
     *  - Repl lag: lastCommittedOpTime (majority commit point) when rs.status is available; else lastWrite vs majorityWriteDate (M0/Flex)
@@ -72,7 +72,7 @@
     *  End user defined options
     */
 
-   const __script = { "name": "niceDeleteMany.js", "version": "1.1.0" };
+   const __script = { "name": "niceDeleteMany.js", "version": "1.1.1" };
    let vitals = {};
    let vitalsSampling = false;
    let startupLogDone = false; // after writeConsole of the startup banner; attach WARN is banner-only until then
@@ -1303,13 +1303,11 @@
 
    function curationCannotSpill() {
       /*
-       *  Atlas M0/Flex (and mongod with no WT in serverStatus) ignore
-       *  allowDiskUse. The ordered window's public $setWindowFields can still
-       *  inject a SORT, and that fails at the aggregation blocking-sort budget
-       *  (internalQueryMaxBlockingSortMemoryUsageBytes, default 100MiB).
-       *  The natural window has no $sort, so inability to spill is not why to
-       *  skip it. mongos pace is different: shards can spill, so the ordered
-       *  window stays eligible. Set in main() before getIds (paceReason 'no-wt').
+       *  Atlas M0/Flex (and mongod with no WT in serverStatus) reject
+       *  noCursorTimeout. The find walk still runs: Policy A explains that
+       *  find, and a blocking SORT is not opened. Session idle bounds the
+       *  cursor when the flag is omitted. Set in main() before getIds
+       *  (paceReason 'no-wt').
        */
       return admissionCtl.mode === 'pace' && admissionCtl.reason === 'no-wt';
    }
@@ -1322,89 +1320,9 @@
          || /did not opt in to external sorting/i.test(msg);
    }
 
-   function bucketPartitionTail() {
-      /*
-       *  bucketId is one contiguous run, so the internal stage must not sort.
-       *  Public $setWindowFields partitionBy always injects a blocking $sort
-       *  on the partition key. $_internalSetWindowFields does not: sortBy is
-       *  a claim that the input is already ordered, and {} adds no $sort.
-       *  Document bounds still require the field (error 5339901).
-       */
-      return [
-         { "$set": {
-            "bucketId": { "$ceil": { "$divide": ["$ordinal", "$$bucketSizeLimit"] } },
-            "cardinal": 1 // unit contribution per document within its bucket
-         } },
-         { "$_internalSetWindowFields": {
-            "partitionBy": "$bucketId",
-            "sortBy": {},
-            "output": {
-               "idsInBucket": { // was IDsCumulative (per-bucket only, not global)
-                  "$sum": "$cardinal",
-                  "window": { "documents": ["unbounded", "current"] }
-               },
-               "ids": { "$push": "$_id" },
-               "bucketSize": { "$sum": 1 }
-            }
-         } },
-         { "$match": { // emit only the last document of each bucket
-            "$expr": { "$eq": ["$idsInBucket", "$bucketSize"] }
-         } },
-         { "$project": {
-            "_id": 0,
-            "bucketId": 1,
-            "bucketSize": 1,
-            "bucketSizeLimit": "$$bucketSizeLimit",
-            "ids": 1
-         } }
-      ];
-   }
-
-   function windowBucketPipeline(filter, sortBy) {
-      /*
-       *  Index-ordered window. $sort immediately after $match so an index can
-       *  provide order. The public ordinal stage keeps $documentNumber, which
-       *  needs that sortBy. History: Howto-streaming-sort.md
-       */
-      return [
-         { "$match": filter },
-         { "$sort": sortBy },
-         { "$setWindowFields": {
-            "sortBy": sortBy,
-            "output": { "ordinal": { "$documentNumber": {} } }
-         } },
-         ...bucketPartitionTail()
-      ];
-   }
-
-   function naturalBucketPipeline(filter) {
-      /*
-       *  No $sort. A selective index scan arrives in index order, which is
-       *  not _id order. $documentNumber rejects an empty sortBy (5371602);
-       *  a running $sum of 1 is the ordinal that accepts {}.
-       *  Projecting {_id:1} is safe here because this pipeline has no $sort.
-       *  Do not insert that project between $match and $sort on the ordered
-       *  pipeline: it left a real $sort on _id.
-       */
-      return [
-         { "$match": filter },
-         { "$project": { "_id": 1 } },
-         { "$_internalSetWindowFields": {
-            "sortBy": {},
-            "output": {
-               "ordinal": {
-                  "$sum": 1,
-                  "window": { "documents": ["unbounded", "current"] }
-               }
-            }
-         } },
-         ...bucketPartitionTail()
-      ];
-   }
-
    function sortKeyFromFilter(filter = {}) {
       /*
-       *  Derive a field path for window/sort order. Empty / operator-shaped filters → _id.
+       *  Derive a field path for sort order. Empty / operator-shaped filters → _id.
        */
       if (filter == null || typeof filter !== 'object' || Array.isArray(filter)) return '_id';
       const keys = Object.keys(filter);
@@ -1632,13 +1550,39 @@
    }
 
    function ixscanKeyPattern(planRoot) {
-      let keyPattern = null;
+      const keys = ixscanKeyPatterns(planRoot);
+      return keys.length ? keys[0] : null;
+   }
+
+   function ixscanKeyPatterns(planRoot) {
+      const keys = [];
+      const seen = new Set();
       walkPlanNodes(planRoot, (node) => {
-         if (keyPattern == null && isIxscanStage(node) && node.keyPattern != null) {
-            keyPattern = node.keyPattern;
-         }
+         if (!isIxscanStage(node) || node.keyPattern == null) return;
+         const sig = JSON.stringify(node.keyPattern);
+         if (seen.has(sig)) return;
+         seen.add(sig);
+         keys.push(node.keyPattern);
       });
-      return keyPattern;
+      return keys;
+   }
+
+   function explainedIndexHint(explainResult) {
+      /*
+       *  Pin the live find to the index the explain already chose. One
+       *  keyPattern across every winning plan. Two different IXSCANs in one
+       *  plan (an $or of two indexes) is not a single hint.
+       */
+      const { winningPlans } = collectExplainTree(explainResult);
+      if (!winningPlans.length) return null;
+      let hint = null;
+      for (const root of winningPlans) {
+         const keys = ixscanKeyPatterns(root);
+         if (keys.length !== 1) return null;
+         if (hint == null) hint = keys[0];
+         else if (JSON.stringify(hint) !== JSON.stringify(keys[0])) return null;
+      }
+      return hint;
    }
 
    function firstViableWindowHint(explainResult, indexes) {
@@ -1727,8 +1671,8 @@
    }
 
    function applyCursorReadPref(cursor, cmdRP) {
-      // FindCursor / AggregationCursor (idScan explain, window aggregate).
-      // RunCommandCursor has no readPref(); scan walk uses driverReadPreference.
+      // FindCursor explain. RunCommandCursor has no readPref();
+      // the find walk uses driverReadPreference.
       if (!cursor || typeof cursor.readPref !== 'function' || !cmdRP?.mode) return cursor;
       const next = cursor.readPref(cmdRP.mode, cmdRP.tags);
       return next ?? cursor;
@@ -1799,109 +1743,104 @@
       }
    }
 
-   function explainCurationAggregate(namespace, pipeline, opts) {
-      return namespace.explain('queryPlanner').aggregate(pipeline, opts);
+   async function explainFind(namespace, filter, explainOpts, sortBy, hint) {
+      /*
+       *  Explain the find the walk will open. mongosh find() drops readOnce,
+       *  so this probe is plan-only. Sort and hint are applied on the options
+       *  document and again on the cursor: the helper does not always keep
+       *  both from the options object.
+       */
+      let cursor;
+      try {
+         const findExplainOpts = {};
+         if (hasNonEmptyDoc(sortBy)) findExplainOpts.sort = sortBy;
+         applyHint(findExplainOpts, hint);
+         applyUserCollation(findExplainOpts);
+         if (explainOpts?.readPreference) findExplainOpts.readPreference = explainOpts.readPreference;
+         cursor = namespace.find(filter, { "_id": 1 }, findExplainOpts);
+         cursor = await unwrapShellCursor(cursor);
+         if (hasNonEmptyDoc(sortBy) && typeof cursor.sort === 'function') cursor = cursor.sort(sortBy) ?? cursor;
+         if (hasNonEmptyDoc(hint) && typeof cursor.hint === 'function') cursor = cursor.hint(hint) ?? cursor;
+         if (explainOpts?.readPreference) cursor = applyCursorReadPref(cursor, explainOpts.readPreference);
+         return await cursor.explain('queryPlanner');
+      } finally {
+         await closeCursor(cursor);
+      }
    }
 
    async function idScan(namespace, filter, explainOpts, why) {
       const idSort = { "_id": 1 };
       const idHint = { "_id": 1 };
-      let cursor;
       try {
-         const findExplainOpts = {
-            "sort": idSort,
-            "hint": idHint
-         };
-         applyUserCollation(findExplainOpts);
-         if (explainOpts.readPreference) findExplainOpts.readPreference = explainOpts.readPreference;
-         cursor = namespace.find(filter, { "_id": 1 }, findExplainOpts);
-         cursor = await unwrapShellCursor(cursor);
-         if (typeof cursor.sort === 'function') cursor = cursor.sort(idSort) ?? cursor;
-         if (typeof cursor.hint === 'function') cursor = cursor.hint(idHint) ?? cursor;
-         if (explainOpts.readPreference) cursor = applyCursorReadPref(cursor, explainOpts.readPreference);
-         const expl = await cursor.explain('queryPlanner');
+         const expl = await explainFind(namespace, filter, explainOpts, idSort, idHint);
          if (!planIsIndexOrdered(expl)) {
             emit('\n[red][WARN][/] [yellow]_id find() explain is not IXSCAN-without-SORT; scan will still force hinted {_id:1}[/]');
          }
       } catch(e) {
          emit('\n[red][WARN][/] [yellow]Curation _id find() explain failed[/]:', e?.message ?? e);
-      } finally {
-         await closeCursor(cursor);
       }
       emit(why ?? '\n[red][WARN][/] [yellow]Curation falling back to _id index order to avoid COLLSCAN/blocking SORT (filter selectivity may suffer)[/]');
       return { "sortBy": idSort, "hint": idHint, "mode": "scan" };
    }
 
-   async function tryWindow(namespace, filter, explainOpts, candidateSort, candidateHint) {
-      const opts = { ...explainOpts };
-      applyHint(opts, candidateHint);
-      const prefix = [{ "$match": filter }, { "$sort": candidateSort }];
-      const fullOpts = { ...opts, "allowDiskUse": false, "let": { "bucketSizeLimit": 100 } };
-      try {
-         const prefixExpl = await explainCurationAggregate(namespace, prefix, opts);
-         if (!planIsIndexOrdered(prefixExpl)) return null;
-         const fullExpl = await explainCurationAggregate(namespace, windowBucketPipeline(filter, candidateSort), fullOpts);
-         if (!planIsIndexOrdered(fullExpl)) return null;
-         return { "sortBy": candidateSort, "hint": candidateHint, "mode": "window" };
-      } catch(e) {
-         emit('\n[red][WARN][/] [yellow]Curation window explain failed[/]:', e?.message ?? e);
-         return null;
-      }
-   }
-
-   async function tryWindowFromPlanner(namespace, filter, explainOpts, candidateSort, indexes) {
+   async function tryOrderedFind(namespace, filter, explainOpts, candidateSort, candidateHint) {
       /*
-       *  Unhinted $match+$sort. If the winner is index-ordered, no hint.
-       *  Else hint the first ranked rejectedPlan that stays IXSCAN-without-SORT
-       *  on a window-safe btree. One prefix explain, then one full pipeline
-       *  (with that hint when picked).
+       *  The live cursor is this find: filter, projection {_id:1}, the
+       *  candidate sort, and a hint. Accept only an index scan with no
+       *  blocking SORT. A user hint is kept. Otherwise pin the explained
+       *  index so the walk cannot replan.
        */
-      const prefix = [{ "$match": filter }, { "$sort": candidateSort }];
-      const fullLet = { "allowDiskUse": false, "let": { "bucketSizeLimit": 100 } };
       try {
-         const prefixExpl = await explainCurationAggregate(namespace, prefix, explainOpts);
-         if (planIsIndexOrdered(prefixExpl)) {
-            const fullExpl = await explainCurationAggregate(namespace, windowBucketPipeline(filter, candidateSort), { ...explainOpts, ...fullLet });
-            if (!planIsIndexOrdered(fullExpl)) return null;
-            return { "sortBy": candidateSort, "hint": {}, "mode": "window" };
-         }
-         const pick = firstViableWindowHint(prefixExpl, indexes);
-         if (!pick || pick.fromWinner || !hasNonEmptyDoc(pick.hint)) return null;
-         const hintedOpts = { ...explainOpts };
-         applyHint(hintedOpts, pick.hint);
-         const fullExpl = await explainCurationAggregate(
-            namespace,
-            windowBucketPipeline(filter, candidateSort),
-            { ...hintedOpts, ...fullLet }
-         );
-         if (!planIsIndexOrdered(fullExpl)) return null;
-         emit(`\n[blue][INFO][/] Curation planner hint [yellow]${JSON.stringify(pick.hint)}[/] for sortBy [yellow]${JSON.stringify(candidateSort)}[/]`);
-         return { "sortBy": candidateSort, "hint": pick.hint, "mode": "window" };
-      } catch(e) {
-         emit('\n[red][WARN][/] [yellow]Curation window explain failed[/]:', e?.message ?? e);
-         return null;
-      }
-   }
-
-   async function tryNaturalWindow(namespace, filter, explainOpts, candidateHint) {
-      /*
-       *  No $sort. Accept when the winning plan is a selective index scan:
-       *  IXSCAN (or an alias), no COLLSCAN, no blocking SORT. A natural
-       *  COLLSCAN fills the WT cache (aggregate cannot set readOnce), so
-       *  that plan stays on the hinted {_id:1} walk. sortBy {} is server
-       *  behaviour, not a documented contract; explain failure falls through.
-       */
-      const opts = { ...explainOpts };
-      applyHint(opts, candidateHint);
-      const fullOpts = { ...opts, "allowDiskUse": false, "let": { "bucketSizeLimit": 100 } };
-      try {
-         const expl = await explainCurationAggregate(namespace, naturalBucketPipeline(filter), fullOpts);
+         const expl = await explainFind(namespace, filter, explainOpts, candidateSort, candidateHint);
          if (!planIsIndexOrdered(expl)) return null;
-         const hintLabel = hasNonEmptyDoc(candidateHint) ? JSON.stringify(candidateHint) : '{}';
-         emit(`\n[blue][INFO][/] Curation natural window (selective index scan, no sort) hint [yellow]${hintLabel}[/]`);
-         return { "sortBy": {}, "hint": candidateHint ?? {}, "mode": "natural" };
+         const pinned = hasNonEmptyDoc(candidateHint) ? candidateHint : explainedIndexHint(expl);
+         if (!hasNonEmptyDoc(pinned)) return null;
+         return { "sortBy": candidateSort, "hint": pinned, "mode": "ordered" };
       } catch(e) {
-         emit('\n[red][WARN][/] [yellow]Curation natural window explain failed[/]:', e?.message ?? e);
+         emit('\n[red][WARN][/] [yellow]Curation ordered find explain failed[/]:', e?.message ?? e);
+         return null;
+      }
+   }
+
+   async function tryOrderedFindFromPlanner(namespace, filter, explainOpts, candidateSort, indexes) {
+      /*
+       *  Unhinted find + sort. If the winner is index-ordered, pin its
+       *  keyPattern. Else hint the first ranked rejectedPlan that stays
+       *  IXSCAN-without-SORT on a window-safe btree, and explain that find.
+       */
+      try {
+         const expl = await explainFind(namespace, filter, explainOpts, candidateSort, {});
+         if (planIsIndexOrdered(expl)) {
+            const pinned = explainedIndexHint(expl);
+            if (!hasNonEmptyDoc(pinned)) return null;
+            return { "sortBy": candidateSort, "hint": pinned, "mode": "ordered" };
+         }
+         const pick = firstViableWindowHint(expl, indexes);
+         if (!pick || pick.fromWinner || !hasNonEmptyDoc(pick.hint)) return null;
+         const hinted = await explainFind(namespace, filter, explainOpts, candidateSort, pick.hint);
+         if (!planIsIndexOrdered(hinted)) return null;
+         emit(`\n[blue][INFO][/] Curation planner hint [yellow]${JSON.stringify(pick.hint)}[/] for sortBy [yellow]${JSON.stringify(candidateSort)}[/]`);
+         return { "sortBy": candidateSort, "hint": pick.hint, "mode": "ordered" };
+      } catch(e) {
+         emit('\n[red][WARN][/] [yellow]Curation ordered find explain failed[/]:', e?.message ?? e);
+         return null;
+      }
+   }
+
+   async function tryNaturalFind(namespace, filter, explainOpts, candidateHint) {
+      /*
+       *  No sort. Accept when the find is a selective index scan: IXSCAN
+       *  (or an alias), no COLLSCAN, no blocking SORT. Pin that index.
+       *  A COLLSCAN stays on the hinted {_id:1} walk, which can set readOnce.
+       */
+      try {
+         const expl = await explainFind(namespace, filter, explainOpts, {}, candidateHint);
+         if (!planIsIndexOrdered(expl)) return null;
+         const pinned = hasNonEmptyDoc(candidateHint) ? candidateHint : explainedIndexHint(expl);
+         if (!hasNonEmptyDoc(pinned)) return null;
+         return { "sortBy": {}, "hint": pinned, "mode": "natural" };
+      } catch(e) {
+         emit('\n[red][WARN][/] [yellow]Curation natural find explain failed[/]:', e?.message ?? e);
          return null;
       }
    }
@@ -1915,9 +1854,9 @@
          if (probes >= POLICY_B_MAX_PROBES) break;
          if (hasNonEmptyDoc(forcedHint)) {
             probes++;
-            const win = await tryWindow(namespace, filter, explainOpts, cand.sortBy, forcedHint);
+            const win = await tryOrderedFind(namespace, filter, explainOpts, cand.sortBy, forcedHint);
             if (win) {
-               emit(`\n[blue][INFO][/] Curation Policy B window sortBy [yellow]${JSON.stringify(win.sortBy)}[/]`);
+               emit(`\n[blue][INFO][/] Curation Policy B ordered find sortBy [yellow]${JSON.stringify(win.sortBy)}[/]`);
                return win;
             }
             continue;
@@ -1926,35 +1865,23 @@
          if (seenSort.has(sig)) continue;
          seenSort.add(sig);
          probes++;
-         const win = await tryWindowFromPlanner(namespace, filter, explainOpts, cand.sortBy, indexes);
+         const win = await tryOrderedFindFromPlanner(namespace, filter, explainOpts, cand.sortBy, indexes);
          if (win) {
-            emit(`\n[blue][INFO][/] Curation Policy B window sortBy [yellow]${JSON.stringify(win.sortBy)}[/]`);
+            emit(`\n[blue][INFO][/] Curation Policy B ordered find sortBy [yellow]${JSON.stringify(win.sortBy)}[/]`);
             return win;
          }
       }
       return null;
    }
 
-   // Policy A probe order. First non-null result wins. C4 is tryWindowFromPlanner
-   // (winner or first ranked rejectedPlan). C5/C3nat are the no-sort window.
-   // C8 catch-292 is in getIds.
+   // Policy A probe order. First non-null result wins. C4 is tryOrderedFindFromPlanner
+   // (winner or first ranked rejectedPlan). C5/C3nat are the no-sort find.
+   // A live find that still sorts falls back to the _id walk in getIds.
    const POLICY_A_STEPS = [
-      {
-         "id": "C1",
-         "when": (ctx) => ctx.cannotSpill,
-         "run": async (ctx) => {
-            const nat = await tryNaturalWindow(ctx.namespace, ctx.filter, ctx.explainOpts, ctx.userHint);
-            if (nat) return nat;
-            return idScan(
-               ctx.namespace, ctx.filter, ctx.explainOpts,
-               '\n[red][WARN][/] [yellow]Curation forcing hinted _id find() walk — this host cannot spill a leftover window SORT (Atlas M0/Flex / no WT vitals)[/]'
-            );
-         }
-      },
       {
          "id": "C2",
          "when": (ctx) => ctx.hinted,
-         "run": (ctx) => tryWindow(ctx.namespace, ctx.filter, ctx.explainOpts, ctx.sortBy, ctx.userHint)
+         "run": (ctx) => tryOrderedFind(ctx.namespace, ctx.filter, ctx.explainOpts, ctx.sortBy, ctx.userHint)
       },
       {
          "id": "C3",
@@ -1964,7 +1891,7 @@
       {
          "id": "C3nat",
          "when": (ctx) => ctx.hinted,
-         "run": (ctx) => tryNaturalWindow(ctx.namespace, ctx.filter, ctx.explainOpts, ctx.userHint)
+         "run": (ctx) => tryNaturalFind(ctx.namespace, ctx.filter, ctx.explainOpts, ctx.userHint)
       },
       {
          "id": "C3scan",
@@ -1977,7 +1904,7 @@
       {
          "id": "C4",
          "when": (ctx) => !ctx.hinted,
-         "run": (ctx) => tryWindowFromPlanner(ctx.namespace, ctx.filter, ctx.explainOpts, ctx.sortBy, ctx.indexes)
+         "run": (ctx) => tryOrderedFindFromPlanner(ctx.namespace, ctx.filter, ctx.explainOpts, ctx.sortBy, ctx.indexes)
       },
       {
          "id": "C7",
@@ -1987,7 +1914,7 @@
       {
          "id": "C5",
          "when": (ctx) => !ctx.hinted,
-         "run": (ctx) => tryNaturalWindow(ctx.namespace, ctx.filter, ctx.explainOpts, {})
+         "run": (ctx) => tryNaturalFind(ctx.namespace, ctx.filter, ctx.explainOpts, {})
       },
       {
          "id": "C6",
@@ -1998,19 +1925,18 @@
    async function resolveCurationOrder(namespace, filter = {}, userHint = {}, readPreference = null) {
       /*
        *  Walk POLICY_A_STEPS. sortBy from the filter ({} / non-field → _id).
-       *  C1 cannotSpill skips the ordered window (M0/Flex leftover SORT
-       *  cannot spill) and still tries the natural window.
-       *  C11 mongos pace leaves cannotSpill false so the ordered window stays eligible.
-       *  C10 collation is applyUserCollation on explainOpts.
+       *  Each probe explains the find the walk will open. A blocking SORT
+       *  or COLLSCAN is not opened. C10 collation is applyUserCollation
+       *  on explainOpts. noCursorTimeout is omitted when the host cannot
+       *  take one (Atlas M0/Flex); that does not change the plan choice.
        */
       const sortField = sortKeyFromFilter(filter);
       const sortBy = { [sortField]: 1 };
       const explainOpts = {};
       applyUserCollation(explainOpts);
       if (readPreference?.mode) explainOpts.readPreference = commandReadPreference(readPreference);
-      const cannotSpill = curationCannotSpill();
       const hinted = hasNonEmptyDoc(userHint);
-      const indexes = cannotSpill ? [] : await listCurationIndexes(namespace);
+      const indexes = await listCurationIndexes(namespace);
       const ctx = {
          "namespace": namespace,
          "filter": filter,
@@ -2018,7 +1944,6 @@
          "sortBy": sortBy,
          "userHint": userHint,
          "indexes": indexes,
-         "cannotSpill": cannotSpill,
          "hinted": hinted
       };
       for (const step of POLICY_A_STEPS) {
@@ -2032,9 +1957,9 @@
    async function* getIds(filter = {}, bucketSizeLimit = 100, sessionOpts = {}, lastCuration = { "mode": "scan", "hint": {} }) {
       /*
        *  Curation via per-command readPreference (no Mongo.setReadPref):
-       *  landing hello, Policy A explain, and bucketing aggregate share the same RP
+       *  landing hello, Policy A explain, and the find walk share the same RP
        *  document so server selection can stay on one secondary / plan cache.
-       *  Scan walk converts that document with driverReadPreference() for
+       *  The walk converts that document with driverReadPreference() for
        *  _runCursorCommand (Node RunCommandCursor ignores {mode, tags}).
        *  No DriverSession (mongosh explain on a session can expire before the cursor).
        */
@@ -2061,59 +1986,34 @@
       lastCuration.mode = curationMode;
       lastCuration.hint = curationHint;
 
-      if (curationMode === 'scan') {
-         yield* getIdsByIdIndexScan(namespace, filter, bucketSizeLimit, cmdRP);
-         return;
+      const walkSort = curationMode === 'natural' ? {} : curationSortBy;
+      const walkHint = curationHint;
+      if (curationMode === 'ordered') {
+         emit(`[blue][INFO][/] Curation using index-ordered find walk sortBy [yellow]${JSON.stringify(curationSortBy)}[/] hint [yellow]${JSON.stringify(curationHint)}[/]`);
+      } else if (curationMode === 'natural') {
+         emit(`[blue][INFO][/] Curation using natural find walk (selective index scan, no sort) hint [yellow]${JSON.stringify(curationHint)}[/]`);
       }
 
-      if (curationMode === 'window') {
-         emit(`[blue][INFO][/] Curation using index-ordered window sortBy [yellow]${JSON.stringify(curationSortBy)}[/]`);
-      }
-
-      const aggOpts = {
-         // Fail closed: a blocking SORT / spill means the plan is wrong (Policy A
-         // should have forced the _id find() walk). Do not opt in to external sort.
-         "allowDiskUse": false,
-         // 1 agg doc = 1 bucket of bucketSizeLimit (_id)s; prefetch pulls buckets.
-         "cursor": { "batchSize": 1 },
-         "maxTimeMS": 0, // required to overide potential v8 defaultMaxTimeMS cluster settings
-         "comment": "Bucketing IDs via niceDeleteMany.js",
-         "let": { "bucketSizeLimit": bucketSizeLimit },
-         "readPreference": cmdRP
-      };
-      // Atlas M0/Flex reject no-timeout cursors. The natural window can run
-      // there (it has no SORT); the ordered window is not chosen on those hosts.
-      if (!curationCannotSpill()) aggOpts.noCursorTimeout = true;
-      applyUserCollation(aggOpts);
-      applyHint(aggOpts, curationHint);
-      const pipeline = curationMode === 'natural'
-         ? naturalBucketPipeline(filter)
-         : windowBucketPipeline(filter, curationSortBy);
-      // offload iterator to the shell's cursor (same RP as Policy A explain)
+      let yielded = false;
       try {
-         let cursor = namespace.aggregate(pipeline, aggOpts);
-         cursor = await unwrapShellCursor(cursor);
-         try {
-            yield* cursor;
-         } finally {
-            await closeCursor(cursor);
+         for await (const bucket of getIdsByIndexScan(namespace, filter, bucketSizeLimit, cmdRP, walkSort, walkHint, curationMode)) {
+            yielded = true;
+            yield bucket;
          }
       } catch(e) {
-         if (!isCurationSortMemoryError(e)) throw e;
-         emit('\n[red][WARN][/] [yellow]Window curation hit in-memory SORT limit; continuing with hinted _id find() walk[/]');
+         if (yielded || curationMode === 'scan' || !isCurationSortMemoryError(e)) throw e;
+         emit('\n[red][WARN][/] [yellow]Find curation hit in-memory SORT limit; continuing with hinted _id find() walk[/]');
          lastCuration.mode = "scan";
          lastCuration.hint = { "_id": 1 };
-         yield* getIdsByIdIndexScan(namespace, filter, bucketSizeLimit, cmdRP);
+         yield* getIdsByIndexScan(namespace, filter, bucketSizeLimit, cmdRP, { "_id": 1 }, { "_id": 1 }, "scan");
       }
    }
 
-   async function* getIdsByIdIndexScan(namespace, filter = {}, bucketSizeLimit = 100, cmdRP = { "mode": "primary" }) {
+   async function* getIdsByIndexScan(namespace, filter = {}, bucketSizeLimit = 100, cmdRP = { "mode": "primary" }, sortBy = { "_id": 1 }, hint = { "_id": 1 }, mode = "scan") {
       /*
-       *  Hinted {_id:1} find walk. Residual filter is a FETCH (object scan);
-       *  no blocking SORT and no window stage. Used when the filter is not a
-       *  selective index scan (COLLSCAN would fill the WT cache: aggregate
-       *  cannot set readOnce). Bucket in-process to the same shape as the
-       *  window pipeline ({ bucketId, ids, bucketSize, ... }).
+       *  Hinted find walk. Projection is {_id:1}. Sort is set only when the
+       *  explained index provides that order. Natural mode omits sort.
+       *  Buckets are assembled in process ({ bucketId, ids, bucketSize, ... }).
        *
        *  readOnce is a find-command flag (WiredTiger one-shot pages; IDL
        *  unstable/deprecated). It is a find field, not a $match option.
@@ -2127,23 +2027,28 @@
        *  (CursorNotFound). Pass driverReadPreference(cmdRP). No
        *  DriverSession on this cursor (implicit cursor session only).
        */
-      emit('[blue][INFO][/] Curation using hinted [yellow]_id[/] index walk (find); filter applied as residual');
-      // Same per-command RP as aggregate (secondaryPreferred + Atlas tags).
+      if (mode === 'scan') {
+         emit('[blue][INFO][/] Curation using hinted [yellow]_id[/] index walk (find); filter applied as residual');
+      }
       // find.batchSize = firstBatch; getMore.batchSize is driver setBatchSize.
-      // Shell RunCommandCursor.batchSize() throws. Agg path uses cursor
-      // batchSize 1 because each agg doc is already one yielded bucket.
+      // Shell RunCommandCursor.batchSize() throws.
       const database = namespace.getDB();
+      const comment = mode === 'natural'
+         ? "Bucketing IDs via niceDeleteMany.js (natural index scan)"
+         : mode === 'ordered'
+            ? "Bucketing IDs via niceDeleteMany.js (ordered index scan)"
+            : "Bucketing IDs via niceDeleteMany.js (_id index scan)";
       const findCmd = {
          "find": namespace.getName(),
          "filter": filter,
          "projection": { "_id": 1 },
-         "sort": { "_id": 1 },
-         "hint": { "_id": 1 },
          "batchSize": bucketSizeLimit,
          "maxTimeMS": 0,
          "readOnce": true,
-         "comment": "Bucketing IDs via niceDeleteMany.js (_id index scan)"
+         "comment": comment
       };
+      if (hasNonEmptyDoc(sortBy)) findCmd.sort = sortBy;
+      if (hasNonEmptyDoc(hint)) findCmd.hint = hint;
       // Atlas M0/Flex reject noTimeout cursors; session idle already bounds the walk.
       if (!curationCannotSpill()) findCmd.noCursorTimeout = true;
       applyUserCollation(findCmd);
@@ -2189,11 +2094,11 @@
       /*
        *  Residual validation on primary with majority RC (matches wc:majority deletes).
        *  allowDiskUse false: $count is O(1) memory; spill is a failed plan (Policy A).
-       *  Hint only when window or natural mode honored a hint. Scan drops a
+       *  Hint only when ordered or natural mode pinned an index. Scan drops a
        *  rejected hint so the planner can pick a filter index for $match.
        *  aggregate IDL has no readOnce field (runCommand → 40415 IDLUnknownField);
        *  collection.aggregate() strips it as a silent no-op. Residual $match+$count
-       *  is small; the one-shot WT walk is getIdsByIdIndexScan.
+       *  is small; the one-shot WT walk is getIdsByIndexScan.
        */
       const session = db.getMongo().startSession(sessionOpts);
       try {
@@ -2214,7 +2119,7 @@
                "readConcern": sessionOpts?.readConcern?.level ?? "majority",
                "comment": "Validating IDs via niceDeleteMany.js"
             };
-         if (lastCuration.mode === 'window' || lastCuration.mode === 'natural') {
+         if (lastCuration.mode === 'ordered' || lastCuration.mode === 'natural') {
             applyHint(aggOpts, lastCuration.hint);
          }
          applyUserCollation(aggOpts);

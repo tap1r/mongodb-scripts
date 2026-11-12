@@ -115,7 +115,7 @@ Read preference on this cursor is a driver **instance** — see [`RunCommandCurs
 
 `_runCursorCommand` is a plain `async` method (the rewriter does not unwrap it), so the first value is `Promise<RunCommandCursor>`. Unwrap only while there is no `.close`, then stream — see [Thenable cursors](#thenable-cursors-do-not-await-a-live-cursor). Keep the cursor connection-scoped (implicit session); a DriverSession can expire under a long walk.
 
-Hit in `niceDeleteMany.js` on the hinted `_id` scan walk (`getIdsByIdIndexScan`). Window `$setWindowFields` stays on `aggregate()`. Residual `countIds` stays on aggregate without `readOnce`.
+Hit in `niceDeleteMany.js`: the ordered, natural, and `_id` curation walks all use `database._runCursorCommand` (`getIdsByIndexScan`). Ordered sets `sort` and the pinned hint. Natural omits `sort`. The command below is the scan shape. Residual `countIds` stays on aggregate without `readOnce`.
 
 ```javascript
 const database = db.getSiblingDB(dbName);
@@ -290,7 +290,7 @@ A `Promise` has `.then` and no `.close`; a mongosh find, aggregation, or `RunCom
 
 In `--file` scripts the [async rewriter](https://www.npmjs.com/package/@mongosh/async-rewriter2) already inserts implicit `await` around marked **shell-API** methods (`find`, `aggregate`, …). You usually receive a **cursor object**, not `Promise<Cursor>`. `Database._runCursorCommand` is a plain `async` method (not rewriter-marked), so the first value **is** `Promise<RunCommandCursor>` — unwrap that Promise, then stream. Do not `await` a live cursor.
 
-Hit in `niceDeleteMany.js`: window `aggregate()` and the `_runCursorCommand` `_id` walk both unwrap only a bare Promise (no `.close`), then stream (`yield*` / `for await`). `await` on the live cursor would materialise every matching `_id` instead of yielding 100-id buckets.
+Hit in `niceDeleteMany.js`: the `_runCursorCommand` find walk (`getIdsByIndexScan`) unwraps only a bare Promise (no `.close`), then streams (`for await`). `await` on the live cursor would materialise every matching `_id` instead of yielding 100-id buckets. Residual `countIds` stays on `aggregate()`.
 
 The object you hold is the **mongosh cursor**, not the server cursor. It wraps a Node driver cursor (`_cursor`). `for await` / `yield*` on the shell object uses `Symbol.asyncIterator`, which (unless `.map()` is set) **delegates to the driver iterator**. `close()` is `await this._cursor.close()` (killCursors on the server when the id is still live).
 
@@ -416,7 +416,7 @@ Safer approach for “is this plan a collection scan / blocking sort?” checks:
 - Treat classic stages such as `COLLSCAN` and `SORT` as signals. `SORT_KEY_GENERATOR` over an index scan is the index attaching sort-key metadata (9.0 often shows `FETCH` → `SORT_KEY_GENERATOR` → `IXSCAN`). It is not itself a blocking `SORT`.
 - Only treat a top-level aggregation `$sort` stage as blocking when it looks like an explain stage (for example includes `sortPattern` or `sortKey`), not a bare sort-key document echoed from the command.
 
-Used by scripts that choose an index-friendly sort key for windowed / ordered batching (e.g. deriving sort from the filter, falling back to `{ _id: 1 }` when the plan is unsafe).
+`niceDeleteMany.js` 1.1.1 explains the find it will open, not an aggregation window. The same rule applies: walk `winningPlan` (on mongos, `SINGLE_SHARD.shards[].winningPlan`), treat `SORT_KEY_GENERATOR` over an index scan as index order, and treat a physical `SORT` as blocking. A leftover aggregation `$sort` is blocking only when the explain stage has `sortPattern` or `sortKey`.
 
 ---
 
