@@ -39,7 +39,7 @@ CARRIERS = [
     ("string", "string"),
     ("binary", "binary"),
 ]
-RUNGS = [
+PATTERNS = [
     (1, "Repetitive"),
     (5, "Mixed"),
     (10, "Nearly random"),
@@ -70,24 +70,24 @@ plt.rcParams.update(
 )
 
 
-def pick(slice_, carrier, rung, comp, level, target=None):
+def pick(slice_, carrier, pattern, comp, level, target=None):
     hits = [
         r
         for r in ROWS
         if r["slice"] == slice_
         and r["carrier"] == carrier
-        and r["rung"] == rung
+        and r["pattern"] == pattern
         and r["compressor"] == comp
         and r["level"] == level
         and (target is None or r["target"] == target)
     ]
     if target is not None:
         if len(hits) != 1:
-            raise SystemExit(f"expected 1 row, got {len(hits)} for {slice_} {carrier} r{rung} {comp} {level} t={target}")
+            raise SystemExit(f"expected 1 row, got {len(hits)} for {slice_} {carrier} pattern {pattern} {comp} {level} t={target}")
         return hits[0]
     hits.sort(key=lambda r: r["target"])
     if not hits:
-        raise SystemExit(f"no rows for {slice_} {carrier} r{rung} {comp} {level}")
+        raise SystemExit(f"no rows for {slice_} {carrier} pattern {pattern} {comp} {level}")
     return hits
 
 
@@ -125,24 +125,24 @@ def style_axis(ax, ticks):
     ax.margins(x=0.02)
 
 
-def plot_length(ax, carrier, rung, ticks):
+def plot_length(ax, carrier, pattern, ticks):
     ratios = []
     for comp, level, color, _label in SERIES:
-        rows = pick("length", carrier, rung, comp, level)
+        rows = pick("length", carrier, pattern, comp, level)
         xs = [r["target"] for r in rows]
         ys = [r["wireRatio"] for r in rows]
         ratios.extend(ys)
         ax.plot(xs, ys, color=color, lw=2.15, solid_capstyle="round", zorder=3)
     style_axis(ax, ticks)
-    bits = pick("length", carrier, rung, "none", None, 65536)["bits"]
+    bits = pick("length", carrier, pattern, "none", None, 65536)["bits"]
     return bits, min(ratios), max(ratios)
 
 
 DETAIL_TICKS = [1, 256, 4096, 65536, 1048576, 16777216]
 
 
-def tag_end(ax, key, rung, comp, level, text, color, va="top", dy=-3):
-    row = pick("length", key, rung, comp, level, 16777216)
+def tag_end(ax, key, pattern, comp, level, text, color, va="top", dy=-3):
+    row = pick("length", key, pattern, comp, level, 16777216)
     ax.annotate(
         text,
         xy=(row["target"], row["wireRatio"]),
@@ -155,8 +155,8 @@ def tag_end(ax, key, rung, comp, level, text, color, va="top", dy=-3):
     )
 
 
-def point_at(ax, key, rung, comp, level, target, text, color, dx, dy):
-    row = pick("length", key, rung, comp, level, target)
+def point_at(ax, key, pattern, comp, level, target, text, color, dx, dy):
+    row = pick("length", key, pattern, comp, level, target)
     ax.annotate(
         text,
         xy=(row["target"], row["wireRatio"]),
@@ -242,18 +242,18 @@ def mark_combined(axes):
 
 def carrier_chart(key, title):
     fig, axes = plt.subplots(3, 1, figsize=(9.4, 8.6), sharex=True, constrained_layout=True)
-    for ax, (rung, name) in zip(axes, RUNGS):
-        bits, lo, hi = plot_length(ax, key, rung, DETAIL_TICKS)
+    for ax, (pattern, name) in zip(axes, PATTERNS):
+        bits, lo, hi = plot_length(ax, key, pattern, DETAIL_TICKS)
         ax.set_ylim(lo / 1.45, hi * 1.55)
         ax.set_ylabel("Wire ratio")
-        ax.set_title(f"{name}  ·  rung {rung}  ·  {bits:.3f} bits/byte at 64 KiB", loc="left", fontsize=11, color=INK, pad=8)
-        if key == "binary" and rung == 10:
+        ax.set_title(f"{name}  ·  pattern {pattern}  ·  {bits:.3f} bits/byte at 64 KiB", loc="left", fontsize=11, color=INK, pad=8)
+        if key == "binary" and pattern == 10:
             ax.text(
                 0.98, 0.90,
                 "below the line at every size\nat 16 MiB: zstd +406 · snappy +778 · zlib +2,660",
                 transform=ax.transAxes, ha="right", va="top", fontsize=8.5, color=MUTED,
             )
-        if key == "string" and rung == 10:
+        if key == "string" and pattern == 10:
             ax.text(
                 0.98, 0.08,
                 "snappy stays below the line\n+777 bytes at 16 MiB",
@@ -298,11 +298,11 @@ def combined_chart():
     fig, axes = plt.subplots(2, len(CARRIERS), figsize=(19.2, 6.6), sharex=True, constrained_layout=True)
     bounds = {1: [float("inf"), 0.0], 10: [float("inf"), 0.0]}
     for col, (key, title) in enumerate(CARRIERS):
-        for row, (rung, name) in enumerate(((1, "Repetitive"), (10, "Nearly random"))):
+        for row, (pattern, name) in enumerate(((1, "Repetitive"), (10, "Nearly random"))):
             ax = axes[row][col]
-            _bits, lo, hi = plot_length(ax, key, rung, ticks)
-            bounds[rung][0] = min(bounds[rung][0], lo)
-            bounds[rung][1] = max(bounds[rung][1], hi)
+            _bits, lo, hi = plot_length(ax, key, pattern, ticks)
+            bounds[pattern][0] = min(bounds[pattern][0], lo)
+            bounds[pattern][1] = max(bounds[pattern][1], hi)
             if row == 0:
                 ax.set_title(title, fontsize=12, pad=8)
             if col == 0:
@@ -310,8 +310,8 @@ def combined_chart():
             if row == 1:
                 ax.set_xlabel("Target")
             ax.tick_params(labelsize=8)
-    for rung, row in ((1, 0), (10, 1)):
-        lo, hi = bounds[rung]
+    for pattern, row in ((1, 0), (10, 1)):
+        lo, hi = bounds[pattern]
         for ax in axes[row]:
             ax.set_ylim(lo / 1.5, hi * 1.45)
     mark_combined(axes)
@@ -331,7 +331,7 @@ def level_chart():
     rows = [
         r
         for r in ROWS
-        if r["slice"] == "level64" and r["carrier"] == "int32" and r["rung"] == 1 and r["compressor"] == "zstd"
+        if r["slice"] == "level64" and r["carrier"] == "int32" and r["pattern"] == 1 and r["compressor"] == "zstd"
     ]
     rows.sort(key=lambda r: r["level"])
     xs = [r["level"] for r in rows]
@@ -386,7 +386,7 @@ def level_chart():
         for r in ROWS
         if r["slice"] == "levelMax"
         and r["carrier"] == "int32"
-        and r["rung"] == 1
+        and r["pattern"] == 1
         and r["compressor"] == "zstd"
         and r["level"] in sampled
     ]
@@ -436,14 +436,14 @@ def level_chart():
 
 def surface_rows(carrier, comp, level):
     rows = []
-    for rung in range(1, 11):
-        slice_ = "length" if rung in (1, 5, 10) else "surface"
+    for pattern in range(1, 11):
+        slice_ = "length" if pattern in (1, 5, 10) else "surface"
         rows.extend(
             r
             for r in ROWS
             if r["slice"] == slice_
             and r["carrier"] == carrier
-            and r["rung"] == rung
+            and r["pattern"] == pattern
             and r["compressor"] == comp
             and r["level"] == level
         )
@@ -459,24 +459,24 @@ def manifold_chart():
         ax = fig.add_subplot(2, 4, i + 1, projection="3d")
         for comp, level, color, _label in SERIES:
             rows = surface_rows(key, comp, level)
-            rungs = sorted({r["rung"] for r in rows})
+            patterns = sorted({r["pattern"] for r in rows})
             sizes = sorted({r["target"] for r in rows})
-            by = {(r["rung"], r["target"]): r["wireRatio"] for r in rows}
-            if len(by) != len(rungs) * len(sizes):
-                raise SystemExit(f"surface holes for {key} {comp}: {len(by)} of {len(rungs) * len(sizes)}")
+            by = {(r["pattern"], r["target"]): r["wireRatio"] for r in rows}
+            if len(by) != len(patterns) * len(sizes):
+                raise SystemExit(f"surface holes for {key} {comp}: {len(by)} of {len(patterns) * len(sizes)}")
             x = np.log2(np.array(sizes, dtype=float))
-            X, Y = np.meshgrid(x, rungs)
-            Z = np.empty((len(rungs), len(sizes)))
-            for yi, rung in enumerate(rungs):
+            X, Y = np.meshgrid(x, patterns)
+            Z = np.empty((len(patterns), len(sizes)))
+            for yi, pattern in enumerate(patterns):
                 for xi, size in enumerate(sizes):
-                    Z[yi, xi] = by[(rung, size)]
+                    Z[yi, xi] = by[(pattern, size)]
             ax.plot_surface(X, Y, Z, color=color, alpha=0.55, linewidth=0, antialiased=True, shade=False)
         ax.set_zscale("log")
         ax.set_xticks([0, 8, 16, 24])
         ax.set_xticklabels(["1", "256", "64 KiB", "16 MiB"], fontsize=7)
         ax.set_yticks([1, 3, 5, 7, 10])
         ax.set_xlabel("Size", fontsize=8, labelpad=1)
-        ax.set_ylabel("Rung", fontsize=8, labelpad=1)
+        ax.set_ylabel("Pattern", fontsize=8, labelpad=1)
         # The top-right panel sits against the figure edge. Its z label was clipped.
         if i % 4 != 3:
             ax.set_zlabel("Ratio", fontsize=8, labelpad=0)
@@ -492,10 +492,10 @@ def manifold_chart():
     legend_ax.legend(handles, [h.get_label() for h in handles], loc="center", frameon=False, fontsize=12)
     legend_ax.text(
         0.5, 0.18,
-        "Each sheet is one compressor\nacross every rung and every size.\nThe length charts are the\nrung 1, 5, and 10 slices.",
+        "Each sheet is one compressor\nacross every pattern and every size.\nThe length charts are the\npattern 1, 5, and 10 slices.",
         transform=legend_ax.transAxes, ha="center", va="top", fontsize=10, color=MUTED,
     )
-    fig.suptitle("Wire ratio over document size and rung", fontsize=15)
+    fig.suptitle("Wire ratio over document size and pattern", fontsize=15)
     fig.savefig(OUT / "manifold.png", dpi=140)
     plt.close(fig)
 
