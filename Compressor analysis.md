@@ -20,11 +20,55 @@ zstd level 3 is the level these drivers send when zstd is left unset, and the le
 
 ## How to read the charts
 
-Each carrier chart has three panels. The top is repetitive (pattern 1), the middle is mixed (pattern 5), and the bottom is nearly random (pattern 10). Document size runs along the bottom, from 1 byte to the largest legal BSON document, 16 MiB. The wire ratio runs up the side. Each panel has its own vertical scale, so a 20× curve and a 20,000× curve can both be read.
+Blue is zlib at level 6 on the length charts, and every zlib level from −1 to 9 on the level charts. Level −1 matches level 6 on every paired cell, and −1 is the library default. Orange is zstd at level 3, the level these drivers send when zstd is left unset. Purple is every other zstd level, and it appears only on the level charts. Green is snappy, which has no level. The dashed line is a ratio of 1. Above it, the framed message is smaller. Below it, the frame made the message larger.
 
-Blue is zlib at level 6. Level −1 matches it on every paired cell, and −1 is the library default. Orange is zstd at level 3, the level these drivers send when zstd is left unset. Green is snappy, which has no level. The dashed line is a ratio of 1. Above it, the framed message is smaller. Below it, the frame made the message larger. The pale vertical line is the first target that holds a real BSON document. To the left of that line the buffer is raw bytes.
+The next two figures are the manifold and the levels. The [per-carrier charts](#per-carrier) are patterns 1, 5, and 10, one BSON type at a time.
 
-The labels on the right of a top panel are the 16 MiB finish. The bits/byte in a panel title are measured on that panel's 64 KiB document. The pattern number names which generator filled the bytes. Bits per byte are the entropy of that buffer. A single bits/byte figure does not place a payload on one of these curves.
+## The manifold
+
+Each sheet is one compressor across every pattern and every sampled size. The [per-carrier charts](#per-carrier) are the slices at patterns 1, 5, and 10. The vertical axis is the pattern, not bits per byte.
+
+![Wire ratio over document size and pattern. One panel per carrier. Blue, orange, and green sheets are zlib 6, zstd 3, and snappy. The length charts are the slices at patterns 1, 5, and 10.](compressor-analysis/manifold.png)
+
+The patterns in between are not a straight slope. On the string, zstd at 1 MiB is 10,083× at pattern 1, 2,503× at patterns 3 and 4, 5,924× at pattern 5, and 1.999× at pattern 7. Patterns 3 and 4 both use every byte value, which is why they share a ratio, and pattern 7 is where half the bytes become noise. The cliff at pattern 7 is there at 64 KiB and at 16 MiB. The valley at patterns 3 and 4 is deep at 64 KiB and at 1 MiB, and shallow by 16 MiB. The length charts skip both.
+
+On a number, pattern 3 is the element index, so a long document is a long counter. On the 16 MiB double, zstd is 85.9× at pattern 2, 7.4× at pattern 3, and 75.7× at pattern 5. The middle panel of the double chart sits next to the top panel and never shows that hole.
+
+## Compressor levels
+
+The orange point is level 3, the level these drivers send when zstd is left unset. Purple is every other zstd level. Those other levels are a Rust-only request. The connection string has no zstd level. Blue is zlib, every level from −1 to 9. Snappy is the dashed line. It has no level.
+
+![Wire ratio by level for one zero int32 array. Orange is zstd 3, sent when left unset. Purple is every other zstd level. Blue is zlib from −1 to 9. Left, 64 KiB, labelled 13.1× at zstd 3. Right, 16 MiB, labelled 32.4× at zstd 3 and 44.8× at level 17. Snappy is the green dashed line.](compressor-analysis/levels.png)
+
+Both charts are that one array. The left is 64 KiB and the right is 16 MiB, each at every zstd level from −1 to 22 and every zlib level from −1 to 9. A level in the high teens takes much longer on a 16 MiB document than at 64 KiB, so the 16 MiB panel started as seven zstd points. The missing levels are filled in for this array. The other 16 MiB rows in the grid are still that sample.
+
+On the left, level 3 sits in a sag at 13.1×. Level 1, to the left of it, is 16.4×. The curve then bumps along, drops to 7.7× at level 13, jumps, and peaks at levels 19–21 at 36.7×. Level 22 is a hair looser, 36.6×. Level −1 is inside the legal range (measured here as −131072 through 22) and it is a fast level of its own, 7.4× on this document. It matched level 3 on 13 of the 74 paired cells in the grid, all of them string or binary, and it differed on the other 61. Every numeric pair differed.
+
+On the right the sag has moved. Level 3 is 32.4×. It beats level 1 at 24.8× and level 2 at 20.5×. Level 4 is 33.0×, and levels 6 and 7 are 36.3× and 36.5×. Levels 8 through 15 sit around 21×, with level 12 the low point at 21.0×. Level 17 is the tightest at 44.8×. Level 19 is 44.6×, levels 20 and 21 are 43.7×, and level 22 is 44.4×. Level −1 is 15.6×. Snappy is 2.7× on this document and 2.2× on the 64 KiB one. Even the worst zstd level in either chart beats snappy on this particular array. That is a statement about zero int32s. On the cryptographic binary, every zstd level loses.
+
+At 1 MiB, level 1 is tighter than level 3 on several numeric patterns, including the zero int32 array at 37.8009× against 17.7719×. At the max document that relationship flips for the numeric carriers. Level 3 is tighter than level 1: 32.3538× against 24.8378× for int32, 86.4311× against 41.1268× for double, 74.1804× against 41.1352× for long, 74.1689× against 41.1340× for date, and 60.3339× against 56.2017× for decimal128. Level 9 is the loosest of those three on the numbers. On the zero string and the zero binary, levels 1 and 3 meet at 28,728.1455× and level 9 is one step tighter, 28,777.4220×. The [1 MiB grid](#zstd-3-at-1-mib) lists which patterns.
+
+zlib is the blue line. The spec calls level 9 the best compression. On the 16 MiB array, level 3 is the tightest zlib level at 6.21×, and level 6, the default match, is 5.21×. Level 9 is 5.2075×, slightly looser than level 6. At 64 KiB the same shape sits lower: level 3 is 4.86× and level 6 is 4.21×. Level 0 is store, the point on the floor of both charts. It is 2,660 bytes longer on the 16 MiB document, ratio 0.999841. Level −1 matches level 6 on all 669 paired cells. Blue on the length charts is that level 6. The other zlib levels are a URI option, from −1 to 9.
+
+Which levels a caller can actually set depends on the driver.
+
+| Compressor | Connection string | Rust code | Node, PyMongo, Java |
+| --- | --- | --- | --- |
+| snappy | No level | No level | No level |
+| zlib | −1 to 9 | 0 to 9, or unset for the flate2 default | Node publishes 0 to 9, and 0 selects the default. PyMongo and Java take −1 to 9 |
+| zstd | None | Any level in the library range, or unset for 3 | 3 only |
+
+Rust mongodb 3.10.1 exposes `Compressor::Zstd { level }`: any value `zstd::compression_level_range()` returns, or unset for level 3. `validate()` rejects a level outside that range. The three compression features are off unless the crate is built with them. The URI still only carries the zlib level. PyMongo calls `zstd.compress` with no level. The Java driver calls `Zstd.defaultCompressionLevel()`. Node hardcodes `ZSTD_COMPRESSION_LEVEL = 3`.
+
+The reply does not follow the client level. The server has no compression level to set. `net.compression.compressors` only names which compressors it will offer. `session_workflow.cpp` keeps the compressor id from a compressed request and compresses the reply with that compressor's compiled-in default: `Z_DEFAULT_COMPRESSION` for zlib, and `ZSTD_CLEVEL_DEFAULT` for zstd, which is 3. A client that sends zstd at level 19 still reads a level-3 reply. Snappy has no level. An uncompressed request is answered uncompressed.
+
+## Per carrier
+
+One BSON type at a time. The manifold already shows the shape, so this is the boring detail: patterns 1, 5, and 10, kept for the notches, the crossings, and the finishes.
+
+The combined figure puts all seven carriers on two shared scales. After that, each chart has three panels. The top is repetitive (pattern 1), the middle is mixed (pattern 5), and the bottom is nearly random (pattern 10). Document size runs along the bottom, from 1 byte to the largest legal BSON document, 16 MiB. The wire ratio runs up the side. Each panel has its own vertical scale, so a 20× curve and a 20,000× curve can both be read.
+
+The pale vertical line is the first target that holds a real BSON document. To the left of that line the buffer is raw bytes. The labels on the right of a top panel are the 16 MiB finish. The bits/byte in a panel title are measured on that panel's 64 KiB document. The pattern number names which generator filled the bytes. Bits per byte are the entropy of that buffer. A single bits/byte figure does not place a payload on one of these curves.
 
 ## All seven carriers
 
@@ -88,7 +132,7 @@ An int32 array never becomes a run of zeros. Even pattern 1 carries the keys, so
 
 The bottom panel is a fresh cryptographic draw in each integer, and it still shrinks. The keys and the 4-byte layout keep the 64 KiB document near 6.14 bits/byte rather than 8, and zstd finishes at 1.84×. Snappy is the late one. It is still below the line at 64 KiB (14 bytes longer, ratio 0.999786) and above it from 128 KiB. zlib and zstd are still below the line at 256 bytes and above it from 512.
 
-The orange line gains, flattens, and gains again as the array grows. The level chart shows the same compressor refusing to be a straight function of the level either.
+The orange line gains, flattens, and gains again as the array grows. The level charts show the same compressor refusing to be a straight function of the level either.
 
 ## decimal128
 
@@ -99,44 +143,6 @@ Until the bytes are actually random, this is the most compressible number in the
 Pattern 10 fills all 16 bytes from the CSPRNG. Those bytes are not a validated Decimal128. The 64 KiB document is the noisiest number in the grid, 7.476 bits/byte. At that size zstd is 1.06× and zlib is 1.12×. Snappy stays below the line through 64 KiB and goes above it from 128 KiB. At 16 MiB the ratios are 1.25× for zstd, 1.23× for zlib, and 1.08× for snappy.
 
 The zlib curve on pattern 1 wiggles. It is 8.6879× at 64 KiB, 8.6753× at 1 MiB, and 9.0757× at the max document. The 1 MiB point is a hair looser than the 64 KiB point.
-
-## The manifold
-
-Each sheet is one compressor across every pattern and every sampled size. The length charts are the slices at patterns 1, 5, and 10. The vertical axis is the pattern, not bits per byte.
-
-![Wire ratio over document size and pattern. One panel per carrier. Blue, orange, and green sheets are zlib 6, zstd 3, and snappy. The length charts are the slices at patterns 1, 5, and 10.](compressor-analysis/manifold.png)
-
-The patterns in between are not a straight slope. On the string, zstd at 1 MiB is 10,083× at pattern 1, 2,503× at patterns 3 and 4, 5,924× at pattern 5, and 1.999× at pattern 7. Patterns 3 and 4 both use every byte value, which is why they share a ratio, and pattern 7 is where half the bytes become noise. The cliff at pattern 7 is there at 64 KiB and at 16 MiB. The valley at patterns 3 and 4 is deep at 64 KiB and at 1 MiB, and shallow by 16 MiB. The length charts skip both.
-
-On a number, pattern 3 is the element index, so a long document is a long counter. On the 16 MiB double, zstd is 85.9× at pattern 2, 7.4× at pattern 3, and 75.7× at pattern 5. The middle panel of the double chart sits next to the top panel and never shows that hole.
-
-## zstd levels
-
-The orange point is level 3, the level these drivers send when zstd is left unset. Purple is every other zstd level. Those other levels are a Rust-only request. The connection string has no zstd level. Blue is zlib, every level from −1 to 9. Snappy is the dashed line. It has no level.
-
-![Wire ratio by level for one zero int32 array. Orange is zstd 3, sent when left unset. Purple is every other zstd level. Blue is zlib from −1 to 9. Left, 64 KiB, labelled 13.1× at zstd 3. Right, 16 MiB, labelled 32.4× at zstd 3 and 44.8× at level 17. Snappy is the green dashed line.](compressor-analysis/levels.png)
-
-Both charts are that one array. The left is 64 KiB and the right is 16 MiB, each at every zstd level from −1 to 22 and every zlib level from −1 to 9. A level in the high teens takes much longer on a 16 MiB document than at 64 KiB, so the 16 MiB panel started as seven zstd points. The missing levels are filled in for this array. The other 16 MiB rows in the grid are still that sample.
-
-On the left, level 3 sits in a sag at 13.1×. Level 1, to the left of it, is 16.4×. The curve then bumps along, drops to 7.7× at level 13, jumps, and peaks at levels 19–21 at 36.7×. Level 22 is a hair looser, 36.6×. Level −1 is inside the legal range (measured here as −131072 through 22) and it is a fast level of its own, 7.4× on this document. It matched level 3 on 13 of the 74 paired cells in the grid, all of them string or binary, and it differed on the other 61. Every numeric pair differed.
-
-On the right the sag has moved. Level 3 is 32.4×. It beats level 1 at 24.8× and level 2 at 20.5×. Level 4 is 33.0×, and levels 6 and 7 are 36.3× and 36.5×. Levels 8 through 15 sit around 21×, with level 12 the low point at 21.0×. Level 17 is the tightest at 44.8×. Level 19 is 44.6×, levels 20 and 21 are 43.7×, and level 22 is 44.4×. Level −1 is 15.6×. Snappy is 2.7× on this document and 2.2× on the 64 KiB one. Even the worst zstd level in either chart beats snappy on this particular array. That is a statement about zero int32s. On the cryptographic binary, every zstd level loses.
-
-At 1 MiB, level 1 is tighter than level 3 on several numeric patterns, including the zero int32 array at 37.8009× against 17.7719×. At the max document that relationship flips for the numeric carriers. Level 3 is tighter than level 1: 32.3538× against 24.8378× for int32, 86.4311× against 41.1268× for double, 74.1804× against 41.1352× for long, 74.1689× against 41.1340× for date, and 60.3339× against 56.2017× for decimal128. Level 9 is the loosest of those three on the numbers. On the zero string and the zero binary, levels 1 and 3 meet at 28,728.1455× and level 9 is one step tighter, 28,777.4220×. The [1 MiB grid](#zstd-3-at-1-mib) lists which patterns.
-
-zlib is the blue line. The spec calls level 9 the best compression. On the 16 MiB array, level 3 is the tightest zlib level at 6.21×, and level 6, the default match, is 5.21×. Level 9 is 5.2075×, slightly looser than level 6. At 64 KiB the same shape sits lower: level 3 is 4.86× and level 6 is 4.21×. Level 0 is store, the point on the floor of both charts. It is 2,660 bytes longer on the 16 MiB document, ratio 0.999841. Level −1 matches level 6 on all 669 paired cells. Blue on the length charts is that level 6. The other zlib levels are a URI option, from −1 to 9.
-
-Which levels a caller can actually set depends on the driver.
-
-| Compressor | Connection string | Rust code | Node, PyMongo, Java |
-| --- | --- | --- | --- |
-| snappy | No level | No level | No level |
-| zlib | −1 to 9 | 0 to 9, or unset for the flate2 default | Node publishes 0 to 9, and 0 selects the default. PyMongo and Java take −1 to 9 |
-| zstd | None | Any level in the library range, or unset for 3 | 3 only |
-
-Rust mongodb 3.10.1 exposes `Compressor::Zstd { level }`: any value `zstd::compression_level_range()` returns, or unset for level 3. `validate()` rejects a level outside that range. The three compression features are off unless the crate is built with them. The URI still only carries the zlib level. PyMongo calls `zstd.compress` with no level. The Java driver calls `Zstd.defaultCompressionLevel()`. Node hardcodes `ZSTD_COMPRESSION_LEVEL = 3`.
-
-The reply does not follow the client level. The server has no compression level to set. `net.compression.compressors` only names which compressors it will offer. `session_workflow.cpp` keeps the compressor id from a compressed request and compresses the reply with that compressor's compiled-in default: `Z_DEFAULT_COMPRESSION` for zlib, and `ZSTD_CLEVEL_DEFAULT` for zstd, which is 3. A client that sends zstd at level 19 still reads a level-3 reply. Snappy has no level. An uncompressed request is answered uncompressed.
 
 ## What the drivers send
 

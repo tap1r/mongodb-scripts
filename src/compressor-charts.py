@@ -388,7 +388,7 @@ def level_chart():
     )
     snappy = pick("level64", "int32", 1, "snappy", None, 65536)
     left.axhline(snappy["wireRatio"], color=SNAP, lw=1.2, ls=(0, (3, 2)), zorder=2)
-    left.text(-1.6, snappy["wireRatio"] + 0.7, "snappy  2.2×", color=SNAP, fontsize=9, ha="left", va="bottom")
+    left.text(22, snappy["wireRatio"] + 0.8, "snappy  2.2×", color=SNAP, fontsize=9, ha="right")
     left.set_xlim(-2, 23)
     left.set_ylim(0, 44)
     left.set_xlabel("level")
