@@ -5,7 +5,8 @@
 // With no arguments it writes /tmp/compressor-grid.json and
 // /tmp/compressor-digest.txt. Two arguments are the grid path and the digest path.
 // It does not write the published JSON.
-// COMPRESSOR_SLICES and COMPRESSOR_CARRIERS, comma-separated, limit a run.
+// COMPRESSOR_SLICES, COMPRESSOR_CARRIERS, and COMPRESSOR_PATTERNS, comma-separated, limit a run.
+// COMPRESSOR_ZSTD replaces that run's zstd levels.
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
 use serde_json::{json, Value};
@@ -34,17 +35,26 @@ fn main() {
     let mut points = Vec::new();
     let slice_filter = split_env("COMPRESSOR_SLICES");
     let carrier_filter = split_env("COMPRESSOR_CARRIERS");
+    let pattern_filter = split_env("COMPRESSOR_PATTERNS");
+    let zstd_override = split_env("COMPRESSOR_ZSTD");
     let jobs = jobs();
     for job in jobs {
         if !slice_filter.is_empty() && !slice_filter.iter().any(|s| s == job.tag) {
             continue;
         }
-        let zstd_levels: Vec<i32> = job.zstd.iter().copied().filter(|lvl| range.contains(lvl)).collect();
+        let zstd_levels: Vec<i32> = if zstd_override.is_empty() {
+            job.zstd.iter().copied().filter(|lvl| range.contains(lvl)).collect()
+        } else {
+            zstd_override.iter().filter_map(|s| s.parse().ok()).filter(|lvl| range.contains(lvl)).collect()
+        };
         for &carrier in job.carriers {
             if !carrier_filter.is_empty() && !carrier_filter.iter().any(|s| s == carrier) {
                 continue;
             }
             for &pattern in job.patterns {
+                if !pattern_filter.is_empty() && !pattern_filter.iter().any(|s| s == &pattern.to_string()) {
+                    continue;
+                }
                 for target in job.sizes() {
                     let tb = Instant::now();
                     let doc = build_doc(target, carrier, pattern);
@@ -123,7 +133,7 @@ fn main() {
     let grid_path = args.next().unwrap_or_else(|| "/tmp/compressor-grid.json".to_string());
     let digest_path = args.next().unwrap_or_else(|| "/tmp/compressor-digest.txt".to_string());
     write_grid(&grid_path, &meta, &points);
-    if slice_filter.is_empty() && carrier_filter.is_empty() {
+    if slice_filter.is_empty() && carrier_filter.is_empty() && pattern_filter.is_empty() && zstd_override.is_empty() {
         write_digest(&digest_path, &points);
     }
     eprintln!("done {} points in {:.1}s guard={}", points.len(), started.elapsed().as_secs_f64(), guard);

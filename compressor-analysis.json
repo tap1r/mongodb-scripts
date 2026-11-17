@@ -2,7 +2,7 @@
   "meta": {
   "body": "4 flag bytes, kind byte 0, and a BSON {ping:1, p:<payload>} document. A target below a legal document is a raw buffer (shape raw).",
   "compressor": "rust",
-  "count": 13966,
+  "count": 13982,
   "framedWire": "16-byte MsgHeader + 9-byte OP_COMPRESSED details + compressed body",
   "guardTripsAtBody": 47985319,
   "libraries": {
@@ -18,7 +18,7 @@
     "compare": "65536 and 16777216; long, date, and timestamp; patterns 1, 5, 9, 10; zlib 6; zstd 3; snappy",
     "length": "2^0 through 2^23 plus 16777216; seven carriers; patterns 1, 5, 10; zlib -1,0,1,6,9; zstd 1,3,9; snappy",
     "level64": "65536; seven carriers; patterns 1-10; zlib -1 and 0-9; zstd -1 and 1-22; snappy",
-    "levelMax": "16777216; binary and int32; patterns 1 and 10; zlib -1 and 0-9; zstd -1,1,3,6,9,19,22; snappy",
+    "levelMax": "16777216; binary and int32; patterns 1 and 10; zlib -1 and 0-9; zstd -1,1,3,6,9,19,22, and on int32 pattern 1 also 2,4,5,7,8,10-18,20,21; snappy",
     "oneMiB": "1048576; seven carriers; patterns 1-10; zlib -1 and 0-9; zstd 1,3,9; snappy",
     "surface": "2^0 through 2^23 plus 16777216; seven carriers; patterns 2, 3, 4, 6, 7, 8, 9; zlib 6; zstd 3; snappy"
   },
@@ -13994,6 +13994,22 @@
     {"bits":6.645,"body":16777219,"carrier":"timestamp","compressed":16777219,"compressor":"none","doc":16777214,"expands":false,"level":null,"pattern":10,"rawRatio":1.0,"shape":"document","slice":"compare","target":16777216,"wire":16777235,"wireRatio":1.0},
     {"bits":6.645,"body":16777219,"carrier":"timestamp","compressed":11552745,"compressor":"zlib","doc":16777214,"expands":false,"level":6,"pattern":10,"rawRatio":1.452228,"shape":"document","slice":"compare","target":16777216,"wire":11552770,"wireRatio":1.452226},
     {"bits":6.645,"body":16777219,"carrier":"timestamp","compressed":11384671,"compressor":"zstd","doc":16777214,"expands":false,"level":3,"pattern":10,"rawRatio":1.473667,"shape":"document","slice":"compare","target":16777216,"wire":11384696,"wireRatio":1.473666},
-    {"bits":6.645,"body":16777219,"carrier":"timestamp","compressed":14871786,"compressor":"snappy","doc":16777214,"expands":false,"level":null,"pattern":10,"rawRatio":1.128124,"shape":"document","slice":"compare","target":16777216,"wire":14871811,"wireRatio":1.128123}
+    {"bits":6.645,"body":16777219,"carrier":"timestamp","compressed":14871786,"compressor":"snappy","doc":16777214,"expands":false,"level":null,"pattern":10,"rawRatio":1.128124,"shape":"document","slice":"compare","target":16777216,"wire":14871811,"wireRatio":1.128123},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":817366,"compressor":"zstd","doc":16777212,"expands":false,"level":2,"pattern":1,"rawRatio":20.525954,"shape":"document","slice":"levelMax","target":16777216,"wire":817391,"wireRatio":20.525346},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":509050,"compressor":"zstd","doc":16777212,"expands":false,"level":4,"pattern":1,"rawRatio":32.957896,"shape":"document","slice":"levelMax","target":16777216,"wire":509075,"wireRatio":32.956309},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":590308,"compressor":"zstd","doc":16777212,"expands":false,"level":5,"pattern":1,"rawRatio":28.421124,"shape":"document","slice":"levelMax","target":16777216,"wire":590333,"wireRatio":28.419948},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":459230,"compressor":"zstd","doc":16777212,"expands":false,"level":7,"pattern":1,"rawRatio":36.533365,"shape":"document","slice":"levelMax","target":16777216,"wire":459255,"wireRatio":36.531411},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":795767,"compressor":"zstd","doc":16777212,"expands":false,"level":8,"pattern":1,"rawRatio":21.083077,"shape":"document","slice":"levelMax","target":16777216,"wire":795792,"wireRatio":21.082435},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":796697,"compressor":"zstd","doc":16777212,"expands":false,"level":10,"pattern":1,"rawRatio":21.058466,"shape":"document","slice":"levelMax","target":16777216,"wire":796722,"wireRatio":21.057826},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":795877,"compressor":"zstd","doc":16777212,"expands":false,"level":11,"pattern":1,"rawRatio":21.080163,"shape":"document","slice":"levelMax","target":16777216,"wire":795902,"wireRatio":21.079521},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":797607,"compressor":"zstd","doc":16777212,"expands":false,"level":12,"pattern":1,"rawRatio":21.034441,"shape":"document","slice":"levelMax","target":16777216,"wire":797632,"wireRatio":21.033801},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":782648,"compressor":"zstd","doc":16777212,"expands":false,"level":13,"pattern":1,"rawRatio":21.436478,"shape":"document","slice":"levelMax","target":16777216,"wire":782673,"wireRatio":21.435814},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":786762,"compressor":"zstd","doc":16777212,"expands":false,"level":14,"pattern":1,"rawRatio":21.324387,"shape":"document","slice":"levelMax","target":16777216,"wire":786787,"wireRatio":21.323729},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":786762,"compressor":"zstd","doc":16777212,"expands":false,"level":15,"pattern":1,"rawRatio":21.324387,"shape":"document","slice":"levelMax","target":16777216,"wire":786787,"wireRatio":21.323729},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":415527,"compressor":"zstd","doc":16777212,"expands":false,"level":16,"pattern":1,"rawRatio":40.375757,"shape":"document","slice":"levelMax","target":16777216,"wire":415552,"wireRatio":40.373366},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":374379,"compressor":"zstd","doc":16777212,"expands":false,"level":17,"pattern":1,"rawRatio":44.813456,"shape":"document","slice":"levelMax","target":16777216,"wire":374404,"wireRatio":44.810507},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":463163,"compressor":"zstd","doc":16777212,"expands":false,"level":18,"pattern":1,"rawRatio":36.223137,"shape":"document","slice":"levelMax","target":16777216,"wire":463188,"wireRatio":36.221217},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":383541,"compressor":"zstd","doc":16777212,"expands":false,"level":20,"pattern":1,"rawRatio":43.742956,"shape":"document","slice":"levelMax","target":16777216,"wire":383566,"wireRatio":43.740146},
+    {"bits":2.998,"body":16777217,"carrier":"int32","compressed":383541,"compressor":"zstd","doc":16777212,"expands":false,"level":21,"pattern":1,"rawRatio":43.742956,"shape":"document","slice":"levelMax","target":16777216,"wire":383566,"wireRatio":43.740146}
   ]
 }
