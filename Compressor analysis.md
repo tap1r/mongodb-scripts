@@ -1,6 +1,6 @@
 # Compressor analysis
 
-This note is about network compression on an OP_MSG: the compressor a driver applies to a command before the bytes go on the wire. WiredTiger block compression is a different problem and is left out.
+This knowledge base article covers network compression on an OP_MSG: the compressor a driver applies to a command before the bytes go on the wire. WiredTiger block compression is a different problem and is left out.
 
 The ratio is the original message length divided by the framed `OP_COMPRESSED` length. Higher is tighter. A ratio of 1 means the framed message is the same size as the original. Below 1, compression made the message larger, and the drivers still send that larger message. The `none` row is an uncompressed OP_MSG. It is not the protocol noop compressor, which would add 9 bytes and was not measured.
 
