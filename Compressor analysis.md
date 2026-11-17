@@ -24,7 +24,7 @@ Blue is zlib at level 6. Level −1 matches it on every paired cell, and −1 is
 
 The length charts draw those three defaults. The [level chart](#zstd-levels) draws every other measured zstd level in purple. Purple is a level the Rust driver can set in code. The connection string has no zstd level.
 
-The bits/byte in each panel title are measured on that panel's 64 KiB document. The rung number is the name of the generator. It is not the entropy.
+The bits/byte in each panel title are measured on that panel's 64 KiB document. The rung number is the name of the generator. It is not the entropy. Where a panel carries a label, that label is the figure named in the paragraph under the chart.
 
 ## What was measured
 
@@ -66,7 +66,9 @@ Wire compressor ids are noop 0, snappy 1, zlib 2, zstd 3. The length curves use 
 
 ## int32
 
-![int32 wire ratio against document size, for a repetitive array, a mixed array, and a nearly random array](compressor-analysis/int32.png)
+The labels on the right of the top panel are the 16 MiB finish. The bottom panel marks where zlib and zstd go above the line, and where snappy does.
+
+![int32 wire ratio against document size. The top panel is labelled 32.4×, 5.2×, and 2.7× at 16 MiB. The bottom panel marks the crossings.](compressor-analysis/int32.png)
 
 An int32 array never becomes a run of zeros. Even rung 1 carries the keys, so the top panel tops out in the tens rather than the thousands. zstd pulls away from zlib once the document is past a few hundred bytes and finishes at 32.4×, against 5.2× for zlib and 2.7× for snappy. The middle panel is the same shape with a lower ceiling: 30.2× for zstd at 16 MiB.
 
@@ -76,7 +78,9 @@ The orange line is not smooth. zstd at level 3 gains, flattens, and gains again 
 
 ## double
 
-![double wire ratio against document size, for repetitive, mixed, and nearly random values](compressor-analysis/double.png)
+The top panel marks the notch, where zstd drops back below the line on the first document, and labels the 16 MiB finish. The middle panel marks snappy's one-byte notch.
+
+![double wire ratio against document size. The top panel is labelled 86.4×, 6.7×, and 3.2×, and marks the notch back below the line. The middle panel marks a one-byte-longer notch.](compressor-analysis/double.png)
 
 Zero doubles have more repeated bytes than zero int32s, and the ceiling shows it. zstd finishes the top panel at 86.4×, zlib at 6.7×, snappy at 3.2×.
 
@@ -86,7 +90,9 @@ On nearly random doubles, zlib and zstd are still below the line at 512 bytes an
 
 ## decimal128
 
-![decimal128 wire ratio against document size, for repetitive, mixed, and nearly random values](compressor-analysis/decimal128.png)
+The top panel labels the 16 MiB finish, and marks 1.55× where snappy is briefly the tightest. The bottom panel carries the 64 KiB ratios.
+
+![decimal128 wire ratio against document size. The top panel is labelled 60.3×, 9.1×, and 4.8×, and marks snappy at 1.55×. The bottom panel notes 1.06× and 1.12× at 64 KiB.](compressor-analysis/decimal128.png)
 
 Until the bytes are actually random, this is the most compressible number in the set. The value lives in the low bytes and the high bytes stay zero, so a zero decimal128 is mostly a run of zeros with a little structure. The 64 KiB document measures 1.457 bits/byte. zstd finishes rung 1 at 60.3×, zlib at 9.1×, snappy at 4.8×. On this rung all three are still below the line at 16 bytes and above it from 32. At 32 bytes snappy is the tightest of the three, 1.55×, and from 128 bytes it falls behind.
 
@@ -96,7 +102,9 @@ The zlib curve on rung 1 is not perfectly smooth. It is 8.6879× at 64 KiB, 8.67
 
 ## string
 
-![string wire ratio against document size, for a run of zeros, a repeated phrase, and printable random text](compressor-analysis/string.png)
+The labels on the right are the 16 MiB ratios. The bottom panel marks that snappy stays below the line.
+
+![string wire ratio against document size. The top panel is labelled 28,728×, 1,026×, and 21.3×. The bottom panel marks snappy still below the line, 777 bytes longer at 16 MiB.](compressor-analysis/string.png)
 
 This chart is a different instrument. A string of zero bytes measures 0.003 bits/byte. zstd keeps finding a smaller encoding as the run gets longer: 1,009× at 64 KiB, 10,083× at 1 MiB, 28,728× at 16 MiB. zlib climbs and then flattens: 504×, 966×, 1,026×. Snappy is already 20.9× at 64 KiB and only inches up to 21.3× at 16 MiB. More of the same zero does not buy snappy another factor of a thousand.
 
@@ -106,7 +114,9 @@ The bottom panel is the one to be careful with. Rung 10 maps random bytes into 9
 
 ## binary
 
-![binary wire ratio against document size, for a run of zeros, a repeated pattern, and cryptographic bytes](compressor-analysis/binary.png)
+The 28,728× on the top panel is the same finish as the zero string. The note on the bottom panel is the byte count for the three lines drawn there. Those lines stay below the line at every sampled size.
+
+![binary wire ratio against document size. The top panel is labelled 28,728×. The bottom panel notes that the three drawn lines stay below the line, and gives the 16 MiB byte counts.](compressor-analysis/binary.png)
 
 The top two panels match the string. A run of zero bytes is a run of zero bytes, whether the BSON type is string or binary. At 1 MiB, zlib is 966.4488× on both and zstd is 10,082.6635× on both. At the max document zlib is 1,025.4408× on the binary and 1,025.5035× on the string. The keys in an int32 array are what break that match. The same zlib level on a zero int32 array is 5.2×.
 
@@ -114,7 +124,9 @@ The bottom panel does not match the string, because rung 10 here is raw CSPRNG, 
 
 ## All five carriers
 
-![All five carriers together. The top row is repetitive data and the bottom row is nearly random data, each row on one shared scale.](compressor-analysis/combined.png)
+The bottom row is labelled where the shared scale hides the result: snappy below the line on the printable string, and every drawn line below it on the cryptographic binary.
+
+![All five carriers together. The top row is repetitive data and the bottom row is nearly random data, each row on one shared scale. The string and binary panels on the bottom row are labelled where they stay below the line.](compressor-analysis/combined.png)
 
 Read the top row from left to right and the carrier is the whole story. The zero string and the zero binary leave the chart. The zero decimal128 and the zero double follow, well above the int32 array, which is held down by its keys. Snappy's green line barely leaves the bottom of those two right-hand panels. On a pure run it has a ceiling near 21×, and zstd does not.
 
@@ -170,7 +182,9 @@ The same length curve, at the max document. A ratio below 1 is six decimals so i
 
 ## zstd levels
 
-![zstd wire ratio by level. Orange is level 3, the level drivers send. Purple is every other measured level, which only the Rust API can set. Left, the 64 KiB array of zero int32s. Right, the sampled levels on the 16 MiB version. Snappy is the green dashed line.](compressor-analysis/levels.png)
+The orange point is labelled level 3, the level these drivers send when zstd is left unset. Purple is every other measured level.
+
+![zstd wire ratio by level. Orange is level 3, sent when left unset. Purple is every other measured level, which only the Rust API can set. Left, the 64 KiB array of zero int32s, labelled 13.1× at level 3. Right, the sampled levels on the 16 MiB version, labelled 32.4× at level 3. Snappy is the green dashed line.](compressor-analysis/levels.png)
 
 The left chart is one document, a 64 KiB array of zero int32s, run through every zstd level this library accepts from −1 to 22. The orange point is level 3, in a sag at 13.1×. That is the level these drivers send when zstd is left unset. The purple curve is the rest, and it is a Rust-only request. Level 1, to the left of the orange point, is 16.4×. The curve then bumps along, drops to 7.7× at level 13, jumps, and peaks at levels 19–21 at 36.7×. Level 22 is a hair looser, 36.6×. Level −1 is inside the legal range (measured here as −131072 through 22) and it is a fast level of its own, 7.4× on this document. It matched level 3 on 13 of the 54 paired cells in the grid, all of them string or binary, and it differed on the other 41. Every numeric pair differed.
 

@@ -139,6 +139,84 @@ def plot_length(ax, carrier, rung, ticks):
 DETAIL_TICKS = [1, 256, 4096, 65536, 1048576, 16777216]
 
 
+def tag_end(ax, key, rung, comp, level, text, color, va="top", dy=-3):
+    row = pick("length", key, rung, comp, level, 16777216)
+    ax.annotate(
+        text,
+        xy=(row["target"], row["wireRatio"]),
+        xytext=(-5, dy),
+        textcoords="offset points",
+        ha="right",
+        va=va,
+        fontsize=8,
+        color=color,
+    )
+
+
+def point_at(ax, key, rung, comp, level, target, text, color, dx, dy):
+    row = pick("length", key, rung, comp, level, target)
+    ax.annotate(
+        text,
+        xy=(row["target"], row["wireRatio"]),
+        xytext=(dx, dy),
+        textcoords="offset points",
+        fontsize=8,
+        color=color,
+        arrowprops={"arrowstyle": "-", "color": color, "lw": 0.7},
+    )
+
+
+def mark_carrier(key, axes):
+    # Labels use the same rounded figures as the paragraphs under each chart.
+    if key == "int32":
+        tag_end(axes[0], key, 1, "zstd", 3, "32.4×", ZSTD)
+        tag_end(axes[0], key, 1, "zlib", 6, "5.2×", ZLIB, va="bottom", dy=3)
+        tag_end(axes[0], key, 1, "snappy", None, "2.7×", SNAP, va="bottom", dy=3)
+        tag_end(axes[1], key, 5, "zstd", 3, "30.2×", ZSTD)
+        tag_end(axes[2], key, 10, "zstd", 3, "1.84×", ZSTD, va="bottom", dy=4)
+        point_at(axes[2], key, 10, "zstd", 3, 512, "zlib and zstd\nabove from 512 B", ZSTD, 16, 18)
+        point_at(axes[2], key, 10, "snappy", None, 131072, "snappy above\nfrom 128 KiB", SNAP, -8, -22)
+    elif key == "double":
+        tag_end(axes[0], key, 1, "zstd", 3, "86.4×", ZSTD)
+        tag_end(axes[0], key, 1, "zlib", 6, "6.7×", ZLIB, va="bottom", dy=3)
+        tag_end(axes[0], key, 1, "snappy", None, "3.2×", SNAP, va="bottom", dy=3)
+        point_at(axes[0], key, 1, "zstd", 3, 64, "back below", ZSTD, 34, -14)
+        point_at(axes[1], key, 5, "snappy", None, 64, "1 byte longer", SNAP, 36, -16)
+        point_at(axes[2], key, 10, "snappy", None, 131072, "snappy above\nfrom 128 KiB", SNAP, 12, -20)
+    elif key == "decimal128":
+        tag_end(axes[0], key, 1, "zstd", 3, "60.3×", ZSTD)
+        tag_end(axes[0], key, 1, "zlib", 6, "9.1×", ZLIB, va="bottom", dy=3)
+        tag_end(axes[0], key, 1, "snappy", None, "4.8×", SNAP, va="bottom", dy=3)
+        point_at(axes[0], key, 1, "snappy", None, 32, "1.55×", SNAP, 14, 12)
+        axes[2].text(
+            0.98, 0.90,
+            "at 64 KiB: zstd 1.06×, zlib 1.12×\nsnappy above from 128 KiB",
+            transform=axes[2].transAxes, ha="right", va="top", fontsize=8, color=MUTED,
+        )
+    elif key == "string":
+        tag_end(axes[0], key, 1, "zstd", 3, "28,728×", ZSTD)
+        tag_end(axes[0], key, 1, "zlib", 6, "1,026×", ZLIB, va="bottom", dy=3)
+        tag_end(axes[0], key, 1, "snappy", None, "21.3×", SNAP, va="bottom", dy=3)
+        tag_end(axes[1], key, 5, "zstd", 3, "10,376×", ZSTD)
+        tag_end(axes[1], key, 5, "snappy", None, "21×", SNAP, va="bottom", dy=3)
+    elif key == "binary":
+        tag_end(axes[0], key, 1, "zstd", 3, "28,728×", ZSTD)
+        tag_end(axes[0], key, 1, "snappy", None, "21.3×", SNAP, va="bottom", dy=3)
+
+
+def mark_combined(axes):
+    # The shared scale hides these two results. The paragraphs name them.
+    axes[1][3].text(
+        0.50, 0.78, "snappy below",
+        transform=axes[1][3].transAxes, ha="center", va="center", fontsize=8, color=SNAP,
+    )
+    axes[1][4].text(
+        0.50, 0.78, "below the line",
+        transform=axes[1][4].transAxes, ha="center", va="center", fontsize=8, color=MUTED,
+    )
+
+
+
 def carrier_chart(key, title):
     fig, axes = plt.subplots(3, 1, figsize=(9.4, 8.6), sharex=True, constrained_layout=True)
     for ax, (rung, name) in zip(axes, RUNGS):
@@ -149,13 +227,13 @@ def carrier_chart(key, title):
         if key == "binary" and rung == 10:
             ax.text(
                 0.98, 0.90,
-                "still longer at 16 MiB\nzstd +406 bytes · snappy +778 · zlib +2,660",
+                "below the line at every size\nat 16 MiB: zstd +406 · snappy +778 · zlib +2,660",
                 transform=ax.transAxes, ha="right", va="top", fontsize=8.5, color=MUTED,
             )
         if key == "string" and rung == 10:
             ax.text(
                 0.98, 0.08,
-                "snappy stays under the line\n+777 bytes at 16 MiB",
+                "snappy stays below the line\n+777 bytes at 16 MiB",
                 transform=ax.transAxes, ha="right", va="bottom", fontsize=8.5, color=SNAP,
             )
     axes[-1].set_xlabel("Document target")
@@ -178,11 +256,12 @@ def carrier_chart(key, title):
         fontsize=8,
         color="#8a8a8a",
     )
+    mark_carrier(key, axes)
     handles = [
         Line2D([0], [0], color=color, lw=2.4, label=label)
         for _c, _l, color, label in SERIES
     ]
-    handles.append(Line2D([0], [0], color="#9a9a9a", lw=1.0, ls=(0, (2, 2)), label="same size"))
+    handles.append(Line2D([0], [0], color="#9a9a9a", lw=1.0, ls=(0, (2, 2)), label="ratio of 1"))
     fig.legend(handles=handles, loc="upper right", frameon=False, bbox_to_anchor=(0.995, 1.005), ncol=4, fontsize=10)
     fig.suptitle(title, fontsize=15, x=0.01, ha="left")
     fig.savefig(OUT / f"{key}.png", dpi=160)
@@ -210,8 +289,9 @@ def combined_chart():
         lo, hi = bounds[rung]
         for ax in axes[row]:
             ax.set_ylim(lo / 1.5, hi * 1.45)
+    mark_combined(axes)
     handles = [Line2D([0], [0], color=color, lw=2.4, label=label) for _c, _l, color, label in SERIES]
-    handles.append(Line2D([0], [0], color="#9a9a9a", lw=1.0, ls=(0, (2, 2)), label="same size"))
+    handles.append(Line2D([0], [0], color="#9a9a9a", lw=1.0, ls=(0, (2, 2)), label="ratio of 1"))
     fig.legend(handles=handles, loc="upper center", frameon=False, bbox_to_anchor=(0.5, 1.06), ncol=4, fontsize=11)
     fig.suptitle("All five carriers, on one scale per row", fontsize=15, y=1.10)
     fig.savefig(OUT / "combined.png", dpi=150, bbox_inches="tight")
@@ -236,7 +316,7 @@ def level_chart():
     default = next(r for r in rows if r["level"] == 3)
     left.scatter([3], [default["wireRatio"]], s=78, color=ZSTD, zorder=5, edgecolor="white", linewidth=1.2)
     left.annotate(
-        "default  13.1×",
+        "level 3  13.1×",
         xy=(3, default["wireRatio"]),
         xytext=(5.2, 22),
         fontsize=9,
@@ -298,7 +378,7 @@ def level_chart():
     nine = next(r for r in mrows if r["level"] == 9)
     top = next(r for r in mrows if r["level"] == 19)
     right.scatter([3], [d["wireRatio"]], s=84, color=ZSTD, zorder=5, edgecolor="white", linewidth=1.2)
-    right.annotate("default  32.4×", xy=(3, d["wireRatio"]), xytext=(4.4, 27), fontsize=9, color=ZSTD,
+    right.annotate("level 3  32.4×", xy=(3, d["wireRatio"]), xytext=(4.4, 27), fontsize=9, color=ZSTD,
                    arrowprops={"arrowstyle": "-", "color": ZSTD, "lw": 0.8})
     right.annotate("level 1  24.8×", xy=(1, one["wireRatio"]), xytext=(4.6, 17.2), fontsize=9, color=MUTED,
                    arrowprops={"arrowstyle": "-", "color": "#b0b0b0", "lw": 0.8})
@@ -319,7 +399,7 @@ def level_chart():
     right.spines["right"].set_visible(False)
 
     handles = [
-        Line2D([0], [0], color=ZSTD, marker="o", lw=0, ms=8, label="zstd 3, the level drivers send"),
+        Line2D([0], [0], color=ZSTD, marker="o", lw=0, ms=8, label="zstd 3, sent when left unset"),
         Line2D([0], [0], color=RUST, lw=2.4, marker="o", ms=5, label="other zstd levels, Rust API only"),
         Line2D([0], [0], color=SNAP, lw=1.2, ls=(0, (3, 2)), label="snappy"),
     ]
