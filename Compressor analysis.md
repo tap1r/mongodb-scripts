@@ -8,19 +8,21 @@ The pictures are the length surface of each carrier, then all five carriers on o
 
 ## Summary
 
-Repetitive BSON shrinks, and zstd shrinks it harder than zlib or snappy. On a 16 MiB string of zeros, zstd at its usual level reaches 28,728×, zlib 1,026×, and snappy 21×. A 16 MiB array of zero doubles still reaches 86× with zstd. An array of zero int32s does not, because the keys `"0"`, `"1"`, and so on are still in the document: zstd gets to 32×, zlib to 5.2×, snappy to 2.7×.
+Repetitive BSON shrinks, and zstd shrinks it harder than zlib or snappy. On a 16 MiB string of zeros, zstd at level 3 reaches 28,728×, zlib 1,026×, and snappy 21×. A 16 MiB array of zero doubles still reaches 86.4× with zstd. An array of zero int32s does not, because the keys `"0"`, `"1"`, and so on are still in the document: zstd gets to 32.4×, zlib to 5.2×, snappy to 2.7×.
 
-Random bytes do not shrink. A 16 MiB cryptographic binary is longer after framing for every compressor and every level in this grid. zstd adds 406 bytes, snappy 778, zlib 2,660. A random printable string measures about 6.55 bits per byte. It looks like text. zlib and zstd get it down to about 1.21×. Snappy is still 777 bytes over at 16 MiB.
+Random bytes do not shrink. A 16 MiB cryptographic binary is longer after framing for every compressor and every level in this grid. At the levels on the length charts, zstd adds 406 bytes, snappy 778, and zlib 2,660. A random printable string measures about 6.55 bits per byte. It looks like text. zlib and zstd get it down to about 1.21×. Snappy is still 777 bytes longer at 16 MiB.
 
 The saving does not start at the first byte. Under a few dozen bytes the 25-byte frame costs more than the compressor gives back. The Node driver and the Rust driver have no small-message cutoff, so that larger frame is what goes out.
 
-zstd level 3 is the usual client setting, and it is the level the server uses when it compresses a reply. It is a strong default, and it is not the top of the curve. On a 64 KiB array of zero int32s, level 1 is tighter than level 3, level 13 falls to 7.7×, and levels 19–21 reach 36.7×. On the 16 MiB version of that array the order changes, and level 3 beats level 1.
+zstd level 3 is the level these drivers send when zstd is left unset, and it is the level the server uses when it compresses a reply. It is a strong default, and it is not the top of the curve. On a 64 KiB array of zero int32s, level 1 is tighter than level 3, level 13 falls to 7.7×, and levels 19–21 reach 36.7×. Those other levels are a Rust-only request. On the 16 MiB version of that array the order changes, and level 3 beats level 1.
 
 ## How to read the charts
 
 Each carrier chart has three panels. The top is repetitive (rung 1), the middle is mixed (rung 5), and the bottom is nearly random (rung 10). The horizontal axis is the target document size, on a log scale, from 1 byte to the largest legal BSON document, 16 MiB. The vertical axis is the wire ratio, also on a log scale. Each panel has its own vertical scale, so a 20× curve and a 20,000× curve can both be read.
 
-Blue is zlib at level 6. On every paired cell in this grid, zlib level −1 matches level 6, and level 6 is what an omitted zlib level means on the Node driver. Orange is zstd at level 3, which is `zstd::DEFAULT_COMPRESSION_LEVEL`, the Rust driver's unset level, the Node driver's only level, and the server's reply. Green is snappy. Snappy has no level. The dashed line is a ratio of 1. Above it, the framed message is smaller. The pale vertical line is the first target that holds a real BSON document. To the left of that line the buffer is raw bytes.
+Blue is zlib at level 6. Level −1 matches it on every paired cell, and −1 is the library default. Orange is zstd at level 3, the level these drivers send when zstd is left unset, and the level the server uses on a reply. Green is snappy. Snappy has no level. The dashed line is a ratio of 1. Above it, the framed message is smaller. Below it, the frame made the message larger. The pale vertical line is the first target that holds a real BSON document. To the left of that line the buffer is raw bytes.
+
+The length charts draw those three defaults. The [level chart](#zstd-levels) draws every other measured zstd level in purple. Purple is a level the Rust driver can set in code. The connection string has no zstd level.
 
 The bits/byte in each panel title are measured on that panel's 64 KiB document. The rung number is the name of the generator. It is not the entropy.
 
@@ -51,6 +53,8 @@ The libraries are snap 1.1.2 (raw Snappy, the same framing as the server's `snap
 
 [`src/compressor-probe`](src/compressor-probe) is that program. With no arguments it writes `/tmp/compressor-grid.json` and `/tmp/compressor-digest.txt`. Two arguments are those two paths. It leaves the published grid where it is. Rung 10 is drawn again on every run, so a new file will not match the published rung 10 rows. [`src/compressor-charts.py`](src/compressor-charts.py) redraws the pictures from the JSON.
 
+The probe calls the Rust driver's libraries because that driver can name a zstd level and the others checked here cannot. The [compression spec](https://github.com/mongodb/specifications/blob/master/source/compression/OP_COMPRESSED.md) defines one level, `zlibCompressionLevel`, from −1 to 9. It calls −1 the library default, 0 no compression, 1 the fastest, and 9 the best compression. Snappy has no level. zstd was added later, and the spec still has no zstd level. Rust mongodb 3.10.1 exposes `Compressor::Zstd { level }` anyway: any value `zstd::compression_level_range()` returns, or `None` for level 3. The URI still only carries the zlib level. The [level chart](#zstd-levels) draws the Rust-only levels in purple, and the table under it lists what Node, PyMongo, and the Java driver can set.
+
 Wire compressor ids are noop 0, snappy 1, zlib 2, zstd 3. The length curves use zlib 6, zstd 3, and snappy, at rungs 1, 5, and 10. zstd levels 10–22 are on the 64 KiB sweep, and levels 19 and 22 are also on the 16 MiB sample for int32 and binary. They are not on the length curves. The full cross of every level, every rung, and every size was not run.
 
 | Slice | What it is |
@@ -66,7 +70,7 @@ Wire compressor ids are noop 0, snappy 1, zlib 2, zstd 3. The length curves use 
 
 An int32 array never becomes a run of zeros. Even rung 1 carries the keys, so the top panel tops out in the tens rather than the thousands. zstd pulls away from zlib once the document is past a few hundred bytes and finishes at 32.4×, against 5.2× for zlib and 2.7× for snappy. The middle panel is the same shape with a lower ceiling: 30.2× for zstd at 16 MiB.
 
-The bottom panel is a fresh cryptographic draw in each integer, and it still shrinks. The keys and the 4-byte layout keep the 64 KiB document near 6.14 bits/byte rather than 8, and zstd finishes at 1.84×. Snappy is the late one. It is still longer than the original at 64 KiB (14 bytes over, ratio 0.999786) and crosses under at 128 KiB. zlib and zstd have already crossed at 256 bytes.
+The bottom panel is a fresh cryptographic draw in each integer, and it still shrinks. The keys and the 4-byte layout keep the 64 KiB document near 6.14 bits/byte rather than 8, and zstd finishes at 1.84×. Snappy is the late one. It is still below the line at 64 KiB (14 bytes longer, ratio 0.999786) and above it from 128 KiB. zlib and zstd are still below the line at 256 bytes and above it from 512.
 
 The orange line is not smooth. zstd at level 3 gains, flattens, and gains again as the array grows. That is the same compressor refusing to be a straight function of size. The level chart later shows it refusing to be a straight function of the level either.
 
@@ -76,17 +80,17 @@ The orange line is not smooth. zstd at level 3 gains, flattens, and gains again 
 
 Zero doubles have more repeated bytes than zero int32s, and the ceiling shows it. zstd finishes the top panel at 86.4×, zlib at 6.7×, snappy at 3.2×.
 
-Look at the pale line in the top panel. That is the first real document, 56 bytes inside a 64-byte target. zstd is already under the original on the 32-byte raw buffer (ratio 1.142857) and pops back over the line on that first document (0.974684). From 128 bytes on it stays under. The dip is the change from a raw buffer to a document, not a change in the compressor. Snappy does a smaller version of the same notch on the middle panel: under on the 32-byte raw buffer (1.043478), one byte over on the first document (0.987179), then under from 128 bytes.
+Look at the pale line in the top panel. That is the first real document, 56 bytes inside a 64-byte target. zstd is already above the line on the 32-byte raw buffer (ratio 1.142857) and drops back below it on that first document (0.974684). From 128 bytes on it stays above. The dip is the change from a raw buffer to a document, not a change in the compressor. Snappy does a smaller version of the same notch on the middle panel: above the line on the 32-byte raw buffer (1.043478), one byte longer on the first document (0.987179), then above the line from 128 bytes.
 
-On nearly random doubles, zlib and zstd cross under at 512 bytes and finish near 1.45× and 1.47×. Snappy needs the document to pass 64 KiB. It is under by 1 MiB, at 1.087×, and 1.128× at the max document. On the repetitive panel, snappy's last over target is 16 bytes. zstd's is 64, because of that notch at the first document.
+On nearly random doubles, zlib and zstd are still below the line at 512 bytes and above it from 1 KiB, finishing near 1.45× and 1.47×. Snappy is still below the line at 64 KiB and above it from 128 KiB. It is 1.087× at 1 MiB and 1.128× on the max document. On the repetitive panel, snappy's last target below the line is 16 bytes. zstd's is 64, because of that notch at the first document.
 
 ## decimal128
 
 ![decimal128 wire ratio against document size, for repetitive, mixed, and nearly random values](compressor-analysis/decimal128.png)
 
-Until the bytes are actually random, this is the most compressible number in the set. The value lives in the low bytes and the high bytes stay zero, so a zero decimal128 is mostly a run of zeros with a little structure. The 64 KiB document measures 1.457 bits/byte. zstd finishes rung 1 at 60.3×, zlib at 9.1×, snappy at 4.8×. On this rung all three are still longer than the original at 16 bytes and shorter from 32 bytes on. Snappy then loses the ratio.
+Until the bytes are actually random, this is the most compressible number in the set. The value lives in the low bytes and the high bytes stay zero, so a zero decimal128 is mostly a run of zeros with a little structure. The 64 KiB document measures 1.457 bits/byte. zstd finishes rung 1 at 60.3×, zlib at 9.1×, snappy at 4.8×. On this rung all three are still below the line at 16 bytes and above it from 32. At 32 bytes snappy is the tightest of the three, 1.55×, and from 128 bytes it falls behind.
 
-Rung 10 fills all 16 bytes from the CSPRNG. Those bytes are not a validated Decimal128. The 64 KiB document is the noisiest number in the grid, 7.476 bits/byte, and the win shrinks to 1.25× for zstd, 1.23× for zlib, and 1.08× for snappy. Snappy is over through 64 KiB and under from 128 KiB, same as the other numeric rung-10 rows.
+Rung 10 fills all 16 bytes from the CSPRNG. Those bytes are not a validated Decimal128. The 64 KiB document is the noisiest number in the grid, 7.476 bits/byte. At that size zstd is 1.06× and zlib is 1.12×. Snappy stays below the line through 64 KiB and goes above it from 128 KiB, same as the other numeric rung-10 rows. At 16 MiB the ratios are 1.25× for zstd, 1.23× for zlib, and 1.08× for snappy.
 
 The zlib curve on rung 1 is not perfectly smooth. It is 8.6879× at 64 KiB, 8.6753× at 1 MiB, and 9.0757× at the max document. The 1 MiB point is a hair looser than the 64 KiB point. The data did not get harder. The compressor found a slightly worse block split.
 
@@ -96,9 +100,9 @@ The zlib curve on rung 1 is not perfectly smooth. It is 8.6879× at 64 KiB, 8.67
 
 This chart is a different instrument. A string of zero bytes measures 0.003 bits/byte. zstd keeps finding a smaller encoding as the run gets longer: 1,009× at 64 KiB, 10,083× at 1 MiB, 28,728× at 16 MiB. zlib climbs and then flattens: 504×, 966×, 1,026×. Snappy is already 20.9× at 64 KiB and only inches up to 21.3× at 16 MiB. More of the same zero does not buy snappy another factor of a thousand.
 
-The middle panel is a repeated phrase, 4.002 bits/byte, and the shape repeats at a lower ceiling. zstd finishes at 10,376×. Snappy is still about 21×. The entropy number says this phrase is "more random" than an int32 array at 3.37 bits/byte. The ratios disagree: that int32 array finishes at 30× with zstd, and this phrase finishes at 10,376×. Bits per byte are the right axis label and a poor universal predictor. The carrier decides.
+The middle panel is a repeated phrase, 4.002 bits/byte, and the shape repeats at a lower ceiling. zstd finishes at 10,376×. Snappy is still about 21×. The entropy number says this phrase is "more random" than an int32 array at 3.37 bits/byte. The ratios disagree: that int32 array finishes at 30.2× with zstd, and this phrase finishes at 10,376×. Bits per byte are the right axis label and a poor universal predictor. The carrier decides.
 
-The bottom panel is the one to be careful with. Rung 10 maps random bytes into 95 printable characters, so it measures 6.548 bits/byte on this draw and looks like text. zlib and zstd cross under after 256 bytes and are essentially done by 1 MiB, at about 1.21×. From 1 MiB to 16 MiB, zlib moves from 1.206653× to 1.206659×. Snappy never crosses. At 16 MiB the framed snappy message is 777 bytes longer than the original.
+The bottom panel is the one to be careful with. Rung 10 maps random bytes into 95 printable characters, so it measures 6.548 bits/byte on this draw and looks like text. zlib and zstd are still below the line at 256 bytes and above it from 512, and they are essentially done by 1 MiB, at about 1.21×. From 1 MiB to 16 MiB, zlib moves from 1.206653× to 1.206659×. Snappy stays below the line. At 16 MiB the framed snappy message is 777 bytes longer than the original.
 
 ## binary
 
@@ -106,7 +110,7 @@ The bottom panel is the one to be careful with. Rung 10 maps random bytes into 9
 
 The top two panels match the string. A run of zero bytes is a run of zero bytes, whether the BSON type is string or binary. At 1 MiB, zlib is 966.4488× on both and zstd is 10,082.6635× on both. At the max document zlib is 1,025.4408× on the binary and 1,025.5035× on the string. The keys in an int32 array are what break that match. The same zlib level on a zero int32 array is 5.2×.
 
-The bottom panel does not match the string, because rung 10 here is raw CSPRNG, 7.997 bits/byte, with no alphabet to hide in. Every compressor stays under the dashed line at every sampled size, including 16 MiB. Raising the level does not fix it. At 64 KiB, every zstd level from −1 through 22 is the same 19 bytes over (ratio 0.999710). At 16 MiB, zstd is 406 bytes over, snappy 778, and zlib 2,660. zlib level 1 is worse on that document: 15,514 bytes over, ratio 0.999076. There is no level in this grid at which a cryptographic binary should be wrapped.
+The bottom panel does not match the string, because rung 10 here is raw CSPRNG, 7.997 bits/byte, with no alphabet to hide in. Every compressor stays below the dashed line at every sampled size, including 16 MiB. Raising the level does not fix it. At 64 KiB, every zstd level from −1 through 22 is the same 19 bytes longer (ratio 0.999710). At 16 MiB, snappy is 778 bytes longer. zstd is 406 bytes longer at every sampled level except level 22, which is one byte less. zlib is 2,660 bytes longer at every sampled level except level 1, which is 15,514 bytes longer, ratio 0.999076. There is no level in this grid at which a cryptographic binary should be wrapped.
 
 ## All five carriers
 
@@ -114,15 +118,15 @@ The bottom panel does not match the string, because rung 10 here is raw CSPRNG, 
 
 Read the top row from left to right and the carrier is the whole story. The zero string and the zero binary leave the chart. The zero decimal128 and the zero double follow, well above the int32 array, which is held down by its keys. Snappy's green line barely leaves the bottom of those two right-hand panels. On a pure run it has a ceiling near 21×, and zstd does not.
 
-Read the bottom row and the order changes in the way the entropy would have suggested. The numeric arrays cannot be pure noise, so they finish above the line: int32 highest, then double, then decimal128. The printable string just clears the line for zlib and zstd, and snappy sits on it from underneath. The cryptographic binary never clears it. The shared scale makes that last panel look empty. It is empty on purpose. A ratio of 0.999976 and a ratio of 1 are the same pixel, which is why the byte counts are the number to keep.
+Read the bottom row and the order changes in the way the entropy would have suggested. The numeric arrays cannot be pure noise, so they finish above the line: int32 highest, then double, then decimal128. The printable string just clears the line for zlib and zstd, and snappy stays just below it. The cryptographic binary never clears it. The shared scale makes that last panel look empty. It is empty on purpose. A ratio of 0.999976 and a ratio of 1 are the same pixel, which is why the byte counts are the number to keep.
 
 A single bits/byte figure does not place a payload on one of these curves. String rung 5 is 4.00 bits/byte and zstd's ratio at 1 MiB is 5,924×. int32 rung 5 is 3.37 bits/byte and the ratio is 14.3×. The string is the higher entropy estimate and the vastly easier payload, because one of them is a repeated phrase and the other is keys plus integers.
 
-At 1 MiB, zlib level 6 beats zstd level 3 on a handful of mid-entropy rows: double rung 8 (2.4919× against 2.2528×) and decimal128 rungs 7, 8, and 9 (3.4225× against 3.2770×, 3.8855× against 3.6416×, 2.0305× against 1.9601×). Everywhere else in that slice, zstd 3 is tighter, usually by a lot. Snappy is the loosest of the three on the repetitive rows and the first to give up as the bytes get noisier. From rung 8 up, snappy is over the original on both string and binary.
+At 1 MiB, zlib level 6 beats zstd level 3 on a handful of mid-entropy rows: double rung 8 (2.4919× against 2.2528×) and decimal128 rungs 7, 8, and 9 (3.4225× against 3.2770×, 3.8855× against 3.6416×, 2.0305× against 1.9601×). Everywhere else in that slice, zstd 3 is tighter, usually by a lot. Snappy is the loosest of the three on the repetitive rows and the first to give up as the bytes get noisier. From rung 8 up, snappy is below the line on both string and binary.
 
 ### Where the framed message stops being larger
 
-This is the largest sampled target that is still longer than the original. On the double charts the line is crossed twice, so the number here is the later one. The dips are the notches at the first document, described above. Bits are the length-slice document at 64 KiB.
+This is the largest sampled target still below the line, the last size at which the framed message is longer than the original. On the double charts the line is crossed twice, so the number here is the later one. The dips are the notches at the first document, described above. Bits are the length-slice document at 64 KiB.
 
 | Carrier | Rung | Bits at 64 KiB | zlib 6 | zstd 3 | snappy |
 | --- | --- | --- | --- | --- | --- |
@@ -144,7 +148,7 @@ This is the largest sampled target that is still longer than the original. On th
 
 ### Ratio at 16 MiB
 
-The same length curve, at the max document. A ratio under 1 is six decimals so it does not round to 1.0000. The string rung 10 zlib cells are six decimals for the same reason.
+The same length curve, at the max document. A ratio below 1 is six decimals so it does not round to 1.0000. The string rung 10 zlib cells are six decimals for the same reason.
 
 | Carrier | Rung | zlib 6 | zstd 3 | snappy |
 | --- | --- | --- | --- | --- |
@@ -157,24 +161,34 @@ The same length curve, at the max document. A ratio under 1 is six decimals so i
 | decimal128 | 1 | 9.0757 | 60.3339 | 4.7988 |
 | decimal128 | 5 | 8.5267 | 57.1260 | 4.2628 |
 | decimal128 | 10 | 1.2317 | 1.2508 | 1.0796 |
-| string | 1 | 1025.5035 | 28728.1455 | 21.3179 |
-| string | 5 | 513.9927 | 10375.5331 | 21.2144 |
+| string | 1 | 1,025.5035 | 28,728.1455 | 21.3179 |
+| string | 5 | 513.9927 | 10,375.5331 | 21.2144 |
 | string | 10 | 1.206659 | 1.2106 | 0.999954 |
-| binary | 1 | 1025.4408 | 28728.1455 | 21.3179 |
-| binary | 5 | 514.0085 | 10369.1205 | 21.2144 |
+| binary | 1 | 1,025.4408 | 28,728.1455 | 21.3179 |
+| binary | 5 | 514.0085 | 10,369.1205 | 21.2144 |
 | binary | 10 | 0.999841 | 0.999976 | 0.999954 |
 
 ## zstd levels
 
-![zstd wire ratio by level. Left, every level on a 64 KiB array of zero int32s. Right, the sampled levels on the 16 MiB version of that array. Snappy is the green dashed line.](compressor-analysis/levels.png)
+![zstd wire ratio by level. Orange is level 3, the level drivers send. Purple is every other measured level, which only the Rust API can set. Left, the 64 KiB array of zero int32s. Right, the sampled levels on the 16 MiB version. Snappy is the green dashed line.](compressor-analysis/levels.png)
 
-The left chart is one document, a 64 KiB array of zero int32s, run through every zstd level this library accepts from −1 to 22. Level 3, the default, sits in a sag at 13.1×. Level 1, to its left, is 16.4×. The curve then bumps along, drops to 7.7× at level 13, jumps, and peaks at levels 19–21 at 36.7×. Level 22 is a hair looser, 36.6×. Level −1 is inside the legal range (measured here as −131072 through 22) and it is not a spelling of the default. It is a fast level, and on this document it is 7.4×. It matched level 3 on 13 of the 54 paired cells in the grid, all of them string or binary, and it differed on the other 41. Every numeric pair differed.
+The left chart is one document, a 64 KiB array of zero int32s, run through every zstd level this library accepts from −1 to 22. The orange point is level 3, in a sag at 13.1×. That is the level these drivers send when zstd is left unset. The purple curve is the rest, and it is a Rust-only request. Level 1, to the left of the orange point, is 16.4×. The curve then bumps along, drops to 7.7× at level 13, jumps, and peaks at levels 19–21 at 36.7×. Level 22 is a hair looser, 36.6×. Level −1 is inside the legal range (measured here as −131072 through 22) and it is a fast level of its own, 7.4× on this document. It matched level 3 on 13 of the 54 paired cells in the grid, all of them string or binary, and it differed on the other 41. Every numeric pair differed.
 
 The right chart is the same kind of array at 16 MiB, at the levels there was time to run. The dots are those levels. Nothing was measured between them. The sag has moved. Level 3 is now 32.4× and beats level 1 at 24.8×. Level 9, which is an easy number to reach for, is the loosest of the positive levels in the sample, 21.1×. Level 19 is the tightest, 44.6×, and level 22 is 44.4×. Level −1 is 15.6×. Snappy, with nothing to turn, is 2.7× on this document and 2.2× on the 64 KiB one. Even the worst zstd level in either chart beats snappy on this particular array. That is a statement about zero int32s, not about the cryptographic binary, where every zstd level loses.
 
-zlib has its own small version of this. On the 16 MiB zero int32 array, level 3 is the tightest of the sampled zlib levels at 6.21×, and level 6, the default match, is 5.21×. Level 9 is 5.2075×, slightly looser than level 6. Level 0 is store. It is 2,660 bytes over on that document, ratio 0.999841. Level −1 matches level 6 on all 479 paired cells.
+zlib has its own small version of this. The spec calls level 9 the best compression. On the 16 MiB zero int32 array, level 3 is the tightest of the sampled zlib levels at 6.21×, and level 6, the default match, is 5.21×. Level 9 is 5.2075×, slightly looser than level 6. Level 0 is store. It is 2,660 bytes longer on that document, ratio 0.999841. Level −1 matches level 6 on all 479 paired cells. Blue on the length charts is that level 6. The other zlib levels are a URI option, from −1 to 9, so they are not drawn in purple.
 
-The reply does not follow the client level. `session_workflow.cpp` answers a compressed request with the same compressor id, at the server's own level: `Z_DEFAULT_COMPRESSION` for zlib and `ZSTD_CLEVEL_DEFAULT` for zstd. A client that negotiates zstd and sends level 19 still reads a level-3 reply. There is no URI key for a zstd level. Node hardcodes 3. Rust mongodb 3.10.1 can set `Compressor::Zstd { level }` in code, `None` means 3, and `validate()` rejects a level outside the library range. The features `zstd-compression`, `zlib-compression`, and `snappy-compression` are off unless enabled.
+Which levels a caller can actually set depends on the driver. This is not a universal feature.
+
+| Compressor | Connection string | Rust code | Node, PyMongo, Java |
+| --- | --- | --- | --- |
+| snappy | No level | No level | No level |
+| zlib | −1 to 9 | 0 to 9, or unset for the flate2 default | Node publishes 0 to 9, and 0 selects the default. PyMongo and Java take −1 to 9 |
+| zstd | None | Any level in the library range, or unset for 3 | 3 only |
+
+Rust's `validate()` rejects a zstd level outside `zstd::compression_level_range()`. The three compression features are off unless the crate is built with them. PyMongo calls `zstd.compress` with no level. The Java driver calls `Zstd.defaultCompressionLevel()`. Node hardcodes `ZSTD_COMPRESSION_LEVEL = 3`.
+
+The reply does not follow the client level. `session_workflow.cpp` answers a compressed request with the same compressor id, at the server's own level: `Z_DEFAULT_COMPRESSION` for zlib and `ZSTD_CLEVEL_DEFAULT` for zstd. A client that negotiates zstd and sends level 19 still reads a level-3 reply.
 
 ## What the drivers send
 
@@ -184,7 +198,7 @@ mongosh 2.14.2, Node driver `OpCompressedRequest.toBin`, wraps a compressible co
 
 The log line "Compressed message would be larger than maximum allowed" is a different check. `MaxMessageSizeBytes` is `48 * 1000 * 1000`. `MessageCompressorManager::compressMessage` returns the original message when the worst-case compressed buffer, plus the 9-byte details and the 16-byte header, would exceed that. For zlib the bound first exceeds 48,000,000 at body length 47,985,319. The grid records that length as `guardTripsAtBody`. No body in this grid trips it. A legal document is at most 16 MiB. The short-message expansion is the frame.
 
-On an incompressible input the compressor keeps the bytes and adds a frame, which is why the ratio sits just under 1 instead of falling apart. At 16 MiB of cryptographic binary the zstd frame adds 397 bytes and the 9-byte details make 406 on the wire. zlib's stored-block framing is the 2,660 bytes. Snappy's is the 778.
+On an incompressible input the compressor keeps the bytes and adds a frame, which is why the ratio sits just below 1 instead of falling apart. At 16 MiB of cryptographic binary, zstd at level 3 adds a 397-byte frame and the 9-byte details make 406 on the wire. zlib's stored-block framing is the 2,660 bytes. Snappy's is the 778.
 
 flate2 level 0 is store, and that is what Rust sends for level 0. The Node driver sets a zlib level only when `zlibCompressionLevel` is truthy, and `compressCommand` passes `description.zlibCompressionLevel ?? 0`, so an omitted level and an explicit 0 both take the default on that driver. The level 0 row in the JSON is the store row. It is not the row this Node driver sends for 0. The Rust URI accepts `zlibCompressionLevel` −1 as the flate2 default, which matched level 6 here, and rejects values above 9 and negatives other than −1. A sweep of the client zlib level moves the request only.
 
@@ -198,13 +212,13 @@ Snappy has no level. This mongosh has no `snappy` module, so the Node driver on 
 
 Turn zstd on for ordinary documents, logs, and low-cardinality fields. That is where the wire saving is large, and where zlib and snappy, while useful, leave most of it behind. The int32 charts are the reminder that "ordinary" includes the keys. An array of integers compresses like an array of keys, not like a string of the values.
 
-Leave compression off when the payload is ciphertext, a compressed blob, or any other near-random binary. Every level in this grid still adds a frame, and within a legal document the ratio does not come back under 1. Printable random text is the awkward middle. zlib and zstd reach about 1.21×, and snappy costs bytes at every size.
+Leave compression off when the payload is ciphertext, a compressed blob, or any other near-random binary. Every level in this grid still adds a frame, and within a legal document the ratio stays below 1. Printable random text is the awkward middle. zlib and zstd reach about 1.21×, and snappy costs bytes at every size.
 
 Keep snappy in the negotiated list when the peer supports it and the payload is repetitive. It starts helping at slightly smaller sizes than zstd on some of the numeric rows, because its wrapper is slimmer, and it stops helping sooner as the bytes get noisier. It has no level to get wrong. It will not do for a cryptographic binary what it does for a run of zeros, and on a run of zeros it flattens near 21× while zstd keeps going. This mongosh build does not include the module. The Rust driver can, behind a feature that is off by default. The server's default list is `snappy,zstd,zlib`, and negotiation walks the client's list.
 
-Leave zstd at level 3 unless a measured payload says otherwise, and remember that the reply stays at 3 either way. The left-hand level chart is one document on which level 1 beats the default and level 19 beats both. The right-hand chart is the same document grown to 16 MiB, and there the default beats level 1 while level 9 is a step backwards. A higher number is not a tighter message. Node cannot set the level. Rust can, in code, with no URI key. Tuning it changes the request only.
+Leave zstd at level 3, the orange point, unless a measured payload says otherwise. The reply stays at 3 either way. On the 64 KiB zero int32 array the purple levels include a tighter level 1 and a tighter band at 19–21. On the same array at 16 MiB, level 3 beats level 1 and level 9 is a step backwards. A higher number is not a tighter message. Node, PyMongo, and the Java driver have no zstd level to change. Rust can change it in code, and the connection string still cannot. Tuning it changes the request only.
 
-The small-message penalty is real, and it is not the 48,000,000 guard. Below a few dozen bytes the frame dominates, the ratio drops under 1, and the driver sends the framed message anyway. The guard is a worst-case allocation check that a legal document never reaches.
+The small-message penalty is real, and it is not the 48,000,000 guard. Below a few dozen bytes the frame dominates, the ratio drops below 1, and the driver sends the framed message anyway. The guard is a worst-case allocation check that a legal document never reaches.
 
 ## Appendix
 
@@ -233,12 +247,12 @@ Level 1 is tighter than level 3 on this slice for int32 rungs 1, 2, 5, 6, and 8 
 
 | Rung | int32 | double | decimal128 | string | binary |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 17.7719 | 25.1981 | 40.9238 | 10082.6635 | 10082.6635 |
-| 2 | 17.8175 | 24.7112 | 40.5864 | 6393.8841 | 6355.1333 |
-| 3 | 4.6336 | 8.5914 | 10.0399 | 2502.6181 | 2496.6595 |
-| 4 | 8.2141 | 15.9978 | 14.6386 | 2502.6181 | 2496.6595 |
-| 5 | 14.3402 | 18.9086 | 31.1885 | 5924.2768 | 5890.9944 |
-| 6 | 17.3983 | 23.0876 | 37.5287 | 5698.8967 | 5668.0919 |
+| 1 | 17.7719 | 25.1981 | 40.9238 | 10,082.6635 | 10,082.6635 |
+| 2 | 17.8175 | 24.7112 | 40.5864 | 6,393.8841 | 6,355.1333 |
+| 3 | 4.6336 | 8.5914 | 10.0399 | 2,502.6181 | 2,496.6595 |
+| 4 | 8.2141 | 15.9978 | 14.6386 | 2,502.6181 | 2,496.6595 |
+| 5 | 14.3402 | 18.9086 | 31.1885 | 5,924.2768 | 5,890.9944 |
+| 6 | 17.3983 | 23.0876 | 37.5287 | 5,698.8967 | 5,668.0919 |
 | 7 | 3.9270 | 4.5692 | 3.2770 | 1.9990 | 1.9990 |
 | 8 | 1.9672 | 2.2528 | 3.6416 | 1.5318 | 1.5318 |
 | 9 | 1.8333 | 2.2926 | 1.9601 | 1.2036 | 1.2036 |

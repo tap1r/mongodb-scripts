@@ -24,6 +24,7 @@ with open(ROOT / "compressor-analysis.json") as f:
 
 ZLIB = "#0072B2"
 ZSTD = "#D55E00"
+RUST = "#CC79A7"
 SNAP = "#009E73"
 GRID = "#E6E6E6"
 INK = "#1c1c1c"
@@ -218,7 +219,8 @@ def combined_chart():
 
 
 def level_chart():
-    fig, axes = plt.subplots(1, 2, figsize=(11.2, 4.8), constrained_layout=True)
+    fig, axes = plt.subplots(1, 2, figsize=(11.2, 5.35))
+    fig.subplots_adjust(top=0.78, wspace=0.28, bottom=0.14, left=0.07, right=0.98)
 
     left = axes[0]
     rows = [
@@ -229,10 +231,10 @@ def level_chart():
     rows.sort(key=lambda r: r["level"])
     xs = [r["level"] for r in rows]
     ys = [r["wireRatio"] for r in rows]
-    left.plot(xs, ys, color=ZSTD, lw=2.15, zorder=3)
-    left.scatter(xs, ys, color=ZSTD, s=22, zorder=4)
+    left.plot(xs, ys, color=RUST, lw=2.15, zorder=3)
+    left.scatter(xs, ys, color=RUST, s=22, zorder=4)
     default = next(r for r in rows if r["level"] == 3)
-    left.scatter([3], [default["wireRatio"]], s=64, color=ZSTD, zorder=5, edgecolor="white", linewidth=1.2)
+    left.scatter([3], [default["wireRatio"]], s=78, color=ZSTD, zorder=5, edgecolor="white", linewidth=1.2)
     left.annotate(
         "default  13.1×",
         xy=(3, default["wireRatio"]),
@@ -284,12 +286,18 @@ def level_chart():
         and r["level"] in sampled
     ]
     mrows.sort(key=lambda r: r["level"])
-    right.scatter([r["level"] for r in mrows], [r["wireRatio"] for r in mrows], color=ZSTD, s=42, zorder=4)
+    right.scatter(
+        [r["level"] for r in mrows],
+        [r["wireRatio"] for r in mrows],
+        c=[ZSTD if r["level"] == 3 else RUST for r in mrows],
+        s=42,
+        zorder=4,
+    )
     d = next(r for r in mrows if r["level"] == 3)
     one = next(r for r in mrows if r["level"] == 1)
     nine = next(r for r in mrows if r["level"] == 9)
     top = next(r for r in mrows if r["level"] == 19)
-    right.scatter([3], [d["wireRatio"]], s=70, color=ZSTD, zorder=5, edgecolor="white", linewidth=1.2)
+    right.scatter([3], [d["wireRatio"]], s=84, color=ZSTD, zorder=5, edgecolor="white", linewidth=1.2)
     right.annotate("default  32.4×", xy=(3, d["wireRatio"]), xytext=(4.4, 27), fontsize=9, color=ZSTD,
                    arrowprops={"arrowstyle": "-", "color": ZSTD, "lw": 0.8})
     right.annotate("level 1  24.8×", xy=(1, one["wireRatio"]), xytext=(4.6, 17.2), fontsize=9, color=MUTED,
@@ -307,6 +315,15 @@ def level_chart():
     right.set_title("16 MiB array of zero int32s, sampled levels", loc="left", fontsize=12)
     right.grid(True, axis="y", color=GRID, lw=0.8)
     right.tick_params(length=0)
+    right.spines["top"].set_visible(False)
+    right.spines["right"].set_visible(False)
+
+    handles = [
+        Line2D([0], [0], color=ZSTD, marker="o", lw=0, ms=8, label="zstd 3, the level drivers send"),
+        Line2D([0], [0], color=RUST, lw=2.4, marker="o", ms=5, label="other zstd levels, Rust API only"),
+        Line2D([0], [0], color=SNAP, lw=1.2, ls=(0, (3, 2)), label="snappy"),
+    ]
+    fig.legend(handles=handles, loc="upper center", frameon=False, ncol=3, fontsize=10, bbox_to_anchor=(0.5, 0.98))
 
     fig.savefig(OUT / "levels.png", dpi=160)
     plt.close(fig)
