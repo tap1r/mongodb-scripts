@@ -33,6 +33,8 @@ MUTED = "#5c5c5c"
 CARRIERS = [
     ("int32", "int32"),
     ("double", "double"),
+    ("long", "long"),
+    ("date", "date"),
     ("decimal128", "decimal128"),
     ("string", "string"),
     ("binary", "binary"),
@@ -183,6 +185,24 @@ def mark_carrier(key, axes):
         point_at(axes[0], key, 1, "zstd", 3, 64, "back below", ZSTD, 34, -14)
         point_at(axes[1], key, 5, "snappy", None, 64, "1 byte longer", SNAP, 36, -16)
         point_at(axes[2], key, 10, "snappy", None, 131072, "snappy above\nfrom 128 KiB", SNAP, 12, -20)
+    elif key == "long":
+        tag_end(axes[0], key, 1, "zstd", 3, "74.2×", ZSTD)
+        tag_end(axes[0], key, 1, "zlib", 6, "6.7×", ZLIB, va="bottom", dy=3)
+        tag_end(axes[0], key, 1, "snappy", None, "3.2×", SNAP, va="bottom", dy=3)
+        point_at(axes[0], key, 1, "zstd", 3, 64, "back below", ZSTD, 34, -14)
+        point_at(axes[1], key, 5, "snappy", None, 64, "1 byte longer", SNAP, 36, -16)
+        axes[0].text(
+            0.03, 0.90, "double finishes at 86.4×",
+            transform=axes[0].transAxes, ha="left", va="top", fontsize=8, color=MUTED,
+        )
+    elif key == "date":
+        tag_end(axes[0], key, 1, "zstd", 3, "74.2×", ZSTD)
+        tag_end(axes[0], key, 1, "zlib", 6, "6.7×", ZLIB, va="bottom", dy=3)
+        tag_end(axes[0], key, 1, "snappy", None, "3.2×", SNAP, va="bottom", dy=3)
+        axes[0].text(
+            0.03, 0.90, "tracks the long chart",
+            transform=axes[0].transAxes, ha="left", va="top", fontsize=8, color=MUTED,
+        )
     elif key == "decimal128":
         tag_end(axes[0], key, 1, "zstd", 3, "60.3×", ZSTD)
         tag_end(axes[0], key, 1, "zlib", 6, "9.1×", ZLIB, va="bottom", dy=3)
@@ -206,14 +226,17 @@ def mark_carrier(key, axes):
 
 def mark_combined(axes):
     # The shared scale hides these two results. The paragraphs name them.
-    axes[1][3].text(
-        0.50, 0.78, "snappy below",
-        transform=axes[1][3].transAxes, ha="center", va="center", fontsize=8, color=SNAP,
-    )
-    axes[1][4].text(
-        0.50, 0.78, "below the line",
-        transform=axes[1][4].transAxes, ha="center", va="center", fontsize=8, color=MUTED,
-    )
+    for col, (key, _title) in enumerate(CARRIERS):
+        if key == "string":
+            axes[1][col].text(
+                0.50, 0.78, "snappy below",
+                transform=axes[1][col].transAxes, ha="center", va="center", fontsize=8, color=SNAP,
+            )
+        if key == "binary":
+            axes[1][col].text(
+                0.50, 0.78, "below the line",
+                transform=axes[1][col].transAxes, ha="center", va="center", fontsize=8, color=MUTED,
+            )
 
 
 
@@ -239,7 +262,9 @@ def carrier_chart(key, title):
     axes[-1].set_xlabel("Document target")
     first = {
         "int32": 32,
+        "long": 64,
         "double": 64,
+        "date": 64,
         "decimal128": 64,
         "string": 32,
         "binary": 32,
@@ -270,7 +295,7 @@ def carrier_chart(key, title):
 
 def combined_chart():
     ticks = [1, 65536, 16777216]
-    fig, axes = plt.subplots(2, 5, figsize=(14.4, 7.0), sharex=True, constrained_layout=True)
+    fig, axes = plt.subplots(2, len(CARRIERS), figsize=(19.2, 6.6), sharex=True, constrained_layout=True)
     bounds = {1: [float("inf"), 0.0], 10: [float("inf"), 0.0]}
     for col, (key, title) in enumerate(CARRIERS):
         for row, (rung, name) in enumerate(((1, "Repetitive"), (10, "Nearly random"))):
@@ -293,7 +318,7 @@ def combined_chart():
     handles = [Line2D([0], [0], color=color, lw=2.4, label=label) for _c, _l, color, label in SERIES]
     handles.append(Line2D([0], [0], color="#9a9a9a", lw=1.0, ls=(0, (2, 2)), label="ratio of 1"))
     fig.legend(handles=handles, loc="upper center", frameon=False, bbox_to_anchor=(0.5, 1.06), ncol=4, fontsize=11)
-    fig.suptitle("All five carriers, on one scale per row", fontsize=15, y=1.10)
+    fig.suptitle("All seven carriers, on one scale per row", fontsize=15, y=1.10)
     fig.savefig(OUT / "combined.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
 
@@ -409,6 +434,72 @@ def level_chart():
     plt.close(fig)
 
 
+def surface_rows(carrier, comp, level):
+    rows = []
+    for rung in range(1, 11):
+        slice_ = "length" if rung in (1, 5, 10) else "surface"
+        rows.extend(
+            r
+            for r in ROWS
+            if r["slice"] == slice_
+            and r["carrier"] == carrier
+            and r["rung"] == rung
+            and r["compressor"] == comp
+            and r["level"] == level
+        )
+    return rows
+
+
+def manifold_chart():
+    import numpy as np
+
+    fig = plt.figure(figsize=(17.2, 9.4))
+    fig.subplots_adjust(left=0.02, right=0.97, top=0.90, bottom=0.04, wspace=0.16, hspace=0.28)
+    for i, (key, title) in enumerate(CARRIERS):
+        ax = fig.add_subplot(2, 4, i + 1, projection="3d")
+        for comp, level, color, _label in SERIES:
+            rows = surface_rows(key, comp, level)
+            rungs = sorted({r["rung"] for r in rows})
+            sizes = sorted({r["target"] for r in rows})
+            by = {(r["rung"], r["target"]): r["wireRatio"] for r in rows}
+            if len(by) != len(rungs) * len(sizes):
+                raise SystemExit(f"surface holes for {key} {comp}: {len(by)} of {len(rungs) * len(sizes)}")
+            x = np.log2(np.array(sizes, dtype=float))
+            X, Y = np.meshgrid(x, rungs)
+            Z = np.empty((len(rungs), len(sizes)))
+            for yi, rung in enumerate(rungs):
+                for xi, size in enumerate(sizes):
+                    Z[yi, xi] = by[(rung, size)]
+            ax.plot_surface(X, Y, Z, color=color, alpha=0.55, linewidth=0, antialiased=True, shade=False)
+        ax.set_zscale("log")
+        ax.set_xticks([0, 8, 16, 24])
+        ax.set_xticklabels(["1", "256", "64 KiB", "16 MiB"], fontsize=7)
+        ax.set_yticks([1, 3, 5, 7, 10])
+        ax.set_xlabel("Size", fontsize=8, labelpad=1)
+        ax.set_ylabel("Rung", fontsize=8, labelpad=1)
+        # The top-right panel sits against the figure edge. Its z label was clipped.
+        if i % 4 != 3:
+            ax.set_zlabel("Ratio", fontsize=8, labelpad=0)
+        ax.view_init(elev=26, azim=-58)
+        ax.set_title(title, fontsize=12, pad=-2)
+        ax.tick_params(labelsize=7, pad=0)
+        for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+            axis.pane.set_facecolor((1, 1, 1, 0))
+            axis.pane.set_edgecolor("#e6e6e6")
+    legend_ax = fig.add_subplot(2, 4, 8)
+    legend_ax.axis("off")
+    handles = [Line2D([0], [0], color=color, lw=2.4, label=label) for _c, _l, color, label in SERIES]
+    legend_ax.legend(handles, [h.get_label() for h in handles], loc="center", frameon=False, fontsize=12)
+    legend_ax.text(
+        0.5, 0.18,
+        "Each sheet is one compressor\nacross every rung and every size.\nThe length charts are the\nrung 1, 5, and 10 slices.",
+        transform=legend_ax.transAxes, ha="center", va="top", fontsize=10, color=MUTED,
+    )
+    fig.suptitle("Wire ratio over document size and rung", fontsize=15)
+    fig.savefig(OUT / "manifold.png", dpi=140)
+    plt.close(fig)
+
+
 def main():
     for key, title in CARRIERS:
         carrier_chart(key, title)
@@ -417,6 +508,8 @@ def main():
     print("wrote combined")
     level_chart()
     print("wrote levels")
+    manifold_chart()
+    print("wrote manifold")
 
 
 if __name__ == "__main__":

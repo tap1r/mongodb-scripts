@@ -5,6 +5,10 @@
 // With no arguments it writes /tmp/compressor-grid.json and
 // /tmp/compressor-digest.txt. Two arguments are the grid path and the digest path.
 // It does not write the published JSON.
+// COMPRESSOR_SLICES and COMPRESSOR_CARRIERS, comma-separated, limit a run.
+// The published grid was extended by appending long, date, the surface
+// rungs, and a timestamp comparison. The original five carriers' rung 10
+// rows were not redrawn.
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
 use serde_json::{json, Value};
@@ -31,10 +35,18 @@ fn main() {
     let range = zstd::compression_level_range();
     let started = Instant::now();
     let mut points = Vec::new();
+    let slice_filter = split_env("COMPRESSOR_SLICES");
+    let carrier_filter = split_env("COMPRESSOR_CARRIERS");
     let jobs = jobs();
     for job in jobs {
+        if !slice_filter.is_empty() && !slice_filter.iter().any(|s| s == job.tag) {
+            continue;
+        }
         let zstd_levels: Vec<i32> = job.zstd.iter().copied().filter(|lvl| range.contains(lvl)).collect();
         for &carrier in job.carriers {
+            if !carrier_filter.is_empty() && !carrier_filter.iter().any(|s| s == carrier) {
+                continue;
+            }
             for &rung in job.rungs {
                 for target in job.sizes() {
                     let tb = Instant::now();
@@ -102,10 +114,12 @@ fn main() {
         "maxMessage": MAX_MESSAGE,
         "guardTripsAtBody": guard,
         "slices": {
-            "length": "2^0 through 2^23 plus 16777216; five carriers; rungs 1, 5, 10; zlib -1,0,1,6,9; zstd 1,3,9; snappy",
-            "level64": "65536; five carriers; rungs 1-10; zlib -1 and 0-9; zstd -1 and 1-22; snappy",
-            "rung1m": "1048576; five carriers; rungs 1-10; zlib -1 and 0-9; zstd 1,3,9; snappy",
-            "levelMax": "16777216; binary and int32; rungs 1 and 10; zlib -1 and 0-9; zstd -1,1,3,6,9,19,22; snappy"
+            "compare": "65536 and 16777216; long, date, and timestamp; rungs 1, 5, 9, 10; zlib 6; zstd 3; snappy",
+            "length": "2^0 through 2^23 plus 16777216; seven carriers; rungs 1, 5, 10; zlib -1,0,1,6,9; zstd 1,3,9; snappy",
+            "level64": "65536; seven carriers; rungs 1-10; zlib -1 and 0-9; zstd -1 and 1-22; snappy",
+            "levelMax": "16777216; binary and int32; rungs 1 and 10; zlib -1 and 0-9; zstd -1,1,3,6,9,19,22; snappy",
+            "rung1m": "1048576; seven carriers; rungs 1-10; zlib -1 and 0-9; zstd 1,3,9; snappy",
+            "surface": "2^0 through 2^23 plus 16777216; seven carriers; rungs 2, 3, 4, 6, 7, 8, 9; zlib 6; zstd 3; snappy"
         },
         "count": points.len(),
         "seconds": round_n(started.elapsed().as_secs_f64(), 1)
@@ -114,7 +128,9 @@ fn main() {
     let grid_path = args.next().unwrap_or_else(|| "/tmp/compressor-grid.json".to_string());
     let digest_path = args.next().unwrap_or_else(|| "/tmp/compressor-digest.txt".to_string());
     write_grid(&grid_path, &meta, &points);
-    write_digest(&digest_path, &points);
+    if slice_filter.is_empty() && carrier_filter.is_empty() {
+        write_digest(&digest_path, &points);
+    }
     eprintln!("done {} points in {:.1}s guard={}", points.len(), started.elapsed().as_secs_f64(), guard);
 }
 
@@ -142,10 +158,17 @@ fn jobs() -> Vec<Job> {
         Job { tag: "level64", carriers: &CARRIERS, rungs: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], zlib: &[-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9], zstd: &[-1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22] },
         Job { tag: "rung1m", carriers: &CARRIERS, rungs: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], zlib: &[-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9], zstd: &[1, 3, 9] },
         Job { tag: "levelMax", carriers: &["binary", "int32"], rungs: &[1, 10], zlib: &[-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9], zstd: &[-1, 1, 3, 6, 9, 19, 22] },
+        // Rungs the length charts skip. The chart reads rungs 1, 5, and 10 from `length`.
+        Job { tag: "surface", carriers: &CARRIERS, rungs: &[2, 3, 4, 6, 7, 8, 9], zlib: &[6], zstd: &[3] },
+        Job { tag: "compare", carriers: &["long", "date", "timestamp"], rungs: &[1, 5, 9, 10], zlib: &[6], zstd: &[3] },
     ]
 }
 
-const CARRIERS: [&str; 5] = ["int32", "double", "decimal128", "string", "binary"];
+fn split_env(key: &str) -> Vec<String> {
+    std::env::var(key).ok().map(|raw| raw.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()).unwrap_or_default()
+}
+
+const CARRIERS: [&str; 7] = ["int32", "double", "long", "date", "decimal128", "string", "binary"];
 
 impl Job {
     fn sizes(&self) -> Vec<usize> {
@@ -158,6 +181,12 @@ impl Job {
             "level64" => vec![65536],
             "rung1m" => vec![1 << 20],
             "levelMax" => vec![BSON_MAX],
+            "surface" => {
+                let mut sizes: Vec<usize> = (0..=23).map(|n| 1usize << n).collect();
+                sizes.push(BSON_MAX);
+                sizes
+            }
+            "compare" => vec![65536, BSON_MAX],
             _ => Vec::new(),
         }
     }
@@ -266,9 +295,13 @@ fn build_doc(target: usize, carrier: &str, rung: u8) -> Option<Vec<u8>> {
     match carrier {
         "string" => build_scalar(target, rung, true),
         "binary" => build_scalar(target, rung, false),
-        "int32" => build_array(target, rung, 4, 0x10),
-        "double" => build_array(target, rung, 8, 0x01),
-        _ => build_array(target, rung, 16, 0x13),
+        "int32" => build_array(target, rung, 4, 0x10, Kind::Int32),
+        "double" => build_array(target, rung, 8, 0x01, Kind::Double),
+        "long" => build_array(target, rung, 8, 0x12, Kind::Long),
+        "date" => build_array(target, rung, 8, 0x09, Kind::Long),
+        "timestamp" => build_array(target, rung, 8, 0x11, Kind::Timestamp),
+        "decimal128" => build_array(target, rung, 16, 0x13, Kind::Decimal),
+        _ => panic!("unknown carrier {carrier}"),
     }
 }
 
@@ -315,7 +348,10 @@ fn build_scalar(target: usize, rung: u8, string: bool) -> Option<Vec<u8>> {
     Some(buf)
 }
 
-fn build_array(target: usize, rung: u8, width: usize, type_byte: u8) -> Option<Vec<u8>> {
+#[derive(Clone, Copy)]
+enum Kind { Int32, Double, Long, Timestamp, Decimal }
+
+fn build_array(target: usize, rung: u8, width: usize, type_byte: u8, kind: Kind) -> Option<Vec<u8>> {
     if target < 23 { return None; }
     let mut buf = vec![0u8; target];
     let mut p = write_ping(&mut buf, 4);
@@ -340,21 +376,40 @@ fn build_array(target: usize, rung: u8, width: usize, type_byte: u8) -> Option<V
         p += key.len();
         buf[p] = 0;
         p += 1;
-        if width == 4 {
-            let value = int_value(i, rung, &mut rand, &mut crypto, &mut crypto_at);
-            buf[p..p + 4].copy_from_slice(&value.to_le_bytes());
-        } else if width == 8 {
-            if rung == 10 {
-                refill(&mut crypto, &mut crypto_at, 8);
-                buf[p..p + 8].copy_from_slice(&crypto[crypto_at..crypto_at + 8]);
-                crypto_at += 8;
-            } else {
-                let n = double_value(i, rung, &mut rand);
-                buf[p..p + 8].copy_from_slice(&n.to_le_bytes());
+        match kind {
+            Kind::Int32 => {
+                let value = int_value(i, rung, &mut rand, &mut crypto, &mut crypto_at);
+                buf[p..p + 4].copy_from_slice(&value.to_le_bytes());
             }
-        } else {
-            buf[p..p + 16].fill(0);
-            write_decimal(i, rung, &mut rand, &mut crypto, &mut crypto_at, &mut buf[p..p + 16]);
+            Kind::Double => {
+                if rung == 10 {
+                    refill(&mut crypto, &mut crypto_at, 8);
+                    buf[p..p + 8].copy_from_slice(&crypto[crypto_at..crypto_at + 8]);
+                    crypto_at += 8;
+                } else {
+                    let n = double_value(i, rung, &mut rand);
+                    buf[p..p + 8].copy_from_slice(&n.to_le_bytes());
+                }
+            }
+            Kind::Long => {
+                if rung == 10 {
+                    refill(&mut crypto, &mut crypto_at, 8);
+                    buf[p..p + 8].copy_from_slice(&crypto[crypto_at..crypto_at + 8]);
+                    crypto_at += 8;
+                } else {
+                    let n = long_value(i, rung, &mut rand);
+                    buf[p..p + 8].copy_from_slice(&n.to_le_bytes());
+                }
+            }
+            Kind::Timestamp => {
+                let (inc, sec) = timestamp_value(i, rung, &mut rand, &mut crypto, &mut crypto_at);
+                buf[p..p + 4].copy_from_slice(&inc.to_le_bytes());
+                buf[p + 4..p + 8].copy_from_slice(&sec.to_le_bytes());
+            }
+            Kind::Decimal => {
+                buf[p..p + 16].fill(0);
+                write_decimal(i, rung, &mut rand, &mut crypto, &mut crypto_at, &mut buf[p..p + 16]);
+            }
         }
         p += width;
         i += 1;
@@ -396,6 +451,34 @@ fn int_value(i: usize, rung: u8, rand: &mut impl FnMut() -> u32, crypto: &mut Ve
             v
         }
     }
+}
+
+fn long_value(i: usize, rung: u8, rand: &mut impl FnMut() -> u32) -> i64 {
+    // The same ladder as int32, widened. Values fit in 32 bits, so the high four bytes stay zero.
+    match rung {
+        1 => 0,
+        2 => (i & 3) as i64,
+        3 => i as i64,
+        4 => (i & 255) as i64,
+        5 => (i & 15) as i64,
+        6 => ((i & 7) * 100) as i64,
+        7 => if i & 1 == 0 { (i & 15) as i64 } else { (rand() & 0xffff) as i64 },
+        8 => (rand() % 1_000_000) as i64,
+        _ => rand() as u32 as i64,
+    }
+}
+
+fn timestamp_value(i: usize, rung: u8, rand: &mut impl FnMut() -> u32, crypto: &mut Vec<u8>, crypto_at: &mut usize) -> (u32, u32) {
+    // BSON timestamp is a uint32 increment and a uint32 seconds, not one int64.
+    if rung == 10 {
+        refill(crypto, crypto_at, 8);
+        let inc = u32::from_le_bytes(crypto[*crypto_at..*crypto_at + 4].try_into().unwrap());
+        let sec = u32::from_le_bytes(crypto[*crypto_at + 4..*crypto_at + 8].try_into().unwrap());
+        *crypto_at += 8;
+        return (inc, sec);
+    }
+    let low = long_value(i, rung, rand) as u32;
+    (low, low)
 }
 
 fn double_value(i: usize, rung: u8, rand: &mut impl FnMut() -> u32) -> f64 {
