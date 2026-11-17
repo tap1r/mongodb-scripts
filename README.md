@@ -38,6 +38,7 @@ Live scripts are in [`src/`](src/). They run under **mongosh** 1.10 / 2.10+ (`mo
 ### Operations
 
 * [Atomic backups using `fsyncLock()`](fsyncLock.md) — which single-mongod file backups are consistent, through 9.0.
+* [Compressor analysis](Compressor%20analysis.md) — network compressor ratio across message size and payload entropy.
 * [Sweet32 protection in Ops Manager (Java)](Sweet32.md) — historical Ops Manager deny list for 3DES. Do not add it on a current Ops Manager.
 * [Command tool tips](Tool%20tips.md) — process and network commands used alongside these notes.
 
