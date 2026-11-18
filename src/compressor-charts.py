@@ -38,17 +38,17 @@ CARRIERS = [
     ("date", "date"),
     ("decimal128", "decimal128"),
     ("string", "string"),
-    ("binary", "binary"),
+    ("binary", "binary")
 ]
 PATTERNS = [
     (1, "Repetitive"),
     (5, "Mixed"),
-    (10, "Nearly random"),
+    (10, "Nearly random")
 ]
 SERIES = [
     ("zlib", 6, ZLIB, "zlib 6"),
     ("zstd", 3, ZSTD, "zstd 3"),
-    ("snappy", None, SNAP, "snappy"),
+    ("snappy", None, SNAP, "snappy")
 ]
 
 plt.rcParams.update(
@@ -152,7 +152,7 @@ def tag_end(ax, key, pattern, comp, level, text, color, va="top", dy=-3):
         ha="right",
         va=va,
         fontsize=8,
-        color=color,
+        color=color
     )
 
 
@@ -165,7 +165,7 @@ def point_at(ax, key, pattern, comp, level, target, text, color, dx, dy):
         textcoords="offset points",
         fontsize=8,
         color=color,
-        arrowprops={"arrowstyle": "-", "color": color, "lw": 0.7},
+        arrowprops={"arrowstyle": "-", "color": color, "lw": 0.7}
     )
 
 
@@ -194,7 +194,7 @@ def mark_carrier(key, axes):
         point_at(axes[1], key, 5, "snappy", None, 64, "1 byte longer", SNAP, 36, -16)
         axes[0].text(
             0.03, 0.90, "double finishes at 86.4×",
-            transform=axes[0].transAxes, ha="left", va="top", fontsize=8, color=MUTED,
+            transform=axes[0].transAxes, ha="left", va="top", fontsize=8, color=MUTED
         )
     elif key == "date":
         tag_end(axes[0], key, 1, "zstd", 3, "74.2×", ZSTD)
@@ -202,7 +202,7 @@ def mark_carrier(key, axes):
         tag_end(axes[0], key, 1, "snappy", None, "3.2×", SNAP, va="bottom", dy=3)
         axes[0].text(
             0.03, 0.90, "tracks the long chart",
-            transform=axes[0].transAxes, ha="left", va="top", fontsize=8, color=MUTED,
+            transform=axes[0].transAxes, ha="left", va="top", fontsize=8, color=MUTED
         )
     elif key == "decimal128":
         tag_end(axes[0], key, 1, "zstd", 3, "60.3×", ZSTD)
@@ -212,7 +212,7 @@ def mark_carrier(key, axes):
         axes[2].text(
             0.98, 0.90,
             "at 64 KiB: zstd 1.06×, zlib 1.12×\nsnappy above from 128 KiB",
-            transform=axes[2].transAxes, ha="right", va="top", fontsize=8, color=MUTED,
+            transform=axes[2].transAxes, ha="right", va="top", fontsize=8, color=MUTED
         )
     elif key == "string":
         tag_end(axes[0], key, 1, "zstd", 3, "28,728×", ZSTD)
@@ -271,7 +271,7 @@ def mark_crossings(ax, key, pattern):
                 fontsize=8,
                 color=color,
                 arrowprops={"arrowstyle": "-", "color": color, "lw": 0.6},
-                zorder=5,
+                zorder=5
             )
         else:
             # A label on the line sits on the curve that just crossed.
@@ -292,7 +292,7 @@ def mark_crossings(ax, key, pattern):
                 va=va,
                 fontsize=8,
                 color=color,
-                zorder=5,
+                zorder=5
             )
 
 
@@ -304,12 +304,12 @@ def mark_combined(axes):
         if key == "string":
             axes[1][col].text(
                 0.50, 0.78, "snappy below",
-                transform=axes[1][col].transAxes, ha="center", va="center", fontsize=8, color=SNAP,
+                transform=axes[1][col].transAxes, ha="center", va="center", fontsize=8, color=SNAP
             )
         if key == "binary":
             axes[1][col].text(
                 0.50, 0.78, "below the line",
-                transform=axes[1][col].transAxes, ha="center", va="center", fontsize=8, color=MUTED,
+                transform=axes[1][col].transAxes, ha="center", va="center", fontsize=8, color=MUTED
             )
 
 
@@ -323,7 +323,7 @@ def carrier_chart(key, title):
         "date": 64,
         "decimal128": 64,
         "string": 32,
-        "binary": 32,
+        "binary": 32
     }[key]
     ticks = sorted(set(DETAIL_TICKS) | {first})
     fig, axes = plt.subplots(3, 1, figsize=(9.4, 8.6), sharex=True, constrained_layout=True)
@@ -355,7 +355,7 @@ def carrier_chart(key, title):
         ha="left",
         va="top",
         fontsize=8,
-        color="#8a8a8a",
+        color="#8a8a8a"
     )
     mark_carrier(key, axes)
     handles = [
@@ -433,7 +433,7 @@ def level_chart():
         xytext=(5.2, 22),
         fontsize=9,
         color=ZSTD,
-        arrowprops={"arrowstyle": "-", "color": ZSTD, "lw": 0.8},
+        arrowprops={"arrowstyle": "-", "color": ZSTD, "lw": 0.8}
     )
     valley = next(r for r in zstd_rows if r["level"] == 13)
     left.annotate(
@@ -442,7 +442,7 @@ def level_chart():
         xytext=(15.4, 11.5),
         fontsize=9,
         color=MUTED,
-        arrowprops={"arrowstyle": "-", "color": "#b0b0b0", "lw": 0.8},
+        arrowprops={"arrowstyle": "-", "color": "#b0b0b0", "lw": 0.8}
     )
     peak = next(r for r in zstd_rows if r["level"] == 19)
     left.annotate(
@@ -451,7 +451,7 @@ def level_chart():
         xytext=(8.5, 39.5),
         fontsize=9,
         color=MUTED,
-        arrowprops={"arrowstyle": "-", "color": "#b0b0b0", "lw": 0.8},
+        arrowprops={"arrowstyle": "-", "color": "#b0b0b0", "lw": 0.8}
     )
     zlib3 = next(r for r in zlib_rows if r["level"] == 3)
     left.annotate(
@@ -460,7 +460,7 @@ def level_chart():
         xytext=(5.4, 8.6),
         fontsize=9,
         color=ZLIB,
-        arrowprops={"arrowstyle": "-", "color": ZLIB, "lw": 0.8},
+        arrowprops={"arrowstyle": "-", "color": ZLIB, "lw": 0.8}
     )
     snappy = pick("level64", "int32", 1, "snappy", None, 65536)
     left.axhline(snappy["wireRatio"], color=SNAP, lw=1.2, ls=(0, (3, 2)), zorder=2)
@@ -510,7 +510,7 @@ def level_chart():
         Line2D([0], [0], color=ZSTD, marker="o", lw=0, ms=8, label="zstd 3, sent when left unset"),
         Line2D([0], [0], color=RUST, lw=2.4, marker="o", ms=5, label="other zstd levels, Rust API only"),
         Line2D([0], [0], color=ZLIB, lw=2.2, marker="o", ms=4, label="zlib, levels −1 to 9"),
-        Line2D([0], [0], color=SNAP, lw=1.2, ls=(0, (3, 2)), label="snappy"),
+        Line2D([0], [0], color=SNAP, lw=1.2, ls=(0, (3, 2)), label="snappy")
     ]
     fig.legend(handles=handles, loc="upper center", frameon=False, ncol=2, fontsize=10, bbox_to_anchor=(0.5, 0.98))
 
@@ -577,7 +577,7 @@ def manifold_chart():
     legend_ax.text(
         0.5, 0.18,
         "Each sheet is one compressor\nacross every pattern and every size.\nThe length charts are the\npattern 1, 5, and 10 slices.",
-        transform=legend_ax.transAxes, ha="center", va="top", fontsize=10, color=MUTED,
+        transform=legend_ax.transAxes, ha="center", va="top", fontsize=10, color=MUTED
     )
     fig.suptitle("Wire ratio over document size and pattern", fontsize=15)
     fig.savefig(OUT / "manifold.png", dpi=140)
