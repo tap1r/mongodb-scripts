@@ -6,13 +6,15 @@ under compressor-analysis/. The root is the parent of this file's directory.
 
    python src/compressor-charts.py
    python src/compressor-charts.py combined levels
+   python src/compressor-charts.py check
    python src/compressor-charts.py json [path]
 
 Chart names are the carriers plus combined, levels, and manifold. With no
-names, every chart is drawn. The json command reads the published file and
-writes it again in the same 3-space layout. With no path it writes to stdout,
-and a redirect is byte-for-byte the file. The published file has no trailing
-newline.
+names, every chart is drawn. check compares the lasting crossings to the
+published marks and does not draw. The json command reads the published file
+and writes it again in the same 3-space layout. With no path it writes to
+stdout, and a redirect is byte-for-byte the file. The published file has no
+trailing newline.
 """
 
 import json
@@ -34,15 +36,70 @@ MUTED = "#5c5c5c"
 LINE = "#9a9a9a"
 ARROW = "#b0b0b0"
 
+End = namedtuple("End", "pattern comp level text color va dy")
+Point = namedtuple("Point", "pattern comp level target text color dx dy")
+Corner = namedtuple("Corner", "pattern x y text color ha va size")
+Carrier = namedtuple("Carrier", "name first notes")
+
+# The strings are the article's rounded figures. Formatting wireRatio would move them.
 CARRIERS = [
-   ("int32", "int32"),
-   ("double", "double"),
-   ("long", "long"),
-   ("date", "date"),
-   ("decimal128", "decimal128"),
-   ("string", "string"),
-   ("binary", "binary")
+   Carrier("int32", 32, [
+      End(1, "zstd", 3, "32.4×", ZSTD, "top", -3),
+      End(1, "zlib", 6, "5.2×", ZLIB, "bottom", 3),
+      End(1, "snappy", None, "2.7×", SNAP, "bottom", 3),
+      End(5, "zstd", 3, "30.2×", ZSTD, "top", -3),
+      End(10, "zstd", 3, "1.84×", ZSTD, "bottom", 4),
+      Point(10, "zstd", 3, 512, "zlib and zstd\nabove from 512 B", ZSTD, 16, 18),
+      Point(10, "snappy", None, 131072, "snappy above\nfrom 128 KiB", SNAP, -8, -22)
+   ]),
+   Carrier("double", 64, [
+      End(1, "zstd", 3, "86.4×", ZSTD, "top", -3),
+      End(1, "zlib", 6, "6.7×", ZLIB, "bottom", 3),
+      End(1, "snappy", None, "3.2×", SNAP, "bottom", 3),
+      Point(1, "zstd", 3, 64, "back below", ZSTD, 34, -14),
+      Point(5, "snappy", None, 64, "1 byte longer", SNAP, 36, -16),
+      Point(10, "snappy", None, 131072, "snappy above\nfrom 128 KiB", SNAP, 12, -20)
+   ]),
+   Carrier("long", 64, [
+      End(1, "zstd", 3, "74.2×", ZSTD, "top", -3),
+      End(1, "zlib", 6, "6.7×", ZLIB, "bottom", 3),
+      End(1, "snappy", None, "3.2×", SNAP, "bottom", 3),
+      Point(1, "zstd", 3, 64, "back below", ZSTD, 34, -14),
+      Point(5, "snappy", None, 64, "1 byte longer", SNAP, 36, -16),
+      Corner(1, 0.03, 0.90, "double finishes at 86.4×", MUTED, "left", "top", 8)
+   ]),
+   Carrier("date", 64, [
+      End(1, "zstd", 3, "74.2×", ZSTD, "top", -3),
+      End(1, "zlib", 6, "6.7×", ZLIB, "bottom", 3),
+      End(1, "snappy", None, "3.2×", SNAP, "bottom", 3),
+      Corner(1, 0.03, 0.90, "tracks the long chart", MUTED, "left", "top", 8)
+   ]),
+   Carrier("decimal128", 64, [
+      End(1, "zstd", 3, "60.3×", ZSTD, "top", -3),
+      End(1, "zlib", 6, "9.1×", ZLIB, "bottom", 3),
+      End(1, "snappy", None, "4.8×", SNAP, "bottom", 3),
+      Point(1, "snappy", None, 32, "1.55×", SNAP, 14, 12),
+      Corner(10, 0.98, 0.90, "at 64 KiB: zstd 1.06×, zlib 1.12×\nsnappy above from 128 KiB", MUTED, "right", "top", 8)
+   ]),
+   Carrier("string", 32, [
+      End(1, "zstd", 3, "28,728×", ZSTD, "top", -3),
+      End(1, "zlib", 6, "1,026×", ZLIB, "bottom", 3),
+      End(1, "snappy", None, "21.3×", SNAP, "bottom", 3),
+      End(5, "zstd", 3, "10,376×", ZSTD, "top", -3),
+      End(5, "snappy", None, "21×", SNAP, "bottom", 3),
+      Corner(10, 0.98, 0.08, "snappy stays below the line\n+777 bytes at 16 MiB", SNAP, "right", "bottom", 8.5)
+   ]),
+   Carrier("binary", 32, [
+      End(1, "zstd", 3, "28,728×", ZSTD, "top", -3),
+      End(1, "snappy", None, "21.3×", SNAP, "bottom", 3),
+      Corner(
+         10, 0.98, 0.90,
+         "below the line at every size\nat 16 MiB: zstd +406 · snappy +778 · zlib +2,660",
+         MUTED, "right", "top", 8.5
+      )
+   ])
 ]
+
 PATTERNS = [
    (1, "Repetitive"),
    (5, "Mixed"),
@@ -54,79 +111,28 @@ SERIES = [
    ("zstd", 3, ZSTD, "zstd 3"),
    ("snappy", None, SNAP, "snappy")
 ]
-FIRST = {
-   "int32": 32,
-   "long": 64,
-   "double": 64,
-   "date": 64,
-   "decimal128": 64,
-   "string": 32,
-   "binary": 32
-}
-DETAIL_TICKS = [1, 256, 4096, 65536, 1048576, 16777216]
-CHARTS = [key for key, _title in CARRIERS] + ["combined", "levels", "manifold"]
+KIB_64 = 65536
+BSON_MAX = 16777216
+DETAIL_TICKS = [1, 256, 4096, KIB_64, 1048576, BSON_MAX]
+CHARTS = [carrier.name for carrier in CARRIERS] + ["combined", "levels", "manifold"]
 
-# The strings are the article's rounded figures. Formatting wireRatio would move them.
-End = namedtuple("End", "pattern comp level text color va dy")
-Point = namedtuple("Point", "pattern comp level target text color dx dy")
-Corner = namedtuple("Corner", "pattern x y text color ha va size")
-
-NOTES = {
-   "int32": [
-      End(1, "zstd", 3, "32.4×", ZSTD, "top", -3),
-      End(1, "zlib", 6, "5.2×", ZLIB, "bottom", 3),
-      End(1, "snappy", None, "2.7×", SNAP, "bottom", 3),
-      End(5, "zstd", 3, "30.2×", ZSTD, "top", -3),
-      End(10, "zstd", 3, "1.84×", ZSTD, "bottom", 4),
-      Point(10, "zstd", 3, 512, "zlib and zstd\nabove from 512 B", ZSTD, 16, 18),
-      Point(10, "snappy", None, 131072, "snappy above\nfrom 128 KiB", SNAP, -8, -22)
-   ],
-   "double": [
-      End(1, "zstd", 3, "86.4×", ZSTD, "top", -3),
-      End(1, "zlib", 6, "6.7×", ZLIB, "bottom", 3),
-      End(1, "snappy", None, "3.2×", SNAP, "bottom", 3),
-      Point(1, "zstd", 3, 64, "back below", ZSTD, 34, -14),
-      Point(5, "snappy", None, 64, "1 byte longer", SNAP, 36, -16),
-      Point(10, "snappy", None, 131072, "snappy above\nfrom 128 KiB", SNAP, 12, -20)
-   ],
-   "long": [
-      End(1, "zstd", 3, "74.2×", ZSTD, "top", -3),
-      End(1, "zlib", 6, "6.7×", ZLIB, "bottom", 3),
-      End(1, "snappy", None, "3.2×", SNAP, "bottom", 3),
-      Point(1, "zstd", 3, 64, "back below", ZSTD, 34, -14),
-      Point(5, "snappy", None, 64, "1 byte longer", SNAP, 36, -16),
-      Corner(1, 0.03, 0.90, "double finishes at 86.4×", MUTED, "left", "top", 8)
-   ],
-   "date": [
-      End(1, "zstd", 3, "74.2×", ZSTD, "top", -3),
-      End(1, "zlib", 6, "6.7×", ZLIB, "bottom", 3),
-      End(1, "snappy", None, "3.2×", SNAP, "bottom", 3),
-      Corner(1, 0.03, 0.90, "tracks the long chart", MUTED, "left", "top", 8)
-   ],
-   "decimal128": [
-      End(1, "zstd", 3, "60.3×", ZSTD, "top", -3),
-      End(1, "zlib", 6, "9.1×", ZLIB, "bottom", 3),
-      End(1, "snappy", None, "4.8×", SNAP, "bottom", 3),
-      Point(1, "snappy", None, 32, "1.55×", SNAP, 14, 12),
-      Corner(10, 0.98, 0.90, "at 64 KiB: zstd 1.06×, zlib 1.12×\nsnappy above from 128 KiB", MUTED, "right", "top", 8)
-   ],
-   "string": [
-      End(1, "zstd", 3, "28,728×", ZSTD, "top", -3),
-      End(1, "zlib", 6, "1,026×", ZLIB, "bottom", 3),
-      End(1, "snappy", None, "21.3×", SNAP, "bottom", 3),
-      End(5, "zstd", 3, "10,376×", ZSTD, "top", -3),
-      End(5, "snappy", None, "21×", SNAP, "bottom", 3),
-      Corner(10, 0.98, 0.08, "snappy stays below the line\n+777 bytes at 16 MiB", SNAP, "right", "bottom", 8.5)
-   ],
-   "binary": [
-      End(1, "zstd", 3, "28,728×", ZSTD, "top", -3),
-      End(1, "snappy", None, "21.3×", SNAP, "bottom", 3),
-      Corner(
-         10, 0.98, 0.90,
-         "below the line at every size\nat 16 MiB: zstd +406 · snappy +778 · zlib +2,660",
-         MUTED, "right", "top", 8.5
-      )
-   ]
+# First sampled target that stays above the line. Absent means the curve never does.
+# Pattern 1 zstd on double, long, and date is 128, after the notch back below the line.
+MARKS = {
+   ("int32", 1): {"zlib": 64, "zstd": 128, "snappy": 128},
+   ("double", 1): {"zlib": 32, "zstd": 128, "snappy": 32},
+   ("long", 1): {"zlib": 32, "zstd": 128, "snappy": 32},
+   ("date", 1): {"zlib": 32, "zstd": 128, "snappy": 32},
+   ("decimal128", 1): {"zlib": 32, "zstd": 32, "snappy": 32},
+   ("string", 1): {"zlib": 64, "zstd": 64, "snappy": 64},
+   ("binary", 1): {"zlib": 64, "zstd": 64, "snappy": 64},
+   ("int32", 10): {"zlib": 512, "zstd": 512, "snappy": 131072},
+   ("double", 10): {"zlib": 1024, "zstd": 1024, "snappy": 131072},
+   ("long", 10): {"zlib": 1024, "zstd": 1024, "snappy": 131072},
+   ("date", 10): {"zlib": 1024, "zstd": 1024, "snappy": 131072},
+   ("decimal128", 10): {"zlib": 2048, "zstd": 2048, "snappy": 131072},
+   ("string", 10): {"zlib": 512, "zstd": 512},
+   ("binary", 10): {}
 }
 
 # compressor, anchor level, text, xytext, text color.
@@ -136,7 +142,7 @@ LEVEL_PANELS = [
       "slice": "level64",
       "title": "64 KiB array of zero int32s",
       "xlim": (-2, 23),
-      "target": 65536,
+      "target": KIB_64,
       "snappy": "snappy  2.2×",
       "callouts": [
          ("zstd", 3, "level 3  13.1×", (5.2, 22), ZSTD),
@@ -149,7 +155,7 @@ LEVEL_PANELS = [
       "slice": "levelMax",
       "title": "16 MiB array of zero int32s",
       "xlim": (-3, 24),
-      "target": 16777216,
+      "target": BSON_MAX,
       "snappy": "snappy  2.7×",
       "callouts": [
          ("zstd", 3, "level 3  32.4×", (4.2, 42.5), ZSTD),
@@ -161,7 +167,9 @@ LEVEL_PANELS = [
 ]
 
 _GRID = None
+_INDEX = None
 _PLOT_READY = False
+
 
 def grid():
    global _GRID
@@ -172,6 +180,57 @@ def grid():
 
 def rows():
    return grid()["rows"]
+
+def index():
+   """Rows keyed by slice, carrier, pattern, compressor, and level, sorted by target."""
+   global _INDEX
+   if _INDEX is None:
+      grouped = {}
+      for record in rows():
+         key = (record["slice"], record["carrier"], record["pattern"], record["compressor"], record["level"])
+         grouped.setdefault(key, []).append(record)
+      for hits in grouped.values():
+         hits.sort(key=lambda record: record["target"])
+      _INDEX = grouped
+   return _INDEX
+
+def curve(slice_, carrier, pattern, comp, level):
+   hits = index().get((slice_, carrier, pattern, comp, level))
+   if not hits:
+      raise SystemExit(f"no rows for {slice_} {carrier} pattern {pattern} {comp} {level}")
+   return hits
+
+def row(slice_, carrier, pattern, comp, level, target):
+   hits = [record for record in curve(slice_, carrier, pattern, comp, level) if record["target"] == target]
+   if len(hits) != 1:
+      raise SystemExit(f"expected 1 row, got {len(hits)} for {slice_} {carrier} pattern {pattern} {comp} {level} t={target}")
+   return hits[0]
+
+def levels(slice_, carrier, pattern, comp):
+   hits = []
+   for (key_slice, key_carrier, key_pattern, key_comp, _level), found in index().items():
+      if key_slice == slice_ and key_carrier == carrier and key_pattern == pattern and key_comp == comp:
+         hits.extend(found)
+   if not hits:
+      raise SystemExit(f"no level rows for {slice_} {carrier} pattern {pattern} {comp}")
+   hits.sort(key=lambda record: (record["level"], record["target"]))
+   return hits
+
+def sheet(carrier, comp, level):
+   """Patterns, sizes, and wire ratios for one manifold sheet.
+   Patterns 1, 5, and 10 come from the length slice. The other seven come from surface.
+   """
+   found = []
+   for pattern in range(1, 11):
+      slice_ = "length" if pattern in (1, 5, 10) else "surface"
+      found.extend(curve(slice_, carrier, pattern, comp, level))
+   patterns = sorted({record["pattern"] for record in found})
+   sizes = sorted({record["target"] for record in found})
+   by = {(record["pattern"], record["target"]): record["wireRatio"] for record in found}
+   if len(by) != len(patterns) * len(sizes):
+      raise SystemExit(f"surface holes for {carrier} {comp}: {len(by)} of {len(patterns) * len(sizes)}")
+   ratios = [[by[(pattern, size)] for size in sizes] for pattern in patterns]
+   return patterns, sizes, ratios
 
 def emit_json(path):
    """Write the loaded grid in the published 3-space layout."""
@@ -213,31 +272,6 @@ def plotting():
    )
    _PLOT_READY = True
 
-def pick(slice_, carrier, pattern, comp, level, target=None, *, every_level=False):
-   hits = [
-      r
-      for r in rows()
-      if r["slice"] == slice_
-      and r["carrier"] == carrier
-      and r["pattern"] == pattern
-      and r["compressor"] == comp
-      and (every_level or r["level"] == level)
-      and (target is None or r["target"] == target)
-   ]
-   if target is not None and not every_level:
-      if len(hits) != 1:
-         raise SystemExit(f"expected 1 row, got {len(hits)} for {slice_} {carrier} pattern {pattern} {comp} {level} t={target}")
-      return hits[0]
-   hits.sort(key=lambda r: r["target"])
-   if not hits:
-      raise SystemExit(f"no rows for {slice_} {carrier} pattern {pattern} {comp} {level}")
-   return hits
-
-def level_rows(slice_name, compressor):
-   hits = pick(slice_name, "int32", 1, compressor, None, every_level=True)
-   hits.sort(key=lambda r: r["level"])
-   return hits
-
 def size_label(v, _pos=None):
    v = int(round(v))
    if v >= 1048576 and v % 1048576 == 0:
@@ -272,13 +306,13 @@ def style_axis(ax, ticks):
 def plot_length(ax, carrier, pattern, ticks):
    ratios = []
    for comp, level, color, _label in SERIES:
-      found = pick("length", carrier, pattern, comp, level)
-      xs = [r["target"] for r in found]
-      ys = [r["wireRatio"] for r in found]
+      found = curve("length", carrier, pattern, comp, level)
+      xs = [record["target"] for record in found]
+      ys = [record["wireRatio"] for record in found]
       ratios.extend(ys)
       ax.plot(xs, ys, color=color, lw=2.15, solid_capstyle="round", zorder=3)
    style_axis(ax, ticks)
-   bits = pick("length", carrier, pattern, "none", None, 65536)["bits"]
+   bits = row("length", carrier, pattern, "none", None, KIB_64)["bits"]
    return bits, min(ratios), max(ratios)
 
 def length_handles():
@@ -290,10 +324,10 @@ def length_handles():
    return handles
 
 def tag_end(ax, key, pattern, comp, level, text, color, va="top", dy=-3):
-   row = pick("length", key, pattern, comp, level, 16777216)
+   found = row("length", key, pattern, comp, level, BSON_MAX)
    ax.annotate(
       text,
-      xy=(row["target"], row["wireRatio"]),
+      xy=(found["target"], found["wireRatio"]),
       xytext=(-5, dy),
       textcoords="offset points",
       ha="right",
@@ -303,10 +337,10 @@ def tag_end(ax, key, pattern, comp, level, text, color, va="top", dy=-3):
    )
 
 def point_at(ax, key, pattern, comp, level, target, text, color, dx, dy):
-   row = pick("length", key, pattern, comp, level, target)
+   found = row("length", key, pattern, comp, level, target)
    ax.annotate(
       text,
-      xy=(row["target"], row["wireRatio"]),
+      xy=(found["target"], found["wireRatio"]),
       xytext=(dx, dy),
       textcoords="offset points",
       fontsize=8,
@@ -314,35 +348,55 @@ def point_at(ax, key, pattern, comp, level, target, text, color, dx, dy):
       arrowprops={"arrowstyle": "-", "color": color, "lw": 0.7}
    )
 
-def mark_carrier(key, axes):
-   for note in NOTES[key]:
+def mark_carrier(carrier, axes):
+   for note in carrier.notes:
       ax = axes[PANEL[note.pattern]]
       if isinstance(note, End):
-         tag_end(ax, key, note.pattern, note.comp, note.level, note.text, note.color, va=note.va, dy=note.dy)
+         tag_end(ax, carrier.name, note.pattern, note.comp, note.level, note.text, note.color, va=note.va, dy=note.dy)
       elif isinstance(note, Point):
-         point_at(ax, key, note.pattern, note.comp, note.level, note.target, note.text, note.color, note.dx, note.dy)
-      else:
+         point_at(ax, carrier.name, note.pattern, note.comp, note.level, note.target, note.text, note.color, note.dx, note.dy)
+      elif isinstance(note, Corner):
          ax.text(
             note.x, note.y, note.text,
             transform=ax.transAxes, ha=note.ha, va=note.va, fontsize=note.size, color=note.color
          )
+      else:
+         raise SystemExit(f"unknown note on {carrier.name}: {note!r}")
 
-def lasting_cross(carrier, pattern, comp, level):
+def lasting_cross(found):
    """First sampled target that is above the line and stays above."""
    last_below = None
    cross = None
-   for row in pick("length", carrier, pattern, comp, level):
-      if row["wireRatio"] < 1:
-         last_below = row["target"]
+   for record in found:
+      if record["wireRatio"] < 1:
+         last_below = record["target"]
          cross = None
-      elif cross is None and last_below is not None and row["target"] > last_below:
-         cross = row["target"]
+      elif cross is None and last_below is not None and record["target"] > last_below:
+         cross = record["target"]
    return cross
 
-def crossing_groups(key, pattern):
-   groups = {}
+def crossings(carrier, pattern):
+   """Compressor, color, and the lasting-cross target. The target is None when the curve stays below the line."""
+   found = []
    for comp, level, color, _label in SERIES:
-      target = lasting_cross(key, pattern, comp, level)
+      target = lasting_cross(curve("length", carrier, pattern, comp, level))
+      found.append((comp, color, target))
+   return found
+
+def check_crossings():
+   bad = []
+   for carrier in CARRIERS:
+      for pattern in (1, 10):
+         got = {comp: target for comp, _color, target in crossings(carrier.name, pattern) if target is not None}
+         want = MARKS[(carrier.name, pattern)]
+         if got != want:
+            bad.append(f"{carrier.name} pattern {pattern}: {got} != {want}")
+   if bad:
+      raise SystemExit("crossing marks moved:\n" + "\n".join(bad))
+
+def crossing_groups(carrier, pattern):
+   groups = {}
+   for _comp, color, target in crossings(carrier, pattern):
       if target is None:
          continue
       groups.setdefault(target, []).append(color)
@@ -354,17 +408,28 @@ def group_color(colors):
 def mark_tick(ax, target, color):
    ax.plot([target], [1], marker="|", markersize=9, mew=1.2, color=color, zorder=4)
 
+# The string scale crushes ratio 1, so a top-row label sits in the open band.
+# String and binary rise through that band, so their label sits up and to the left.
+TOP_STRING_X = 2.6
+TOP_STRING_Y = 0.34
+TOP_Y = 0.20
+TOP_CLOSE_Y = 0.14
+TOP_CLOSE = 4
+# Snappy's own mark sits under the line. A single shared mark, the string's 512,
+# sits to the left of the rise. The earlier shared mark stays just above the line.
+SNAP_OFFSET = (3, -8)
+LONE_OFFSET = (-2, 6)
+EARLY_OFFSET = (0, 4)
+
 def mark_top_row(ax, key, items):
-   # The string scale crushes ratio 1, so the label sits in the open band with a stem.
-   # String and binary rise through that band, so their label sits up and to the left.
    for i, (target, colors) in enumerate(items):
-      close = i > 0 and target <= items[i - 1][0] * 4
+      close = i > 0 and target <= items[i - 1][0] * TOP_CLOSE
       color = group_color(colors)
       mark_tick(ax, target, color)
       if key in ("string", "binary"):
-         text_x, text_y = target / 2.6, 0.34
+         text_x, text_y = target / TOP_STRING_X, TOP_STRING_Y
       else:
-         text_x, text_y = target, 0.20 + (0.14 if close else 0)
+         text_x, text_y = target, TOP_Y + (TOP_CLOSE_Y if close else 0)
       ax.annotate(
          size_label(target),
          xy=(target, 1),
@@ -380,18 +445,15 @@ def mark_top_row(ax, key, items):
       )
 
 def mark_bottom_row(ax, items):
-   # A label on the line sits on the curve that just crossed.
-   # The later mark is snappy at 128 KiB; it sits under the line.
-   # A lone mark, the string's 512, sits to the left of the rise.
-   for i, (target, colors) in enumerate(items):
+   for target, colors in items:
       color = group_color(colors)
       mark_tick(ax, target, color)
-      if len(items) == 1:
-         ha, va, offset = "right", "bottom", (-2, 6)
-      elif i == 0:
-         ha, va, offset = "right", "bottom", (0, 4)
+      if colors == [SNAP]:
+         ha, va, offset = "left", "top", SNAP_OFFSET
+      elif len(items) == 1:
+         ha, va, offset = "right", "bottom", LONE_OFFSET
       else:
-         ha, va, offset = "left", "top", (3, -8)
+         ha, va, offset = "right", "bottom", EARLY_OFFSET
       ax.annotate(
          size_label(target),
          xy=(target, 1),
@@ -406,28 +468,28 @@ def mark_bottom_row(ax, items):
 
 def mark_combined(axes):
    # The shared scale hides these two results. The paragraphs name them.
-   for col, (key, _title) in enumerate(CARRIERS):
-      mark_top_row(axes[0][col], key, crossing_groups(key, 1))
-      mark_bottom_row(axes[1][col], crossing_groups(key, 10))
-      if key == "string":
+   for col, carrier in enumerate(CARRIERS):
+      mark_top_row(axes[0][col], carrier.name, crossing_groups(carrier.name, 1))
+      mark_bottom_row(axes[1][col], crossing_groups(carrier.name, 10))
+      if carrier.name == "string":
          axes[1][col].text(
             0.50, 0.78, "snappy below",
             transform=axes[1][col].transAxes, ha="center", va="center", fontsize=8, color=SNAP
          )
-      if key == "binary":
+      if carrier.name == "binary":
          axes[1][col].text(
             0.50, 0.78, "below the line",
             transform=axes[1][col].transAxes, ha="center", va="center", fontsize=8, color=MUTED
          )
 
-def carrier_chart(key, title):
+def carrier_chart(carrier):
    plotting()
    # The pale line is the first sampled target that holds a real document.
-   first = FIRST[key]
+   first = carrier.first
    ticks = sorted(set(DETAIL_TICKS) | {first})
    fig, axes = plt.subplots(3, 1, figsize=(9.4, 8.6), sharex=True, constrained_layout=True)
    for ax, (pattern, name) in zip(axes, PATTERNS):
-      bits, lo, hi = plot_length(ax, key, pattern, ticks)
+      bits, lo, hi = plot_length(ax, carrier.name, pattern, ticks)
       ax.set_ylim(lo / 1.45, hi * 1.55)
       ax.set_ylabel("Wire ratio")
       ax.set_title(f"{name}  ·  pattern {pattern}  ·  {bits:.3f} bits/byte at 64 KiB", loc="left", fontsize=11, color=INK, pad=8)
@@ -444,26 +506,26 @@ def carrier_chart(key, title):
       fontsize=8,
       color="#8a8a8a"
    )
-   mark_carrier(key, axes)
+   mark_carrier(carrier, axes)
    fig.legend(handles=length_handles(), loc="upper right", frameon=False, bbox_to_anchor=(0.995, 1.005), ncol=4, fontsize=10)
-   fig.suptitle(title, fontsize=15, x=0.01, ha="left")
+   fig.suptitle(carrier.name, fontsize=15, x=0.01, ha="left")
    OUT.mkdir(exist_ok=True)
-   fig.savefig(OUT / f"{key}.png", dpi=160)
+   fig.savefig(OUT / f"{carrier.name}.png", dpi=160)
    plt.close(fig)
 
 def combined_chart():
    plotting()
-   ticks = [1, 65536, 16777216]
+   ticks = [1, KIB_64, BSON_MAX]
    fig, axes = plt.subplots(2, len(CARRIERS), figsize=(19.2, 6.6), sharex=True, constrained_layout=True)
    bounds = {1: [float("inf"), 0.0], 10: [float("inf"), 0.0]}
-   for col, (key, title) in enumerate(CARRIERS):
+   for col, carrier in enumerate(CARRIERS):
       for row, (pattern, name) in enumerate(((1, "Repetitive"), (10, "Nearly random"))):
          ax = axes[row][col]
-         _bits, lo, hi = plot_length(ax, key, pattern, ticks)
+         _bits, lo, hi = plot_length(ax, carrier.name, pattern, ticks)
          bounds[pattern][0] = min(bounds[pattern][0], lo)
          bounds[pattern][1] = max(bounds[pattern][1], hi)
          if row == 0:
-            ax.set_title(title, fontsize=12, pad=8)
+            ax.set_title(carrier.name, fontsize=12, pad=8)
          if col == 0:
             ax.set_ylabel(f"{name}\nwire ratio")
          if row == 1:
@@ -481,11 +543,11 @@ def combined_chart():
    plt.close(fig)
 
 def draw_levels(ax, zstd_rows, zlib_rows):
-   ax.plot([r["level"] for r in zlib_rows], [r["wireRatio"] for r in zlib_rows], color=ZLIB, lw=1.8, zorder=3)
-   ax.scatter([r["level"] for r in zlib_rows], [r["wireRatio"] for r in zlib_rows], color=ZLIB, s=18, zorder=4)
-   ax.plot([r["level"] for r in zstd_rows], [r["wireRatio"] for r in zstd_rows], color=RUST, lw=2.15, zorder=3)
-   ax.scatter([r["level"] for r in zstd_rows], [r["wireRatio"] for r in zstd_rows], color=RUST, s=22, zorder=4)
-   default = next(r for r in zstd_rows if r["level"] == 3)
+   ax.plot([record["level"] for record in zlib_rows], [record["wireRatio"] for record in zlib_rows], color=ZLIB, lw=1.8, zorder=3)
+   ax.scatter([record["level"] for record in zlib_rows], [record["wireRatio"] for record in zlib_rows], color=ZLIB, s=18, zorder=4)
+   ax.plot([record["level"] for record in zstd_rows], [record["wireRatio"] for record in zstd_rows], color=RUST, lw=2.15, zorder=3)
+   ax.scatter([record["level"] for record in zstd_rows], [record["wireRatio"] for record in zstd_rows], color=RUST, s=22, zorder=4)
+   default = next(record for record in zstd_rows if record["level"] == 3)
    ax.scatter([3], [default["wireRatio"]], s=78, color=ZSTD, zorder=5, edgecolor="white", linewidth=1.2)
 
 def finish_level_panel(ax, title, xlim):
@@ -505,21 +567,21 @@ def level_chart():
    fig, axes = plt.subplots(1, 2, figsize=(11.2, 5.35))
    fig.subplots_adjust(top=0.74, wspace=0.28, bottom=0.14, left=0.07, right=0.98)
    for ax, spec in zip(axes, LEVEL_PANELS):
-      zstd_rows = level_rows(spec["slice"], "zstd")
-      zlib_rows = level_rows(spec["slice"], "zlib")
+      zstd_rows = levels(spec["slice"], "int32", 1, "zstd")
+      zlib_rows = levels(spec["slice"], "int32", 1, "zlib")
       draw_levels(ax, zstd_rows, zlib_rows)
       found = {"zstd": zstd_rows, "zlib": zlib_rows}
       for comp, level, text, xytext, color in spec["callouts"]:
-         row = next(r for r in found[comp] if r["level"] == level)
+         record = next(item for item in found[comp] if item["level"] == level)
          ax.annotate(
             text,
-            xy=(level, row["wireRatio"]),
+            xy=(level, record["wireRatio"]),
             xytext=xytext,
             fontsize=9,
             color=color,
-            arrowprops={"arrowstyle": "-", "color": color if color in (ZSTD, ZLIB) else ARROW, "lw": 0.8},
+            arrowprops={"arrowstyle": "-", "color": color if color in (ZSTD, ZLIB) else ARROW, "lw": 0.8}
          )
-      snappy = pick(spec["slice"], "int32", 1, "snappy", None, spec["target"])
+      snappy = row(spec["slice"], "int32", 1, "snappy", None, spec["target"])
       ax.axhline(snappy["wireRatio"], color=SNAP, lw=1.2, ls=(0, (3, 2)), zorder=2)
       ax.text(22, snappy["wireRatio"] + 0.8, spec["snappy"], color=SNAP, fontsize=9, ha="right")
       finish_level_panel(ax, spec["title"], spec["xlim"])
@@ -527,20 +589,12 @@ def level_chart():
       Line2D([0], [0], color=ZSTD, marker="o", lw=0, ms=8, label="zstd 3, sent when left unset"),
       Line2D([0], [0], color=RUST, lw=2.4, marker="o", ms=5, label="other zstd levels, Rust API only"),
       Line2D([0], [0], color=ZLIB, lw=2.2, marker="o", ms=4, label="zlib, levels −1 to 9"),
-      Line2D([0], [0], color=SNAP, lw=1.2, ls=(0, (3, 2)), label="snappy"),
+      Line2D([0], [0], color=SNAP, lw=1.2, ls=(0, (3, 2)), label="snappy")
    ]
    fig.legend(handles=handles, loc="upper center", frameon=False, ncol=2, fontsize=10, bbox_to_anchor=(0.5, 0.98))
    OUT.mkdir(exist_ok=True)
    fig.savefig(OUT / "levels.png", dpi=160)
    plt.close(fig)
-
-def surface_rows(carrier, comp, level):
-   # Patterns 1, 5, and 10 live on the length slice. The other seven are surface.
-   found = []
-   for pattern in range(1, 11):
-      slice_ = "length" if pattern in (1, 5, 10) else "surface"
-      found.extend(pick(slice_, carrier, pattern, comp, level))
-   return found
 
 def manifold_chart():
    plotting()
@@ -548,21 +602,13 @@ def manifold_chart():
 
    fig = plt.figure(figsize=(17.2, 9.4))
    fig.subplots_adjust(left=0.02, right=0.97, top=0.90, bottom=0.04, wspace=0.16, hspace=0.28)
-   for i, (key, title) in enumerate(CARRIERS):
+   for i, carrier in enumerate(CARRIERS):
       ax = fig.add_subplot(2, 4, i + 1, projection="3d")
       for comp, level, color, _label in SERIES:
-         found = surface_rows(key, comp, level)
-         patterns = sorted({r["pattern"] for r in found})
-         sizes = sorted({r["target"] for r in found})
-         by = {(r["pattern"], r["target"]): r["wireRatio"] for r in found}
-         if len(by) != len(patterns) * len(sizes):
-            raise SystemExit(f"surface holes for {key} {comp}: {len(by)} of {len(patterns) * len(sizes)}")
+         patterns, sizes, ratios = sheet(carrier.name, comp, level)
          x = np.log2(np.array(sizes, dtype=float))
          X, Y = np.meshgrid(x, patterns)
-         Z = np.empty((len(patterns), len(sizes)))
-         for yi, pattern in enumerate(patterns):
-            for xi, size in enumerate(sizes):
-               Z[yi, xi] = by[(pattern, size)]
+         Z = np.array(ratios, dtype=float)
          ax.plot_surface(X, Y, Z, color=color, alpha=0.55, linewidth=0, antialiased=True, shade=False)
       ax.set_zscale("log")
       ax.set_xticks([0, 8, 16, 24])
@@ -574,7 +620,7 @@ def manifold_chart():
       if i % 4 != 3:
          ax.set_zlabel("Ratio", fontsize=8, labelpad=0)
       ax.view_init(elev=26, azim=-58)
-      ax.set_title(title, fontsize=12, pad=-2)
+      ax.set_title(carrier.name, fontsize=12, pad=-2)
       ax.tick_params(labelsize=7, pad=0)
       for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
          axis.pane.set_facecolor((1, 1, 1, 0))
@@ -594,11 +640,12 @@ def manifold_chart():
    plt.close(fig)
 
 def draw(names):
+   check_crossings()
    plotting()
-   titles = dict(CARRIERS)
+   by_name = {carrier.name: carrier for carrier in CARRIERS}
    for name in names:
-      if name in titles:
-         carrier_chart(name, titles[name])
+      if name in by_name:
+         carrier_chart(by_name[name])
       elif name == "combined":
          combined_chart()
       elif name == "levels":
@@ -612,6 +659,10 @@ def main(argv):
       if len(argv) > 2:
          raise SystemExit("usage: compressor-charts.py json [path]")
       emit_json(argv[1] if len(argv) == 2 else None)
+      return
+   if argv == ["check"]:
+      check_crossings()
+      print("crossings match")
       return
    unknown = [name for name in argv if name not in CHARTS]
    if unknown:
