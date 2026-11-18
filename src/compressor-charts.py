@@ -241,9 +241,20 @@ def mark_combined(axes):
 
 
 def carrier_chart(key, title):
+    # The pale line is the first sampled target that holds a real document.
+    first = {
+        "int32": 32,
+        "long": 64,
+        "double": 64,
+        "date": 64,
+        "decimal128": 64,
+        "string": 32,
+        "binary": 32,
+    }[key]
+    ticks = sorted(set(DETAIL_TICKS) | {first})
     fig, axes = plt.subplots(3, 1, figsize=(9.4, 8.6), sharex=True, constrained_layout=True)
     for ax, (pattern, name) in zip(axes, PATTERNS):
-        bits, lo, hi = plot_length(ax, key, pattern, DETAIL_TICKS)
+        bits, lo, hi = plot_length(ax, key, pattern, ticks)
         ax.set_ylim(lo / 1.45, hi * 1.55)
         ax.set_ylabel("Wire ratio")
         ax.set_title(f"{name}  ·  pattern {pattern}  ·  {bits:.3f} bits/byte at 64 KiB", loc="left", fontsize=11, color=INK, pad=8)
@@ -260,15 +271,6 @@ def carrier_chart(key, title):
                 transform=ax.transAxes, ha="right", va="bottom", fontsize=8.5, color=SNAP,
             )
     axes[-1].set_xlabel("Document target")
-    first = {
-        "int32": 32,
-        "long": 64,
-        "double": 64,
-        "date": 64,
-        "decimal128": 64,
-        "string": 32,
-        "binary": 32,
-    }[key]
     for ax in axes:
         ax.axvline(first, color="#d0d0d0", lw=1.0, zorder=0)
     axes[0].annotate(
