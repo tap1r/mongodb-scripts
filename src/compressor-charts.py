@@ -274,18 +274,22 @@ def mark_crossings(ax, key, pattern):
                 zorder=5,
             )
         else:
-            # Grow away from the other mark so "1 KiB" and "128 KiB" do not meet.
+            # A label on the line sits on the curve that just crossed.
+            # Snappy's 128 KiB mark is the later one; drop it under the line.
+            # A lone mark, the string's 512, sits to the left of the rise.
             if len(items) == 1:
-                ha = "left"
+                ha, va, offset = "right", "bottom", (-2, 6)
+            elif i == 0:
+                ha, va, offset = "right", "bottom", (0, 4)
             else:
-                ha = "right" if i == 0 else "left"
+                ha, va, offset = "left", "top", (3, -8)
             ax.annotate(
                 label,
                 xy=(target, 1),
-                xytext=(0, 4),
+                xytext=offset,
                 textcoords="offset points",
                 ha=ha,
-                va="bottom",
+                va=va,
                 fontsize=8,
                 color=color,
                 zorder=5,
@@ -479,7 +483,8 @@ def level_chart():
     low = next(r for r in mz if r["level"] == 12)
     top = next(r for r in mz if r["level"] == 17)
     zlib_top = next(r for r in ml if r["level"] == 3)
-    right.annotate("level 3  32.4×", xy=(3, d["wireRatio"]), xytext=(4.6, 27), fontsize=9, color=ZSTD,
+    # Above the level 3–7 hump. The old spot sat on the drop from level 4 to level 5.
+    right.annotate("level 3  32.4×", xy=(3, d["wireRatio"]), xytext=(4.2, 42.5), fontsize=9, color=ZSTD,
                    arrowprops={"arrowstyle": "-", "color": ZSTD, "lw": 0.8})
     right.annotate("levels 8–15  ~21×", xy=(12, low["wireRatio"]), xytext=(13.2, 14.5), fontsize=9, color=MUTED,
                    arrowprops={"arrowstyle": "-", "color": "#b0b0b0", "lw": 0.8})
