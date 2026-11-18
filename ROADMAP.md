@@ -713,6 +713,8 @@ Remaining mongosh-line work (do not block the archive): none.
 
 **0.3.3:** that port is `$last` of the `_id` split. On 4.4 this is the array operator, an alias of `$arrayElemAt` index `-1`.
 
+**NODE-7859** ([RTTPinger never reschedules after a failed ping](https://jira.mongodb.org/browse/NODE-7859), Node driver SDAM, open, affects 7.6.0; duplicated by closed NODE-7985): the printed `roundTripTime` is `ServerDescription.roundTripTime`, the driver's average of heartbeat samples. On a streaming monitor (MongoDB 4.4+, the default) each successful hello records `RTTPinger.latestRtt`. A rejected `connect()` or hello destroys that dedicated connection and returns without `measureAndReschedule`, so sampling stops. `latestRtt` stays at the last good value, later heartbeats keep recording it, and the average stays there until the application restarts. A failed attempt is not itself a sample. Poll mode (`serverMonitoringMode=poll`, or a server with no `topologyVersion`) times the hello on the monitor connection and does not use the pinger. `latency.js` times its own `ping`. `modifiedCountDocumentsByKey.js` times its own counts. `connStats.js` classifies the RTT socket (`client.purpose` `"rtt"`, DRIVERS-3027) and does not read this number. Do not treat a stuck `rtt.js` line as a live measurement while NODE-7859 is open. No script change until the driver reschedules on both failure paths.
+
 ### `sleepy.js`
 
 **Live: v0.2.7.** **Archive: v0.2.6.** Mongosh-only (inline `console` polyfill dropped).

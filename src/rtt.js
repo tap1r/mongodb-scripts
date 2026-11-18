@@ -15,6 +15,7 @@
     *  - mongosh only
     *  - Reports on all discoverable servers only
     *  - Supports mongos, replica sets and direct modes
+    *  - printed roundTripTime can stick after a failed RTT ping (NODE-7859)
     *
     *  TODOs:
     *  - TBA
@@ -143,6 +144,14 @@
 
    // fragile on IPv6
    const me = db.runCommand({ "whatsmyuri": 1 }).you.match(/^(?<src>.+)\:(?:\d+)$/).groups.src;
+   /*
+    *  roundTripTime is the Node driver's ServerDescription average.
+    *  A streaming monitor (MongoDB 4.4+) records RTTPinger.latestRtt on
+    *  each successful hello. NODE-7859: one rejected connect() or hello
+    *  drops the pinger without rescheduling, so this average stays on the
+    *  last good sample until the process restarts.
+    *  https://jira.mongodb.org/browse/NODE-7859
+    */
    for ([host, { 'roundTripTime': rtt } = {}] of servers().entries()) {
       console.log(`Application latency from ${me} to ${host} = ${latency(rtt)}`);
    }
