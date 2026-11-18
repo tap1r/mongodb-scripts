@@ -35,6 +35,8 @@ INK = "#1c1c1c"
 MUTED = "#5c5c5c"
 LINE = "#9a9a9a"
 ARROW = "#b0b0b0"
+RATIO_DASH = (0, (2, 2))
+SNAP_DASH = (0, (3, 2))
 
 End = namedtuple("End", "pattern comp level text color va dy")
 Point = namedtuple("Point", "pattern comp level target text color dx dy")
@@ -46,6 +48,7 @@ Callout = namedtuple("Callout", "comp level text xytext color mark")
 Cross = namedtuple("Cross", "comp color target")
 LevelPanel = namedtuple("LevelPanel", "slice carrier pattern title xlim target snappy callouts")
 Plot = namedtuple("Plot", "plt Line2D FuncFormatter NullFormatter blended_transform_factory")
+Index = namedtuple("Index", "curves levels points")
 
 # The strings are the article's rounded figures. Formatting wireRatio would move them.
 # place is "band" or "tick". caption is the bottom-row note the shared scale hides.
@@ -112,15 +115,19 @@ PATTERNS = [
    (5, "Mixed"),
    (10, "Nearly random")
 ]
-PANEL = {1: 0, 5: 1, 10: 2}
+PATTERN_NAME = dict(PATTERNS)
+PANEL = {pattern: i for i, (pattern, _name) in enumerate(PATTERNS)}
+COMBINED = (1, 10)
 SERIES = [
    Series("zlib", 6, ZLIB, "zlib 6"),
    Series("zstd", 3, ZSTD, "zstd 3"),
    Series("snappy", None, SNAP, "snappy")
 ]
-KIB_64 = 65536
-BSON_MAX = 16777216
-DETAIL_TICKS = [1, 256, 4096, KIB_64, 1048576, BSON_MAX]
+KIB = 1024
+MIB = 1048576
+KIB_64 = 64 * KIB
+BSON_MAX = 16 * MIB
+DETAIL_TICKS = [1, 256, 4096, KIB_64, MIB, BSON_MAX]
 CHARTS = [carrier.name for carrier in CARRIERS] + ["combined", "levels", "manifold"]
 
 # First sampled target that stays above the line. Absent means the curve never does.
@@ -169,7 +176,6 @@ LEVEL_PANELS = [
 
 _GRID = None
 _INDEX = None
-_BY_LEVEL = None
 _PLOT = None
 
 
@@ -184,40 +190,42 @@ def rows():
    return grid()["rows"]
 
 def indexes():
-   """Curve rows sorted by target, and level rows sorted by level then target."""
-   global _INDEX, _BY_LEVEL
+   """Curves sorted by target, level sweeps sorted by level then target, and one row per target."""
+   global _INDEX
    if _INDEX is None:
-      grouped = {}
-      by_level = {}
+      curves = {}
+      levels_ = {}
+      points = {}
       for record in rows():
          key = (record["slice"], record["carrier"], record["pattern"], record["compressor"], record["level"])
-         grouped.setdefault(key, []).append(record)
+         curves.setdefault(key, []).append(record)
          parent = (record["slice"], record["carrier"], record["pattern"], record["compressor"])
-         by_level.setdefault(parent, []).append(record)
-      for hits in grouped.values():
+         levels_.setdefault(parent, []).append(record)
+         point = (*key, record["target"])
+         if point in points:
+            raise SystemExit(f"duplicate row for {point}")
+         points[point] = record
+      for hits in curves.values():
          hits.sort(key=lambda record: record["target"])
-      for hits in by_level.values():
+      for hits in levels_.values():
          hits.sort(key=lambda record: (record["level"], record["target"]))
-      _INDEX = grouped
-      _BY_LEVEL = by_level
-   return _INDEX, _BY_LEVEL
+      _INDEX = Index(curves, levels_, points)
+   return _INDEX
 
 def curve(slice_, carrier, pattern, comp, level):
-   grouped, _by_level = indexes()
-   hits = grouped.get((slice_, carrier, pattern, comp, level))
+   hits = indexes().curves.get((slice_, carrier, pattern, comp, level))
    if not hits:
       raise SystemExit(f"no rows for {slice_} {carrier} pattern {pattern} {comp} {level}")
    return hits
 
 def row(slice_, carrier, pattern, comp, level, target):
-   hits = [record for record in curve(slice_, carrier, pattern, comp, level) if record["target"] == target]
-   if len(hits) != 1:
-      raise SystemExit(f"expected 1 row, got {len(hits)} for {slice_} {carrier} pattern {pattern} {comp} {level} t={target}")
-   return hits[0]
+   found = indexes().points.get((slice_, carrier, pattern, comp, level, target))
+   if found is None:
+      raise SystemExit(f"expected 1 row, got 0 for {slice_} {carrier} pattern {pattern} {comp} {level} t={target}")
+   return found
 
 def levels(slice_, carrier, pattern, comp):
-   _grouped, by_level = indexes()
-   hits = by_level.get((slice_, carrier, pattern, comp))
+   hits = indexes().levels.get((slice_, carrier, pattern, comp))
    if not hits:
       raise SystemExit(f"no level rows for {slice_} {carrier} pattern {pattern} {comp}")
    return hits
@@ -251,11 +259,11 @@ def emit_json(path):
 
 def size_label(v, _pos=None):
    v = int(round(v))
-   if v >= 1048576 and v % 1048576 == 0:
-      n = v // 1048576
+   if v >= MIB and v % MIB == 0:
+      n = v // MIB
       return f"{n} MiB" if n > 1 else "1 MiB"
-   if v >= 1024 and v % 1024 == 0:
-      n = v // 1024
+   if v >= KIB and v % KIB == 0:
+      n = v // KIB
       return f"{n} KiB" if n > 1 else "1 KiB"
    return str(v)
 
@@ -291,7 +299,7 @@ def crossings(carrier, pattern):
 def check_crossings():
    bad = []
    for carrier in CARRIERS:
-      for pattern in (1, 10):
+      for pattern in COMBINED:
          got = {hit.comp: hit.target for hit in crossings(carrier.name, pattern) if hit.target is not None}
          want = MARKS[(carrier.name, pattern)]
          if got != want:
@@ -304,11 +312,11 @@ def crossing_groups(carrier, pattern):
    for hit in crossings(carrier, pattern):
       if hit.target is None:
          continue
-      groups.setdefault(hit.target, []).append(hit.color)
+      groups.setdefault(hit.target, []).append(hit)
    return sorted(groups.items())
 
-def group_color(colors):
-   return colors[0] if len(colors) == 1 else MUTED
+def group_color(hits):
+   return hits[0].color if len(hits) == 1 else MUTED
 
 def plotting():
    """Load matplotlib once and keep its names on one holder."""
@@ -350,7 +358,7 @@ def style_axis(ax, ticks):
    ax.xaxis.set_major_formatter(plot.FuncFormatter(size_label))
    ax.yaxis.set_major_formatter(plot.FuncFormatter(ratio_label))
    ax.yaxis.set_minor_formatter(plot.NullFormatter())
-   ax.axhline(1, color=LINE, lw=1.0, ls=(0, (2, 2)), zorder=1)
+   ax.axhline(1, color=LINE, lw=1.0, ls=RATIO_DASH, zorder=1)
    ax.grid(True, which="major", color=GRID, lw=0.8)
    ax.tick_params(length=0)
    ax.margins(x=0.02)
@@ -373,7 +381,7 @@ def length_handles():
       plot.Line2D([0], [0], color=series.color, lw=2.4, label=series.label)
       for series in SERIES
    ]
-   handles.append(plot.Line2D([0], [0], color=LINE, lw=1.0, ls=(0, (2, 2)), label="ratio of 1"))
+   handles.append(plot.Line2D([0], [0], color=LINE, lw=1.0, ls=RATIO_DASH, label="ratio of 1"))
    return handles
 
 def tag_end(ax, key, pattern, comp, level, text, color, va="top", dy=-3):
@@ -431,14 +439,17 @@ TOP_CLOSE = 4
 SNAP_OFFSET = (3, -8)
 LONE_OFFSET = (-2, 6)
 EARLY_OFFSET = (0, 4)
+# The bottom-row caption sits in the open part of the panel.
+CAPTION_X = 0.50
+CAPTION_Y = 0.78
 
 def mark_top_row(ax, place, items):
    if place not in ("band", "tick"):
       raise SystemExit(f"unknown placement {place}")
    plot = plotting()
-   for i, (target, colors) in enumerate(items):
+   for i, (target, hits) in enumerate(items):
       close = i > 0 and target <= items[i - 1][0] * TOP_CLOSE
-      color = group_color(colors)
+      color = group_color(hits)
       mark_tick(ax, target, color)
       if place == "band":
          text_x, text_y = target / TOP_STRING_X, TOP_STRING_Y
@@ -459,10 +470,10 @@ def mark_top_row(ax, place, items):
       )
 
 def mark_bottom_row(ax, items):
-   for target, colors in items:
-      color = group_color(colors)
+   for target, hits in items:
+      color = group_color(hits)
       mark_tick(ax, target, color)
-      if colors == [SNAP]:
+      if len(hits) == 1 and hits[0].comp == "snappy":
          ha, va, offset = "left", "top", SNAP_OFFSET
       elif len(items) == 1:
          ha, va, offset = "right", "bottom", LONE_OFFSET
@@ -487,7 +498,7 @@ def mark_combined(axes):
       mark_bottom_row(axes[1][col], crossing_groups(carrier.name, 10))
       if carrier.caption is not None:
          axes[1][col].text(
-            0.50, 0.78, carrier.caption.text,
+            CAPTION_X, CAPTION_Y, carrier.caption.text,
             transform=axes[1][col].transAxes, ha="center", va="center", fontsize=8, color=carrier.caption.color
          )
 
@@ -532,9 +543,10 @@ def combined_chart(out):
    plot = plotting()
    ticks = [1, KIB_64, BSON_MAX]
    fig, axes = plot.plt.subplots(2, len(CARRIERS), figsize=(19.2, 6.6), sharex=True, constrained_layout=True)
-   bounds = {1: [float("inf"), 0.0], 10: [float("inf"), 0.0]}
+   bounds = {pattern: [float("inf"), 0.0] for pattern in COMBINED}
    for col, carrier in enumerate(CARRIERS):
-      for row, (pattern, name) in enumerate(((1, "Repetitive"), (10, "Nearly random"))):
+      for row, pattern in enumerate(COMBINED):
+         name = PATTERN_NAME[pattern]
          ax = axes[row][col]
          _bits, lo, hi = plot_length(ax, carrier.name, pattern, ticks)
          bounds[pattern][0] = min(bounds[pattern][0], lo)
@@ -546,7 +558,7 @@ def combined_chart(out):
          if row == 1:
             ax.set_xlabel("Target")
          ax.tick_params(labelsize=8)
-   for pattern, row in ((1, 0), (10, 1)):
+   for row, pattern in enumerate(COMBINED):
       lo, hi = bounds[pattern]
       for ax in axes[row]:
          ax.set_ylim(lo / 1.5, hi * 1.45)
@@ -555,13 +567,32 @@ def combined_chart(out):
    fig.suptitle("All seven carriers, on one scale per row", fontsize=15, y=1.10)
    save(fig, "combined.png", 150, out, tight=True)
 
-def draw_levels(ax, zstd_rows, zlib_rows, marked):
+def level_points(panel):
+   """Zlib rows, zstd rows, and one map keyed by compressor and level."""
+   found = {}
+   listed = {}
+   for comp in ("zlib", "zstd"):
+      hits = levels(panel.slice, panel.carrier, panel.pattern, comp)
+      listed[comp] = hits
+      for record in hits:
+         key = (comp, record["level"])
+         if key in found:
+            raise SystemExit(f"duplicate {comp} level {record['level']} on {panel.slice}")
+         found[key] = record
+   return listed["zlib"], listed["zstd"], found
+
+def at_level(found, comp, level):
+   record = found.get((comp, level))
+   if record is None:
+      raise SystemExit(f"no {comp} level {level}")
+   return record
+
+def draw_levels(ax, zlib_rows, zstd_rows, marked, found):
    ax.plot([record["level"] for record in zlib_rows], [record["wireRatio"] for record in zlib_rows], color=ZLIB, lw=1.8, zorder=3)
    ax.scatter([record["level"] for record in zlib_rows], [record["wireRatio"] for record in zlib_rows], color=ZLIB, s=18, zorder=4)
    ax.plot([record["level"] for record in zstd_rows], [record["wireRatio"] for record in zstd_rows], color=RUST, lw=2.15, zorder=3)
    ax.scatter([record["level"] for record in zstd_rows], [record["wireRatio"] for record in zstd_rows], color=RUST, s=22, zorder=4)
-   rows_for = {"zstd": zstd_rows, "zlib": zlib_rows}[marked.comp]
-   default = next(record for record in rows_for if record["level"] == marked.level)
+   default = at_level(found, marked.comp, marked.level)
    ax.scatter([marked.level], [default["wireRatio"]], s=78, color=marked.color, zorder=5, edgecolor="white", linewidth=1.2)
 
 def finish_level_panel(ax, title, xlim):
@@ -581,15 +612,13 @@ def level_chart(out):
    fig, axes = plot.plt.subplots(1, 2, figsize=(11.2, 5.35))
    fig.subplots_adjust(top=0.74, wspace=0.28, bottom=0.14, left=0.07, right=0.98)
    for ax, panel in zip(axes, LEVEL_PANELS):
-      zstd_rows = levels(panel.slice, panel.carrier, panel.pattern, "zstd")
-      zlib_rows = levels(panel.slice, panel.carrier, panel.pattern, "zlib")
+      zlib_rows, zstd_rows, found = level_points(panel)
       marked = [callout for callout in panel.callouts if callout.mark]
       if len(marked) != 1:
          raise SystemExit(f"expected one marked level on {panel.slice}")
-      draw_levels(ax, zstd_rows, zlib_rows, marked[0])
-      found = {"zstd": zstd_rows, "zlib": zlib_rows}
+      draw_levels(ax, zlib_rows, zstd_rows, marked[0], found)
       for callout in panel.callouts:
-         record = next(item for item in found[callout.comp] if item["level"] == callout.level)
+         record = at_level(found, callout.comp, callout.level)
          ax.annotate(
             callout.text,
             xy=(callout.level, record["wireRatio"]),
@@ -599,14 +628,14 @@ def level_chart(out):
             arrowprops={"arrowstyle": "-", "color": callout.color if callout.color in (ZSTD, ZLIB) else ARROW, "lw": 0.8}
          )
       snappy = row(panel.slice, panel.carrier, panel.pattern, "snappy", None, panel.target)
-      ax.axhline(snappy["wireRatio"], color=SNAP, lw=1.2, ls=(0, (3, 2)), zorder=2)
+      ax.axhline(snappy["wireRatio"], color=SNAP, lw=1.2, ls=SNAP_DASH, zorder=2)
       ax.text(22, snappy["wireRatio"] + 0.8, panel.snappy, color=SNAP, fontsize=9, ha="right")
       finish_level_panel(ax, panel.title, panel.xlim)
    handles = [
       plot.Line2D([0], [0], color=ZSTD, marker="o", lw=0, ms=8, label="zstd 3, sent when left unset"),
       plot.Line2D([0], [0], color=RUST, lw=2.4, marker="o", ms=5, label="other zstd levels, Rust API only"),
       plot.Line2D([0], [0], color=ZLIB, lw=2.2, marker="o", ms=4, label="zlib, levels −1 to 9"),
-      plot.Line2D([0], [0], color=SNAP, lw=1.2, ls=(0, (3, 2)), label="snappy")
+      plot.Line2D([0], [0], color=SNAP, lw=1.2, ls=SNAP_DASH, label="snappy")
    ]
    fig.legend(handles=handles, loc="upper center", frameon=False, ncol=2, fontsize=10, bbox_to_anchor=(0.5, 0.98))
    save(fig, "levels.png", 160, out)
