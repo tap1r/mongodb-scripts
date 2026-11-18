@@ -14,6 +14,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
+from matplotlib.transforms import blended_transform_factory
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "compressor-analysis"
@@ -224,9 +225,78 @@ def mark_carrier(key, axes):
         tag_end(axes[0], key, 1, "snappy", None, "21.3×", SNAP, va="bottom", dy=3)
 
 
+def lasting_cross(carrier, pattern, comp, level):
+    """First sampled target that is above the line and stays above."""
+    last_below = None
+    cross = None
+    for row in pick("length", carrier, pattern, comp, level):
+        if row["wireRatio"] < 1:
+            last_below = row["target"]
+            cross = None
+        elif cross is None and last_below is not None and row["target"] > last_below:
+            cross = row["target"]
+    return cross
+
+
+def mark_crossings(ax, key, pattern):
+    groups = {}
+    for comp, level, color, _label in SERIES:
+        target = lasting_cross(key, pattern, comp, level)
+        if target is None:
+            continue
+        groups.setdefault(target, []).append(color)
+    items = sorted(groups.items())
+    # The top row's scale is set by the string, so a label on the line is unreadable.
+    # Lift those into the open band and draw a stem down to the crossing.
+    for i, (target, colors) in enumerate(items):
+        close = i > 0 and target <= items[i - 1][0] * 4
+        color = colors[0] if len(colors) == 1 else MUTED
+        ax.plot([target], [1], marker="|", markersize=9, mew=1.2, color=color, zorder=4)
+        label = size_label(target)
+        if pattern == 1:
+            # Sit beside the stem, in the open band above the crushed ratio-1 line.
+            # String and binary rise through that band, so the label sits up and to the left.
+            if key in ("string", "binary"):
+                text_x, text_y = target / 2.6, 0.34
+            else:
+                text_x, text_y = target, 0.20 + (0.14 if close else 0)
+            ax.annotate(
+                label,
+                xy=(target, 1),
+                xycoords="data",
+                xytext=(text_x, text_y),
+                textcoords=blended_transform_factory(ax.transData, ax.transAxes),
+                ha="right",
+                va="bottom",
+                fontsize=8,
+                color=color,
+                arrowprops={"arrowstyle": "-", "color": color, "lw": 0.6},
+                zorder=5,
+            )
+        else:
+            # Grow away from the other mark so "1 KiB" and "128 KiB" do not meet.
+            if len(items) == 1:
+                ha = "left"
+            else:
+                ha = "right" if i == 0 else "left"
+            ax.annotate(
+                label,
+                xy=(target, 1),
+                xytext=(0, 4),
+                textcoords="offset points",
+                ha=ha,
+                va="bottom",
+                fontsize=8,
+                color=color,
+                zorder=5,
+            )
+
+
 def mark_combined(axes):
     # The shared scale hides these two results. The paragraphs name them.
     for col, (key, _title) in enumerate(CARRIERS):
+        for row, pattern in ((0, 1), (1, 10)):
+            mark_crossings(axes[row][col], key, pattern)
         if key == "string":
             axes[1][col].text(
                 0.50, 0.78, "snappy below",
