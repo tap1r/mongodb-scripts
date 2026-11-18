@@ -40,6 +40,8 @@ End = namedtuple("End", "pattern comp level text color va dy")
 Point = namedtuple("Point", "pattern comp level target text color dx dy")
 Corner = namedtuple("Corner", "pattern x y text color ha va size")
 Carrier = namedtuple("Carrier", "name first notes")
+Series = namedtuple("Series", "comp level color label")
+Callout = namedtuple("Callout", "comp level text xytext color mark")
 
 # The strings are the article's rounded figures. Formatting wireRatio would move them.
 CARRIERS = [
@@ -107,9 +109,9 @@ PATTERNS = [
 ]
 PANEL = {1: 0, 5: 1, 10: 2}
 SERIES = [
-   ("zlib", 6, ZLIB, "zlib 6"),
-   ("zstd", 3, ZSTD, "zstd 3"),
-   ("snappy", None, SNAP, "snappy")
+   Series("zlib", 6, ZLIB, "zlib 6"),
+   Series("zstd", 3, ZSTD, "zstd 3"),
+   Series("snappy", None, SNAP, "snappy")
 ]
 KIB_64 = 65536
 BSON_MAX = 16777216
@@ -145,10 +147,10 @@ LEVEL_PANELS = [
       "target": KIB_64,
       "snappy": "snappy  2.2×",
       "callouts": [
-         ("zstd", 3, "level 3  13.1×", (5.2, 22), ZSTD),
-         ("zstd", 13, "level 13  7.7×", (15.4, 11.5), MUTED),
-         ("zstd", 19, "levels 19–21  36.7×", (8.5, 39.5), MUTED),
-         ("zlib", 3, "zlib 3  4.9×", (5.4, 8.6), ZLIB)
+         Callout("zstd", 3, "level 3  13.1×", (5.2, 22), ZSTD, True),
+         Callout("zstd", 13, "level 13  7.7×", (15.4, 11.5), MUTED, False),
+         Callout("zstd", 19, "levels 19–21  36.7×", (8.5, 39.5), MUTED, False),
+         Callout("zlib", 3, "zlib 3  4.9×", (5.4, 8.6), ZLIB, False)
       ]
    },
    {
@@ -158,16 +160,17 @@ LEVEL_PANELS = [
       "target": BSON_MAX,
       "snappy": "snappy  2.7×",
       "callouts": [
-         ("zstd", 3, "level 3  32.4×", (4.2, 42.5), ZSTD),
-         ("zstd", 12, "levels 8–15  ~21×", (13.2, 14.5), MUTED),
-         ("zstd", 17, "level 17  44.8×", (8.2, 48.2), MUTED),
-         ("zlib", 3, "zlib 3  6.2×", (5.2, 10.4), ZLIB)
+         Callout("zstd", 3, "level 3  32.4×", (4.2, 42.5), ZSTD, True),
+         Callout("zstd", 12, "levels 8–15  ~21×", (13.2, 14.5), MUTED, False),
+         Callout("zstd", 17, "level 17  44.8×", (8.2, 48.2), MUTED, False),
+         Callout("zlib", 3, "zlib 3  6.2×", (5.2, 10.4), ZLIB, False)
       ]
    }
 ]
 
 _GRID = None
 _INDEX = None
+_BY_LEVEL = None
 _PLOT_READY = False
 
 
@@ -181,21 +184,28 @@ def grid():
 def rows():
    return grid()["rows"]
 
-def index():
-   """Rows keyed by slice, carrier, pattern, compressor, and level, sorted by target."""
-   global _INDEX
+def indexes():
+   """Curve rows sorted by target, and level rows sorted by level then target."""
+   global _INDEX, _BY_LEVEL
    if _INDEX is None:
       grouped = {}
+      by_level = {}
       for record in rows():
          key = (record["slice"], record["carrier"], record["pattern"], record["compressor"], record["level"])
          grouped.setdefault(key, []).append(record)
+         parent = (record["slice"], record["carrier"], record["pattern"], record["compressor"])
+         by_level.setdefault(parent, []).append(record)
       for hits in grouped.values():
          hits.sort(key=lambda record: record["target"])
+      for hits in by_level.values():
+         hits.sort(key=lambda record: (record["level"], record["target"]))
       _INDEX = grouped
-   return _INDEX
+      _BY_LEVEL = by_level
+   return _INDEX, _BY_LEVEL
 
 def curve(slice_, carrier, pattern, comp, level):
-   hits = index().get((slice_, carrier, pattern, comp, level))
+   grouped, _by_level = indexes()
+   hits = grouped.get((slice_, carrier, pattern, comp, level))
    if not hits:
       raise SystemExit(f"no rows for {slice_} {carrier} pattern {pattern} {comp} {level}")
    return hits
@@ -207,13 +217,10 @@ def row(slice_, carrier, pattern, comp, level, target):
    return hits[0]
 
 def levels(slice_, carrier, pattern, comp):
-   hits = []
-   for (key_slice, key_carrier, key_pattern, key_comp, _level), found in index().items():
-      if key_slice == slice_ and key_carrier == carrier and key_pattern == pattern and key_comp == comp:
-         hits.extend(found)
+   _grouped, by_level = indexes()
+   hits = by_level.get((slice_, carrier, pattern, comp))
    if not hits:
       raise SystemExit(f"no level rows for {slice_} {carrier} pattern {pattern} {comp}")
-   hits.sort(key=lambda record: (record["level"], record["target"]))
    return hits
 
 def sheet(carrier, comp, level):
@@ -241,6 +248,67 @@ def emit_json(path):
          sys.stdout.write("\n")
       return
    Path(path).write_text(text)
+
+def size_label(v, _pos=None):
+   v = int(round(v))
+   if v >= 1048576 and v % 1048576 == 0:
+      n = v // 1048576
+      return f"{n} MiB" if n > 1 else "1 MiB"
+   if v >= 1024 and v % 1024 == 0:
+      n = v // 1024
+      return f"{n} KiB" if n > 1 else "1 KiB"
+   return str(v)
+
+def ratio_label(v, _pos=None):
+   if v >= 1000:
+      return f"{v:,.0f}"
+   if v >= 10:
+      return f"{v:.0f}"
+   if v >= 1:
+      return f"{v:.0f}" if abs(v - round(v)) < 1e-9 else f"{v:.1f}"
+   return f"{v:.1f}" if v >= 0.1 else f"{v:.2f}"
+
+def lasting_cross(found):
+   """First sampled target that is above the line and stays above."""
+   last_below = None
+   cross = None
+   for record in found:
+      if record["wireRatio"] < 1:
+         last_below = record["target"]
+         cross = None
+      elif cross is None and last_below is not None and record["target"] > last_below:
+         cross = record["target"]
+   return cross
+
+def crossings(carrier, pattern):
+   """Compressor, color, and the lasting-cross target. The target is None when the curve stays below the line."""
+   found = []
+   for series in SERIES:
+      target = lasting_cross(curve("length", carrier, pattern, series.comp, series.level))
+      found.append((series.comp, series.color, target))
+   return found
+
+def check_crossings():
+   bad = []
+   for carrier in CARRIERS:
+      for pattern in (1, 10):
+         got = {comp: target for comp, _color, target in crossings(carrier.name, pattern) if target is not None}
+         want = MARKS[(carrier.name, pattern)]
+         if got != want:
+            bad.append(f"{carrier.name} pattern {pattern}: {got} != {want}")
+   if bad:
+      raise SystemExit("crossing marks moved:\n" + "\n".join(bad))
+
+def crossing_groups(carrier, pattern):
+   groups = {}
+   for _comp, color, target in crossings(carrier, pattern):
+      if target is None:
+         continue
+      groups.setdefault(target, []).append(color)
+   return sorted(groups.items())
+
+def group_color(colors):
+   return colors[0] if len(colors) == 1 else MUTED
 
 def plotting():
    global _PLOT_READY, plt, Line2D, FuncFormatter, NullFormatter, blended_transform_factory
@@ -272,25 +340,6 @@ def plotting():
    )
    _PLOT_READY = True
 
-def size_label(v, _pos=None):
-   v = int(round(v))
-   if v >= 1048576 and v % 1048576 == 0:
-      n = v // 1048576
-      return f"{n} MiB" if n > 1 else "1 MiB"
-   if v >= 1024 and v % 1024 == 0:
-      n = v // 1024
-      return f"{n} KiB" if n > 1 else "1 KiB"
-   return str(v)
-
-def ratio_label(v, _pos=None):
-   if v >= 1000:
-      return f"{v:,.0f}"
-   if v >= 10:
-      return f"{v:.0f}"
-   if v >= 1:
-      return f"{v:.0f}" if abs(v - round(v)) < 1e-9 else f"{v:.1f}"
-   return f"{v:.1f}" if v >= 0.1 else f"{v:.2f}"
-
 def style_axis(ax, ticks):
    ax.set_xscale("log", base=2)
    ax.set_yscale("log")
@@ -305,20 +354,20 @@ def style_axis(ax, ticks):
 
 def plot_length(ax, carrier, pattern, ticks):
    ratios = []
-   for comp, level, color, _label in SERIES:
-      found = curve("length", carrier, pattern, comp, level)
+   for series in SERIES:
+      found = curve("length", carrier, pattern, series.comp, series.level)
       xs = [record["target"] for record in found]
       ys = [record["wireRatio"] for record in found]
       ratios.extend(ys)
-      ax.plot(xs, ys, color=color, lw=2.15, solid_capstyle="round", zorder=3)
+      ax.plot(xs, ys, color=series.color, lw=2.15, solid_capstyle="round", zorder=3)
    style_axis(ax, ticks)
    bits = row("length", carrier, pattern, "none", None, KIB_64)["bits"]
    return bits, min(ratios), max(ratios)
 
 def length_handles():
    handles = [
-      Line2D([0], [0], color=color, lw=2.4, label=label)
-      for _c, _l, color, label in SERIES
+      Line2D([0], [0], color=series.color, lw=2.4, label=series.label)
+      for series in SERIES
    ]
    handles.append(Line2D([0], [0], color=LINE, lw=1.0, ls=(0, (2, 2)), label="ratio of 1"))
    return handles
@@ -362,48 +411,6 @@ def mark_carrier(carrier, axes):
          )
       else:
          raise SystemExit(f"unknown note on {carrier.name}: {note!r}")
-
-def lasting_cross(found):
-   """First sampled target that is above the line and stays above."""
-   last_below = None
-   cross = None
-   for record in found:
-      if record["wireRatio"] < 1:
-         last_below = record["target"]
-         cross = None
-      elif cross is None and last_below is not None and record["target"] > last_below:
-         cross = record["target"]
-   return cross
-
-def crossings(carrier, pattern):
-   """Compressor, color, and the lasting-cross target. The target is None when the curve stays below the line."""
-   found = []
-   for comp, level, color, _label in SERIES:
-      target = lasting_cross(curve("length", carrier, pattern, comp, level))
-      found.append((comp, color, target))
-   return found
-
-def check_crossings():
-   bad = []
-   for carrier in CARRIERS:
-      for pattern in (1, 10):
-         got = {comp: target for comp, _color, target in crossings(carrier.name, pattern) if target is not None}
-         want = MARKS[(carrier.name, pattern)]
-         if got != want:
-            bad.append(f"{carrier.name} pattern {pattern}: {got} != {want}")
-   if bad:
-      raise SystemExit("crossing marks moved:\n" + "\n".join(bad))
-
-def crossing_groups(carrier, pattern):
-   groups = {}
-   for _comp, color, target in crossings(carrier, pattern):
-      if target is None:
-         continue
-      groups.setdefault(target, []).append(color)
-   return sorted(groups.items())
-
-def group_color(colors):
-   return colors[0] if len(colors) == 1 else MUTED
 
 def mark_tick(ax, target, color):
    ax.plot([target], [1], marker="|", markersize=9, mew=1.2, color=color, zorder=4)
@@ -482,6 +489,14 @@ def mark_combined(axes):
             transform=axes[1][col].transAxes, ha="center", va="center", fontsize=8, color=MUTED
          )
 
+def save(fig, name, dpi, tight=False):
+   OUT.mkdir(exist_ok=True)
+   if tight:
+      fig.savefig(OUT / name, dpi=dpi, bbox_inches="tight")
+   else:
+      fig.savefig(OUT / name, dpi=dpi)
+   plt.close(fig)
+
 def carrier_chart(carrier):
    plotting()
    # The pale line is the first sampled target that holds a real document.
@@ -509,9 +524,7 @@ def carrier_chart(carrier):
    mark_carrier(carrier, axes)
    fig.legend(handles=length_handles(), loc="upper right", frameon=False, bbox_to_anchor=(0.995, 1.005), ncol=4, fontsize=10)
    fig.suptitle(carrier.name, fontsize=15, x=0.01, ha="left")
-   OUT.mkdir(exist_ok=True)
-   fig.savefig(OUT / f"{carrier.name}.png", dpi=160)
-   plt.close(fig)
+   save(fig, f"{carrier.name}.png", 160)
 
 def combined_chart():
    plotting()
@@ -538,17 +551,16 @@ def combined_chart():
    mark_combined(axes)
    fig.legend(handles=length_handles(), loc="upper center", frameon=False, bbox_to_anchor=(0.5, 1.06), ncol=4, fontsize=11)
    fig.suptitle("All seven carriers, on one scale per row", fontsize=15, y=1.10)
-   OUT.mkdir(exist_ok=True)
-   fig.savefig(OUT / "combined.png", dpi=150, bbox_inches="tight")
-   plt.close(fig)
+   save(fig, "combined.png", 150, tight=True)
 
-def draw_levels(ax, zstd_rows, zlib_rows):
+def draw_levels(ax, zstd_rows, zlib_rows, marked):
    ax.plot([record["level"] for record in zlib_rows], [record["wireRatio"] for record in zlib_rows], color=ZLIB, lw=1.8, zorder=3)
    ax.scatter([record["level"] for record in zlib_rows], [record["wireRatio"] for record in zlib_rows], color=ZLIB, s=18, zorder=4)
    ax.plot([record["level"] for record in zstd_rows], [record["wireRatio"] for record in zstd_rows], color=RUST, lw=2.15, zorder=3)
    ax.scatter([record["level"] for record in zstd_rows], [record["wireRatio"] for record in zstd_rows], color=RUST, s=22, zorder=4)
-   default = next(record for record in zstd_rows if record["level"] == 3)
-   ax.scatter([3], [default["wireRatio"]], s=78, color=ZSTD, zorder=5, edgecolor="white", linewidth=1.2)
+   rows_for = {"zstd": zstd_rows, "zlib": zlib_rows}[marked.comp]
+   default = next(record for record in rows_for if record["level"] == marked.level)
+   ax.scatter([marked.level], [default["wireRatio"]], s=78, color=marked.color, zorder=5, edgecolor="white", linewidth=1.2)
 
 def finish_level_panel(ax, title, xlim):
    ax.set_xlim(*xlim)
@@ -569,17 +581,20 @@ def level_chart():
    for ax, spec in zip(axes, LEVEL_PANELS):
       zstd_rows = levels(spec["slice"], "int32", 1, "zstd")
       zlib_rows = levels(spec["slice"], "int32", 1, "zlib")
-      draw_levels(ax, zstd_rows, zlib_rows)
+      marked = [callout for callout in spec["callouts"] if callout.mark]
+      if len(marked) != 1:
+         raise SystemExit(f"expected one marked level on {spec['slice']}")
+      draw_levels(ax, zstd_rows, zlib_rows, marked[0])
       found = {"zstd": zstd_rows, "zlib": zlib_rows}
-      for comp, level, text, xytext, color in spec["callouts"]:
-         record = next(item for item in found[comp] if item["level"] == level)
+      for callout in spec["callouts"]:
+         record = next(item for item in found[callout.comp] if item["level"] == callout.level)
          ax.annotate(
-            text,
-            xy=(level, record["wireRatio"]),
-            xytext=xytext,
+            callout.text,
+            xy=(callout.level, record["wireRatio"]),
+            xytext=callout.xytext,
             fontsize=9,
-            color=color,
-            arrowprops={"arrowstyle": "-", "color": color if color in (ZSTD, ZLIB) else ARROW, "lw": 0.8}
+            color=callout.color,
+            arrowprops={"arrowstyle": "-", "color": callout.color if callout.color in (ZSTD, ZLIB) else ARROW, "lw": 0.8}
          )
       snappy = row(spec["slice"], "int32", 1, "snappy", None, spec["target"])
       ax.axhline(snappy["wireRatio"], color=SNAP, lw=1.2, ls=(0, (3, 2)), zorder=2)
@@ -592,9 +607,7 @@ def level_chart():
       Line2D([0], [0], color=SNAP, lw=1.2, ls=(0, (3, 2)), label="snappy")
    ]
    fig.legend(handles=handles, loc="upper center", frameon=False, ncol=2, fontsize=10, bbox_to_anchor=(0.5, 0.98))
-   OUT.mkdir(exist_ok=True)
-   fig.savefig(OUT / "levels.png", dpi=160)
-   plt.close(fig)
+   save(fig, "levels.png", 160)
 
 def manifold_chart():
    plotting()
@@ -604,12 +617,12 @@ def manifold_chart():
    fig.subplots_adjust(left=0.02, right=0.97, top=0.90, bottom=0.04, wspace=0.16, hspace=0.28)
    for i, carrier in enumerate(CARRIERS):
       ax = fig.add_subplot(2, 4, i + 1, projection="3d")
-      for comp, level, color, _label in SERIES:
-         patterns, sizes, ratios = sheet(carrier.name, comp, level)
+      for series in SERIES:
+         patterns, sizes, ratios = sheet(carrier.name, series.comp, series.level)
          x = np.log2(np.array(sizes, dtype=float))
          X, Y = np.meshgrid(x, patterns)
          Z = np.array(ratios, dtype=float)
-         ax.plot_surface(X, Y, Z, color=color, alpha=0.55, linewidth=0, antialiased=True, shade=False)
+         ax.plot_surface(X, Y, Z, color=series.color, alpha=0.55, linewidth=0, antialiased=True, shade=False)
       ax.set_zscale("log")
       ax.set_xticks([0, 8, 16, 24])
       ax.set_xticklabels(["1", "256", "64 KiB", "16 MiB"], fontsize=7)
@@ -627,7 +640,7 @@ def manifold_chart():
          axis.pane.set_edgecolor("#e6e6e6")
    legend_ax = fig.add_subplot(2, 4, 8)
    legend_ax.axis("off")
-   handles = [Line2D([0], [0], color=color, lw=2.4, label=label) for _c, _l, color, label in SERIES]
+   handles = [Line2D([0], [0], color=series.color, lw=2.4, label=series.label) for series in SERIES]
    legend_ax.legend(handles, [h.get_label() for h in handles], loc="center", frameon=False, fontsize=12)
    legend_ax.text(
       0.5, 0.18,
@@ -635,9 +648,7 @@ def manifold_chart():
       transform=legend_ax.transAxes, ha="center", va="top", fontsize=10, color=MUTED
    )
    fig.suptitle("Wire ratio over document size and pattern", fontsize=15)
-   OUT.mkdir(exist_ok=True)
-   fig.savefig(OUT / "manifold.png", dpi=140)
-   plt.close(fig)
+   save(fig, "manifold.png", 140)
 
 def draw(names):
    check_crossings()
