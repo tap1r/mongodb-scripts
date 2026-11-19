@@ -85,7 +85,7 @@ const COMPARE_CARRIERS: [&Carrier; 3] = [&LONG, &DATE, &TIMESTAMP];
 const DIGEST_CARRIERS: &[&str] = &["int32", "double", "decimal128", "string", "binary"];
 // levelMax runs binary then int32. The digest prints int32 then binary.
 const DIGEST_LEVEL_MAX: [&str; 2] = ["int32", "binary"];
-const CHART_SERIES: [(&str, Option<i32>); 3] = [("zlib", Some(6)), ("zstd", Some(3)), ("snappy", None)];
+const CHART_SERIES: [Codec; 3] = [Codec::Zlib(6), Codec::Zstd(3), Codec::Snappy];
 
 const fn known_carrier(name: &str) -> bool {
     let mut j = 0;
@@ -314,7 +314,14 @@ fn collect(run: &Run, range: &std::ops::RangeInclusive<i32>, started: Instant, r
                     continue;
                 }
                 for &target in slice.sizes {
-                    points.extend(measure(slice.tag, carrier, pattern, target, slice.zlib, &zstd_levels, random));
+                    points.extend(measure(&Sample {
+                        slice: slice.tag,
+                        carrier: *carrier,
+                        pattern,
+                        target,
+                        zlib: slice.zlib,
+                        zstd: &zstd_levels
+                    }, random));
                 }
                 eprintln!("{} {} pattern {pattern} {}ms", slice.tag, carrier.name, started.elapsed().as_millis());
             }
@@ -497,66 +504,84 @@ impl Frame<'_> {
     }
 
     fn record(&self, codec: Codec) -> Point {
-        let compressed_len = if codec.name == "none" {
-            self.body.len()
-        } else {
-            compress(self.body, codec.name, codec.level).len()
-        };
-        self.point(codec.name, codec.level, compressed_len, codec.details)
+        self.point(codec.name(), codec.level(), compressed_len(self.body, codec), codec.details())
     }
 }
 
-struct Codec {
-    name: &'static str,
-    level: Option<i32>,
-    details: usize
+#[derive(Clone, Copy)]
+enum Codec {
+    None,
+    Zlib(i32),
+    Zstd(i32),
+    Snappy
 }
 
 impl Codec {
-    fn none() -> Self {
-        Self { name: "none", level: None, details: 0 }
+    fn name(self) -> &'static str {
+        match self {
+            Codec::None => "none",
+            Codec::Zlib(_) => "zlib",
+            Codec::Zstd(_) => "zstd",
+            Codec::Snappy => "snappy"
+        }
     }
 
-    fn framed(name: &'static str, level: Option<i32>) -> Self {
-        Self { name, level, details: DETAILS }
+    fn level(self) -> Option<i32> {
+        match self {
+            Codec::Zlib(level) | Codec::Zstd(level) => Some(level),
+            Codec::None | Codec::Snappy => None
+        }
+    }
+
+    fn details(self) -> usize {
+        match self {
+            Codec::None => 0,
+            Codec::Zlib(_) | Codec::Zstd(_) | Codec::Snappy => DETAILS
+        }
     }
 }
 
-fn measure(slice: &'static str, carrier: &'static Carrier, pattern: u8, target: usize, zlib: &[i32], zstd: &[i32], random: &mut dyn Read) -> Vec<Point> {
+struct Sample<'a> {
+    slice: &'static str,
+    carrier: &'a Carrier,
+    pattern: u8,
+    target: usize,
+    zlib: &'a [i32],
+    zstd: &'a [i32]
+}
+
+fn measure(sample: &Sample<'_>, random: &mut dyn Read) -> Vec<Point> {
     let mut points = Vec::new();
     let tb = Instant::now();
-    let built = payload(target, carrier, pattern, random);
+    let built = payload(sample.target, sample.carrier, sample.pattern, random);
     let build_ms = tb.elapsed().as_millis();
-    let frame = built.frame(slice, carrier.name, pattern, target);
-    points.push(frame.record(Codec::none()));
-    let tz = Instant::now();
-    for &level in zlib {
-        points.push(frame.record(Codec::framed("zlib", Some(level))));
-    }
-    let zlib_ms = tz.elapsed().as_millis();
-    let ts = Instant::now();
-    for &level in zstd {
-        points.push(frame.record(Codec::framed("zstd", Some(level))));
-    }
-    let zstd_ms = ts.elapsed().as_millis();
-    points.push(frame.record(Codec::framed("snappy", None)));
-    if target >= MIB {
-        eprintln!("  {} p{pattern} {target} build {build_ms}ms zlib {zlib_ms}ms zstd {zstd_ms}ms body {}", carrier.name, frame.body.len());
+    let frame = built.frame(sample.slice, sample.carrier.name, sample.pattern, sample.target);
+    points.push(frame.record(Codec::None));
+    let zlib_ms = record_levels(&mut points, &frame, sample.zlib, Codec::Zlib);
+    let zstd_ms = record_levels(&mut points, &frame, sample.zstd, Codec::Zstd);
+    points.push(frame.record(Codec::Snappy));
+    if sample.target >= MIB {
+        eprintln!("  {} p{} {} build {build_ms}ms zlib {zlib_ms}ms zstd {zstd_ms}ms body {}", sample.carrier.name, sample.pattern, sample.target, frame.body.len());
     }
     points
 }
 
-fn compress(body: &[u8], compressor: &str, level: Option<i32>) -> Vec<u8> {
-    match compressor {
-        "zlib" => zlib_compress(body, level.expect("zlib level")),
-        "zstd" => {
-            let level = level.expect("zstd level");
-            zstd::bulk::compress(body, level).unwrap_or_else(|err| {
-                panic!("zstd {level} on {} bytes: {err}", body.len());
-            })
-        }
-        "snappy" => SnappyEncoder::new().compress_vec(body).expect("snappy"),
-        _ => panic!("compressor {compressor}")
+fn record_levels(points: &mut Vec<Point>, frame: &Frame, levels: &[i32], codec: impl Fn(i32) -> Codec) -> u128 {
+    let started = Instant::now();
+    for &level in levels {
+        points.push(frame.record(codec(level)));
+    }
+    started.elapsed().as_millis()
+}
+
+fn compressed_len(body: &[u8], codec: Codec) -> usize {
+    match codec {
+        Codec::None => body.len(),
+        Codec::Zlib(level) => zlib_compress(body, level).len(),
+        Codec::Zstd(level) => zstd::bulk::compress(body, level).unwrap_or_else(|err| {
+            panic!("zstd {level} on {} bytes: {err}", body.len());
+        }).len(),
+        Codec::Snappy => SnappyEncoder::new().compress_vec(body).expect("snappy").len()
     }
 }
 
@@ -719,10 +744,14 @@ impl DocBuf {
         at
     }
 
-    fn write_index_key(&mut self, n: usize) {
+    fn try_element(&mut self, n: usize, type_byte: u8, width: usize, target: usize) -> bool {
         let mut key = [0u8; 8];
-        let len = write_index(&mut key, n);
-        self.write_key(&key[..len]);
+        let key_len = write_index(&mut key, n);
+        let need = 1 + key_len + 1 + width;
+        if !self.room(need, target) { return false; }
+        self.write_u8(type_byte);
+        self.write_key(&key[..key_len]);
+        true
     }
 
     fn end_array(&mut self, at: usize) {
@@ -832,11 +861,6 @@ fn draw(random: &mut dyn Read, pattern: u8, len: usize) -> Vec<u8> {
     crypto.take(len).to_vec()
 }
 
-fn index_len(n: usize) -> usize {
-    let mut key = [0u8; 8];
-    write_index(&mut key, n)
-}
-
 fn write_index(buf: &mut [u8], n: usize) -> usize {
     if n == 0 {
         buf[0] = b'0';
@@ -891,11 +915,7 @@ fn build_array(target: usize, pattern: u8, array: Array, random: &mut dyn Read) 
     let mut crypto = Crypto::open(random, pattern, array.width * CRYPTO_WINDOW);
     let mut i = 0usize;
     loop {
-        let key_len = index_len(i);
-        let need = 1 + key_len + 1 + array.width;
-        if !doc.room(need, target) { break; }
-        doc.write_u8(array.type_byte);
-        doc.write_index_key(i);
+        if !doc.try_element(i, array.type_byte, array.width, target) { break; }
         // Pattern 10 copies width raw bytes. The seeded ladders are not called.
         if pattern == 10 {
             let drawn = crypto.take(array.width);
@@ -1026,6 +1046,9 @@ fn write_grid(path: &str, meta: &str, points: &[Point]) {
     writeln!(file, "  ]\n}}").unwrap();
 }
 
+#[derive(Clone, Copy)]
+enum Sibling { Required, SkipMissing }
+
 type RowKey<'a> = (&'a str, &'a str, u8, &'a str, Option<i32>, usize);
 
 fn row_key<'a>(slice: &'a str, carrier: &'a str, pattern: u8, compressor: &'a str, level: Option<i32>, target: usize) -> RowKey<'a> {
@@ -1058,17 +1081,16 @@ impl<'a> Grid<'a> {
         self.rows.get(&row_key(slice, carrier, pattern, compressor, level, target)).copied()
     }
 
-    fn pair_counts(&self, compressor: &str, level: Option<i32>, other_level: Option<i32>, skip_missing: bool) -> (usize, usize) {
+    fn pair_counts(&self, compressor: &str, level: Option<i32>, other_level: Option<i32>, sibling: Sibling) -> (usize, usize) {
         let mut pairs = 0usize;
         let mut mismatches = 0usize;
         for point in self.rows.values().filter(|point| point.compressor == compressor && point.level == level) {
-            let other = if skip_missing {
-                match self.get(point.slice, point.carrier, point.pattern, compressor, other_level, point.target) {
+            let other = match sibling {
+                Sibling::SkipMissing => match self.get(point.slice, point.carrier, point.pattern, compressor, other_level, point.target) {
                     Some(other) => other,
                     None => continue
-                }
-            } else {
-                self.lookup(point.slice, point.carrier, point.pattern, compressor, other_level, point.target)
+                },
+                Sibling::Required => self.lookup(point.slice, point.carrier, point.pattern, compressor, other_level, point.target)
             };
             pairs += 1;
             if other.compressed != point.compressed { mismatches += 1; }
@@ -1160,9 +1182,9 @@ fn one_mib_section(map: &Grid<'_>) -> String {
         let mut line = format!("p{pattern}");
         for &carrier in DIGEST_CARRIERS {
             let row = map.row("oneMiB", carrier, pattern);
-            for (comp, level) in CHART_SERIES {
-                let p = row.point(comp, level, MIB);
-                line.push_str(&format!("\t{carrier}:{comp}:{}:{}", p.bits, p.wire_ratio));
+            for codec in CHART_SERIES {
+                let p = row.point(codec.name(), codec.level(), MIB);
+                line.push_str(&format!("\t{carrier}:{}:{}:{}", codec.name(), p.bits, p.wire_ratio));
             }
         }
         out.push('\n');
@@ -1204,8 +1226,8 @@ fn level_max_line(point: &Point) -> String {
 }
 
 fn pairs_section(map: &Grid<'_>) -> String {
-    let (z_pairs, z_mis) = map.pair_counts("zlib", Some(-1), Some(6), false);
-    let (s_pairs, s_mis) = map.pair_counts("zstd", Some(-1), Some(3), true);
+    let (z_pairs, z_mis) = map.pair_counts("zlib", Some(-1), Some(6), Sibling::Required);
+    let (s_pairs, s_mis) = map.pair_counts("zstd", Some(-1), Some(3), Sibling::SkipMissing);
     format!("PAIRS zlib -1 vs 6 {z_pairs} mismatches {z_mis}\nPAIRS zstd -1 vs 3 {s_pairs} mismatches {s_mis}\n")
 }
 
@@ -1427,7 +1449,7 @@ mod tests {
     #[test]
     fn measure_order_is_none_zlib_zstd_snappy() {
         let mut random = PanicRead;
-        let points = measure("length", carrier("int32"), 1, 32, &[6, -1], &[3, 1], &mut random);
+        let points = measure(&Sample { slice: "length", carrier: carrier("int32"), pattern: 1, target: 32, zlib: &[6, -1], zstd: &[3, 1] }, &mut random);
         let names: Vec<_> = points.iter().map(|point| (point.compressor, point.level)).collect();
         assert_eq!(names, [("none", None), ("zlib", Some(6)), ("zlib", Some(-1)), ("zstd", Some(3)), ("zstd", Some(1)), ("snappy", None)]);
         let none = &points[0];
@@ -1448,7 +1470,7 @@ mod tests {
     #[test]
     fn raw_target_has_no_document() {
         let mut random = PanicRead;
-        let points = measure("length", carrier("int32"), 1, 1, &[6], &[3], &mut random);
+        let points = measure(&Sample { slice: "length", carrier: carrier("int32"), pattern: 1, target: 1, zlib: &[6], zstd: &[3] }, &mut random);
         assert_eq!(points[0].shape, "raw");
         assert_eq!(points[0].doc, None);
         assert_eq!(points[0].body, 1);
@@ -1499,8 +1521,8 @@ mod tests {
         let mut one = Vec::new();
         for pattern in 1u8..=10 {
             for carrier in DIGEST_CARRIERS {
-                for (comp, level) in CHART_SERIES {
-                    one.push(sample("oneMiB", carrier, pattern, comp, level, MIB, 1.5, 2.5, false));
+                for codec in CHART_SERIES {
+                    one.push(sample("oneMiB", carrier, pattern, codec.name(), codec.level(), MIB, 1.5, 2.5, false));
                 }
             }
         }
