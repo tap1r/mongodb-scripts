@@ -8,9 +8,10 @@
 // COMPRESSOR_SLICES, COMPRESSOR_CARRIERS, and COMPRESSOR_PATTERNS, comma-separated, limit a run.
 // COMPRESSOR_ZSTD replaces that run's zstd levels.
 // A pattern or zstd token that does not parse fails the run.
+// An unknown slice or carrier name fails the run.
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use snap::raw::Encoder as SnappyEncoder;
 use std::collections::HashMap;
 use std::fs::File;
@@ -43,11 +44,71 @@ const PATTERNS_LEVEL_MAX: [u8; 2] = [1, 10];
 const PATTERNS_SURFACE: [u8; 7] = surface_patterns();
 const PATTERNS_COMPARE: [u8; 4] = [1, 5, 9, 10];
 
-const CARRIERS: &[&str] = &["int32", "double", "long", "date", "decimal128", "string", "binary"];
-const LEVEL_MAX_CARRIERS: &[&str] = &["binary", "int32"];
-const COMPARE_CARRIERS: &[&str] = &["long", "date", "timestamp"];
+#[derive(Clone, Copy)]
+enum Kind { Int32, Double, Long, Timestamp, Decimal }
+
+#[derive(Clone, Copy)]
+enum Form {
+    String,
+    Binary,
+    Array { width: usize, type_byte: u8, kind: Kind },
+}
+
+struct Carrier {
+    name: &'static str,
+    form: Form,
+}
+
+const INT32: Carrier = Carrier { name: "int32", form: Form::Array { width: 4, type_byte: 0x10, kind: Kind::Int32 } };
+const DOUBLE: Carrier = Carrier { name: "double", form: Form::Array { width: 8, type_byte: 0x01, kind: Kind::Double } };
+const LONG: Carrier = Carrier { name: "long", form: Form::Array { width: 8, type_byte: 0x12, kind: Kind::Long } };
+const DATE: Carrier = Carrier { name: "date", form: Form::Array { width: 8, type_byte: 0x09, kind: Kind::Long } };
+const TIMESTAMP: Carrier = Carrier { name: "timestamp", form: Form::Array { width: 8, type_byte: 0x11, kind: Kind::Timestamp } };
+const DECIMAL128: Carrier = Carrier { name: "decimal128", form: Form::Array { width: 16, type_byte: 0x13, kind: Kind::Decimal } };
+const STRING: Carrier = Carrier { name: "string", form: Form::String };
+const BINARY: Carrier = Carrier { name: "binary", form: Form::Binary };
+
+const CARRIER_TABLE: [&Carrier; 8] = [&INT32, &DOUBLE, &LONG, &DATE, &TIMESTAMP, &DECIMAL128, &STRING, &BINARY];
+const CHART_CARRIERS: [&Carrier; 7] = [&INT32, &DOUBLE, &LONG, &DATE, &DECIMAL128, &STRING, &BINARY];
+const LEVEL_MAX_CARRIERS: [&Carrier; 2] = [&BINARY, &INT32];
+const COMPARE_CARRIERS: [&Carrier; 3] = [&LONG, &DATE, &TIMESTAMP];
 // The digest prints these five. Long, date, and timestamp stay out of it.
 const DIGEST_CARRIERS: &[&str] = &["int32", "double", "decimal128", "string", "binary"];
+
+const _: () = {
+    let mut i = 0;
+    while i < DIGEST_CARRIERS.len() {
+        let name = DIGEST_CARRIERS[i];
+        let mut found = false;
+        let mut j = 0;
+        while j < CARRIER_TABLE.len() {
+            if str_eq(CARRIER_TABLE[j].name, name) {
+                found = true;
+            }
+            j += 1;
+        }
+        if !found {
+            panic!("digest carrier");
+        }
+        i += 1;
+    }
+};
+
+const fn str_eq(left: &str, right: &str) -> bool {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < left.len() {
+        if left[i] != right[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
 
 const LENGTH_SIZES: [usize; 25] = length_sizes();
 const LEVEL64_SIZES: [usize; 1] = [KIB_64];
@@ -97,7 +158,7 @@ const fn length_sizes() -> [usize; 25] {
 
 struct Slice {
     tag: &'static str,
-    carriers: &'static [&'static str],
+    carriers: &'static [&'static Carrier],
     patterns: &'static [u8],
     zlib: &'static [i32],
     zstd: &'static [i32],
@@ -108,7 +169,7 @@ struct Slice {
 const SLICES: [Slice; 6] = [
     Slice {
         tag: "length",
-        carriers: CARRIERS,
+        carriers: &CHART_CARRIERS,
         patterns: &PATTERNS_LENGTH,
         zlib: &ZLIB_LENGTH,
         zstd: &ZSTD_LENGTH,
@@ -117,7 +178,7 @@ const SLICES: [Slice; 6] = [
     },
     Slice {
         tag: "level64",
-        carriers: CARRIERS,
+        carriers: &CHART_CARRIERS,
         patterns: &PATTERNS_ALL,
         zlib: &ZLIB_ALL,
         zstd: &ZSTD_LEVEL64,
@@ -126,7 +187,7 @@ const SLICES: [Slice; 6] = [
     },
     Slice {
         tag: "oneMiB",
-        carriers: CARRIERS,
+        carriers: &CHART_CARRIERS,
         patterns: &PATTERNS_ALL,
         zlib: &ZLIB_ALL,
         zstd: &ZSTD_LENGTH,
@@ -135,7 +196,7 @@ const SLICES: [Slice; 6] = [
     },
     Slice {
         tag: "levelMax",
-        carriers: LEVEL_MAX_CARRIERS,
+        carriers: &LEVEL_MAX_CARRIERS,
         patterns: &PATTERNS_LEVEL_MAX,
         zlib: &ZLIB_ALL,
         zstd: &ZSTD_LEVEL_MAX,
@@ -145,7 +206,7 @@ const SLICES: [Slice; 6] = [
     // Patterns the length charts skip. The chart reads patterns 1, 5, and 10 from length.
     Slice {
         tag: "surface",
-        carriers: CARRIERS,
+        carriers: &CHART_CARRIERS,
         patterns: &PATTERNS_SURFACE,
         zlib: &ZLIB_CHART,
         zstd: &ZSTD_CHART,
@@ -154,7 +215,7 @@ const SLICES: [Slice; 6] = [
     },
     Slice {
         tag: "compare",
-        carriers: COMPARE_CARRIERS,
+        carriers: &COMPARE_CARRIERS,
         patterns: &PATTERNS_COMPARE,
         zlib: &ZLIB_CHART,
         zstd: &ZSTD_CHART,
@@ -167,8 +228,8 @@ fn main() {
     let range = zstd::compression_level_range();
     let started = Instant::now();
     let mut points = Vec::new();
-    let slice_filter = split_env("COMPRESSOR_SLICES");
-    let carrier_filter = split_env("COMPRESSOR_CARRIERS");
+    let slice_filter = name_env("COMPRESSOR_SLICES");
+    let carrier_filter = name_env("COMPRESSOR_CARRIERS");
     let pattern_filter: Vec<u8> = parse_env("COMPRESSOR_PATTERNS");
     let zstd_override: Vec<i32> = parse_env("COMPRESSOR_ZSTD");
     let mut random = Random::new();
@@ -181,8 +242,8 @@ fn main() {
         } else {
             zstd_override.iter().copied().filter(|lvl| range.contains(lvl)).collect()
         };
-        for &carrier in slice.carriers {
-            if !carrier_filter.is_empty() && !carrier_filter.iter().any(|name| name == carrier) {
+        for carrier in slice.carriers {
+            if !carrier_filter.is_empty() && !carrier_filter.iter().any(|name| name == carrier.name) {
                 continue;
             }
             for &pattern in slice.patterns {
@@ -190,33 +251,15 @@ fn main() {
                     continue;
                 }
                 for &target in slice.sizes {
-                    points.extend(measure(slice.tag, carrier, pattern, target, slice.zlib, &zstd_levels, &mut random));
+                    points.extend(measure(slice.tag, carrier.name, pattern, target, slice.zlib, &zstd_levels, &mut random));
                 }
-                eprintln!("{} {carrier} pattern {pattern} {}ms", slice.tag, started.elapsed().as_millis());
+                eprintln!("{} {} pattern {pattern} {}ms", slice.tag, carrier.name, started.elapsed().as_millis());
             }
         }
     }
 
     let guard = guard_trip();
-    let meta = json!({
-        "compressor": "rust",
-        "rustc": "1.99.1",
-        "libraries": {
-            "snappy": "snap 1.1.2 raw, same framing as snappy::RawCompress and the Rust driver",
-            "zlib": "flate2 1.1.11 default backend (miniz_oxide), zlib wrapper, same call the Rust driver makes",
-            "zstd": "zstd 0.14.4"
-        },
-        "zstdDefault": zstd::DEFAULT_COMPRESSION_LEVEL,
-        "zstdLevelRange": [range.start(), range.end()],
-        "ratio": "originalWire / framedWire. Higher is tighter. none is 1.",
-        "originalWire": "16-byte MsgHeader + body",
-        "framedWire": "16-byte MsgHeader + 9-byte OP_COMPRESSED details + compressed body",
-        "body": "4 flag bytes, kind byte 0, and a BSON {ping:1, p:<payload>} document. A target below a legal document is a raw buffer (shape raw).",
-        "maxMessage": MAX_MESSAGE,
-        "guardTripsAtBody": guard,
-        "slices": slice_meta(),
-        "count": points.len()
-    });
+    let meta = meta_json(guard, points.len(), *range.start(), *range.end());
     let mut args = std::env::args().skip(1);
     let grid_path = args.next().unwrap_or_else(|| "/tmp/compressor-grid.json".to_string());
     let digest_path = args.next().unwrap_or_else(|| "/tmp/compressor-digest.txt".to_string());
@@ -227,13 +270,78 @@ fn main() {
     eprintln!("done {} points in {:.1}s guard={}", points.len(), started.elapsed().as_secs_f64(), guard);
 }
 
-fn slice_meta() -> Value {
-    let mut slices = Map::new();
-    for tag in SLICE_META_ORDER {
-        let slice = SLICES.iter().find(|slice| slice.tag == tag).unwrap_or_else(|| panic!("missing slice {tag}"));
-        slices.insert(tag.to_string(), Value::String(slice.about.to_string()));
+fn name_env(key: &str) -> Vec<String> {
+    let names: Vec<String> = parse_env(key);
+    require_known(key, &names);
+    names
+}
+
+fn require_known(key: &str, names: &[String]) {
+    for name in names {
+        let known = match key {
+            "COMPRESSOR_SLICES" => SLICES.iter().any(|slice| slice.tag == name),
+            "COMPRESSOR_CARRIERS" => CARRIER_TABLE.iter().any(|carrier| carrier.name == name),
+            _ => false,
+        };
+        if !known {
+            panic!("{key}: unknown {name}");
+        }
     }
-    Value::Object(slices)
+}
+
+fn parse_env<T: FromStr>(key: &str) -> Vec<T> {
+    std::env::var(key).ok().map(|raw| parse_tokens(key, &raw)).unwrap_or_default()
+}
+
+fn parse_tokens<T: FromStr>(key: &str, raw: &str) -> Vec<T> {
+    raw.split(',').map(|token| token.trim()).filter(|token| !token.is_empty()).map(|token| {
+        token.parse().unwrap_or_else(|_| panic!("{key}: bad token {token}"))
+    }).collect()
+}
+
+fn meta_json(guard: usize, count: usize, zstd_min: i32, zstd_max: i32) -> String {
+    let meta = json!({
+        "compressor": "rust",
+        "rustc": "1.99.1",
+        "libraries": {
+            "snappy": "snap 1.1.2 raw, same framing as snappy::RawCompress and the Rust driver",
+            "zlib": "flate2 1.1.11 default backend (miniz_oxide), zlib wrapper, same call the Rust driver makes",
+            "zstd": "zstd 0.14.4"
+        },
+        "zstdDefault": zstd::DEFAULT_COMPRESSION_LEVEL,
+        "zstdLevelRange": [zstd_min, zstd_max],
+        "ratio": "originalWire / framedWire. Higher is tighter. none is 1.",
+        "originalWire": "16-byte MsgHeader + body",
+        "framedWire": "16-byte MsgHeader + 9-byte OP_COMPRESSED details + compressed body",
+        "body": "4 flag bytes, kind byte 0, and a BSON {ping:1, p:<payload>} document. A target below a legal document is a raw buffer (shape raw).",
+        "maxMessage": MAX_MESSAGE,
+        "guardTripsAtBody": guard,
+        "slices": null,
+        "count": count
+    });
+    let mut text = serde_json::to_string_pretty(&meta).unwrap();
+    let needle = "\"slices\": null";
+    let found = text.find(needle).expect("slices");
+    text.replace_range(found..found + needle.len(), &format!("\"slices\": {}", slice_meta_json()));
+    text
+}
+
+fn slice_meta_json() -> String {
+    let mut out = String::from("{\n");
+    for (i, tag) in SLICE_META_ORDER.iter().enumerate() {
+        let slice = SLICES.iter().find(|slice| slice.tag == *tag).unwrap_or_else(|| panic!("missing slice {tag}"));
+        let value = serde_json::to_string(slice.about).unwrap();
+        out.push_str("    \"");
+        out.push_str(tag);
+        out.push_str("\": ");
+        out.push_str(&value);
+        if i + 1 != SLICE_META_ORDER.len() {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+    out.push_str("  }");
+    out
 }
 
 struct Point {
@@ -298,83 +406,42 @@ impl Read for Random {
 fn measure(slice: &'static str, carrier: &'static str, pattern: u8, target: usize, zlib: &[i32], zstd: &[i32], random: &mut dyn Read) -> Vec<Point> {
     let mut points = Vec::new();
     let tb = Instant::now();
-    let doc = build_doc(target, carrier, pattern, random);
+    let built = payload(target, carrier, pattern, random);
     let build_ms = tb.elapsed().as_millis();
-    let (shape, doc_len, body) = match doc {
-        Some(doc) => {
-            let mut body = vec![0u8; 5 + doc.len()];
-            body[4] = 0;
-            body[5..].copy_from_slice(&doc);
-            ("document", Some(doc.len()), body)
-        }
-        None => {
-            let mut body = vec![0u8; target];
-            let crypto = if pattern == 10 {
-                let mut bytes = vec![0u8; target];
-                random.read_exact(&mut bytes).expect("urandom read");
-                bytes
-            } else {
-                Vec::new()
-            };
-            fill_payload(&mut body, 0, target, pattern, &mut xorshift(0xB0D + pattern as u32), &crypto);
-            ("raw", None, body)
-        }
-    };
-    let bits_src = if shape == "document" { &body[5..] } else { body.as_slice() };
-    let bits = round_n(entropy_bits(bits_src), 3);
-    let original = HEADER + body.len();
-    push_none(&mut points, slice, carrier, pattern, shape, target, doc_len, &body, bits, original);
+    let bits = round_n(entropy_bits(built.bits_src()), 3);
+    let original = HEADER + built.body().len();
+    let shape = built.shape();
+    let doc = built.doc_len();
+    push_point(&mut points, slice, carrier, pattern, shape, target, doc, built.body(), bits, original, "none", None, built.body().len(), 0);
     let tz = Instant::now();
     for level in zlib {
-        let compressed = zlib_compress(&body, *level);
-        push_compressed(&mut points, slice, carrier, pattern, shape, target, doc_len, &body, bits, original, "zlib", Some(*level), &compressed);
+        let compressed = zlib_compress(built.body(), *level);
+        push_point(&mut points, slice, carrier, pattern, shape, target, doc, built.body(), bits, original, "zlib", Some(*level), compressed.len(), DETAILS);
     }
     let zlib_ms = tz.elapsed().as_millis();
     let ts = Instant::now();
     for level in zstd {
-        let compressed = zstd::bulk::compress(&body, *level).unwrap_or_else(|err| {
-            panic!("zstd {level} on {} bytes: {err}", body.len());
+        let compressed = zstd::bulk::compress(built.body(), *level).unwrap_or_else(|err| {
+            panic!("zstd {level} on {} bytes: {err}", built.body().len());
         });
-        push_compressed(&mut points, slice, carrier, pattern, shape, target, doc_len, &body, bits, original, "zstd", Some(*level), &compressed);
+        push_point(&mut points, slice, carrier, pattern, shape, target, doc, built.body(), bits, original, "zstd", Some(*level), compressed.len(), DETAILS);
     }
     let zstd_ms = ts.elapsed().as_millis();
-    let compressed = SnappyEncoder::new().compress_vec(&body).expect("snappy");
-    push_compressed(&mut points, slice, carrier, pattern, shape, target, doc_len, &body, bits, original, "snappy", None, &compressed);
+    let compressed = SnappyEncoder::new().compress_vec(built.body()).expect("snappy");
+    push_point(&mut points, slice, carrier, pattern, shape, target, doc, built.body(), bits, original, "snappy", None, compressed.len(), DETAILS);
     if target >= MIB {
-        eprintln!("  {carrier} p{pattern} {target} build {build_ms}ms zlib {zlib_ms}ms zstd {zstd_ms}ms body {}", body.len());
+        eprintln!("  {carrier} p{pattern} {target} build {build_ms}ms zlib {zlib_ms}ms zstd {zstd_ms}ms body {}", built.body().len());
     }
     points
 }
 
-fn split_env(key: &str) -> Vec<String> {
-    std::env::var(key).ok().map(|raw| parse_tokens(key, &raw)).unwrap_or_default()
-}
-
-fn parse_env<T: FromStr>(key: &str) -> Vec<T> {
-    std::env::var(key).ok().map(|raw| parse_tokens(key, &raw)).unwrap_or_default()
-}
-
-fn parse_tokens<T: FromStr>(key: &str, raw: &str) -> Vec<T> {
-    raw.split(',').map(|token| token.trim()).filter(|token| !token.is_empty()).map(|token| {
-        token.parse().unwrap_or_else(|_| panic!("{key}: bad token {token}"))
-    }).collect()
-}
-
-fn push_none(points: &mut Vec<Point>, slice: &'static str, carrier: &'static str, pattern: u8, shape: &'static str, target: usize, doc: Option<usize>, body: &[u8], bits: f64, original: usize) {
-    points.push(Point {
-        slice, carrier, pattern, shape, target, doc, body: body.len(), bits,
-        compressor: "none", level: None, compressed: body.len(), raw_ratio: 1.0,
-        wire: original, wire_ratio: 1.0, expands: false,
-    });
-}
-
-fn push_compressed(points: &mut Vec<Point>, slice: &'static str, carrier: &'static str, pattern: u8, shape: &'static str, target: usize, doc: Option<usize>, body: &[u8], bits: f64, original: usize, compressor: &'static str, level: Option<i32>, compressed: &[u8]) {
-    let wire = HEADER + DETAILS + compressed.len();
-    let raw_ratio = round_n(body.len() as f64 / compressed.len() as f64, 6);
+fn push_point(points: &mut Vec<Point>, slice: &'static str, carrier: &'static str, pattern: u8, shape: &'static str, target: usize, doc: Option<usize>, body: &[u8], bits: f64, original: usize, compressor: &'static str, level: Option<i32>, compressed_len: usize, details: usize) {
+    let wire = HEADER + details + compressed_len;
+    let raw_ratio = round_n(body.len() as f64 / compressed_len as f64, 6);
     let wire_ratio = round_n(original as f64 / wire as f64, 6);
     points.push(Point {
         slice, carrier, pattern, shape, target, doc, body: body.len(), bits,
-        compressor, level, compressed: compressed.len(), raw_ratio, wire, wire_ratio,
+        compressor, level, compressed: compressed_len, raw_ratio, wire, wire_ratio,
         expands: wire > original,
     });
 }
@@ -454,34 +521,93 @@ fn write_ping(buf: &mut [u8], mut p: usize) -> usize {
     p + 4
 }
 
-#[derive(Clone, Copy)]
-enum Kind { Int32, Double, Long, Timestamp, Decimal }
-
-#[derive(Clone, Copy)]
-enum Form {
-    String,
-    Binary,
-    Array { width: usize, type_byte: u8, kind: Kind },
+enum Payload {
+    Document { doc: Vec<u8>, body: Vec<u8> },
+    Raw { body: Vec<u8> },
 }
 
-struct Carrier {
-    name: &'static str,
-    form: Form,
+impl Payload {
+    fn shape(&self) -> &'static str {
+        match self {
+            Payload::Document { .. } => "document",
+            Payload::Raw { .. } => "raw",
+        }
+    }
+
+    fn doc_len(&self) -> Option<usize> {
+        match self {
+            Payload::Document { doc, .. } => Some(doc.len()),
+            Payload::Raw { .. } => None,
+        }
+    }
+
+    fn body(&self) -> &[u8] {
+        match self {
+            Payload::Document { body, .. } | Payload::Raw { body } => body,
+        }
+    }
+
+    fn bits_src(&self) -> &[u8] {
+        match self {
+            Payload::Document { body, .. } => &body[5..],
+            Payload::Raw { body } => body,
+        }
+    }
 }
 
-const CARRIER_TABLE: [Carrier; 8] = [
-    Carrier { name: "int32", form: Form::Array { width: 4, type_byte: 0x10, kind: Kind::Int32 } },
-    Carrier { name: "double", form: Form::Array { width: 8, type_byte: 0x01, kind: Kind::Double } },
-    Carrier { name: "long", form: Form::Array { width: 8, type_byte: 0x12, kind: Kind::Long } },
-    Carrier { name: "date", form: Form::Array { width: 8, type_byte: 0x09, kind: Kind::Long } },
-    Carrier { name: "timestamp", form: Form::Array { width: 8, type_byte: 0x11, kind: Kind::Timestamp } },
-    Carrier { name: "decimal128", form: Form::Array { width: 16, type_byte: 0x13, kind: Kind::Decimal } },
-    Carrier { name: "string", form: Form::String },
-    Carrier { name: "binary", form: Form::Binary },
-];
+fn payload(target: usize, name: &str, pattern: u8, random: &mut dyn Read) -> Payload {
+    if let Some(doc) = build_doc(target, name, pattern, random) {
+        let body = wrap_doc(&doc);
+        return Payload::Document { doc, body };
+    }
+    let mut body = vec![0u8; target];
+    let crypto = if pattern == 10 {
+        let mut bytes = vec![0u8; target];
+        random.read_exact(&mut bytes).expect("urandom read");
+        bytes
+    } else {
+        Vec::new()
+    };
+    fill_payload(&mut body, 0, target, pattern, &mut xorshift(0xB0D + pattern as u32), &crypto);
+    Payload::Raw { body }
+}
+
+fn wrap_doc(doc: &[u8]) -> Vec<u8> {
+    let mut body = vec![0u8; 5 + doc.len()];
+    body[4] = 0;
+    body[5..].copy_from_slice(doc);
+    body
+}
+
+struct Crypto<'a> {
+    random: &'a mut dyn Read,
+    buf: Vec<u8>,
+    at: usize,
+}
+
+impl<'a> Crypto<'a> {
+    fn open(random: &'a mut dyn Read, pattern: u8, window: usize) -> Self {
+        let mut buf = Vec::new();
+        if pattern == 10 {
+            buf = vec![0u8; window];
+            random.read_exact(&mut buf).expect("urandom read");
+        }
+        Self { random, buf, at: 0 }
+    }
+
+    fn take(&mut self, need: usize) -> &[u8] {
+        if self.at + need > self.buf.len() {
+            self.random.read_exact(&mut self.buf).expect("urandom");
+            self.at = 0;
+        }
+        let start = self.at;
+        self.at += need;
+        &self.buf[start..self.at]
+    }
+}
 
 fn carrier(name: &str) -> &'static Carrier {
-    CARRIER_TABLE.iter().find(|carrier| carrier.name == name).unwrap_or_else(|| panic!("unknown carrier {name}"))
+    CARRIER_TABLE.iter().copied().find(|carrier| carrier.name == name).unwrap_or_else(|| panic!("unknown carrier {name}"))
 }
 
 fn build_doc(target: usize, name: &str, pattern: u8, random: &mut dyn Read) -> Option<Vec<u8>> {
@@ -553,14 +679,7 @@ fn build_array(target: usize, pattern: u8, width: usize, type_byte: u8, kind: Ki
     let arr_size_at = p;
     p += 4;
     let mut rand = xorshift(0xA11A + pattern as u32 * 17 + width as u32);
-    let mut crypto = if pattern == 10 {
-        let mut bytes = vec![0u8; width * 64];
-        random.read_exact(&mut bytes).expect("urandom read");
-        bytes
-    } else {
-        Vec::new()
-    };
-    let mut crypto_at = 0usize;
+    let mut crypto = Crypto::open(random, pattern, width * 64);
     let mut i = 0usize;
     loop {
         let key = i.to_string();
@@ -572,39 +691,33 @@ fn build_array(target: usize, pattern: u8, width: usize, type_byte: u8, kind: Ki
         p += key.len();
         buf[p] = 0;
         p += 1;
-        match kind {
-            Kind::Int32 => {
-                let value = int_value(i, pattern, &mut rand, random, &mut crypto, &mut crypto_at);
-                buf[p..p + 4].copy_from_slice(&value.to_le_bytes());
-            }
-            Kind::Double => {
-                if pattern == 10 {
-                    refill(random, &mut crypto, &mut crypto_at, 8);
-                    buf[p..p + 8].copy_from_slice(&crypto[crypto_at..crypto_at + 8]);
-                    crypto_at += 8;
-                } else {
+        // Pattern 10 copies width raw bytes. The seeded ladders are not called.
+        if pattern == 10 {
+            let drawn = crypto.take(width);
+            buf[p..p + width].copy_from_slice(drawn);
+        } else {
+            match kind {
+                Kind::Int32 => {
+                    let value = int_value(i, pattern, &mut rand);
+                    buf[p..p + 4].copy_from_slice(&value.to_le_bytes());
+                }
+                Kind::Double => {
                     let n = double_value(i, pattern, &mut rand);
                     buf[p..p + 8].copy_from_slice(&n.to_le_bytes());
                 }
-            }
-            Kind::Long => {
-                if pattern == 10 {
-                    refill(random, &mut crypto, &mut crypto_at, 8);
-                    buf[p..p + 8].copy_from_slice(&crypto[crypto_at..crypto_at + 8]);
-                    crypto_at += 8;
-                } else {
+                Kind::Long => {
                     let n = long_value(i, pattern, &mut rand);
                     buf[p..p + 8].copy_from_slice(&n.to_le_bytes());
                 }
-            }
-            Kind::Timestamp => {
-                let (inc, sec) = timestamp_value(i, pattern, &mut rand, random, &mut crypto, &mut crypto_at);
-                buf[p..p + 4].copy_from_slice(&inc.to_le_bytes());
-                buf[p + 4..p + 8].copy_from_slice(&sec.to_le_bytes());
-            }
-            Kind::Decimal => {
-                buf[p..p + 16].fill(0);
-                write_decimal(i, pattern, &mut rand, random, &mut crypto, &mut crypto_at, &mut buf[p..p + 16]);
+                Kind::Timestamp => {
+                    let (inc, sec) = timestamp_value(i, pattern, &mut rand);
+                    buf[p..p + 4].copy_from_slice(&inc.to_le_bytes());
+                    buf[p + 4..p + 8].copy_from_slice(&sec.to_le_bytes());
+                }
+                Kind::Decimal => {
+                    buf[p..p + 16].fill(0);
+                    write_decimal(i, pattern, &mut rand, &mut buf[p..p + 16]);
+                }
             }
         }
         p += width;
@@ -622,14 +735,8 @@ fn build_array(target: usize, pattern: u8, width: usize, type_byte: u8, kind: Ki
     Some(buf[..p].to_vec())
 }
 
-fn refill(random: &mut dyn Read, crypto: &mut Vec<u8>, at: &mut usize, need: usize) {
-    if *at + need > crypto.len() {
-        random.read_exact(crypto).expect("urandom");
-        *at = 0;
-    }
-}
-
-fn int_value(i: usize, pattern: u8, rand: &mut impl FnMut() -> u32, random: &mut dyn Read, crypto: &mut Vec<u8>, crypto_at: &mut usize) -> i32 {
+// Pattern 10 copies raw bytes in the array builder and does not call these ladders.
+fn int_value(i: usize, pattern: u8, rand: &mut impl FnMut() -> u32) -> i32 {
     match pattern {
         1 => 0,
         2 => (i & 3) as i32,
@@ -640,19 +747,12 @@ fn int_value(i: usize, pattern: u8, rand: &mut impl FnMut() -> u32, random: &mut
         7 => if i & 1 == 0 { (i & 15) as i32 } else { (rand() & 0xffff) as i32 },
         8 => (rand() % 1_000_000) as i32,
         9 => rand() as i32,
-        10 => {
-            refill(random, crypto, crypto_at, 4);
-            let v = i32::from_le_bytes(crypto[*crypto_at..*crypto_at + 4].try_into().unwrap());
-            *crypto_at += 4;
-            v
-        }
         _ => panic!("pattern {pattern}"),
     }
 }
 
 fn long_value(i: usize, pattern: u8, rand: &mut impl FnMut() -> u32) -> i64 {
     // The same ladder as int32, widened. Values fit in 32 bits, so the high four bytes stay zero.
-    // Pattern 10 copies raw bytes in the array builder and does not call this ladder.
     match pattern {
         1 => 0,
         2 => (i & 3) as i64,
@@ -667,21 +767,13 @@ fn long_value(i: usize, pattern: u8, rand: &mut impl FnMut() -> u32) -> i64 {
     }
 }
 
-fn timestamp_value(i: usize, pattern: u8, rand: &mut impl FnMut() -> u32, random: &mut dyn Read, crypto: &mut Vec<u8>, crypto_at: &mut usize) -> (u32, u32) {
+fn timestamp_value(i: usize, pattern: u8, rand: &mut impl FnMut() -> u32) -> (u32, u32) {
     // BSON timestamp is a uint32 increment and a uint32 seconds, not one int64.
-    if pattern == 10 {
-        refill(random, crypto, crypto_at, 8);
-        let inc = u32::from_le_bytes(crypto[*crypto_at..*crypto_at + 4].try_into().unwrap());
-        let sec = u32::from_le_bytes(crypto[*crypto_at + 4..*crypto_at + 8].try_into().unwrap());
-        *crypto_at += 8;
-        return (inc, sec);
-    }
     let low = long_value(i, pattern, rand) as u32;
     (low, low)
 }
 
 fn double_value(i: usize, pattern: u8, rand: &mut impl FnMut() -> u32) -> f64 {
-    // Pattern 10 copies raw bytes in the array builder and does not call this ladder.
     match pattern {
         1 => 0.0,
         2 => (i & 3) as f64,
@@ -696,14 +788,9 @@ fn double_value(i: usize, pattern: u8, rand: &mut impl FnMut() -> u32) -> f64 {
     }
 }
 
-fn write_decimal(i: usize, pattern: u8, rand: &mut impl FnMut() -> u32, random: &mut dyn Read, crypto: &mut Vec<u8>, crypto_at: &mut usize, slot: &mut [u8]) {
+fn write_decimal(i: usize, pattern: u8, rand: &mut impl FnMut() -> u32, slot: &mut [u8]) {
     if pattern == 1 { return; }
-    if pattern == 10 {
-        refill(random, crypto, crypto_at, 16);
-        slot.copy_from_slice(&crypto[*crypto_at..*crypto_at + 16]);
-        *crypto_at += 16;
-        return;
-    }
+    if pattern > 9 { panic!("pattern {pattern}"); }
     if pattern >= 7 {
         let v = if pattern == 9 { rand() } else if pattern == 8 { rand() % 1_000_000 } else { (i & 0xffff) as u32 };
         slot[..4].copy_from_slice(&v.to_le_bytes());
@@ -732,10 +819,9 @@ fn guard_trip() -> usize {
     0
 }
 
-fn write_grid(path: &str, meta: &Value, points: &[Point]) {
+fn write_grid(path: &str, meta: &str, points: &[Point]) {
     let mut file = File::create(path).expect("grid");
-    write!(file, "{{\n  \"meta\": ").unwrap();
-    serde_json::to_writer_pretty(&mut file, meta).unwrap();
+    write!(file, "{{\n  \"meta\": {meta}").unwrap();
     write!(file, ",\n  \"rows\": [\n").unwrap();
     for (i, point) in points.iter().enumerate() {
         write!(file, "    ").unwrap();
@@ -764,37 +850,65 @@ fn lookup<'a>(map: &HashMap<RowKey<'a>, &'a Point>, slice: &str, carrier: &str, 
     })
 }
 
-fn write_digest(path: &str, points: &[Point]) {
+fn expanding_target(map: &HashMap<RowKey<'_>, &Point>, slice: &str, carrier: &str, pattern: u8, compressor: &str, level: Option<i32>) -> usize {
+    map.values().filter(|point| {
+        point.slice == slice && point.carrier == carrier && point.pattern == pattern && point.compressor == compressor && point.level == level && point.expands
+    }).map(|point| point.target).max().unwrap_or(0)
+}
+
+fn digest_text(points: &[Point]) -> String {
     let map = point_index(points);
     let mut out = String::new();
-    out.push_str("LENGTH zlib6 zstd3 snappy\n");
+    out.push_str(&length_section(&map));
+    out.push_str(&zstd_section(&map));
+    out.push_str(&one_mib_section(&map));
+    out.push_str(&level64_section(&map));
+    out.push_str(&level_max_section(&map));
+    out.push_str(&pairs_section(&map));
+    let tiny = lookup(&map, "length", "int32", 1, "zlib", Some(6), 1);
+    out.push_str(&format!("TINY zlib6 body {} wire {} ratio {} expands {}\n", tiny.body, tiny.wire, tiny.wire_ratio, tiny.expands));
+    out
+}
+
+fn length_section(map: &HashMap<RowKey<'_>, &Point>) -> String {
+    let mut out = String::from("LENGTH zlib6 zstd3 snappy\n");
     for &carrier in DIGEST_CARRIERS {
         for pattern in [1u8, 5, 10] {
-            let last = |comp, level| {
-                points.iter().filter(|p| p.slice == "length" && p.carrier == carrier && p.pattern == pattern && p.compressor == comp && p.level == level && p.expands).map(|p| p.target).max()
-            };
-            let cell = |comp, level, target| lookup(&map, "length", carrier, pattern, comp, level, target).wire_ratio;
-            let bits = lookup(&map, "length", carrier, pattern, "zlib", Some(6), KIB_64).bits;
-            out.push_str(&format!("{carrier}\t{pattern}\t{bits}\tzlib {}\tzstd {}\tsnappy {}\tz6 {} {} {}\tz3 {} {} {}\tsn {} {} {}\n",
-                last("zlib", Some(6)).unwrap_or(0),
-                last("zstd", Some(3)).unwrap_or(0),
-                last("snappy", None).unwrap_or(0),
-                cell("zlib", Some(6), KIB_64), cell("zlib", Some(6), MIB), cell("zlib", Some(6), BSON_MAX),
-                cell("zstd", Some(3), KIB_64), cell("zstd", Some(3), MIB), cell("zstd", Some(3), BSON_MAX),
-                cell("snappy", None, KIB_64), cell("snappy", None, MIB), cell("snappy", None, BSON_MAX)));
+            out.push_str(&length_line(map, carrier, pattern));
         }
     }
-    out.push_str("ZSTD1V3\n");
+    out
+}
+
+fn length_line(map: &HashMap<RowKey<'_>, &Point>, carrier: &str, pattern: u8) -> String {
+    let last = |comp, level| expanding_target(map, "length", carrier, pattern, comp, level);
+    let cell = |comp, level, target| lookup(map, "length", carrier, pattern, comp, level, target).wire_ratio;
+    let bits = lookup(map, "length", carrier, pattern, "zlib", Some(6), KIB_64).bits;
+    format!("{carrier}\t{pattern}\t{bits}\tzlib {}\tzstd {}\tsnappy {}\tz6 {} {} {}\tz3 {} {} {}\tsn {} {} {}\n",
+        last("zlib", Some(6)),
+        last("zstd", Some(3)),
+        last("snappy", None),
+        cell("zlib", Some(6), KIB_64), cell("zlib", Some(6), MIB), cell("zlib", Some(6), BSON_MAX),
+        cell("zstd", Some(3), KIB_64), cell("zstd", Some(3), MIB), cell("zstd", Some(3), BSON_MAX),
+        cell("snappy", None, KIB_64), cell("snappy", None, MIB), cell("snappy", None, BSON_MAX))
+}
+
+fn zstd_section(map: &HashMap<RowKey<'_>, &Point>) -> String {
+    let mut out = String::from("ZSTD1V3\n");
     for &carrier in DIGEST_CARRIERS {
-        let c = |level, target| lookup(&map, "length", carrier, 1, "zstd", Some(level), target).wire_ratio;
+        let c = |level, target| lookup(map, "length", carrier, 1, "zstd", Some(level), target).wire_ratio;
         out.push_str(&format!("{carrier}\t{}\t{}\t{}\t{}\t{}\n", c(1, MIB), c(3, MIB), c(1, BSON_MAX), c(3, BSON_MAX), c(9, BSON_MAX)));
     }
-    out.push_str("ONE_MIB\n");
+    out
+}
+
+fn one_mib_section(map: &HashMap<RowKey<'_>, &Point>) -> String {
+    let mut out = String::from("ONE_MIB\n");
     for pattern in 1u8..=10 {
         let mut line = format!("p{pattern}");
         for &carrier in DIGEST_CARRIERS {
             for (comp, level) in [("zlib", Some(6)), ("zstd", Some(3)), ("snappy", None)] {
-                let p = lookup(&map, "oneMiB", carrier, pattern, comp, level, MIB);
+                let p = lookup(map, "oneMiB", carrier, pattern, comp, level, MIB);
                 line.push_str(&format!("\t{carrier}:{comp}:{}:{}", p.bits, p.wire_ratio));
             }
         }
@@ -802,38 +916,59 @@ fn write_digest(path: &str, points: &[Point]) {
         out.push_str(&line);
     }
     out.push('\n');
-    out.push_str("LEVEL64 int32 pattern 1 zstd\n");
-    for p in points.iter().filter(|p| p.slice == "level64" && p.carrier == "int32" && p.pattern == 1 && p.compressor == "zstd") {
+    out
+}
+
+fn level64_section(map: &HashMap<RowKey<'_>, &Point>) -> String {
+    let mut out = String::from("LEVEL64 int32 pattern 1 zstd\n");
+    for level in ZSTD_LEVEL64 {
+        let p = lookup(map, "level64", "int32", 1, "zstd", Some(level), KIB_64);
         out.push_str(&format!("{}:{}\n", p.level.unwrap(), p.wire_ratio));
     }
-    out.push_str("LEVELMAX\n");
+    out
+}
+
+fn level_max_section(map: &HashMap<RowKey<'_>, &Point>) -> String {
+    let mut out = String::from("LEVELMAX\n");
     for carrier in ["int32", "binary"] {
         for pattern in [1u8, 10] {
-            for p in points.iter().filter(|p| p.slice == "levelMax" && p.carrier == carrier && p.pattern == pattern && (p.compressor == "zlib" || p.compressor == "zstd" || p.compressor == "snappy")) {
-                out.push_str(&format!("{carrier} p{pattern} {} {:?} {} extra {}\n", p.compressor, p.level, p.wire_ratio, p.wire as isize - (HEADER + p.body) as isize));
+            for level in ZLIB_ALL {
+                out.push_str(&level_max_line(lookup(map, "levelMax", carrier, pattern, "zlib", Some(level), BSON_MAX)));
             }
+            for level in ZSTD_LEVEL_MAX {
+                out.push_str(&level_max_line(lookup(map, "levelMax", carrier, pattern, "zstd", Some(level), BSON_MAX)));
+            }
+            out.push_str(&level_max_line(lookup(map, "levelMax", carrier, pattern, "snappy", None, BSON_MAX)));
         }
     }
+    out
+}
+
+fn level_max_line(point: &Point) -> String {
+    format!("{} p{} {} {:?} {} extra {}\n", point.carrier, point.pattern, point.compressor, point.level, point.wire_ratio, point.wire as isize - (HEADER + point.body) as isize)
+}
+
+fn pairs_section(map: &HashMap<RowKey<'_>, &Point>) -> String {
     let mut z_pairs = 0usize;
     let mut z_mis = 0usize;
     let mut s_pairs = 0usize;
     let mut s_mis = 0usize;
-    for p in points.iter().filter(|p| p.compressor == "zlib" && p.level == Some(-1)) {
-        let o = lookup(&map, p.slice, p.carrier, p.pattern, "zlib", Some(6), p.target);
+    for point in map.values().filter(|point| point.compressor == "zlib" && point.level == Some(-1)) {
+        let other = lookup(map, point.slice, point.carrier, point.pattern, "zlib", Some(6), point.target);
         z_pairs += 1;
-        if o.compressed != p.compressed { z_mis += 1; }
+        if other.compressed != point.compressed { z_mis += 1; }
     }
-    for p in points.iter().filter(|p| p.compressor == "zstd" && p.level == Some(-1)) {
-        if let Some(o) = map.get(&(p.slice, p.carrier, p.pattern, "zstd", Some(3), p.target)) {
+    for point in map.values().filter(|point| point.compressor == "zstd" && point.level == Some(-1)) {
+        if let Some(other) = map.get(&(point.slice, point.carrier, point.pattern, "zstd", Some(3), point.target)) {
             s_pairs += 1;
-            if o.compressed != p.compressed { s_mis += 1; }
+            if other.compressed != point.compressed { s_mis += 1; }
         }
     }
-    out.push_str(&format!("PAIRS zlib -1 vs 6 {z_pairs} mismatches {z_mis}\n"));
-    out.push_str(&format!("PAIRS zstd -1 vs 3 {s_pairs} mismatches {s_mis}\n"));
-    let tiny = lookup(&map, "length", "int32", 1, "zlib", Some(6), 1);
-    out.push_str(&format!("TINY zlib6 body {} wire {} ratio {} expands {}\n", tiny.body, tiny.wire, tiny.wire_ratio, tiny.expands));
-    std::fs::write(path, out).unwrap();
+    format!("PAIRS zlib -1 vs 6 {z_pairs} mismatches {z_mis}\nPAIRS zstd -1 vs 3 {s_pairs} mismatches {s_mis}\n")
+}
+
+fn write_digest(path: &str, points: &[Point]) {
+    std::fs::write(path, digest_text(points)).unwrap();
 }
 
 #[cfg(test)]
@@ -848,9 +983,42 @@ mod tests {
         }
     }
 
+    struct Script {
+        data: Vec<u8>,
+        at: usize,
+    }
+
+    impl Read for Script {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = buf.len().min(self.data.len() - self.at);
+            if n == 0 { return Ok(0); }
+            buf[..n].copy_from_slice(&self.data[self.at..self.at + n]);
+            self.at += n;
+            Ok(n)
+        }
+    }
+
     fn doc(target: usize, name: &str, pattern: u8) -> Vec<u8> {
         let mut random = PanicRead;
         build_doc(target, name, pattern, &mut random).unwrap()
+    }
+
+    fn carrier_names<'a>(carriers: &'a [&'a Carrier]) -> Vec<&'a str> {
+        carriers.iter().map(|carrier| carrier.name).collect()
+    }
+
+    fn sample(slice: &'static str, carrier: &'static str, pattern: u8, compressor: &'static str, level: Option<i32>, target: usize, bits: f64, wire_ratio: f64, expands: bool) -> Point {
+        Point {
+            slice, carrier, pattern, shape: "document", target, doc: Some(target),
+            body: 10, bits, compressor, level, compressed: 4, raw_ratio: wire_ratio,
+            wire: 40, wire_ratio, expands,
+        }
+    }
+
+    fn panic_text(err: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(text) = err.downcast_ref::<String>() { return text.clone(); }
+        if let Some(text) = err.downcast_ref::<&str>() { return (*text).to_string(); }
+        String::new()
     }
 
     #[test]
@@ -903,27 +1071,93 @@ mod tests {
     }
 
     #[test]
+    fn pattern_10_copies_width_bytes() {
+        let mut data = vec![0u8; 4096];
+        data[..16].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+        let mut random = Script { data: data.clone(), at: 0 };
+        let int32 = build_doc(64, "int32", 10, &mut random).unwrap();
+        assert!(int32.windows(4).any(|bytes| bytes == [1, 2, 3, 4]));
+        let mut random = Script { data: data.clone(), at: 0 };
+        let decimal = build_doc(128, "decimal128", 10, &mut random).unwrap();
+        assert!(decimal.windows(16).any(|bytes| bytes == &data[..16]));
+    }
+
+    #[test]
+    fn crypto_refill_rereads_the_window() {
+        let mut random = Script { data: vec![1, 1, 1, 1, 2, 2, 2, 2], at: 0 };
+        let mut crypto = Crypto::open(&mut random, 10, 4);
+        assert_eq!(crypto.take(4), &[1, 1, 1, 1]);
+        assert_eq!(crypto.take(4), &[2, 2, 2, 2]);
+    }
+
+    #[test]
+    fn string_pattern_10_stays_printable() {
+        let source = [0u8, 1, 2, 200, 94, 95, 96, 10, 31];
+        let mut random = Script { data: source.to_vec(), at: 0 };
+        let doc = build_doc(32, "string", 10, &mut random).unwrap();
+        let content = &doc[21..30];
+        for (got, src) in content.iter().zip(source) {
+            assert_eq!(*got, 32 + (src % 95));
+        }
+    }
+
+    #[test]
     fn slice_table() {
         let tags: Vec<_> = SLICES.iter().map(|slice| slice.tag).collect();
         assert_eq!(tags, ["length", "level64", "oneMiB", "levelMax", "surface", "compare"]);
         assert_eq!(PATTERNS_SURFACE, [2, 3, 4, 6, 7, 8, 9]);
         let length = SLICES.iter().find(|slice| slice.tag == "length").unwrap();
         let surface = SLICES.iter().find(|slice| slice.tag == "surface").unwrap();
+        let compare = SLICES.iter().find(|slice| slice.tag == "compare").unwrap();
         assert_eq!(length.sizes, surface.sizes);
         assert_eq!(length.sizes.len(), 25);
         assert_eq!(length.sizes[0], 1);
         assert_eq!(*length.sizes.last().unwrap(), BSON_MAX);
         assert_eq!(length.patterns, &[1, 5, 10]);
+        assert_eq!(carrier_names(length.carriers), ["int32", "double", "long", "date", "decimal128", "string", "binary"]);
+        assert_eq!(carrier_names(compare.carriers), ["long", "date", "timestamp"]);
         let level_max = SLICES.iter().find(|slice| slice.tag == "levelMax").unwrap();
         assert_eq!(level_max.zstd, &[-1, 1, 3, 6, 9, 19, 22]);
-        assert_eq!(level_max.carriers, &["binary", "int32"]);
+        assert_eq!(carrier_names(level_max.carriers), ["binary", "int32"]);
         assert_eq!(level_max.patterns, &[1, 10]);
         assert_eq!(level_max.sizes, &[BSON_MAX]);
-        let meta = slice_meta().as_object().unwrap().clone();
-        let keys: Vec<_> = meta.keys().cloned().collect();
-        assert_eq!(keys, ["compare", "length", "level64", "levelMax", "oneMiB", "surface"]);
-        assert_eq!(meta["levelMax"], "16777216; binary and int32; patterns 1 and 10; zlib -1 and 0-9; zstd -1,1,3,6,9,19,22; snappy");
-        assert_eq!(meta["surface"], "2^0 through 2^23 plus 16777216; seven carriers; patterns 2, 3, 4, 6, 7, 8, 9; zlib 6; zstd 3; snappy");
+        for name in DIGEST_CARRIERS {
+            assert!(CARRIER_TABLE.iter().any(|carrier| carrier.name == *name));
+        }
+        let text = slice_meta_json();
+        let mut at = 0;
+        for tag in SLICE_META_ORDER {
+            let key = format!("\"{tag}\"");
+            let found = text[at..].find(&key).unwrap();
+            at += found + key.len();
+        }
+        assert!(text.contains("\"levelMax\": \"16777216; binary and int32; patterns 1 and 10; zlib -1 and 0-9; zstd -1,1,3,6,9,19,22; snappy\""));
+        assert!(text.contains("\"surface\": \"2^0 through 2^23 plus 16777216; seven carriers; patterns 2, 3, 4, 6, 7, 8, 9; zlib 6; zstd 3; snappy\""));
+        let mut slices = serde_json::Map::new();
+        for tag in SLICE_META_ORDER {
+            let about = SLICES.iter().find(|slice| slice.tag == tag).unwrap().about;
+            slices.insert(tag.to_string(), Value::String(about.to_string()));
+        }
+        let expected = json!({
+            "compressor": "rust",
+            "rustc": "1.99.1",
+            "libraries": {
+                "snappy": "snap 1.1.2 raw, same framing as snappy::RawCompress and the Rust driver",
+                "zlib": "flate2 1.1.11 default backend (miniz_oxide), zlib wrapper, same call the Rust driver makes",
+                "zstd": "zstd 0.14.4"
+            },
+            "zstdDefault": zstd::DEFAULT_COMPRESSION_LEVEL,
+            "zstdLevelRange": [1, 22],
+            "ratio": "originalWire / framedWire. Higher is tighter. none is 1.",
+            "originalWire": "16-byte MsgHeader + body",
+            "framedWire": "16-byte MsgHeader + 9-byte OP_COMPRESSED details + compressed body",
+            "body": "4 flag bytes, kind byte 0, and a BSON {ping:1, p:<payload>} document. A target below a legal document is a raw buffer (shape raw).",
+            "maxMessage": MAX_MESSAGE,
+            "guardTripsAtBody": 7,
+            "slices": slices,
+            "count": 3
+        });
+        assert_eq!(meta_json(7, 3, 1, 22), serde_json::to_string_pretty(&expected).unwrap());
     }
 
     #[test]
@@ -956,13 +1190,29 @@ mod tests {
         let names: Vec<_> = points.iter().map(|point| (point.compressor, point.level)).collect();
         assert_eq!(names, [("none", None), ("zlib", Some(6)), ("zlib", Some(-1)), ("zstd", Some(3)), ("zstd", Some(1)), ("snappy", None)]);
         let none = &points[0];
+        assert_eq!(none.shape, "document");
         assert_eq!(none.wire_ratio, 1.0);
         assert_eq!(none.raw_ratio, 1.0);
         assert!(!none.expands);
         assert_eq!(none.doc, Some(30));
+        assert_eq!(none.compressed, none.body);
+        assert_eq!(none.wire, HEADER + none.body);
+        let zlib = &points[1];
+        assert_eq!(zlib.wire, HEADER + DETAILS + zlib.compressed);
         let map = point_index(&points);
         assert_eq!(lookup(&map, "length", "int32", 1, "none", None, 32).doc, Some(30));
         assert!(map.get(&("length", "int32", 1, "zstd", Some(9), 32)).is_none());
+    }
+
+    #[test]
+    fn raw_target_has_no_document() {
+        let mut random = PanicRead;
+        let points = measure("length", "int32", 1, 1, &[6], &[3], &mut random);
+        assert_eq!(points[0].shape, "raw");
+        assert_eq!(points[0].doc, None);
+        assert_eq!(points[0].body, 1);
+        assert_eq!(points[0].bits, 0.0);
+        assert_eq!(points[0].wire_ratio, 1.0);
     }
 
     #[test]
@@ -971,5 +1221,90 @@ mod tests {
         assert_eq!(parse_tokens::<u8>("COMPRESSOR_PATTERNS", "1,10"), vec![1, 10]);
         let caught = std::panic::catch_unwind(|| parse_tokens::<i32>("COMPRESSOR_ZSTD", "3,no"));
         assert!(caught.is_err());
+    }
+
+    #[test]
+    fn unknown_filter_names() {
+        require_known("COMPRESSOR_SLICES", &["length".into(), "compare".into()]);
+        require_known("COMPRESSOR_CARRIERS", &["timestamp".into()]);
+        let err = std::panic::catch_unwind(|| require_known("COMPRESSOR_SLICES", &["lenght".into()])).unwrap_err();
+        assert_eq!(panic_text(err), "COMPRESSOR_SLICES: unknown lenght");
+        let err = std::panic::catch_unwind(|| require_known("COMPRESSOR_CARRIERS", &["int3".into()])).unwrap_err();
+        assert_eq!(panic_text(err), "COMPRESSOR_CARRIERS: unknown int3");
+    }
+
+    #[test]
+    fn digest_lines_come_from_the_index() {
+        let mut points = Vec::new();
+        for (level, ratio, expands) in [(Some(6), 1.5, true), (Some(6), 2.5, false), (Some(6), 3.5, false)] {
+            let target = [KIB_64, MIB, BSON_MAX][points.len()];
+            points.push(sample("length", "int32", 1, "zlib", level, target, 2.5, ratio, expands));
+        }
+        for (ratio, expands) in [(4.5, false), (5.5, true), (6.5, false)] {
+            let target = [KIB_64, MIB, BSON_MAX][points.len() - 3];
+            points.push(sample("length", "int32", 1, "zstd", Some(3), target, 2.5, ratio, expands));
+        }
+        for ratio in [7.5, 8.5, 9.5] {
+            let target = [KIB_64, MIB, BSON_MAX][points.len() - 6];
+            points.push(sample("length", "int32", 1, "snappy", None, target, 2.5, ratio, false));
+        }
+        let map = point_index(&points);
+        assert_eq!(
+            length_line(&map, "int32", 1),
+            "int32\t1\t2.5\tzlib 65536\tzstd 1048576\tsnappy 0\tz6 1.5 2.5 3.5\tz3 4.5 5.5 6.5\tsn 7.5 8.5 9.5\n"
+        );
+        assert_eq!(expanding_target(&map, "length", "int32", 1, "snappy", None), 0);
+
+        let mut one = Vec::new();
+        for pattern in 1u8..=10 {
+            for carrier in DIGEST_CARRIERS {
+                for (comp, level) in [("zlib", Some(6)), ("zstd", Some(3)), ("snappy", None)] {
+                    one.push(sample("oneMiB", carrier, pattern, comp, level, MIB, 1.5, 2.5, false));
+                }
+            }
+        }
+        let text = one_mib_section(&point_index(&one));
+        assert!(text.starts_with("ONE_MIB\n\np1\t"));
+        assert!(text.contains("\tint32:zlib:1.5:2.5"));
+        assert!(text.ends_with('\n'));
+
+        let mut levels = Vec::new();
+        for level in ZSTD_LEVEL64.into_iter().rev() {
+            levels.push(sample("level64", "int32", 1, "zstd", Some(level), KIB_64, 1.0, level as f64, false));
+        }
+        let text = level64_section(&point_index(&levels));
+        assert!(text.starts_with("LEVEL64 int32 pattern 1 zstd\n-1:-1\n1:1\n"));
+        assert!(text.ends_with("22:22\n"));
+
+        let mut maxes = Vec::new();
+        for carrier in ["binary", "int32"] {
+            for pattern in [10u8, 1] {
+                maxes.push(sample("levelMax", carrier, pattern, "snappy", None, BSON_MAX, 1.0, 1.25, false));
+                for level in ZSTD_LEVEL_MAX.into_iter().rev() {
+                    maxes.push(sample("levelMax", carrier, pattern, "zstd", Some(level), BSON_MAX, 1.0, 1.25, false));
+                }
+                for level in ZLIB_ALL.into_iter().rev() {
+                    maxes.push(sample("levelMax", carrier, pattern, "zlib", Some(level), BSON_MAX, 1.0, 1.25, false));
+                }
+            }
+        }
+        let text = level_max_section(&point_index(&maxes));
+        assert!(text.starts_with("LEVELMAX\nint32 p1 zlib Some(-1) 1.25 extra 14\n"));
+        assert!(text.contains("int32 p1 zstd Some(-1) 1.25 extra 14\n"));
+        assert!(text.contains("int32 p1 snappy None 1.25 extra 14\n"));
+
+        let mut pairs = vec![
+            sample("length", "int32", 1, "zlib", Some(-1), 32, 1.0, 1.0, false),
+            sample("length", "int32", 1, "zlib", Some(6), 32, 1.0, 1.0, false),
+            sample("length", "int32", 1, "zstd", Some(-1), 32, 1.0, 1.0, false),
+            sample("length", "double", 1, "zstd", Some(-1), 32, 1.0, 1.0, false),
+            sample("length", "double", 1, "zstd", Some(3), 32, 1.0, 1.0, false),
+        ];
+        pairs[0].compressed = 4;
+        pairs[1].compressed = 4;
+        pairs[2].compressed = 9;
+        pairs[3].compressed = 8;
+        pairs[4].compressed = 3;
+        assert_eq!(pairs_section(&point_index(&pairs)), "PAIRS zlib -1 vs 6 1 mismatches 0\nPAIRS zstd -1 vs 3 1 mismatches 1\n");
     }
 }
