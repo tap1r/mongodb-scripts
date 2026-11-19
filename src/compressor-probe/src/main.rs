@@ -255,8 +255,8 @@ struct Run {
 impl Run {
     fn from_env() -> Self {
         Self {
-            slices: name_env("COMPRESSOR_SLICES"),
-            carriers: name_env("COMPRESSOR_CARRIERS"),
+            slices: name_env("COMPRESSOR_SLICES", known_slice),
+            carriers: name_env("COMPRESSOR_CARRIERS", known_carrier),
             patterns: parse_env("COMPRESSOR_PATTERNS"),
             zstd: parse_env("COMPRESSOR_ZSTD")
         }
@@ -330,20 +330,19 @@ fn collect(run: &Run, range: &std::ops::RangeInclusive<i32>, started: Instant, r
     points
 }
 
-fn name_env(key: &str) -> Vec<String> {
+fn known_slice(name: &str) -> bool {
+    SLICES.iter().any(|slice| slice.tag == name)
+}
+
+fn name_env(key: &str, known: impl Fn(&str) -> bool) -> Vec<String> {
     let names: Vec<String> = parse_env(key);
-    require_known(key, &names);
+    require_known(key, &names, known);
     names
 }
 
-fn require_known(key: &str, names: &[String]) {
+fn require_known(key: &str, names: &[String], known: impl Fn(&str) -> bool) {
     for name in names {
-        let known = match key {
-            "COMPRESSOR_SLICES" => SLICES.iter().any(|slice| slice.tag == name),
-            "COMPRESSOR_CARRIERS" => CARRIER_TABLE.iter().any(|carrier| carrier.name == name),
-            _ => false
-        };
-        if !known {
+        if !known(name) {
             panic!("{key}: unknown {name}");
         }
     }
@@ -504,7 +503,7 @@ impl Frame<'_> {
     }
 
     fn record(&self, codec: Codec) -> Point {
-        self.point(codec.name(), codec.level(), compressed_len(self.body, codec), codec.details())
+        self.point(codec.name(), codec.level(), codec.compressed_len(self.body), codec.details())
     }
 }
 
@@ -537,6 +536,17 @@ impl Codec {
         match self {
             Codec::None => 0,
             Codec::Zlib(_) | Codec::Zstd(_) | Codec::Snappy => DETAILS
+        }
+    }
+
+    fn compressed_len(self, body: &[u8]) -> usize {
+        match self {
+            Codec::None => body.len(),
+            Codec::Zlib(level) => zlib_compress(body, level).len(),
+            Codec::Zstd(level) => zstd::bulk::compress(body, level).unwrap_or_else(|err| {
+                panic!("zstd {level} on {} bytes: {err}", body.len());
+            }).len(),
+            Codec::Snappy => SnappyEncoder::new().compress_vec(body).expect("snappy").len()
         }
     }
 }
@@ -572,17 +582,6 @@ fn record_levels(points: &mut Vec<Point>, frame: &Frame, levels: &[i32], codec: 
         points.push(frame.record(codec(level)));
     }
     started.elapsed().as_millis()
-}
-
-fn compressed_len(body: &[u8], codec: Codec) -> usize {
-    match codec {
-        Codec::None => body.len(),
-        Codec::Zlib(level) => zlib_compress(body, level).len(),
-        Codec::Zstd(level) => zstd::bulk::compress(body, level).unwrap_or_else(|err| {
-            panic!("zstd {level} on {} bytes: {err}", body.len());
-        }).len(),
-        Codec::Snappy => SnappyEncoder::new().compress_vec(body).expect("snappy").len()
-    }
 }
 
 fn zlib_compress(data: &[u8], level: i32) -> Vec<u8> {
@@ -722,18 +721,16 @@ impl DocBuf {
         }
     }
 
-    fn slot(&mut self, width: usize, i: usize, pattern: u8, kind: Kind, rand: &mut impl FnMut() -> u32) {
-        let start = self.p;
-        write_slot(&mut self.buf[start..start + width], i, pattern, kind, rand);
-        self.p += width;
-    }
-
     fn write_scalar(&mut self, scalar: Scalar, content_len: usize) {
         let string = scalar == Scalar::String;
         self.write_u8(if string { 0x02 } else { 0x05 });
         self.write_key(b"p");
         self.write_i32(if string { content_len as i32 + 1 } else { content_len as i32 });
         if !string { self.write_u8(0); }
+    }
+
+    fn close_scalar(&mut self, scalar: Scalar) {
+        if scalar == Scalar::String { self.write_u8(0); }
     }
 
     fn begin_array(&mut self) -> usize {
@@ -744,13 +741,16 @@ impl DocBuf {
         at
     }
 
-    fn try_element(&mut self, n: usize, type_byte: u8, width: usize, target: usize) -> bool {
+    fn try_element(&mut self, n: usize, type_byte: u8, width: usize, target: usize, fill: impl FnOnce(&mut [u8])) -> bool {
         let mut key = [0u8; 8];
         let key_len = write_index(&mut key, n);
         let need = 1 + key_len + 1 + width;
         if !self.room(need, target) { return false; }
         self.write_u8(type_byte);
         self.write_key(&key[..key_len]);
+        let start = self.p;
+        fill(&mut self.buf[start..start + width]);
+        self.p += width;
         true
     }
 
@@ -883,6 +883,13 @@ fn write_index(buf: &mut [u8], n: usize) -> usize {
     digits
 }
 
+fn assemble(target: usize, body: impl FnOnce(&mut DocBuf)) -> Vec<u8> {
+    let mut doc = DocBuf::new(target);
+    doc.write_ping();
+    body(&mut doc);
+    doc.finish()
+}
+
 fn build_doc(target: usize, carrier: &Carrier, pattern: u8, random: &mut dyn Read) -> Option<Vec<u8>> {
     match carrier.form {
         Form::Scalar(scalar) => build_scalar(target, pattern, scalar, random),
@@ -893,42 +900,44 @@ fn build_doc(target: usize, carrier: &Carrier, pattern: u8, random: &mut dyn Rea
 fn build_scalar(target: usize, pattern: u8, scalar: Scalar, random: &mut dyn Read) -> Option<Vec<u8>> {
     if target < SCALAR_OVERHEAD { return None; }
     let content_len = target - SCALAR_OVERHEAD;
-    let mut doc = DocBuf::new(target);
-    doc.write_ping();
-    let crypto = draw(random, pattern, content_len);
-    let mut rand = xorshift(scalar_seed(pattern));
-    doc.write_scalar(scalar, content_len);
-    doc.fill(content_len, pattern, &mut rand, &crypto);
-    if scalar == Scalar::String && pattern == 10 { doc.remap_printable(content_len); }
-    if scalar == Scalar::String { doc.write_u8(0); }
-    let built = doc.finish();
+    let built = assemble(target, |doc| {
+        let crypto = draw(random, pattern, content_len);
+        let mut rand = xorshift(scalar_seed(pattern));
+        doc.write_scalar(scalar, content_len);
+        doc.fill(content_len, pattern, &mut rand, &crypto);
+        if scalar == Scalar::String && pattern == 10 { doc.remap_printable(content_len); }
+        doc.close_scalar(scalar);
+    });
     if built.len() != target { panic!("scalar size {} != {target}", built.len()); }
     Some(built)
 }
 
 fn build_array(target: usize, pattern: u8, array: Array, random: &mut dyn Read) -> Option<Vec<u8>> {
     if target < ARRAY_FLOOR { return None; }
-    let mut doc = DocBuf::new(target);
-    doc.write_ping();
-    let arr_size_at = doc.begin_array();
-    let mut rand = xorshift(array_seed(pattern, array.width));
-    let mut crypto = Crypto::open(random, pattern, array.width * CRYPTO_WINDOW);
-    let mut i = 0usize;
-    loop {
-        if !doc.try_element(i, array.type_byte, array.width, target) { break; }
-        // Pattern 10 copies width raw bytes. The seeded ladders are not called.
-        if pattern == 10 {
-            let drawn = crypto.take(array.width);
-            doc.write_bytes(drawn);
-        } else {
-            doc.slot(array.width, i, pattern, array.kind, &mut rand);
+    let mut count = 0usize;
+    let built = assemble(target, |doc| {
+        let arr_size_at = doc.begin_array();
+        let mut rand = xorshift(array_seed(pattern, array.width));
+        let mut crypto = Crypto::open(random, pattern, array.width * CRYPTO_WINDOW);
+        let mut i = 0usize;
+        loop {
+            let filled = doc.try_element(i, array.type_byte, array.width, target, |slot| {
+                // Pattern 10 copies width raw bytes. The seeded ladders are not called.
+                if pattern == 10 {
+                    slot.copy_from_slice(crypto.take(array.width));
+                } else {
+                    write_slot(slot, i, pattern, array.kind, &mut rand);
+                }
+            });
+            if !filled { break; }
+            i += 1;
+            if i > ARRAY_CAP { panic!("array element cap"); }
         }
-        i += 1;
-        if i > ARRAY_CAP { panic!("array element cap"); }
-    }
-    if i == 0 { return None; }
-    doc.end_array(arr_size_at);
-    Some(doc.finish())
+        count = i;
+        if i > 0 { doc.end_array(arr_size_at); }
+    });
+    if count == 0 { return None; }
+    Some(built)
 }
 
 fn write_slot(slot: &mut [u8], i: usize, pattern: u8, kind: Kind, rand: &mut impl FnMut() -> u32) {
@@ -1071,26 +1080,28 @@ impl<'a> Grid<'a> {
         Self { rows }
     }
 
-    fn lookup(&self, slice: &str, carrier: &str, pattern: u8, compressor: &str, level: Option<i32>, target: usize) -> &'a Point {
-        self.get(slice, carrier, pattern, compressor, level, target).unwrap_or_else(|| {
-            panic!("missing row {slice} {carrier} pattern {pattern} {compressor} {level:?} t={target}")
+    fn lookup(&self, slice: &str, carrier: &str, pattern: u8, codec: Codec, target: usize) -> &'a Point {
+        self.get(slice, carrier, pattern, codec, target).unwrap_or_else(|| {
+            panic!("missing row {slice} {carrier} pattern {pattern} {} {:?} t={target}", codec.name(), codec.level())
         })
     }
 
-    fn get(&self, slice: &str, carrier: &str, pattern: u8, compressor: &str, level: Option<i32>, target: usize) -> Option<&'a Point> {
-        self.rows.get(&row_key(slice, carrier, pattern, compressor, level, target)).copied()
+    fn get(&self, slice: &str, carrier: &str, pattern: u8, codec: Codec, target: usize) -> Option<&'a Point> {
+        self.rows.get(&row_key(slice, carrier, pattern, codec.name(), codec.level(), target)).copied()
     }
 
-    fn pair_counts(&self, compressor: &str, level: Option<i32>, other_level: Option<i32>, sibling: Sibling) -> (usize, usize) {
+    fn pair_counts(&self, left: Codec, right: Codec, sibling: Sibling) -> (usize, usize) {
+        let name = left.name();
+        let level = left.level();
         let mut pairs = 0usize;
         let mut mismatches = 0usize;
-        for point in self.rows.values().filter(|point| point.compressor == compressor && point.level == level) {
+        for point in self.rows.values().filter(|point| point.compressor == name && point.level == level) {
             let other = match sibling {
-                Sibling::SkipMissing => match self.get(point.slice, point.carrier, point.pattern, compressor, other_level, point.target) {
+                Sibling::SkipMissing => match self.get(point.slice, point.carrier, point.pattern, right, point.target) {
                     Some(other) => other,
                     None => continue
                 },
-                Sibling::Required => self.lookup(point.slice, point.carrier, point.pattern, compressor, other_level, point.target)
+                Sibling::Required => self.lookup(point.slice, point.carrier, point.pattern, right, point.target)
             };
             pairs += 1;
             if other.compressed != point.compressed { mismatches += 1; }
@@ -1098,9 +1109,11 @@ impl<'a> Grid<'a> {
         (pairs, mismatches)
     }
 
-    fn expanding_target(&self, slice: &str, carrier: &str, pattern: u8, compressor: &str, level: Option<i32>) -> usize {
+    fn expanding_target(&self, slice: &str, carrier: &str, pattern: u8, codec: Codec) -> usize {
+        let name = codec.name();
+        let level = codec.level();
         self.rows.values().filter(|point| {
-            point.slice == slice && point.carrier == carrier && point.pattern == pattern && point.compressor == compressor && point.level == level && point.expands
+            point.slice == slice && point.carrier == carrier && point.pattern == pattern && point.compressor == name && point.level == level && point.expands
         }).map(|point| point.target).max().unwrap_or(0)
     }
 
@@ -1117,16 +1130,16 @@ struct Row<'g, 'a> {
 }
 
 impl<'g, 'a> Row<'g, 'a> {
-    fn ratio(&self, compressor: &str, level: Option<i32>, target: usize) -> f64 {
-        self.point(compressor, level, target).wire_ratio
+    fn ratio(&self, codec: Codec, target: usize) -> f64 {
+        self.point(codec, target).wire_ratio
     }
 
-    fn expanding(&self, compressor: &str, level: Option<i32>) -> usize {
-        self.grid.expanding_target(self.slice, self.carrier, self.pattern, compressor, level)
+    fn expanding(&self, codec: Codec) -> usize {
+        self.grid.expanding_target(self.slice, self.carrier, self.pattern, codec)
     }
 
-    fn point(&self, compressor: &str, level: Option<i32>, target: usize) -> &'a Point {
-        self.grid.lookup(self.slice, self.carrier, self.pattern, compressor, level, target)
+    fn point(&self, codec: Codec, target: usize) -> &'a Point {
+        self.grid.lookup(self.slice, self.carrier, self.pattern, codec, target)
     }
 }
 
@@ -1139,7 +1152,7 @@ fn digest_text(points: &[Point]) -> String {
     out.push_str(&level64_section(&grid));
     out.push_str(&level_max_section(&grid));
     out.push_str(&pairs_section(&grid));
-    let tiny = grid.lookup("length", "int32", 1, "zlib", Some(6), 1);
+    let tiny = grid.lookup("length", "int32", 1, Codec::Zlib(6), 1);
     out.push_str(&format!("TINY zlib6 body {} wire {} ratio {} expands {}\n", tiny.body, tiny.wire, tiny.wire_ratio, tiny.expands));
     out
 }
@@ -1156,21 +1169,21 @@ fn length_section(map: &Grid<'_>) -> String {
 
 fn length_line(map: &Grid<'_>, carrier: &str, pattern: u8) -> String {
     let row = map.row("length", carrier, pattern);
-    let bits = row.point("zlib", Some(6), KIB_64).bits;
+    let bits = row.point(Codec::Zlib(6), KIB_64).bits;
     format!("{carrier}\t{pattern}\t{bits}\tzlib {}\tzstd {}\tsnappy {}\tz6 {} {} {}\tz3 {} {} {}\tsn {} {} {}\n",
-        row.expanding("zlib", Some(6)),
-        row.expanding("zstd", Some(3)),
-        row.expanding("snappy", None),
-        row.ratio("zlib", Some(6), KIB_64), row.ratio("zlib", Some(6), MIB), row.ratio("zlib", Some(6), BSON_MAX),
-        row.ratio("zstd", Some(3), KIB_64), row.ratio("zstd", Some(3), MIB), row.ratio("zstd", Some(3), BSON_MAX),
-        row.ratio("snappy", None, KIB_64), row.ratio("snappy", None, MIB), row.ratio("snappy", None, BSON_MAX))
+        row.expanding(Codec::Zlib(6)),
+        row.expanding(Codec::Zstd(3)),
+        row.expanding(Codec::Snappy),
+        row.ratio(Codec::Zlib(6), KIB_64), row.ratio(Codec::Zlib(6), MIB), row.ratio(Codec::Zlib(6), BSON_MAX),
+        row.ratio(Codec::Zstd(3), KIB_64), row.ratio(Codec::Zstd(3), MIB), row.ratio(Codec::Zstd(3), BSON_MAX),
+        row.ratio(Codec::Snappy, KIB_64), row.ratio(Codec::Snappy, MIB), row.ratio(Codec::Snappy, BSON_MAX))
 }
 
 fn zstd_section(map: &Grid<'_>) -> String {
     let mut out = String::from("ZSTD1V3\n");
     for &carrier in DIGEST_CARRIERS {
         let row = map.row("length", carrier, 1);
-        let c = |level, target| row.ratio("zstd", Some(level), target);
+        let c = |level, target| row.ratio(Codec::Zstd(level), target);
         out.push_str(&format!("{carrier}\t{}\t{}\t{}\t{}\t{}\n", c(1, MIB), c(3, MIB), c(1, BSON_MAX), c(3, BSON_MAX), c(9, BSON_MAX)));
     }
     out
@@ -1183,7 +1196,7 @@ fn one_mib_section(map: &Grid<'_>) -> String {
         for &carrier in DIGEST_CARRIERS {
             let row = map.row("oneMiB", carrier, pattern);
             for codec in CHART_SERIES {
-                let p = row.point(codec.name(), codec.level(), MIB);
+                let p = row.point(codec, MIB);
                 line.push_str(&format!("\t{carrier}:{}:{}:{}", codec.name(), p.bits, p.wire_ratio));
             }
         }
@@ -1198,7 +1211,7 @@ fn level64_section(map: &Grid<'_>) -> String {
     let mut out = String::from("LEVEL64 int32 pattern 1 zstd\n");
     let row = map.row("level64", "int32", 1);
     for level in ZSTD_LEVEL64 {
-        let p = row.point("zstd", Some(level), KIB_64);
+        let p = row.point(Codec::Zstd(level), KIB_64);
         out.push_str(&format!("{}:{}\n", p.level.unwrap(), p.wire_ratio));
     }
     out
@@ -1210,12 +1223,12 @@ fn level_max_section(map: &Grid<'_>) -> String {
         for pattern in [1u8, 10] {
             let row = map.row("levelMax", carrier, pattern);
             for level in ZLIB_ALL {
-                out.push_str(&level_max_line(row.point("zlib", Some(level), BSON_MAX)));
+                out.push_str(&level_max_line(row.point(Codec::Zlib(level), BSON_MAX)));
             }
             for level in ZSTD_LEVEL_MAX {
-                out.push_str(&level_max_line(row.point("zstd", Some(level), BSON_MAX)));
+                out.push_str(&level_max_line(row.point(Codec::Zstd(level), BSON_MAX)));
             }
-            out.push_str(&level_max_line(row.point("snappy", None, BSON_MAX)));
+            out.push_str(&level_max_line(row.point(Codec::Snappy, BSON_MAX)));
         }
     }
     out
@@ -1226,8 +1239,8 @@ fn level_max_line(point: &Point) -> String {
 }
 
 fn pairs_section(map: &Grid<'_>) -> String {
-    let (z_pairs, z_mis) = map.pair_counts("zlib", Some(-1), Some(6), Sibling::Required);
-    let (s_pairs, s_mis) = map.pair_counts("zstd", Some(-1), Some(3), Sibling::SkipMissing);
+    let (z_pairs, z_mis) = map.pair_counts(Codec::Zlib(-1), Codec::Zlib(6), Sibling::Required);
+    let (s_pairs, s_mis) = map.pair_counts(Codec::Zstd(-1), Codec::Zstd(3), Sibling::SkipMissing);
     format!("PAIRS zlib -1 vs 6 {z_pairs} mismatches {z_mis}\nPAIRS zstd -1 vs 3 {s_pairs} mismatches {s_mis}\n")
 }
 
@@ -1463,8 +1476,8 @@ mod tests {
         let zlib = &points[1];
         assert_eq!(zlib.wire, HEADER + DETAILS + zlib.compressed);
         let grid = Grid::from(&points);
-        assert_eq!(grid.lookup("length", "int32", 1, "none", None, 32).doc, Some(30));
-        assert!(grid.get("length", "int32", 1, "zstd", Some(9), 32).is_none());
+        assert_eq!(grid.lookup("length", "int32", 1, Codec::None, 32).doc, Some(30));
+        assert!(grid.get("length", "int32", 1, Codec::Zstd(9), 32).is_none());
     }
 
     #[test]
@@ -1488,11 +1501,11 @@ mod tests {
 
     #[test]
     fn unknown_filter_names() {
-        require_known("COMPRESSOR_SLICES", &["length".into(), "compare".into()]);
-        require_known("COMPRESSOR_CARRIERS", &["timestamp".into()]);
-        let err = std::panic::catch_unwind(|| require_known("COMPRESSOR_SLICES", &["lenght".into()])).unwrap_err();
+        require_known("COMPRESSOR_SLICES", &["length".into(), "compare".into()], known_slice);
+        require_known("COMPRESSOR_CARRIERS", &["timestamp".into()], known_carrier);
+        let err = std::panic::catch_unwind(|| require_known("COMPRESSOR_SLICES", &["lenght".into()], known_slice)).unwrap_err();
         assert_eq!(panic_text(err), "COMPRESSOR_SLICES: unknown lenght");
-        let err = std::panic::catch_unwind(|| require_known("COMPRESSOR_CARRIERS", &["int3".into()])).unwrap_err();
+        let err = std::panic::catch_unwind(|| require_known("COMPRESSOR_CARRIERS", &["int3".into()], known_carrier)).unwrap_err();
         assert_eq!(panic_text(err), "COMPRESSOR_CARRIERS: unknown int3");
     }
 
@@ -1516,7 +1529,7 @@ mod tests {
             length_line(&grid, "int32", 1),
             "int32\t1\t2.5\tzlib 65536\tzstd 1048576\tsnappy 0\tz6 1.5 2.5 3.5\tz3 4.5 5.5 6.5\tsn 7.5 8.5 9.5\n"
         );
-        assert_eq!(grid.expanding_target("length", "int32", 1, "snappy", None), 0);
+        assert_eq!(grid.expanding_target("length", "int32", 1, Codec::Snappy), 0);
 
         let mut one = Vec::new();
         for pattern in 1u8..=10 {
