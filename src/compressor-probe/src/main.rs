@@ -479,7 +479,8 @@ struct Frame<'a> {
 }
 
 impl Frame<'_> {
-    fn point(&self, compressor: &'static str, level: Option<i32>, compressed_len: usize, details: usize) -> Point {
+    fn point(&self, codec: Codec, compressed_len: usize) -> Point {
+        let details = codec.details();
         let wire = HEADER + details + compressed_len;
         let raw_ratio = round_n(self.body.len() as f64 / compressed_len as f64, 6);
         let wire_ratio = round_n(self.original as f64 / wire as f64, 6);
@@ -492,8 +493,8 @@ impl Frame<'_> {
             doc: self.doc,
             body: self.body.len(),
             bits: self.bits,
-            compressor,
-            level,
+            compressor: codec.name(),
+            level: codec.level(),
             compressed: compressed_len,
             raw_ratio,
             wire,
@@ -503,7 +504,8 @@ impl Frame<'_> {
     }
 
     fn record(&self, codec: Codec) -> Point {
-        self.point(codec.name(), codec.level(), codec.compressed_len(self.body), codec.details())
+        let compressed_len = codec.compressed_len(self.body);
+        self.point(codec, compressed_len)
     }
 }
 
@@ -883,11 +885,11 @@ fn write_index(buf: &mut [u8], n: usize) -> usize {
     digits
 }
 
-fn assemble(target: usize, body: impl FnOnce(&mut DocBuf)) -> Vec<u8> {
+fn assemble<T>(target: usize, body: impl FnOnce(&mut DocBuf) -> T) -> (Vec<u8>, T) {
     let mut doc = DocBuf::new(target);
     doc.write_ping();
-    body(&mut doc);
-    doc.finish()
+    let value = body(&mut doc);
+    (doc.finish(), value)
 }
 
 fn build_doc(target: usize, carrier: &Carrier, pattern: u8, random: &mut dyn Read) -> Option<Vec<u8>> {
@@ -900,7 +902,7 @@ fn build_doc(target: usize, carrier: &Carrier, pattern: u8, random: &mut dyn Rea
 fn build_scalar(target: usize, pattern: u8, scalar: Scalar, random: &mut dyn Read) -> Option<Vec<u8>> {
     if target < SCALAR_OVERHEAD { return None; }
     let content_len = target - SCALAR_OVERHEAD;
-    let built = assemble(target, |doc| {
+    let (built, ()) = assemble(target, |doc| {
         let crypto = draw(random, pattern, content_len);
         let mut rand = xorshift(scalar_seed(pattern));
         doc.write_scalar(scalar, content_len);
@@ -914,8 +916,7 @@ fn build_scalar(target: usize, pattern: u8, scalar: Scalar, random: &mut dyn Rea
 
 fn build_array(target: usize, pattern: u8, array: Array, random: &mut dyn Read) -> Option<Vec<u8>> {
     if target < ARRAY_FLOOR { return None; }
-    let mut count = 0usize;
-    let built = assemble(target, |doc| {
+    let (built, count) = assemble(target, |doc| {
         let arr_size_at = doc.begin_array();
         let mut rand = xorshift(array_seed(pattern, array.width));
         let mut crypto = Crypto::open(random, pattern, array.width * CRYPTO_WINDOW);
@@ -933,8 +934,8 @@ fn build_array(target: usize, pattern: u8, array: Array, random: &mut dyn Read) 
             i += 1;
             if i > ARRAY_CAP { panic!("array element cap"); }
         }
-        count = i;
         if i > 0 { doc.end_array(arr_size_at); }
+        i
     });
     if count == 0 { return None; }
     Some(built)
@@ -1091,6 +1092,9 @@ impl<'a> Grid<'a> {
     }
 
     fn pair_counts(&self, left: Codec, right: Codec, sibling: Sibling) -> (usize, usize) {
+        if left.name() != right.name() {
+            panic!("pair {} {}", left.name(), right.name());
+        }
         let name = left.name();
         let level = left.level();
         let mut pairs = 0usize;
@@ -1222,16 +1226,18 @@ fn level_max_section(map: &Grid<'_>) -> String {
     for carrier in DIGEST_LEVEL_MAX {
         for pattern in [1u8, 10] {
             let row = map.row("levelMax", carrier, pattern);
-            for level in ZLIB_ALL {
-                out.push_str(&level_max_line(row.point(Codec::Zlib(level), BSON_MAX)));
-            }
-            for level in ZSTD_LEVEL_MAX {
-                out.push_str(&level_max_line(row.point(Codec::Zstd(level), BSON_MAX)));
-            }
+            append_levels(&mut out, &row, &ZLIB_ALL, Codec::Zlib);
+            append_levels(&mut out, &row, &ZSTD_LEVEL_MAX, Codec::Zstd);
             out.push_str(&level_max_line(row.point(Codec::Snappy, BSON_MAX)));
         }
     }
     out
+}
+
+fn append_levels(out: &mut String, row: &Row<'_, '_>, levels: &[i32], codec: impl Fn(i32) -> Codec) {
+    for &level in levels {
+        out.push_str(&level_max_line(row.point(codec(level), BSON_MAX)));
+    }
 }
 
 fn level_max_line(point: &Point) -> String {
@@ -1582,6 +1588,8 @@ mod tests {
         pairs[3].compressed = 8;
         pairs[4].compressed = 3;
         assert_eq!(pairs_section(&Grid::from(&pairs)), "PAIRS zlib -1 vs 6 1 mismatches 0\nPAIRS zstd -1 vs 3 1 mismatches 1\n");
+        let err = std::panic::catch_unwind(|| Grid::from(&pairs).pair_counts(Codec::Zlib(-1), Codec::Zstd(3), Sibling::Required)).unwrap_err();
+        assert_eq!(panic_text(err), "pair zlib zstd");
     }
 
     #[test]
