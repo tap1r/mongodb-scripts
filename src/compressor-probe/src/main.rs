@@ -33,7 +33,7 @@ const ZLIB_CHART: [i32; 1] = [6];
 const ZSTD_LENGTH: [i32; 3] = [1, 3, 9];
 // The full sweep. levelMax stays the seven-level sample below.
 const ZSTD_LEVEL64: [i32; 23] = [
-    -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+    -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
 ];
 const ZSTD_LEVEL_MAX: [i32; 7] = [-1, 1, 3, 6, 9, 19, 22];
 const ZSTD_CHART: [i32; 1] = [3];
@@ -51,12 +51,12 @@ enum Kind { Int32, Double, Long, Timestamp, Decimal }
 enum Form {
     String,
     Binary,
-    Array { width: usize, type_byte: u8, kind: Kind },
+    Array { width: usize, type_byte: u8, kind: Kind }
 }
 
 struct Carrier {
     name: &'static str,
-    form: Form,
+    form: Form
 }
 
 const INT32: Carrier = Carrier { name: "int32", form: Form::Array { width: 4, type_byte: 0x10, kind: Kind::Int32 } };
@@ -163,7 +163,7 @@ struct Slice {
     zlib: &'static [i32],
     zstd: &'static [i32],
     sizes: &'static [usize],
-    about: &'static str,
+    about: &'static str
 }
 
 const SLICES: [Slice; 6] = [
@@ -174,7 +174,7 @@ const SLICES: [Slice; 6] = [
         zlib: &ZLIB_LENGTH,
         zstd: &ZSTD_LENGTH,
         sizes: &LENGTH_SIZES,
-        about: "2^0 through 2^23 plus 16777216; seven carriers; patterns 1, 5, 10; zlib -1,0,1,6,9; zstd 1,3,9; snappy",
+        about: "2^0 through 2^23 plus 16777216; seven carriers; patterns 1, 5, 10; zlib -1,0,1,6,9; zstd 1,3,9; snappy"
     },
     Slice {
         tag: "level64",
@@ -183,7 +183,7 @@ const SLICES: [Slice; 6] = [
         zlib: &ZLIB_ALL,
         zstd: &ZSTD_LEVEL64,
         sizes: &LEVEL64_SIZES,
-        about: "65536; seven carriers; patterns 1-10; zlib -1 and 0-9; zstd -1 and 1-22; snappy",
+        about: "65536; seven carriers; patterns 1-10; zlib -1 and 0-9; zstd -1 and 1-22; snappy"
     },
     Slice {
         tag: "oneMiB",
@@ -192,7 +192,7 @@ const SLICES: [Slice; 6] = [
         zlib: &ZLIB_ALL,
         zstd: &ZSTD_LENGTH,
         sizes: &ONE_MIB_SIZES,
-        about: "1048576; seven carriers; patterns 1-10; zlib -1 and 0-9; zstd 1,3,9; snappy",
+        about: "1048576; seven carriers; patterns 1-10; zlib -1 and 0-9; zstd 1,3,9; snappy"
     },
     Slice {
         tag: "levelMax",
@@ -201,7 +201,7 @@ const SLICES: [Slice; 6] = [
         zlib: &ZLIB_ALL,
         zstd: &ZSTD_LEVEL_MAX,
         sizes: &LEVEL_MAX_SIZES,
-        about: "16777216; binary and int32; patterns 1 and 10; zlib -1 and 0-9; zstd -1,1,3,6,9,19,22; snappy",
+        about: "16777216; binary and int32; patterns 1 and 10; zlib -1 and 0-9; zstd -1,1,3,6,9,19,22; snappy"
     },
     // Patterns the length charts skip. The chart reads patterns 1, 5, and 10 from length.
     Slice {
@@ -211,7 +211,7 @@ const SLICES: [Slice; 6] = [
         zlib: &ZLIB_CHART,
         zstd: &ZSTD_CHART,
         sizes: &LENGTH_SIZES,
-        about: "2^0 through 2^23 plus 16777216; seven carriers; patterns 2, 3, 4, 6, 7, 8, 9; zlib 6; zstd 3; snappy",
+        about: "2^0 through 2^23 plus 16777216; seven carriers; patterns 2, 3, 4, 6, 7, 8, 9; zlib 6; zstd 3; snappy"
     },
     Slice {
         tag: "compare",
@@ -220,15 +220,15 @@ const SLICES: [Slice; 6] = [
         zlib: &ZLIB_CHART,
         zstd: &ZSTD_CHART,
         sizes: &COMPARE_SIZES,
-        about: "65536 and 16777216; long, date, and timestamp; patterns 1, 5, 9, 10; zlib 6; zstd 3; snappy",
-    },
+        about: "65536 and 16777216; long, date, and timestamp; patterns 1, 5, 9, 10; zlib 6; zstd 3; snappy"
+    }
 ];
 
 struct Run {
     slices: Vec<String>,
     carriers: Vec<String>,
     patterns: Vec<u8>,
-    zstd: Vec<i32>,
+    zstd: Vec<i32>
 }
 
 impl Run {
@@ -237,7 +237,7 @@ impl Run {
             slices: name_env("COMPRESSOR_SLICES"),
             carriers: name_env("COMPRESSOR_CARRIERS"),
             patterns: parse_env("COMPRESSOR_PATTERNS"),
-            zstd: parse_env("COMPRESSOR_ZSTD"),
+            zstd: parse_env("COMPRESSOR_ZSTD")
         }
     }
 
@@ -313,7 +313,7 @@ fn require_known(key: &str, names: &[String]) {
         let known = match key {
             "COMPRESSOR_SLICES" => SLICES.iter().any(|slice| slice.tag == name),
             "COMPRESSOR_CARRIERS" => CARRIER_TABLE.iter().any(|carrier| carrier.name == name),
-            _ => false,
+            _ => false
         };
         if !known {
             panic!("{key}: unknown {name}");
@@ -391,7 +391,7 @@ struct Point {
     raw_ratio: f64,
     wire: usize,
     wire_ratio: f64,
-    expands: bool,
+    expands: bool
 }
 
 impl Point {
@@ -421,7 +421,7 @@ impl Point {
 }
 
 struct Random {
-    file: Option<File>,
+    file: Option<File>
 }
 
 impl Random {
@@ -448,7 +448,7 @@ struct Frame<'a> {
     doc: Option<usize>,
     body: &'a [u8],
     bits: f64,
-    original: usize,
+    original: usize
 }
 
 impl Frame<'_> {
@@ -471,7 +471,7 @@ impl Frame<'_> {
             raw_ratio,
             wire,
             wire_ratio,
-            expands: wire > self.original,
+            expands: wire > self.original
         }
     }
 }
@@ -513,7 +513,7 @@ fn compress(body: &[u8], compressor: &str, level: Option<i32>) -> Vec<u8> {
             })
         }
         "snappy" => SnappyEncoder::new().compress_vec(body).expect("snappy"),
-        _ => panic!("compressor {compressor}"),
+        _ => panic!("compressor {compressor}")
     }
 }
 
@@ -593,13 +593,13 @@ fn fill_payload(buf: &mut [u8], start: usize, len: usize, pattern: u8, rand: &mu
             let n = len.min(crypto.len());
             buf[start..start + n].copy_from_slice(&crypto[..n]);
         }
-        _ => panic!("pattern {pattern}"),
+        _ => panic!("pattern {pattern}")
     }
 }
 
 struct DocBuf {
     buf: Vec<u8>,
-    p: usize,
+    p: usize
 }
 
 impl DocBuf {
@@ -675,34 +675,34 @@ impl DocBuf {
 
 enum Payload {
     Document { len: usize, body: Vec<u8> },
-    Raw { body: Vec<u8> },
+    Raw { body: Vec<u8> }
 }
 
 impl Payload {
     fn shape(&self) -> &'static str {
         match self {
             Payload::Document { .. } => "document",
-            Payload::Raw { .. } => "raw",
+            Payload::Raw { .. } => "raw"
         }
     }
 
     fn doc_len(&self) -> Option<usize> {
         match self {
             Payload::Document { len, .. } => Some(*len),
-            Payload::Raw { .. } => None,
+            Payload::Raw { .. } => None
         }
     }
 
     fn body(&self) -> &[u8] {
         match self {
-            Payload::Document { body, .. } | Payload::Raw { body } => body,
+            Payload::Document { body, .. } | Payload::Raw { body } => body
         }
     }
 
     fn bits_src(&self) -> &[u8] {
         match self {
             Payload::Document { body, .. } => &body[5..],
-            Payload::Raw { body } => body,
+            Payload::Raw { body } => body
         }
     }
 
@@ -716,7 +716,7 @@ impl Payload {
             doc: self.doc_len(),
             body: self.body(),
             bits: round_n(entropy_bits(self.bits_src()), 3),
-            original: HEADER + self.body().len(),
+            original: HEADER + self.body().len()
         }
     }
 }
@@ -748,7 +748,7 @@ const SCALAR_OVERHEAD: usize = 4 + 10 + 8 + 1;
 struct Crypto<'a> {
     random: &'a mut dyn Read,
     buf: Vec<u8>,
-    at: usize,
+    at: usize
 }
 
 impl<'a> Crypto<'a> {
@@ -810,7 +810,7 @@ fn build_doc(target: usize, carrier: &Carrier, pattern: u8, random: &mut dyn Rea
     match carrier.form {
         Form::String => build_scalar(target, pattern, Form::String, random),
         Form::Binary => build_scalar(target, pattern, Form::Binary, random),
-        Form::Array { width, type_byte, kind } => build_array(target, pattern, width, type_byte, kind, random),
+        Form::Array { width, type_byte, kind } => build_array(target, pattern, width, type_byte, kind, random)
     }
 }
 
@@ -818,7 +818,7 @@ fn build_scalar(target: usize, pattern: u8, form: Form, random: &mut dyn Read) -
     let string = match form {
         Form::String => true,
         Form::Binary => false,
-        Form::Array { .. } => panic!("scalar form"),
+        Form::Array { .. } => panic!("scalar form")
     };
     if target < SCALAR_OVERHEAD { return None; }
     let content_len = target - SCALAR_OVERHEAD;
@@ -902,7 +902,7 @@ fn int_value(i: usize, pattern: u8, rand: &mut impl FnMut() -> u32) -> i32 {
         7 => if i & 1 == 0 { (i & 15) as i32 } else { (rand() & 0xffff) as i32 },
         8 => (rand() % 1_000_000) as i32,
         9 => rand() as i32,
-        _ => panic!("pattern {pattern}"),
+        _ => panic!("pattern {pattern}")
     }
 }
 
@@ -918,7 +918,7 @@ fn long_value(i: usize, pattern: u8, rand: &mut impl FnMut() -> u32) -> i64 {
         7 => if i & 1 == 0 { (i & 15) as i64 } else { (rand() & 0xffff) as i64 },
         8 => (rand() % 1_000_000) as i64,
         9 => rand() as u32 as i64,
-        _ => panic!("pattern {pattern}"),
+        _ => panic!("pattern {pattern}")
     }
 }
 
@@ -939,7 +939,7 @@ fn double_value(i: usize, pattern: u8, rand: &mut impl FnMut() -> u32) -> f64 {
         7 => if i & 1 == 0 { (i & 15) as f64 } else { (rand() % 1000) as f64 / 7.0 },
         8 => (rand() % 1_000_000) as f64 / 1000.0,
         9 => (rand() as f64) / 4294967296.0,
-        _ => panic!("pattern {pattern}"),
+        _ => panic!("pattern {pattern}")
     }
 }
 
@@ -959,7 +959,7 @@ fn write_decimal(i: usize, pattern: u8, rand: &mut impl FnMut() -> u32, slot: &m
         4 => (i & 255) as u32,
         5 => (i & 15) as u32,
         6 => ((i & 7) * 100) as u32,
-        _ => panic!("pattern {pattern}"),
+        _ => panic!("pattern {pattern}")
     };
     slot[..4].copy_from_slice(&v.to_le_bytes());
 }
@@ -995,7 +995,7 @@ fn row_key<'a>(slice: &'a str, carrier: &'a str, pattern: u8, compressor: &'a st
 }
 
 struct Grid<'a> {
-    rows: HashMap<RowKey<'a>, &'a Point>,
+    rows: HashMap<RowKey<'a>, &'a Point>
 }
 
 impl<'a> Grid<'a> {
@@ -1027,7 +1027,7 @@ impl<'a> Grid<'a> {
             let other = if skip_missing {
                 match self.get(point.slice, point.carrier, point.pattern, compressor, other_level, point.target) {
                     Some(other) => other,
-                    None => continue,
+                    None => continue
                 }
             } else {
                 self.lookup(point.slice, point.carrier, point.pattern, compressor, other_level, point.target)
@@ -1161,7 +1161,7 @@ mod tests {
 
     struct Script {
         data: Vec<u8>,
-        at: usize,
+        at: usize
     }
 
     impl Read for Script {
@@ -1187,7 +1187,7 @@ mod tests {
         Point {
             slice, carrier, pattern, shape: "document", target, doc: Some(target),
             body: 10, bits, compressor, level, compressed: 4, raw_ratio: wire_ratio,
-            wire: 40, wire_ratio, expands,
+            wire: 40, wire_ratio, expands
         }
     }
 
@@ -1352,7 +1352,7 @@ mod tests {
             raw_ratio: 1.0,
             wire: 17,
             wire_ratio: 1.0,
-            expands: false,
+            expands: false
         };
         let text = serde_json::to_string(&point.row()).unwrap();
         assert_eq!(text, "{\"bits\":0.0,\"body\":1,\"carrier\":\"int32\",\"compressed\":1,\"compressor\":\"none\",\"doc\":null,\"expands\":false,\"level\":null,\"pattern\":1,\"rawRatio\":1.0,\"shape\":\"raw\",\"slice\":\"length\",\"target\":1,\"wire\":17,\"wireRatio\":1.0}");
@@ -1473,7 +1473,7 @@ mod tests {
             sample("length", "int32", 1, "zlib", Some(6), 32, 1.0, 1.0, false),
             sample("length", "int32", 1, "zstd", Some(-1), 32, 1.0, 1.0, false),
             sample("length", "double", 1, "zstd", Some(-1), 32, 1.0, 1.0, false),
-            sample("length", "double", 1, "zstd", Some(3), 32, 1.0, 1.0, false),
+            sample("length", "double", 1, "zstd", Some(3), 32, 1.0, 1.0, false)
         ];
         pairs[0].compressed = 4;
         pairs[1].compressed = 4;
