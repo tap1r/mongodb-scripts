@@ -224,50 +224,82 @@ const SLICES: [Slice; 6] = [
     },
 ];
 
-fn main() {
-    let range = zstd::compression_level_range();
-    let started = Instant::now();
-    let mut points = Vec::new();
-    let slice_filter = name_env("COMPRESSOR_SLICES");
-    let carrier_filter = name_env("COMPRESSOR_CARRIERS");
-    let pattern_filter: Vec<u8> = parse_env("COMPRESSOR_PATTERNS");
-    let zstd_override: Vec<i32> = parse_env("COMPRESSOR_ZSTD");
-    let mut random = Random::new();
-    for slice in &SLICES {
-        if !slice_filter.is_empty() && !slice_filter.iter().any(|name| name == slice.tag) {
-            continue;
-        }
-        let zstd_levels: Vec<i32> = if zstd_override.is_empty() {
-            slice.zstd.iter().copied().filter(|lvl| range.contains(lvl)).collect()
-        } else {
-            zstd_override.iter().copied().filter(|lvl| range.contains(lvl)).collect()
-        };
-        for carrier in slice.carriers {
-            if !carrier_filter.is_empty() && !carrier_filter.iter().any(|name| name == carrier.name) {
-                continue;
-            }
-            for &pattern in slice.patterns {
-                if !pattern_filter.is_empty() && !pattern_filter.contains(&pattern) {
-                    continue;
-                }
-                for &target in slice.sizes {
-                    points.extend(measure(slice.tag, carrier.name, pattern, target, slice.zlib, &zstd_levels, &mut random));
-                }
-                eprintln!("{} {} pattern {pattern} {}ms", slice.tag, carrier.name, started.elapsed().as_millis());
-            }
+struct Run {
+    slices: Vec<String>,
+    carriers: Vec<String>,
+    patterns: Vec<u8>,
+    zstd: Vec<i32>,
+}
+
+impl Run {
+    fn from_env() -> Self {
+        Self {
+            slices: name_env("COMPRESSOR_SLICES"),
+            carriers: name_env("COMPRESSOR_CARRIERS"),
+            patterns: parse_env("COMPRESSOR_PATTERNS"),
+            zstd: parse_env("COMPRESSOR_ZSTD"),
         }
     }
 
+    fn complete(&self) -> bool {
+        self.slices.is_empty() && self.carriers.is_empty() && self.patterns.is_empty() && self.zstd.is_empty()
+    }
+
+    fn allows_pattern(&self, pattern: u8) -> bool {
+        self.patterns.is_empty() || self.patterns.contains(&pattern)
+    }
+
+    fn zstd_levels(&self, slice: &Slice, range: &std::ops::RangeInclusive<i32>) -> Vec<i32> {
+        let chosen = if self.zstd.is_empty() { slice.zstd } else { self.zstd.as_slice() };
+        chosen.iter().copied().filter(|level| range.contains(level)).collect()
+    }
+}
+
+fn listed(filter: &[String], name: &str) -> bool {
+    filter.is_empty() || filter.iter().any(|item| item == name)
+}
+
+fn main() {
+    let range = zstd::compression_level_range();
+    let run = Run::from_env();
+    let started = Instant::now();
+    let mut random = Random::new();
+    let points = collect(&run, &range, started, &mut random);
     let guard = guard_trip();
     let meta = meta_json(guard, points.len(), *range.start(), *range.end());
     let mut args = std::env::args().skip(1);
     let grid_path = args.next().unwrap_or_else(|| "/tmp/compressor-grid.json".to_string());
     let digest_path = args.next().unwrap_or_else(|| "/tmp/compressor-digest.txt".to_string());
     write_grid(&grid_path, &meta, &points);
-    if slice_filter.is_empty() && carrier_filter.is_empty() && pattern_filter.is_empty() && zstd_override.is_empty() {
+    if run.complete() {
         write_digest(&digest_path, &points);
     }
     eprintln!("done {} points in {:.1}s guard={}", points.len(), started.elapsed().as_secs_f64(), guard);
+}
+
+fn collect(run: &Run, range: &std::ops::RangeInclusive<i32>, started: Instant, random: &mut dyn Read) -> Vec<Point> {
+    let mut points = Vec::new();
+    for slice in &SLICES {
+        if !listed(&run.slices, slice.tag) {
+            continue;
+        }
+        let zstd_levels = run.zstd_levels(slice, range);
+        for carrier in slice.carriers {
+            if !listed(&run.carriers, carrier.name) {
+                continue;
+            }
+            for &pattern in slice.patterns {
+                if !run.allows_pattern(pattern) {
+                    continue;
+                }
+                for &target in slice.sizes {
+                    points.extend(measure(slice.tag, carrier, pattern, target, slice.zlib, &zstd_levels, random));
+                }
+                eprintln!("{} {} pattern {pattern} {}ms", slice.tag, carrier.name, started.elapsed().as_millis());
+            }
+        }
+    }
+    points
 }
 
 fn name_env(key: &str) -> Vec<String> {
@@ -403,7 +435,7 @@ impl Read for Random {
     }
 }
 
-fn measure(slice: &'static str, carrier: &'static str, pattern: u8, target: usize, zlib: &[i32], zstd: &[i32], random: &mut dyn Read) -> Vec<Point> {
+fn measure(slice: &'static str, carrier: &'static Carrier, pattern: u8, target: usize, zlib: &[i32], zstd: &[i32], random: &mut dyn Read) -> Vec<Point> {
     let mut points = Vec::new();
     let tb = Instant::now();
     let built = payload(target, carrier, pattern, random);
@@ -412,11 +444,11 @@ fn measure(slice: &'static str, carrier: &'static str, pattern: u8, target: usiz
     let original = HEADER + built.body().len();
     let shape = built.shape();
     let doc = built.doc_len();
-    push_point(&mut points, slice, carrier, pattern, shape, target, doc, built.body(), bits, original, "none", None, built.body().len(), 0);
+    push_point(&mut points, slice, carrier.name, pattern, shape, target, doc, built.body(), bits, original, "none", None, built.body().len(), 0);
     let tz = Instant::now();
     for level in zlib {
         let compressed = zlib_compress(built.body(), *level);
-        push_point(&mut points, slice, carrier, pattern, shape, target, doc, built.body(), bits, original, "zlib", Some(*level), compressed.len(), DETAILS);
+        push_point(&mut points, slice, carrier.name, pattern, shape, target, doc, built.body(), bits, original, "zlib", Some(*level), compressed.len(), DETAILS);
     }
     let zlib_ms = tz.elapsed().as_millis();
     let ts = Instant::now();
@@ -424,13 +456,13 @@ fn measure(slice: &'static str, carrier: &'static str, pattern: u8, target: usiz
         let compressed = zstd::bulk::compress(built.body(), *level).unwrap_or_else(|err| {
             panic!("zstd {level} on {} bytes: {err}", built.body().len());
         });
-        push_point(&mut points, slice, carrier, pattern, shape, target, doc, built.body(), bits, original, "zstd", Some(*level), compressed.len(), DETAILS);
+        push_point(&mut points, slice, carrier.name, pattern, shape, target, doc, built.body(), bits, original, "zstd", Some(*level), compressed.len(), DETAILS);
     }
     let zstd_ms = ts.elapsed().as_millis();
     let compressed = SnappyEncoder::new().compress_vec(built.body()).expect("snappy");
-    push_point(&mut points, slice, carrier, pattern, shape, target, doc, built.body(), bits, original, "snappy", None, compressed.len(), DETAILS);
+    push_point(&mut points, slice, carrier.name, pattern, shape, target, doc, built.body(), bits, original, "snappy", None, compressed.len(), DETAILS);
     if target >= MIB {
-        eprintln!("  {carrier} p{pattern} {target} build {build_ms}ms zlib {zlib_ms}ms zstd {zstd_ms}ms body {}", built.body().len());
+        eprintln!("  {} p{pattern} {target} build {build_ms}ms zlib {zlib_ms}ms zstd {zstd_ms}ms body {}", carrier.name, built.body().len());
     }
     points
 }
@@ -451,6 +483,22 @@ fn zlib_compress(data: &[u8], level: i32) -> Vec<u8> {
     let mut enc = ZlibEncoder::new(Vec::new(), compression);
     enc.write_all(data).expect("zlib write");
     enc.finish().expect("zlib finish")
+}
+
+const RAW_SEED: u32 = 0xB0D;
+const SCALAR_SEED: u32 = 0x5eed;
+const ARRAY_SEED: u32 = 0xA11A;
+
+fn raw_seed(pattern: u8) -> u32 {
+    RAW_SEED + pattern as u32
+}
+
+fn scalar_seed(pattern: u8) -> u32 {
+    SCALAR_SEED + pattern as u32
+}
+
+fn array_seed(pattern: u8, width: usize) -> u32 {
+    ARRAY_SEED + pattern as u32 * 17 + width as u32
 }
 
 fn xorshift(seed: u32) -> impl FnMut() -> u32 {
@@ -555,20 +603,14 @@ impl Payload {
     }
 }
 
-fn payload(target: usize, name: &str, pattern: u8, random: &mut dyn Read) -> Payload {
-    if let Some(doc) = build_doc(target, name, pattern, random) {
+fn payload(target: usize, carrier: &Carrier, pattern: u8, random: &mut dyn Read) -> Payload {
+    if let Some(doc) = build_doc(target, carrier, pattern, random) {
         let body = wrap_doc(&doc);
         return Payload::Document { doc, body };
     }
     let mut body = vec![0u8; target];
-    let crypto = if pattern == 10 {
-        let mut bytes = vec![0u8; target];
-        random.read_exact(&mut bytes).expect("urandom read");
-        bytes
-    } else {
-        Vec::new()
-    };
-    fill_payload(&mut body, 0, target, pattern, &mut xorshift(0xB0D + pattern as u32), &crypto);
+    let crypto = draw(random, pattern, target);
+    fill_payload(&mut body, 0, target, pattern, &mut xorshift(raw_seed(pattern)), &crypto);
     Payload::Raw { body }
 }
 
@@ -610,28 +652,57 @@ fn carrier(name: &str) -> &'static Carrier {
     CARRIER_TABLE.iter().copied().find(|carrier| carrier.name == name).unwrap_or_else(|| panic!("unknown carrier {name}"))
 }
 
-fn build_doc(target: usize, name: &str, pattern: u8, random: &mut dyn Read) -> Option<Vec<u8>> {
-    match carrier(name).form {
-        Form::String => build_scalar(target, pattern, true, random),
-        Form::Binary => build_scalar(target, pattern, false, random),
+fn draw(random: &mut dyn Read, pattern: u8, len: usize) -> Vec<u8> {
+    if pattern != 10 {
+        return Vec::new();
+    }
+    let mut crypto = Crypto::open(random, pattern, len);
+    crypto.take(len).to_vec()
+}
+
+fn write_index(buf: &mut [u8], n: usize) -> usize {
+    if n == 0 {
+        buf[0] = b'0';
+        return 1;
+    }
+    let mut digits = 0;
+    let mut value = n;
+    while value > 0 {
+        digits += 1;
+        value /= 10;
+    }
+    if digits > buf.len() {
+        panic!("index {n}");
+    }
+    value = n;
+    for i in (0..digits).rev() {
+        buf[i] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    digits
+}
+
+fn build_doc(target: usize, carrier: &Carrier, pattern: u8, random: &mut dyn Read) -> Option<Vec<u8>> {
+    match carrier.form {
+        Form::String => build_scalar(target, pattern, Form::String, random),
+        Form::Binary => build_scalar(target, pattern, Form::Binary, random),
         Form::Array { width, type_byte, kind } => build_array(target, pattern, width, type_byte, kind, random),
     }
 }
 
-fn build_scalar(target: usize, pattern: u8, string: bool, random: &mut dyn Read) -> Option<Vec<u8>> {
+fn build_scalar(target: usize, pattern: u8, form: Form, random: &mut dyn Read) -> Option<Vec<u8>> {
+    let string = match form {
+        Form::String => true,
+        Form::Binary => false,
+        Form::Array { .. } => panic!("scalar form"),
+    };
     let overhead = 4 + 10 + 8 + 1;
     if target < overhead { return None; }
     let content_len = target - overhead;
     let mut buf = vec![0u8; target];
     let mut p = write_ping(&mut buf, 4);
-    let crypto = if pattern == 10 {
-        let mut bytes = vec![0u8; content_len];
-        random.read_exact(&mut bytes).expect("urandom read");
-        bytes
-    } else {
-        Vec::new()
-    };
-    let mut rand = xorshift(0x5eed + pattern as u32);
+    let crypto = draw(random, pattern, content_len);
+    let mut rand = xorshift(scalar_seed(pattern));
     if string {
         buf[p] = 0x02;
         p += 1;
@@ -678,17 +749,18 @@ fn build_array(target: usize, pattern: u8, width: usize, type_byte: u8, kind: Ki
     p += 2;
     let arr_size_at = p;
     p += 4;
-    let mut rand = xorshift(0xA11A + pattern as u32 * 17 + width as u32);
+    let mut rand = xorshift(array_seed(pattern, width));
     let mut crypto = Crypto::open(random, pattern, width * 64);
     let mut i = 0usize;
     loop {
-        let key = i.to_string();
-        let need = 1 + key.len() + 1 + width;
+        let mut key = [0u8; 8];
+        let key_len = write_index(&mut key, i);
+        let need = 1 + key_len + 1 + width;
         if p + need + 2 > target { break; }
         buf[p] = type_byte;
         p += 1;
-        buf[p..p + key.len()].copy_from_slice(key.as_bytes());
-        p += key.len();
+        buf[p..p + key_len].copy_from_slice(&key[..key_len]);
+        p += key_len;
         buf[p] = 0;
         p += 1;
         // Pattern 10 copies width raw bytes. The seeded ladders are not called.
@@ -722,7 +794,7 @@ fn build_array(target: usize, pattern: u8, width: usize, type_byte: u8, kind: Ki
         }
         p += width;
         i += 1;
-        if i > 5_000_000 { break; }
+        if i > 5_000_000 { panic!("array element cap"); }
     }
     if i == 0 { return None; }
     buf[p] = 0;
@@ -1000,7 +1072,7 @@ mod tests {
 
     fn doc(target: usize, name: &str, pattern: u8) -> Vec<u8> {
         let mut random = PanicRead;
-        build_doc(target, name, pattern, &mut random).unwrap()
+        build_doc(target, carrier(name), pattern, &mut random).unwrap()
     }
 
     fn carrier_names<'a>(carriers: &'a [&'a Carrier]) -> Vec<&'a str> {
@@ -1047,11 +1119,11 @@ mod tests {
     #[test]
     fn seeded_patterns_do_not_read_urandom() {
         let carriers = ["int32", "double", "long", "date", "decimal128", "string", "binary", "timestamp"];
-        for carrier in carriers {
+        for name in carriers {
             for pattern in 1..=9 {
                 let mut random = PanicRead;
-                let built = build_doc(128, carrier, pattern, &mut random);
-                assert!(built.is_some(), "{carrier} pattern {pattern}");
+                let built = build_doc(128, carrier(name), pattern, &mut random);
+                assert!(built.is_some(), "{name} pattern {pattern}");
             }
         }
     }
@@ -1060,14 +1132,13 @@ mod tests {
     #[should_panic(expected = "pattern 11")]
     fn unexpected_pattern() {
         let mut random = PanicRead;
-        let _ = build_doc(64, "int32", 11, &mut random);
+        let _ = build_doc(64, carrier("int32"), 11, &mut random);
     }
 
     #[test]
     #[should_panic(expected = "unknown carrier")]
     fn unknown_carrier() {
-        let mut random = PanicRead;
-        let _ = build_doc(64, "nope", 1, &mut random);
+        let _ = carrier("nope");
     }
 
     #[test]
@@ -1075,10 +1146,10 @@ mod tests {
         let mut data = vec![0u8; 4096];
         data[..16].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
         let mut random = Script { data: data.clone(), at: 0 };
-        let int32 = build_doc(64, "int32", 10, &mut random).unwrap();
+        let int32 = build_doc(64, carrier("int32"), 10, &mut random).unwrap();
         assert!(int32.windows(4).any(|bytes| bytes == [1, 2, 3, 4]));
         let mut random = Script { data: data.clone(), at: 0 };
-        let decimal = build_doc(128, "decimal128", 10, &mut random).unwrap();
+        let decimal = build_doc(128, carrier("decimal128"), 10, &mut random).unwrap();
         assert!(decimal.windows(16).any(|bytes| bytes == &data[..16]));
     }
 
@@ -1094,7 +1165,7 @@ mod tests {
     fn string_pattern_10_stays_printable() {
         let source = [0u8, 1, 2, 200, 94, 95, 96, 10, 31];
         let mut random = Script { data: source.to_vec(), at: 0 };
-        let doc = build_doc(32, "string", 10, &mut random).unwrap();
+        let doc = build_doc(32, carrier("string"), 10, &mut random).unwrap();
         let content = &doc[21..30];
         for (got, src) in content.iter().zip(source) {
             assert_eq!(*got, 32 + (src % 95));
@@ -1186,7 +1257,7 @@ mod tests {
     #[test]
     fn measure_order_is_none_zlib_zstd_snappy() {
         let mut random = PanicRead;
-        let points = measure("length", "int32", 1, 32, &[6, -1], &[3, 1], &mut random);
+        let points = measure("length", carrier("int32"), 1, 32, &[6, -1], &[3, 1], &mut random);
         let names: Vec<_> = points.iter().map(|point| (point.compressor, point.level)).collect();
         assert_eq!(names, [("none", None), ("zlib", Some(6)), ("zlib", Some(-1)), ("zstd", Some(3)), ("zstd", Some(1)), ("snappy", None)]);
         let none = &points[0];
@@ -1207,7 +1278,7 @@ mod tests {
     #[test]
     fn raw_target_has_no_document() {
         let mut random = PanicRead;
-        let points = measure("length", "int32", 1, 1, &[6], &[3], &mut random);
+        let points = measure("length", carrier("int32"), 1, 1, &[6], &[3], &mut random);
         assert_eq!(points[0].shape, "raw");
         assert_eq!(points[0].doc, None);
         assert_eq!(points[0].body, 1);
@@ -1306,5 +1377,44 @@ mod tests {
         pairs[3].compressed = 8;
         pairs[4].compressed = 3;
         assert_eq!(pairs_section(&point_index(&pairs)), "PAIRS zlib -1 vs 6 1 mismatches 0\nPAIRS zstd -1 vs 3 1 mismatches 1\n");
+    }
+
+    #[test]
+    fn index_matches_decimal_text() {
+        for n in [0, 1, 9, 10, 11, 99, 100, 999, 1000, 9999, 10000, 99999, 100000, 999999, 1000000, 5_000_000] {
+            let mut buf = [0u8; 8];
+            let len = write_index(&mut buf, n);
+            assert_eq!(&buf[..len], n.to_string().as_bytes());
+        }
+        let built = doc(512, "int32", 1);
+        assert!(built.windows(4).any(|bytes| bytes == b"\x1010\x00"));
+    }
+
+    #[test]
+    fn seeds_stay_put() {
+        assert_eq!(raw_seed(1), 0xB0D + 1);
+        assert_eq!(scalar_seed(10), 0x5eed + 10);
+        assert_eq!(array_seed(1, 4), 0xA11A + 17 + 4);
+        assert_eq!(array_seed(9, 8), 0xA11A + 9 * 17 + 8);
+        assert_eq!(array_seed(10, 16), 0xA11A + 10 * 17 + 16);
+    }
+
+    #[test]
+    fn run_keeps_the_sweep_filters() {
+        let open = Run { slices: vec![], carriers: vec![], patterns: vec![], zstd: vec![] };
+        assert!(open.complete());
+        assert!(listed(&open.slices, "compare"));
+        assert!(open.allows_pattern(10));
+        let length = SLICES.iter().find(|slice| slice.tag == "length").unwrap();
+        assert_eq!(open.zstd_levels(length, &(1..=22)), vec![1, 3, 9]);
+        let filtered = Run { slices: vec!["length".into()], carriers: vec!["int32".into()], patterns: vec![1], zstd: vec![3, 99] };
+        assert!(!filtered.complete());
+        assert!(listed(&filtered.slices, "length"));
+        assert!(!listed(&filtered.slices, "surface"));
+        assert!(listed(&filtered.carriers, "int32"));
+        assert!(!listed(&filtered.carriers, "binary"));
+        assert!(filtered.allows_pattern(1));
+        assert!(!filtered.allows_pattern(5));
+        assert_eq!(filtered.zstd_levels(length, &(1..=22)), vec![3]);
     }
 }
