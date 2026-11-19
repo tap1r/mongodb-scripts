@@ -414,6 +414,10 @@ impl Point {
             "expands": self.expands
         })
     }
+
+    fn key(&self) -> RowKey<'_> {
+        row_key(self.slice, self.carrier, self.pattern, self.compressor, self.level, self.target)
+    }
 }
 
 struct Random {
@@ -477,38 +481,40 @@ fn measure(slice: &'static str, carrier: &'static Carrier, pattern: u8, target: 
     let tb = Instant::now();
     let built = payload(target, carrier, pattern, random);
     let build_ms = tb.elapsed().as_millis();
-    let frame = Frame {
-        slice,
-        carrier: carrier.name,
-        pattern,
-        shape: built.shape(),
-        target,
-        doc: built.doc_len(),
-        body: built.body(),
-        bits: round_n(entropy_bits(built.bits_src()), 3),
-        original: HEADER + built.body().len(),
-    };
+    let frame = built.frame(slice, carrier.name, pattern, target);
     points.push(frame.point("none", None, frame.body.len(), 0));
     let tz = Instant::now();
-    for level in zlib {
-        let compressed = zlib_compress(frame.body, *level);
-        points.push(frame.point("zlib", Some(*level), compressed.len(), DETAILS));
+    for &level in zlib {
+        let compressed = compress(frame.body, "zlib", Some(level));
+        points.push(frame.point("zlib", Some(level), compressed.len(), DETAILS));
     }
     let zlib_ms = tz.elapsed().as_millis();
     let ts = Instant::now();
-    for level in zstd {
-        let compressed = zstd::bulk::compress(frame.body, *level).unwrap_or_else(|err| {
-            panic!("zstd {level} on {} bytes: {err}", frame.body.len());
-        });
-        points.push(frame.point("zstd", Some(*level), compressed.len(), DETAILS));
+    for &level in zstd {
+        let compressed = compress(frame.body, "zstd", Some(level));
+        points.push(frame.point("zstd", Some(level), compressed.len(), DETAILS));
     }
     let zstd_ms = ts.elapsed().as_millis();
-    let compressed = SnappyEncoder::new().compress_vec(frame.body).expect("snappy");
+    let compressed = compress(frame.body, "snappy", None);
     points.push(frame.point("snappy", None, compressed.len(), DETAILS));
     if target >= MIB {
         eprintln!("  {} p{pattern} {target} build {build_ms}ms zlib {zlib_ms}ms zstd {zstd_ms}ms body {}", carrier.name, frame.body.len());
     }
     points
+}
+
+fn compress(body: &[u8], compressor: &str, level: Option<i32>) -> Vec<u8> {
+    match compressor {
+        "zlib" => zlib_compress(body, level.expect("zlib level")),
+        "zstd" => {
+            let level = level.expect("zstd level");
+            zstd::bulk::compress(body, level).unwrap_or_else(|err| {
+                panic!("zstd {level} on {} bytes: {err}", body.len());
+            })
+        }
+        "snappy" => SnappyEncoder::new().compress_vec(body).expect("snappy"),
+        _ => panic!("compressor {compressor}"),
+    }
 }
 
 fn zlib_compress(data: &[u8], level: i32) -> Vec<u8> {
@@ -631,6 +637,33 @@ impl DocBuf {
         self.buf[at..at + 4].copy_from_slice(&value.to_le_bytes());
     }
 
+    fn pos(&self) -> usize {
+        self.p
+    }
+
+    fn room(&self, need: usize, target: usize) -> bool {
+        self.p + need + 2 <= target
+    }
+
+    fn fill(&mut self, len: usize, pattern: u8, rand: &mut impl FnMut() -> u32, crypto: &[u8]) {
+        let start = self.p;
+        fill_payload(&mut self.buf, start, len, pattern, rand, crypto);
+        self.p += len;
+    }
+
+    fn remap_printable(&mut self, len: usize) {
+        let start = self.p - len;
+        for i in 0..len {
+            self.buf[start + i] = 32 + (self.buf[start + i] % 95);
+        }
+    }
+
+    fn slot(&mut self, width: usize, i: usize, pattern: u8, kind: Kind, rand: &mut impl FnMut() -> u32) {
+        let start = self.p;
+        write_slot(&mut self.buf[start..start + width], i, pattern, kind, rand);
+        self.p += width;
+    }
+
     fn finish(mut self) -> Vec<u8> {
         self.write_u8(0);
         let end = self.p;
@@ -641,7 +674,7 @@ impl DocBuf {
 }
 
 enum Payload {
-    Document { doc: Vec<u8>, body: Vec<u8> },
+    Document { len: usize, body: Vec<u8> },
     Raw { body: Vec<u8> },
 }
 
@@ -655,7 +688,7 @@ impl Payload {
 
     fn doc_len(&self) -> Option<usize> {
         match self {
-            Payload::Document { doc, .. } => Some(doc.len()),
+            Payload::Document { len, .. } => Some(*len),
             Payload::Raw { .. } => None,
         }
     }
@@ -672,12 +705,27 @@ impl Payload {
             Payload::Raw { body } => body,
         }
     }
+
+    fn frame<'a>(&'a self, slice: &'static str, carrier: &'static str, pattern: u8, target: usize) -> Frame<'a> {
+        Frame {
+            slice,
+            carrier,
+            pattern,
+            shape: self.shape(),
+            target,
+            doc: self.doc_len(),
+            body: self.body(),
+            bits: round_n(entropy_bits(self.bits_src()), 3),
+            original: HEADER + self.body().len(),
+        }
+    }
 }
 
 fn payload(target: usize, carrier: &Carrier, pattern: u8, random: &mut dyn Read) -> Payload {
     if let Some(doc) = build_doc(target, carrier, pattern, random) {
+        let len = doc.len();
         let body = wrap_doc(&doc);
-        return Payload::Document { doc, body };
+        return Payload::Document { len, body };
     }
     let mut body = vec![0u8; target];
     let crypto = draw(random, pattern, target);
@@ -694,6 +742,8 @@ fn wrap_doc(doc: &[u8]) -> Vec<u8> {
 
 const CRYPTO_WINDOW: usize = 64;
 const ARRAY_CAP: usize = 5_000_000;
+const ARRAY_FLOOR: usize = 23;
+const SCALAR_OVERHEAD: usize = 4 + 10 + 8 + 1;
 
 struct Crypto<'a> {
     random: &'a mut dyn Read,
@@ -770,9 +820,8 @@ fn build_scalar(target: usize, pattern: u8, form: Form, random: &mut dyn Read) -
         Form::Binary => false,
         Form::Array { .. } => panic!("scalar form"),
     };
-    let overhead = 4 + 10 + 8 + 1;
-    if target < overhead { return None; }
-    let content_len = target - overhead;
+    if target < SCALAR_OVERHEAD { return None; }
+    let content_len = target - SCALAR_OVERHEAD;
     let mut doc = DocBuf::new(target);
     doc.write_ping();
     let crypto = draw(random, pattern, content_len);
@@ -781,12 +830,8 @@ fn build_scalar(target: usize, pattern: u8, form: Form, random: &mut dyn Read) -
     doc.write_key(b"p");
     doc.write_i32(if string { content_len as i32 + 1 } else { content_len as i32 });
     if !string { doc.write_u8(0); }
-    let start = doc.p;
-    fill_payload(&mut doc.buf, start, content_len, pattern, &mut rand, &crypto);
-    if string && pattern == 10 {
-        for i in 0..content_len { doc.buf[start + i] = 32 + (doc.buf[start + i] % 95); }
-    }
-    doc.p += content_len;
+    doc.fill(content_len, pattern, &mut rand, &crypto);
+    if string && pattern == 10 { doc.remap_printable(content_len); }
     if string { doc.write_u8(0); }
     let built = doc.finish();
     if built.len() != target { panic!("scalar size {} != {target}", built.len()); }
@@ -794,12 +839,12 @@ fn build_scalar(target: usize, pattern: u8, form: Form, random: &mut dyn Read) -
 }
 
 fn build_array(target: usize, pattern: u8, width: usize, type_byte: u8, kind: Kind, random: &mut dyn Read) -> Option<Vec<u8>> {
-    if target < 23 { return None; }
+    if target < ARRAY_FLOOR { return None; }
     let mut doc = DocBuf::new(target);
     doc.write_ping();
     doc.write_u8(0x04);
     doc.write_key(b"p");
-    let arr_size_at = doc.p;
+    let arr_size_at = doc.pos();
     doc.write_i32(0);
     let mut rand = xorshift(array_seed(pattern, width));
     let mut crypto = Crypto::open(random, pattern, width * CRYPTO_WINDOW);
@@ -808,25 +853,22 @@ fn build_array(target: usize, pattern: u8, width: usize, type_byte: u8, kind: Ki
         let mut key = [0u8; 8];
         let key_len = write_index(&mut key, i);
         let need = 1 + key_len + 1 + width;
-        if doc.p + need + 2 > target { break; }
+        if !doc.room(need, target) { break; }
         doc.write_u8(type_byte);
-        doc.write_bytes(&key[..key_len]);
-        doc.write_u8(0);
+        doc.write_key(&key[..key_len]);
         // Pattern 10 copies width raw bytes. The seeded ladders are not called.
         if pattern == 10 {
             let drawn = crypto.take(width);
             doc.write_bytes(drawn);
         } else {
-            let start = doc.p;
-            write_slot(&mut doc.buf[start..start + width], i, pattern, kind, &mut rand);
-            doc.p += width;
+            doc.slot(width, i, pattern, kind, &mut rand);
         }
         i += 1;
         if i > ARRAY_CAP { panic!("array element cap"); }
     }
     if i == 0 { return None; }
     doc.write_u8(0);
-    let arr_size = (doc.p - arr_size_at) as i32;
+    let arr_size = (doc.pos() - arr_size_at) as i32;
     doc.patch_i32(arr_size_at, arr_size);
     Some(doc.finish())
 }
@@ -948,6 +990,10 @@ fn write_grid(path: &str, meta: &str, points: &[Point]) {
 
 type RowKey<'a> = (&'a str, &'a str, u8, &'a str, Option<i32>, usize);
 
+fn row_key<'a>(slice: &'a str, carrier: &'a str, pattern: u8, compressor: &'a str, level: Option<i32>, target: usize) -> RowKey<'a> {
+    (slice, carrier, pattern, compressor, level, target)
+}
+
 struct Grid<'a> {
     rows: HashMap<RowKey<'a>, &'a Point>,
 }
@@ -956,9 +1002,9 @@ impl<'a> Grid<'a> {
     fn from(points: &'a [Point]) -> Self {
         let mut rows = HashMap::with_capacity(points.len());
         for point in points {
-            let key = (point.slice, point.carrier, point.pattern, point.compressor, point.level, point.target);
+            let key = point.key();
             if rows.insert(key, point).is_some() {
-                panic!("duplicate row {key:?}");
+                panic!("duplicate row {:?}", point.key());
             }
         }
         Self { rows }
@@ -971,7 +1017,25 @@ impl<'a> Grid<'a> {
     }
 
     fn get(&self, slice: &str, carrier: &str, pattern: u8, compressor: &str, level: Option<i32>, target: usize) -> Option<&'a Point> {
-        self.rows.get(&(slice, carrier, pattern, compressor, level, target)).copied()
+        self.rows.get(&row_key(slice, carrier, pattern, compressor, level, target)).copied()
+    }
+
+    fn pair_counts(&self, compressor: &str, level: Option<i32>, other_level: Option<i32>, skip_missing: bool) -> (usize, usize) {
+        let mut pairs = 0usize;
+        let mut mismatches = 0usize;
+        for point in self.rows.values().filter(|point| point.compressor == compressor && point.level == level) {
+            let other = if skip_missing {
+                match self.get(point.slice, point.carrier, point.pattern, compressor, other_level, point.target) {
+                    Some(other) => other,
+                    None => continue,
+                }
+            } else {
+                self.lookup(point.slice, point.carrier, point.pattern, compressor, other_level, point.target)
+            };
+            pairs += 1;
+            if other.compressed != point.compressed { mismatches += 1; }
+        }
+        (pairs, mismatches)
     }
 
     fn expanding_target(&self, slice: &str, carrier: &str, pattern: u8, compressor: &str, level: Option<i32>) -> usize {
@@ -1074,21 +1138,8 @@ fn level_max_line(point: &Point) -> String {
 }
 
 fn pairs_section(map: &Grid<'_>) -> String {
-    let mut z_pairs = 0usize;
-    let mut z_mis = 0usize;
-    let mut s_pairs = 0usize;
-    let mut s_mis = 0usize;
-    for point in map.rows.values().filter(|point| point.compressor == "zlib" && point.level == Some(-1)) {
-        let other = map.lookup(point.slice, point.carrier, point.pattern, "zlib", Some(6), point.target);
-        z_pairs += 1;
-        if other.compressed != point.compressed { z_mis += 1; }
-    }
-    for point in map.rows.values().filter(|point| point.compressor == "zstd" && point.level == Some(-1)) {
-        if let Some(other) = map.get(point.slice, point.carrier, point.pattern, "zstd", Some(3), point.target) {
-            s_pairs += 1;
-            if other.compressed != point.compressed { s_mis += 1; }
-        }
-    }
+    let (z_pairs, z_mis) = map.pair_counts("zlib", Some(-1), Some(6), false);
+    let (s_pairs, s_mis) = map.pair_counts("zstd", Some(-1), Some(3), true);
     format!("PAIRS zlib -1 vs 6 {z_pairs} mismatches {z_mis}\nPAIRS zstd -1 vs 3 {s_pairs} mismatches {s_mis}\n")
 }
 
