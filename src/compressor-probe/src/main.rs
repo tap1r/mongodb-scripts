@@ -47,11 +47,20 @@ const PATTERNS_COMPARE: [u8; 4] = [1, 5, 9, 10];
 #[derive(Clone, Copy)]
 enum Kind { Int32, Double, Long, Timestamp, Decimal }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Scalar { String, Binary }
+
+#[derive(Clone, Copy)]
+struct Array {
+    width: usize,
+    type_byte: u8,
+    kind: Kind
+}
+
 #[derive(Clone, Copy)]
 enum Form {
-    String,
-    Binary,
-    Array { width: usize, type_byte: u8, kind: Kind }
+    Scalar(Scalar),
+    Array(Array)
 }
 
 struct Carrier {
@@ -59,14 +68,14 @@ struct Carrier {
     form: Form
 }
 
-const INT32: Carrier = Carrier { name: "int32", form: Form::Array { width: 4, type_byte: 0x10, kind: Kind::Int32 } };
-const DOUBLE: Carrier = Carrier { name: "double", form: Form::Array { width: 8, type_byte: 0x01, kind: Kind::Double } };
-const LONG: Carrier = Carrier { name: "long", form: Form::Array { width: 8, type_byte: 0x12, kind: Kind::Long } };
-const DATE: Carrier = Carrier { name: "date", form: Form::Array { width: 8, type_byte: 0x09, kind: Kind::Long } };
-const TIMESTAMP: Carrier = Carrier { name: "timestamp", form: Form::Array { width: 8, type_byte: 0x11, kind: Kind::Timestamp } };
-const DECIMAL128: Carrier = Carrier { name: "decimal128", form: Form::Array { width: 16, type_byte: 0x13, kind: Kind::Decimal } };
-const STRING: Carrier = Carrier { name: "string", form: Form::String };
-const BINARY: Carrier = Carrier { name: "binary", form: Form::Binary };
+const INT32: Carrier = Carrier { name: "int32", form: Form::Array(Array { width: 4, type_byte: 0x10, kind: Kind::Int32 }) };
+const DOUBLE: Carrier = Carrier { name: "double", form: Form::Array(Array { width: 8, type_byte: 0x01, kind: Kind::Double }) };
+const LONG: Carrier = Carrier { name: "long", form: Form::Array(Array { width: 8, type_byte: 0x12, kind: Kind::Long }) };
+const DATE: Carrier = Carrier { name: "date", form: Form::Array(Array { width: 8, type_byte: 0x09, kind: Kind::Long }) };
+const TIMESTAMP: Carrier = Carrier { name: "timestamp", form: Form::Array(Array { width: 8, type_byte: 0x11, kind: Kind::Timestamp }) };
+const DECIMAL128: Carrier = Carrier { name: "decimal128", form: Form::Array(Array { width: 16, type_byte: 0x13, kind: Kind::Decimal }) };
+const STRING: Carrier = Carrier { name: "string", form: Form::Scalar(Scalar::String) };
+const BINARY: Carrier = Carrier { name: "binary", form: Form::Scalar(Scalar::Binary) };
 
 const CARRIER_TABLE: [&Carrier; 8] = [&INT32, &DOUBLE, &LONG, &DATE, &TIMESTAMP, &DECIMAL128, &STRING, &BINARY];
 const CHART_CARRIERS: [&Carrier; 7] = [&INT32, &DOUBLE, &LONG, &DATE, &DECIMAL128, &STRING, &BINARY];
@@ -74,20 +83,32 @@ const LEVEL_MAX_CARRIERS: [&Carrier; 2] = [&BINARY, &INT32];
 const COMPARE_CARRIERS: [&Carrier; 3] = [&LONG, &DATE, &TIMESTAMP];
 // The digest prints these five. Long, date, and timestamp stay out of it.
 const DIGEST_CARRIERS: &[&str] = &["int32", "double", "decimal128", "string", "binary"];
+// levelMax runs binary then int32. The digest prints int32 then binary.
+const DIGEST_LEVEL_MAX: [&str; 2] = ["int32", "binary"];
+const CHART_SERIES: [(&str, Option<i32>); 3] = [("zlib", Some(6)), ("zstd", Some(3)), ("snappy", None)];
+
+const fn known_carrier(name: &str) -> bool {
+    let mut j = 0;
+    while j < CARRIER_TABLE.len() {
+        if str_eq(CARRIER_TABLE[j].name, name) {
+            return true;
+        }
+        j += 1;
+    }
+    false
+}
 
 const _: () = {
     let mut i = 0;
     while i < DIGEST_CARRIERS.len() {
-        let name = DIGEST_CARRIERS[i];
-        let mut found = false;
-        let mut j = 0;
-        while j < CARRIER_TABLE.len() {
-            if str_eq(CARRIER_TABLE[j].name, name) {
-                found = true;
-            }
-            j += 1;
+        if !known_carrier(DIGEST_CARRIERS[i]) {
+            panic!("digest carrier");
         }
-        if !found {
+        i += 1;
+    }
+    let mut i = 0;
+    while i < DIGEST_LEVEL_MAX.len() {
+        if !known_carrier(DIGEST_LEVEL_MAX[i]) {
             panic!("digest carrier");
         }
         i += 1;
@@ -474,6 +495,31 @@ impl Frame<'_> {
             expands: wire > self.original
         }
     }
+
+    fn record(&self, codec: Codec) -> Point {
+        let compressed_len = if codec.name == "none" {
+            self.body.len()
+        } else {
+            compress(self.body, codec.name, codec.level).len()
+        };
+        self.point(codec.name, codec.level, compressed_len, codec.details)
+    }
+}
+
+struct Codec {
+    name: &'static str,
+    level: Option<i32>,
+    details: usize
+}
+
+impl Codec {
+    fn none() -> Self {
+        Self { name: "none", level: None, details: 0 }
+    }
+
+    fn framed(name: &'static str, level: Option<i32>) -> Self {
+        Self { name, level, details: DETAILS }
+    }
 }
 
 fn measure(slice: &'static str, carrier: &'static Carrier, pattern: u8, target: usize, zlib: &[i32], zstd: &[i32], random: &mut dyn Read) -> Vec<Point> {
@@ -482,21 +528,18 @@ fn measure(slice: &'static str, carrier: &'static Carrier, pattern: u8, target: 
     let built = payload(target, carrier, pattern, random);
     let build_ms = tb.elapsed().as_millis();
     let frame = built.frame(slice, carrier.name, pattern, target);
-    points.push(frame.point("none", None, frame.body.len(), 0));
+    points.push(frame.record(Codec::none()));
     let tz = Instant::now();
     for &level in zlib {
-        let compressed = compress(frame.body, "zlib", Some(level));
-        points.push(frame.point("zlib", Some(level), compressed.len(), DETAILS));
+        points.push(frame.record(Codec::framed("zlib", Some(level))));
     }
     let zlib_ms = tz.elapsed().as_millis();
     let ts = Instant::now();
     for &level in zstd {
-        let compressed = compress(frame.body, "zstd", Some(level));
-        points.push(frame.point("zstd", Some(level), compressed.len(), DETAILS));
+        points.push(frame.record(Codec::framed("zstd", Some(level))));
     }
     let zstd_ms = ts.elapsed().as_millis();
-    let compressed = compress(frame.body, "snappy", None);
-    points.push(frame.point("snappy", None, compressed.len(), DETAILS));
+    points.push(frame.record(Codec::framed("snappy", None)));
     if target >= MIB {
         eprintln!("  {} p{pattern} {target} build {build_ms}ms zlib {zlib_ms}ms zstd {zstd_ms}ms body {}", carrier.name, frame.body.len());
     }
@@ -637,10 +680,6 @@ impl DocBuf {
         self.buf[at..at + 4].copy_from_slice(&value.to_le_bytes());
     }
 
-    fn pos(&self) -> usize {
-        self.p
-    }
-
     fn room(&self, need: usize, target: usize) -> bool {
         self.p + need + 2 <= target
     }
@@ -664,6 +703,34 @@ impl DocBuf {
         self.p += width;
     }
 
+    fn write_scalar(&mut self, scalar: Scalar, content_len: usize) {
+        let string = scalar == Scalar::String;
+        self.write_u8(if string { 0x02 } else { 0x05 });
+        self.write_key(b"p");
+        self.write_i32(if string { content_len as i32 + 1 } else { content_len as i32 });
+        if !string { self.write_u8(0); }
+    }
+
+    fn begin_array(&mut self) -> usize {
+        self.write_u8(0x04);
+        self.write_key(b"p");
+        let at = self.p;
+        self.write_i32(0);
+        at
+    }
+
+    fn write_index_key(&mut self, n: usize) {
+        let mut key = [0u8; 8];
+        let len = write_index(&mut key, n);
+        self.write_key(&key[..len]);
+    }
+
+    fn end_array(&mut self, at: usize) {
+        self.write_u8(0);
+        let arr_size = (self.p - at) as i32;
+        self.patch_i32(at, arr_size);
+    }
+
     fn finish(mut self) -> Vec<u8> {
         self.write_u8(0);
         let end = self.p;
@@ -673,37 +740,18 @@ impl DocBuf {
     }
 }
 
-enum Payload {
-    Document { len: usize, body: Vec<u8> },
-    Raw { body: Vec<u8> }
+struct Payload {
+    doc: Option<usize>,
+    body: Vec<u8>
 }
 
 impl Payload {
     fn shape(&self) -> &'static str {
-        match self {
-            Payload::Document { .. } => "document",
-            Payload::Raw { .. } => "raw"
-        }
-    }
-
-    fn doc_len(&self) -> Option<usize> {
-        match self {
-            Payload::Document { len, .. } => Some(*len),
-            Payload::Raw { .. } => None
-        }
-    }
-
-    fn body(&self) -> &[u8] {
-        match self {
-            Payload::Document { body, .. } | Payload::Raw { body } => body
-        }
+        if self.doc.is_some() { "document" } else { "raw" }
     }
 
     fn bits_src(&self) -> &[u8] {
-        match self {
-            Payload::Document { body, .. } => &body[5..],
-            Payload::Raw { body } => body
-        }
+        if self.doc.is_some() { &self.body[5..] } else { &self.body }
     }
 
     fn frame<'a>(&'a self, slice: &'static str, carrier: &'static str, pattern: u8, target: usize) -> Frame<'a> {
@@ -713,10 +761,10 @@ impl Payload {
             pattern,
             shape: self.shape(),
             target,
-            doc: self.doc_len(),
-            body: self.body(),
+            doc: self.doc,
+            body: &self.body,
             bits: round_n(entropy_bits(self.bits_src()), 3),
-            original: HEADER + self.body().len()
+            original: HEADER + self.body.len()
         }
     }
 }
@@ -725,12 +773,12 @@ fn payload(target: usize, carrier: &Carrier, pattern: u8, random: &mut dyn Read)
     if let Some(doc) = build_doc(target, carrier, pattern, random) {
         let len = doc.len();
         let body = wrap_doc(&doc);
-        return Payload::Document { len, body };
+        return Payload { doc: Some(len), body };
     }
     let mut body = vec![0u8; target];
     let crypto = draw(random, pattern, target);
     fill_payload(&mut body, 0, target, pattern, &mut xorshift(raw_seed(pattern)), &crypto);
-    Payload::Raw { body }
+    Payload { doc: None, body }
 }
 
 fn wrap_doc(doc: &[u8]) -> Vec<u8> {
@@ -784,6 +832,11 @@ fn draw(random: &mut dyn Read, pattern: u8, len: usize) -> Vec<u8> {
     crypto.take(len).to_vec()
 }
 
+fn index_len(n: usize) -> usize {
+    let mut key = [0u8; 8];
+    write_index(&mut key, n)
+}
+
 fn write_index(buf: &mut [u8], n: usize) -> usize {
     if n == 0 {
         buf[0] = b'0';
@@ -808,68 +861,53 @@ fn write_index(buf: &mut [u8], n: usize) -> usize {
 
 fn build_doc(target: usize, carrier: &Carrier, pattern: u8, random: &mut dyn Read) -> Option<Vec<u8>> {
     match carrier.form {
-        Form::String => build_scalar(target, pattern, Form::String, random),
-        Form::Binary => build_scalar(target, pattern, Form::Binary, random),
-        Form::Array { width, type_byte, kind } => build_array(target, pattern, width, type_byte, kind, random)
+        Form::Scalar(scalar) => build_scalar(target, pattern, scalar, random),
+        Form::Array(array) => build_array(target, pattern, array, random)
     }
 }
 
-fn build_scalar(target: usize, pattern: u8, form: Form, random: &mut dyn Read) -> Option<Vec<u8>> {
-    let string = match form {
-        Form::String => true,
-        Form::Binary => false,
-        Form::Array { .. } => panic!("scalar form")
-    };
+fn build_scalar(target: usize, pattern: u8, scalar: Scalar, random: &mut dyn Read) -> Option<Vec<u8>> {
     if target < SCALAR_OVERHEAD { return None; }
     let content_len = target - SCALAR_OVERHEAD;
     let mut doc = DocBuf::new(target);
     doc.write_ping();
     let crypto = draw(random, pattern, content_len);
     let mut rand = xorshift(scalar_seed(pattern));
-    doc.write_u8(if string { 0x02 } else { 0x05 });
-    doc.write_key(b"p");
-    doc.write_i32(if string { content_len as i32 + 1 } else { content_len as i32 });
-    if !string { doc.write_u8(0); }
+    doc.write_scalar(scalar, content_len);
     doc.fill(content_len, pattern, &mut rand, &crypto);
-    if string && pattern == 10 { doc.remap_printable(content_len); }
-    if string { doc.write_u8(0); }
+    if scalar == Scalar::String && pattern == 10 { doc.remap_printable(content_len); }
+    if scalar == Scalar::String { doc.write_u8(0); }
     let built = doc.finish();
     if built.len() != target { panic!("scalar size {} != {target}", built.len()); }
     Some(built)
 }
 
-fn build_array(target: usize, pattern: u8, width: usize, type_byte: u8, kind: Kind, random: &mut dyn Read) -> Option<Vec<u8>> {
+fn build_array(target: usize, pattern: u8, array: Array, random: &mut dyn Read) -> Option<Vec<u8>> {
     if target < ARRAY_FLOOR { return None; }
     let mut doc = DocBuf::new(target);
     doc.write_ping();
-    doc.write_u8(0x04);
-    doc.write_key(b"p");
-    let arr_size_at = doc.pos();
-    doc.write_i32(0);
-    let mut rand = xorshift(array_seed(pattern, width));
-    let mut crypto = Crypto::open(random, pattern, width * CRYPTO_WINDOW);
+    let arr_size_at = doc.begin_array();
+    let mut rand = xorshift(array_seed(pattern, array.width));
+    let mut crypto = Crypto::open(random, pattern, array.width * CRYPTO_WINDOW);
     let mut i = 0usize;
     loop {
-        let mut key = [0u8; 8];
-        let key_len = write_index(&mut key, i);
-        let need = 1 + key_len + 1 + width;
+        let key_len = index_len(i);
+        let need = 1 + key_len + 1 + array.width;
         if !doc.room(need, target) { break; }
-        doc.write_u8(type_byte);
-        doc.write_key(&key[..key_len]);
+        doc.write_u8(array.type_byte);
+        doc.write_index_key(i);
         // Pattern 10 copies width raw bytes. The seeded ladders are not called.
         if pattern == 10 {
-            let drawn = crypto.take(width);
+            let drawn = crypto.take(array.width);
             doc.write_bytes(drawn);
         } else {
-            doc.slot(width, i, pattern, kind, &mut rand);
+            doc.slot(array.width, i, pattern, array.kind, &mut rand);
         }
         i += 1;
         if i > ARRAY_CAP { panic!("array element cap"); }
     }
     if i == 0 { return None; }
-    doc.write_u8(0);
-    let arr_size = (doc.pos() - arr_size_at) as i32;
-    doc.patch_i32(arr_size_at, arr_size);
+    doc.end_array(arr_size_at);
     Some(doc.finish())
 }
 
@@ -1043,6 +1081,31 @@ impl<'a> Grid<'a> {
             point.slice == slice && point.carrier == carrier && point.pattern == pattern && point.compressor == compressor && point.level == level && point.expands
         }).map(|point| point.target).max().unwrap_or(0)
     }
+
+    fn row<'g>(&'g self, slice: &'g str, carrier: &'g str, pattern: u8) -> Row<'g, 'a> {
+        Row { grid: self, slice, carrier, pattern }
+    }
+}
+
+struct Row<'g, 'a> {
+    grid: &'g Grid<'a>,
+    slice: &'g str,
+    carrier: &'g str,
+    pattern: u8
+}
+
+impl<'g, 'a> Row<'g, 'a> {
+    fn ratio(&self, compressor: &str, level: Option<i32>, target: usize) -> f64 {
+        self.point(compressor, level, target).wire_ratio
+    }
+
+    fn expanding(&self, compressor: &str, level: Option<i32>) -> usize {
+        self.grid.expanding_target(self.slice, self.carrier, self.pattern, compressor, level)
+    }
+
+    fn point(&self, compressor: &str, level: Option<i32>, target: usize) -> &'a Point {
+        self.grid.lookup(self.slice, self.carrier, self.pattern, compressor, level, target)
+    }
 }
 
 fn digest_text(points: &[Point]) -> String {
@@ -1070,22 +1133,22 @@ fn length_section(map: &Grid<'_>) -> String {
 }
 
 fn length_line(map: &Grid<'_>, carrier: &str, pattern: u8) -> String {
-    let last = |comp, level| map.expanding_target("length", carrier, pattern, comp, level);
-    let cell = |comp, level, target| map.lookup("length", carrier, pattern, comp, level, target).wire_ratio;
-    let bits = map.lookup("length", carrier, pattern, "zlib", Some(6), KIB_64).bits;
+    let row = map.row("length", carrier, pattern);
+    let bits = row.point("zlib", Some(6), KIB_64).bits;
     format!("{carrier}\t{pattern}\t{bits}\tzlib {}\tzstd {}\tsnappy {}\tz6 {} {} {}\tz3 {} {} {}\tsn {} {} {}\n",
-        last("zlib", Some(6)),
-        last("zstd", Some(3)),
-        last("snappy", None),
-        cell("zlib", Some(6), KIB_64), cell("zlib", Some(6), MIB), cell("zlib", Some(6), BSON_MAX),
-        cell("zstd", Some(3), KIB_64), cell("zstd", Some(3), MIB), cell("zstd", Some(3), BSON_MAX),
-        cell("snappy", None, KIB_64), cell("snappy", None, MIB), cell("snappy", None, BSON_MAX))
+        row.expanding("zlib", Some(6)),
+        row.expanding("zstd", Some(3)),
+        row.expanding("snappy", None),
+        row.ratio("zlib", Some(6), KIB_64), row.ratio("zlib", Some(6), MIB), row.ratio("zlib", Some(6), BSON_MAX),
+        row.ratio("zstd", Some(3), KIB_64), row.ratio("zstd", Some(3), MIB), row.ratio("zstd", Some(3), BSON_MAX),
+        row.ratio("snappy", None, KIB_64), row.ratio("snappy", None, MIB), row.ratio("snappy", None, BSON_MAX))
 }
 
 fn zstd_section(map: &Grid<'_>) -> String {
     let mut out = String::from("ZSTD1V3\n");
     for &carrier in DIGEST_CARRIERS {
-        let c = |level, target| map.lookup("length", carrier, 1, "zstd", Some(level), target).wire_ratio;
+        let row = map.row("length", carrier, 1);
+        let c = |level, target| row.ratio("zstd", Some(level), target);
         out.push_str(&format!("{carrier}\t{}\t{}\t{}\t{}\t{}\n", c(1, MIB), c(3, MIB), c(1, BSON_MAX), c(3, BSON_MAX), c(9, BSON_MAX)));
     }
     out
@@ -1096,8 +1159,9 @@ fn one_mib_section(map: &Grid<'_>) -> String {
     for pattern in 1u8..=10 {
         let mut line = format!("p{pattern}");
         for &carrier in DIGEST_CARRIERS {
-            for (comp, level) in [("zlib", Some(6)), ("zstd", Some(3)), ("snappy", None)] {
-                let p = map.lookup("oneMiB", carrier, pattern, comp, level, MIB);
+            let row = map.row("oneMiB", carrier, pattern);
+            for (comp, level) in CHART_SERIES {
+                let p = row.point(comp, level, MIB);
                 line.push_str(&format!("\t{carrier}:{comp}:{}:{}", p.bits, p.wire_ratio));
             }
         }
@@ -1110,8 +1174,9 @@ fn one_mib_section(map: &Grid<'_>) -> String {
 
 fn level64_section(map: &Grid<'_>) -> String {
     let mut out = String::from("LEVEL64 int32 pattern 1 zstd\n");
+    let row = map.row("level64", "int32", 1);
     for level in ZSTD_LEVEL64 {
-        let p = map.lookup("level64", "int32", 1, "zstd", Some(level), KIB_64);
+        let p = row.point("zstd", Some(level), KIB_64);
         out.push_str(&format!("{}:{}\n", p.level.unwrap(), p.wire_ratio));
     }
     out
@@ -1119,15 +1184,16 @@ fn level64_section(map: &Grid<'_>) -> String {
 
 fn level_max_section(map: &Grid<'_>) -> String {
     let mut out = String::from("LEVELMAX\n");
-    for carrier in ["int32", "binary"] {
+    for carrier in DIGEST_LEVEL_MAX {
         for pattern in [1u8, 10] {
+            let row = map.row("levelMax", carrier, pattern);
             for level in ZLIB_ALL {
-                out.push_str(&level_max_line(map.lookup("levelMax", carrier, pattern, "zlib", Some(level), BSON_MAX)));
+                out.push_str(&level_max_line(row.point("zlib", Some(level), BSON_MAX)));
             }
             for level in ZSTD_LEVEL_MAX {
-                out.push_str(&level_max_line(map.lookup("levelMax", carrier, pattern, "zstd", Some(level), BSON_MAX)));
+                out.push_str(&level_max_line(row.point("zstd", Some(level), BSON_MAX)));
             }
-            out.push_str(&level_max_line(map.lookup("levelMax", carrier, pattern, "snappy", None, BSON_MAX)));
+            out.push_str(&level_max_line(row.point("snappy", None, BSON_MAX)));
         }
     }
     out
@@ -1433,7 +1499,7 @@ mod tests {
         let mut one = Vec::new();
         for pattern in 1u8..=10 {
             for carrier in DIGEST_CARRIERS {
-                for (comp, level) in [("zlib", Some(6)), ("zstd", Some(3)), ("snappy", None)] {
+                for (comp, level) in CHART_SERIES {
                     one.push(sample("oneMiB", carrier, pattern, comp, level, MIB, 1.5, 2.5, false));
                 }
             }
