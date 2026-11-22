@@ -753,7 +753,7 @@ The live file continues the sketch on the mongosh line. Stand-in library, no `lo
 
 ### `pcg-xsh-rr.js`
 
-The live file is a BigInt PCG-XSH-RR generator. `pcg32` is one generator, started from the published initializer. Every generator has `random()`, `srandom(seed, seq)`, and bigint `state` and `inc` properties. Writing either word updates that generator. `inc` must be odd, because the LCG modulus is 2^64. `pcg32.seed(seed, seq)` returns a new generator already seeded. `pcg32.rng(state, inc)` restores one from those raw words, and both arguments are required. The snapshot of a generator is `pcg32.rng(gen.state, gen.inc)`. `random_r` and `srandom_r` call the methods on that generator. A seed, sequence, or state is an integer from 0 through 2^53-1, or a bigint from 0 through 2^64-1. There is no version field.
+The live file is a BigInt PCG-XSH-RR generator. `pcg32` is one generator, started from the published initializer. Every generator has `random()`, `srandom(seed, seq)`, `clone()`, and bigint `state` and `inc` properties. Writing either word updates that generator. `inc` must be odd, because the LCG modulus is 2^64. `srandom` reseeds that generator. `pcg32.spawn(seed, seq)` returns a new generator already seeded and does not change `pcg32`. `pcg32.restore(state, inc)` returns a new generator with those raw words, and both arguments are required. `gen.clone()` copies that generator's current words. A seed, sequence, or state is an integer from 0 through 2^53-1, or a bigint from 0 through 2^64-1. There is no version field.
 
 **Legacy archive line: as-is** at `legacy/mongo-shell/src/pcg-xsh-rr.js`. That copy is the 16-bit limb helper. Leave it frozen.
 

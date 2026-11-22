@@ -8,17 +8,16 @@
  *  legacy/mongo-shell/src/pcg-xsh-rr.js.
  *
  *  pcg32 is one generator, started from the published initializer.
- *  Every generator has random(), srandom(seed, seq), and bigint
- *  state and inc. Those two words are readable and writable. random()
- *  returns the next uint32. srandom(seed, seq) selects the stream.
- *  Both arguments are required: an integer from 0 through 2^53-1, or
- *  a bigint from 0 through 2^64-1. inc must be odd.
- *  pcg32.seed(seed, seq) returns a new generator already seeded.
- *  pcg32.rng(state, inc) restores one from those raw words. Both
- *  arguments are required. The snapshot of gen is
- *  pcg32.rng(gen.state, gen.inc).
- *  pcg32.random_r(gen) and pcg32.srandom_r(gen, seed, seq) call the
- *  methods on that generator.
+ *  Every generator has random(), srandom(seed, seq), clone(), and
+ *  bigint state and inc. Those two words are readable and writable.
+ *  random() returns the next uint32. srandom(seed, seq) reseeds this
+ *  generator. Both arguments are required: an integer from 0 through
+ *  2^53-1, or a bigint from 0 through 2^64-1. inc must be odd.
+ *  pcg32.spawn(seed, seq) returns a new generator already seeded.
+ *  It does not change pcg32.
+ *  pcg32.restore(state, inc) returns a new generator with those raw
+ *  words. Both arguments are required.
+ *  gen.clone() returns a new generator with gen's current words.
  */
 
 var pcg32 = (function() {
@@ -32,7 +31,6 @@ var pcg32 = (function() {
    const INITIAL_STATE = 0x853c49e6748fea9bn;
    const INITIAL_INC = 0xda3e39cb94b95bdbn;
    const TWO32 = 4294967296;
-   const BRAND = Symbol('pcg32');
 
    function word64(value, label) {
       if (typeof value === 'bigint') {
@@ -57,8 +55,8 @@ var pcg32 = (function() {
    }
 
    function create(state, inc) {
-      let s = state;
-      let i = inc;
+      let s = word64(state, 'state');
+      let i = oddInc(inc);
 
       function random() {
          const old = s;
@@ -77,16 +75,22 @@ var pcg32 = (function() {
          const initstate = word64(seed, 'seed');
          const initseq = word64(seq, 'sequence');
          s = 0n;
+         // (seq << 1) | 1 is odd, including after the 64-bit mask.
          i = ((initseq << 1n) | 1n) & MASK64;
          random();
          s = (s + initstate) & MASK64;
          random();
       }
 
+      function clone() {
+         return create(s, i);
+      }
+
       const gen = {};
       Object.defineProperties(gen, {
          'random': { 'value': random },
          'srandom': { 'value': srandom },
+         'clone': { 'value': clone },
          'state': {
             'enumerable': true,
             'get': function() { return s; },
@@ -98,44 +102,25 @@ var pcg32 = (function() {
             'set': function(value) { i = oddInc(value); }
          }
       });
-      Object.defineProperty(gen, BRAND, { 'value': true });
       return gen;
    }
 
-   function isGenerator(gen) {
-      return gen != null && gen[BRAND] === true;
-   }
-
-   function rng(state, inc) {
+   function restore(state, inc) {
       if (state === undefined || inc === undefined)
-         throw new Error('pcg32: rng requires a state and an inc');
-      return create(word64(state, 'state'), oddInc(inc));
+         throw new Error('pcg32: restore requires a state and an inc');
+      return create(state, inc);
    }
 
-   function seed(initstate, initseq) {
+   function spawn(initstate, initseq) {
       const gen = create(0n, 1n);
       gen.srandom(initstate, initseq);
       return gen;
    }
 
-   function random_r(gen) {
-      if (!isGenerator(gen))
-         throw new Error('pcg32: random_r requires a generator');
-      return gen.random();
-   }
-
-   function srandom_r(gen, initstate, initseq) {
-      if (!isGenerator(gen))
-         throw new Error('pcg32: srandom_r requires a generator');
-      gen.srandom(initstate, initseq);
-   }
-
    const stream = create(INITIAL_STATE, INITIAL_INC);
    Object.defineProperties(stream, {
-      'rng': { 'value': rng },
-      'seed': { 'value': seed },
-      'random_r': { 'value': random_r },
-      'srandom_r': { 'value': srandom_r }
+      'spawn': { 'value': spawn },
+      'restore': { 'value': restore }
    });
    return stream;
 })();
