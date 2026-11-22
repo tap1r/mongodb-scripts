@@ -1,283 +1,143 @@
 /*
  *  Name: "pcg-xsh-rr.js"
- *  Legacy archive line: as-is (no Version field). PCG RNG helper; freeze as-is
- *  for the whole-tree snapshot. See ROADMAP.md → Legacy mongo shell retirement.
+ *  Description: "PCG-XSH-RR 32-bit generator"
+ *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
+ *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
+ *
+ *  Mongosh 1.10 / 2.10+. The frozen limb copy is
+ *  legacy/mongo-shell/src/pcg-xsh-rr.js.
+ *
+ *  pcg32 is one generator, started from the published initializer.
+ *  Every generator has random(), srandom(seed, seq), and bigint
+ *  state and inc. Those two words are readable and writable. random()
+ *  returns the next uint32. srandom(seed, seq) selects the stream.
+ *  Both arguments are required: an integer from 0 through 2^53-1, or
+ *  a bigint from 0 through 2^64-1. inc must be odd.
+ *  pcg32.seed(seed, seq) returns a new generator already seeded.
+ *  pcg32.rng(state, inc) restores one from those raw words. Both
+ *  arguments are required. The snapshot of gen is
+ *  pcg32.rng(gen.state, gen.inc).
+ *  pcg32.random_r(gen) and pcg32.srandom_r(gen, seed, seq) call the
+ *  methods on that generator.
  */
 
-let UINT64 = function(a, b, c, d) {
-   let a48, a32, a16, a00;
-   const _mask = {
-      "1": 0x0001,
-      "2": 0x0003,
-      "3": 0x0007,
-      "4": 0x000f,
-      "5": 0x001f,
-      "6": 0x003f,
-      "7": 0x007f,
-      "8": 0x00ff,
-      "9": 0x01ff,
-      "10": 0x03ff,
-      "11": 0x07ff,
-      "12": 0x0fff,
-      "13": 0x1fff,
-      "14": 0x3fff,
-      "15": 0x7fff,
-      "16": 0xffff,
-      "32": 0xffffffff
-   };
+var pcg32 = (function() {
+   'use strict';
 
-   if (typeof c === 'undefined') {
-      a48 = (a >> 16) & _mask[16];
-      a32 = a & _mask[16];
-      a16 = (b >> 16) & _mask[16];
-      a00 = b & _mask[16];
-   } else {
-      a48 = a;
-      a32 = b;
-      a16 = c;
-      a00 = d;
+   // PCG-XSH-RR: 64-bit LCG, 32-bit xorshift-high / rotate output.
+   const MULTIPLIER = 0x5851f42d4c957f2dn;
+   const MASK64 = 0xffffffffffffffffn;
+   const MASK32 = 0xffffffffn;
+   // Published initializer. random() follows this stream until srandom().
+   const INITIAL_STATE = 0x853c49e6748fea9bn;
+   const INITIAL_INC = 0xda3e39cb94b95bdbn;
+   const TWO32 = 4294967296;
+   const BRAND = Symbol('pcg32');
+
+   function word64(value, label) {
+      if (typeof value === 'bigint') {
+         if (value < 0n || value > MASK64)
+            throw new Error('pcg32: ' + label + ' does not fit in an unsigned 64-bit integer');
+         return value;
+      }
+      if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+         const hi = Math.floor(value / TWO32);
+         const lo = value % TWO32;
+         return (BigInt(hi) << 32n) | BigInt(lo);
+      }
+      throw new Error('pcg32: ' + label + ' must be an integer from 0 through 2^53-1, or a bigint through 2^64-1');
    }
 
-   function rshift(n) {
-      n = +n;
-
-      if (n <= 0)   return UINT64(a48, a32, a16, a00);
-      if (n >= 64)  return UINT64(0, 0, 0, 0);
-      if (n === 16) return UINT64(0, a48, a32, a16);
-      if (n === 32) return UINT64(0, 0, a48, a32);
-      if (n === 48) return UINT64(0, 0, 0, a48);
-
-      let _n = n % 16;
-      let a = a48 >> _n;
-      let b = ((a48 & _mask[_n]) << (16 - _n)) | (a32 >> _n);
-      let c = ((a32 & _mask[_n]) << (16 - _n)) | (a16 >> _n);
-      let d = ((a16 & _mask[_n]) << (16 - _n)) | (a00 >> _n);
-
-      a = a & _mask[16];
-      b = b & _mask[16];
-      c = c & _mask[16];
-      d = d & _mask[16];
-
-      if (n < 16)      return UINT64(a, b, c, d);
-      else if (n < 32) return UINT64(0, a, b, c);
-      else if (n < 48) return UINT64(0, 0, a, b);
-      else             return UINT64(0, 0, 0, a);
+   // The LCG modulus is 2^64, so a full period needs an odd increment.
+   function oddInc(value) {
+      const word = word64(value, 'inc');
+      if ((word & 1n) === 0n)
+         throw new Error('pcg32: inc must be odd');
+      return word;
    }
 
-   function lshift(n) {
-      n = +n;
+   function create(state, inc) {
+      let s = state;
+      let i = inc;
 
-      if (n <= 0)   return UINT64(a48, a32, a16, a00);
-      if (n >= 64)  return UINT64(0, 0, 0, 0);
-      if (n === 16) return UINT64(a32, a16, a00, 0);
-      if (n === 32) return UINT64(a16, a00, 0, 0);
-      if (n === 48) return UINT64(a00, 0, 0, 0);
+      function random() {
+         const old = s;
+         s = (old * MULTIPLIER + i) & MASK64;
+         // JS shifts are 32-bit, so the xorshift result is masked first.
+         const xorshifted = Number((((old >> 18n) ^ old) >> 27n) & MASK32);
+         const rot = Number(old >> 59n);
+         return ((xorshifted >>> rot) | (xorshifted << ((-rot) & 31))) >>> 0;
+      }
 
-      let _n = n % 16;
-      let a = (a48 << _n) | (a32 >> (16 - _n));
-      let b = (a32 << _n) | (a16 >> (16 - _n));
-      let c = (a16 << _n) | (a00 >> (16 - _n));
-      let d = a00 << _n;
+      function srandom(seed, seq) {
+         if (seed === undefined)
+            throw new Error('pcg32: seed is required');
+         if (seq === undefined)
+            throw new Error('pcg32: sequence is required');
+         const initstate = word64(seed, 'seed');
+         const initseq = word64(seq, 'sequence');
+         s = 0n;
+         i = ((initseq << 1n) | 1n) & MASK64;
+         random();
+         s = (s + initstate) & MASK64;
+         random();
+      }
 
-      a = a & _mask[16];
-      b = b & _mask[16];
-      c = c & _mask[16];
-      d = d & _mask[16];
-
-      if (n < 16)      return UINT64(a, b, c, d);
-      else if (n < 32) return UINT64(b, c, d, 0);
-      else if (n < 48) return UINT64(c, d, 0, 0);
-      else             return UINT64(d, 0, 0, 0);
+      const gen = {};
+      Object.defineProperties(gen, {
+         'random': { 'value': random },
+         'srandom': { 'value': srandom },
+         'state': {
+            'enumerable': true,
+            'get': function() { return s; },
+            'set': function(value) { s = word64(value, 'state'); }
+         },
+         'inc': {
+            'enumerable': true,
+            'get': function() { return i; },
+            'set': function(value) { i = oddInc(value); }
+         }
+      });
+      Object.defineProperty(gen, BRAND, { 'value': true });
+      return gen;
    }
 
-   function or(other) {
-      return UINT64(
-         a48 | other._a48,
-         a32 | other._a32,
-         a16 | other._a16,
-         a00 | other._a00
-      );
+   function isGenerator(gen) {
+      return gen != null && gen[BRAND] === true;
    }
 
-   function xor(other) {
-      return UINT64(
-         a48 ^ other._a48,
-         a32 ^ other._a32,
-         a16 ^ other._a16,
-         a00 ^ other._a00
-      );
+   function rng(state, inc) {
+      if (state === undefined || inc === undefined)
+         throw new Error('pcg32: rng requires a state and an inc');
+      return create(word64(state, 'state'), oddInc(inc));
    }
 
-   function and(other) {
-      return UINT64(
-         a48 & other._a48,
-         a32 & other._a32,
-         a16 & other._a16,
-         a00 & other._a00
-      );
+   function seed(initstate, initseq) {
+      const gen = create(0n, 1n);
+      gen.srandom(initstate, initseq);
+      return gen;
    }
 
-   function mul(other) {
-      let b00 = other._a00;
-      let b16 = other._a16;
-      let b32 = other._a32;
-      let b48 = other._a48;
-
-      let c00 = a00 * b00
-
-      let c16 = c00 >> 16;
-      c16 += a00 * b16;
-      let c32 = c16 >> 16;
-      c16 &= _mask[16];
-      c16 += a16 * b00;
-
-      c32 += c16 >> 16;
-      c32 += a00 * b32;
-      let c48 = c32 >> 16;
-      c32 &= _mask[16];
-      c32 += a16 * b16;
-      c48 += c32 >> 16;
-      c32 &= _mask[16];
-      c32 += a32 * b00;
-
-      c48 += c32 >> 16;
-      c48 += a00 * b48;
-      c48 &= _mask[16];
-      c48 += a16 * b32;
-      c48 &= _mask[16];
-      c48 += a32 * b16;
-      c48 &= _mask[16];
-      c48 += a48 * b00;
-
-      c00 = c00 & _mask[16];
-      c16 = c16 & _mask[16];
-      c32 = c32 & _mask[16];
-      c48 = c48 & _mask[16];
-
-      return UINT64(c48, c32, c16, c00);
+   function random_r(gen) {
+      if (!isGenerator(gen))
+         throw new Error('pcg32: random_r requires a generator');
+      return gen.random();
    }
 
-   function add(other) {
-      let b00 = other._a00;
-      let b16 = other._a16;
-      let b32 = other._a32;
-      let b48 = other._a48;
-
-      let c00 = a00 + b00;
-      let c16 = a16 + b16 + (c00 >> 16);
-      let c32 = a32 + b32 + (c16 >> 16);
-      let c48 = a48 + b48 + (c32 >> 16);
-
-      c00 = c00 & _mask[16];
-      c16 = c16 & _mask[16];
-      c32 = c32 & _mask[16];
-      c48 = c48 & _mask[16];
-
-      return UINT64(c48, c32, c16, c00);
+   function srandom_r(gen, initstate, initseq) {
+      if (!isGenerator(gen))
+         throw new Error('pcg32: srandom_r requires a generator');
+      gen.srandom(initstate, initseq);
    }
 
-   function hex() {
-      if (a48 === 0 && a32 === 0 && a16 === 0 && a00 === 0) return '0';
-
-      let o = a00.toString(16);
-      while (o.length < 4) o = '0' + o;
-
-      o = a16.toString(16) + o;
-      while (o.length < 8) o = '0' + o;
-
-      o = a32.toString(16) + o;
-      while (o.length < 12) o = '0' + o;
-
-      o = a48.toString(16) + o;
-      while (o.length < 16) o = '0' + o;
-
-      o = o.replace(/^0+/, '');
-
-      return '0x' + o;
-   }
-
-   function bin() {
-      if (a48 === 0 && a32 === 0 && a16 === 0 && a00 === 0) return '0';
-
-      let o = a00.toString(2);
-      while (o.length < 16) o = '0' + o;
-
-      o = a16.toString(2) + o;
-      while (o.length < 32) o = '0' + o;
-
-      o = a32.toString(2) + o;
-      while (o.length < 48) o = '0' + o;
-
-      o = a48.toString(2) + o;
-      while (o.length < 64) o = '0' + o;
-
-      o = o.replace(/^0+/, '');
-
-      return '0b' + o;
-   }
-
-   return {
-      "_a48": a48,
-      "_a32": a32,
-      "_a16": a16,
-      "_a00": a00,
-      "rshift": rshift,
-      "lshift": lshift,
-      "or": or,
-      "xor": xor,
-      "and": and,
-      "mul": mul,
-      "add": add,
-      "hex": hex,
-      "bin": bin
-   };
-};
-
-const rng = function(state = 0, inc = 0) {
-   // let state = state | 0;
-   // let inc = inc | 0;
-   return {
-      "state": state,
-      "inc": inc
-   };
-};
-
-var _pcg32_global = rng(UINT64(0x853c49e6, 0x748fea9b), UINT64(0xda3e39cb, 0x94b95bdb));
-
-function srandom_r(_rng, initstate, initseq) {
-   if (typeof initstate === 'number') initstate = UINT64(Math.floor(initstate / 0xffffffff), initstate >> 32);
-   if (typeof initseq === 'number') initseq = UINT64(Math.floor(initseq / 0xffffffff), initseq >> 32);
-   _rng.state = UINT64(0, 0);
-   _rng.inc = initseq.lshift(1).or(UINT64(0, 1));
-   random_r(_rng);
-   _rng.state = _rng.state.add(initstate);
-   random_r(_rng);
-}
-
-function srandom(seed, seq) {
-    srandom_r(_pcg32_global, seed, seq);
-}
-
-function random_r(_rng) {
-   const oldstate = _rng.state;
-   _rng.state = oldstate.mul(UINT64(0x5851f42d, 0x4c957f2d)).add(_rng.inc);
-   const xorshifted = oldstate.rshift(18).xor(oldstate).rshift(27).and(UINT64(0, 0xffffffff));
-   const rot = oldstate.rshift(59)._a00;
-   const rot2 = (-rot) & 31;
-   const result = xorshifted.rshift(rot).or(xorshifted.lshift(rot2)).and(UINT64(0, 0xffffffff));
-   return parseInt(result.hex(), 16); // result32;
-}
-
-function random() {
-   return random_r(_pcg32_global);
-}
-
-pcg32 = _pcg32_global;
-pcg32.random = random;
-pcg32.srandom = srandom;
-pcg32.srandom_r = srandom_r;
-pcg32.random_r = random_r;
-pcg32.UINT64 = UINT64;
-pcg32.rng = rng;
+   const stream = create(INITIAL_STATE, INITIAL_INC);
+   Object.defineProperties(stream, {
+      'rng': { 'value': rng },
+      'seed': { 'value': seed },
+      'random_r': { 'value': random_r },
+      'srandom_r': { 'value': srandom_r }
+   });
+   return stream;
+})();
 
 // EOF

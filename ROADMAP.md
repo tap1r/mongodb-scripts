@@ -57,7 +57,7 @@ Reach a **good-enough** dual-shell snapshot. The bar can be arbitrary, but it sh
 | **`oidFunction.js`** | **v0.1.5** | OID view/`$function` reproduction (mongod 5.0+). Further work is **mongosh-line**. Header documents this freeze. |
 | **`ctxDemo.js`** | **v0.1.0** (mongosh-only) | `mdblib.for(db)` sketch; stand-in lib, no `load('mdblib.js')`. Freeze as-is. Header documents this freeze. |
 | **`modifiedCountDocumentsByKey.js`** | **v0.1.7** (mongosh-only) | `countDocuments` prototype overload. Further work is **mongosh-line**. Header documents this freeze. |
-| **`pcg-xsh-rr.js`** | **as-is** (no `Version`) | PCG RNG helper. Freeze as-is. |
+| **`pcg-xsh-rr.js`** | **as-is** (no `Version`) | Archive copy is the 16-bit limb helper and stays frozen. The live file is a BigInt PCG-XSH-RR generator (`pcg32`). Do not invent a version number. |
 | **`aggregation-template.js`** | **as-is** (no `Version`) | Aggregation snippets. Freeze as-is. |
 | **`misc-scripts.js`** | **as-is** (no `Version`) | Unsorted snippets. Freeze as-is. |
 
@@ -751,9 +751,15 @@ The live file continues the sketch on the mongosh line. Stand-in library, no `lo
 
 **Legacy archive line: v0.1.7** (mongosh-only). `countDocuments` prototype overload. Freeze as-is.
 
-### `pcg-xsh-rr.js` / `aggregation-template.js` / `misc-scripts.js`
+### `pcg-xsh-rr.js`
 
-**Legacy archive line: as-is** (no `Version` field). Helpers and snippets. Freeze as-is; do not invent version numbers for the tag.
+The live file is a BigInt PCG-XSH-RR generator. `pcg32` is one generator, started from the published initializer. Every generator has `random()`, `srandom(seed, seq)`, and bigint `state` and `inc` properties. Writing either word updates that generator. `inc` must be odd, because the LCG modulus is 2^64. `pcg32.seed(seed, seq)` returns a new generator already seeded. `pcg32.rng(state, inc)` restores one from those raw words, and both arguments are required. The snapshot of a generator is `pcg32.rng(gen.state, gen.inc)`. `random_r` and `srandom_r` call the methods on that generator. A seed, sequence, or state is an integer from 0 through 2^53-1, or a bigint from 0 through 2^64-1. There is no version field.
+
+**Legacy archive line: as-is** at `legacy/mongo-shell/src/pcg-xsh-rr.js`. That copy is the 16-bit limb helper. Leave it frozen.
+
+### `aggregation-template.js` / `misc-scripts.js`
+
+**Legacy archive line: as-is** (no `Version` field). Snippets. Freeze as-is; do not invent version numbers for the tag.
 
 ---
 
