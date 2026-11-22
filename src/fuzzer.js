@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.15.5"
+ *  Version: "1.15.6"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -27,7 +27,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.15.5" };
+   const __script = { "name": "fuzzer.js", "version": "1.15.6" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -564,8 +564,9 @@
 
    // Days from now. The draw is a mdblib helper. offset, range, and origin stay
    // this window. uniform fills it. normal and bimodal are not cut; their ts
-   // ObjectId span is 8 sigma. pareto is a truncated Lomax and exponential is
-   // truncated; both are cut to the window. poisson is a whole-number count and
+   // ObjectId span is 8 sigma. A farther tail clamps the ObjectId time and the
+   // Timestamp t. date keeps the draw. pareto is a truncated Lomax and exponential
+   // is truncated; both are cut to the window. poisson is a whole-number count and
    // is not cut; its span is the counts it can draw. $genNormal stays the raw
    // normal. $genRandIncPareto and $genExponential stay unused.
    const DISTRIBUTION_NAMES = ['uniform', 'normal', 'bimodal', 'pareto', 'exponential', 'poisson'];
@@ -943,7 +944,7 @@
    function scriptVersion() {
       return (typeof __fuzzerScript !== 'undefined' && __fuzzerScript && __fuzzerScript.version)
          ? __fuzzerScript.version
-         : '1.15.5';
+         : '1.15.6';
    }
 
    function namespaceContract() {
@@ -1615,11 +1616,18 @@
    // ObjectId time is 4 bytes: 8 hex digits, 1970-01-01 through 2106-02-07T06:28:15Z.
    const OID_SECONDS_MAX = 0xffffffff;
 
-   function objectIdTimePrefix(seconds) {
+   // ObjectId time and Timestamp t are uint32 seconds. A tail past the checked span clamps.
+   function objectIdTimeSeconds(seconds) {
       const whole = $floor(seconds);
-      if (!(whole >= 0) || whole > OID_SECONDS_MAX)
-         return null;
-      return whole.toString(16).padStart(8, '0');
+      if (!Number.isFinite(whole) || whole < 0)
+         return 0;
+      if (whole > OID_SECONDS_MAX)
+         return OID_SECONDS_MAX;
+      return whole;
+   }
+
+   function objectIdTimePrefix(seconds) {
+      return objectIdTimeSeconds(seconds).toString(16).padStart(8, '0');
    }
 
    function isoSeconds(seconds) {
@@ -2207,15 +2215,11 @@
          case 'oid':
             oid = new ObjectId();
             break;
-         default: { // the 'ts' option
-            const prefix = objectIdTimePrefix(timestamp + secondsOffset);
-            if (prefix === null)
-               throw new Error(`the 'ts' ObjectId time ${isoSeconds(timestamp + secondsOffset)} is outside 1970 through 2106-02-07T06:28:15.000Z`);
-            oid = new ObjectId(prefix + $genRandHex(16));
-         }
+         default: // the 'ts' option. The prefix is always a legal ObjectId time.
+            oid = new ObjectId(objectIdTimePrefix(timestamp + secondsOffset) + $genRandHex(16));
       }
       const date = new Date(now + secondsOffset * 1000);
-      const ts = new Timestamp({ "t": timestamp + secondsOffset, "i": 0 });
+      const ts = new Timestamp({ "t": objectIdTimeSeconds(timestamp + secondsOffset), "i": 0 });
       const docDraws = documentDraws(n);
       return realiseSchema(sample.spec, schemaScope({ oid, date, ts, n, "draws": docDraws }), sample.file);
    }
