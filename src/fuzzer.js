@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.15.10"
+ *  Version: "1.16.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -12,6 +12,7 @@
 // Usage: mongosh [connection options] [--quiet] [--eval 'var options = {...};'] [-f|--file] </path/to/>fuzzer.js
 // Overlay: fuzzer-options.jsonc (cwd, --file dir, $MDBLIB, ~/.mongodb) then var options. Missing default is silent.
 // optionsVersion must match OPTIONS_VERSION. A mismatch or an unknown key warns. The run continues.
+// planOnly true prints the HUD and returns. Nothing is dropped, created, or inserted.
 // output.format is table (the HUD, painted from the contract) or json (the contract, once). table is an alias of tabular.
 // Explicit path: var optionsFile = "PATH". --eval var options overlays the file.
 // JSONC parse/search lives in mdblib resolveOptions.
@@ -27,7 +28,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.15.10" };
+   const __script = { "name": "fuzzer.js", "version": "1.16.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -145,7 +146,7 @@
     *  fuzzer.schemas points at the sample plug-ins genDocument realises.
     */
 
-   const OPTIONS_VERSION = 3;
+   const OPTIONS_VERSION = 4;
    const optionDefaults = {
       "optionsVersion": OPTIONS_VERSION, // a loaded file must match. A mismatch warns.
       "output": {
@@ -155,6 +156,7 @@
       "collName": 'collection',         // collection name
       "totalDocsExp": 3.5,              // totalDocs = $getRandExp(totalDocsExp) unless the overlay sets totalDocs
       "dropNamespace": false,           // drop collection prior to generating data
+      "planOnly": false,                // true prints the HUD and returns before any write
       "dropIndexes": false,             // recreate indexes to update creation options
       "compressor": 'best',             // collection block compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
       "idxCompressor": 'default',       // index prefix compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
@@ -428,6 +430,7 @@
       collName = opt.collName,
       totalDocs = hasOwn(opt, 'totalDocs') ? opt.totalDocs : $getRandExp(opt.totalDocsExp),
       dropNamespace = opt.dropNamespace,
+      planOnly = opt.planOnly,
       dropIndexes = opt.dropIndexes,
       compressor = opt.compressor,
       idxCompressor = opt.idxCompressor,
@@ -943,7 +946,7 @@
    function scriptVersion() {
       return (typeof __fuzzerScript !== 'undefined' && __fuzzerScript && __fuzzerScript.version)
          ? __fuzzerScript.version
-         : '1.15.10';
+         : '1.16.0';
    }
 
    function namespaceContract() {
@@ -1153,6 +1156,7 @@
          "namespace": namespaceContract(),
          "documents": isViewRun() ? null : totalDocs,
          "writerConcurrency": writerConcurrency,
+         "planOnly": planOnly === true,
          "optionsPath": resolved.source.file || null,
          "window": windowContract(),
          "collection": collectionContract(),
@@ -1219,7 +1223,8 @@
       const rows = [
          ['namespace', paintNamespace(contract.namespace)],
          ['documents', contract.documents == null ? '[dim]skipped[/]' : `[blue]${grouped(contract.documents)}[/]`],
-         ['writer concurrency', `[blue]${contract.writerConcurrency}[/]`]
+         ['writer concurrency', `[blue]${contract.writerConcurrency}[/]`],
+         ['plan', contract.planOnly ? '[yellow]only[/]' : '[green]write[/]']
       ];
       const draws = paintDraws(contract.draws);
       if (draws)
@@ -1530,6 +1535,12 @@
 
       if (cliTable())
          printHud();
+
+      // The HUD is the plan. Pools and drop come after this return.
+      if (planOnly) {
+         report('\n [green]Plan only.[/] No namespace was changed.\n');
+         return publish({ "ok": 1 });
+      }
 
       // Pools are fixed before the first document. A view does not draw them.
       if (!isViewRun())
@@ -3173,6 +3184,8 @@
       const concurrencyProblem = writerConcurrencyProblem();
       if (concurrencyProblem)
          reasons.push(concurrencyProblem);
+      if (typeof planOnly !== 'boolean')
+         reasons.push('planOnly must be a boolean');
       distributionSpec().errors.forEach(reason => reasons.push(reason));
       drawsSpec().errors.forEach(reason => reasons.push(reason));
       // Zone checks wait until a time series run has replaced the shard key.

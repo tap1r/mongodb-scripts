@@ -17,9 +17,10 @@
 // Sample schemas are pluggable files. genDocument picks one, then builds only that document.
 // A schema string that starts with "=" is an expression. Other strings are literals.
 // optionsVersion must match fuzzer.js. A mismatch or an unknown key warns. The run continues.
+// planOnly true prints the HUD and returns. Nothing is dropped, created, or inserted.
 // output.format table is the HUD. json prints the same contract once, with no colour and no bar.
 {
-   "optionsVersion": 3,
+   "optionsVersion": 4,
    "output": {
       "format": "table" // ["table"|"json"] table is an alias of tabular
    },
@@ -28,6 +29,7 @@
    "totalDocsExp": 3.5,
    // "totalDocs": 1000,
    "dropNamespace": false,
+   "planOnly": false,
    "dropIndexes": false,
    "compressor": "best",
    // collection block compressor ["none"|"snappy"|"zlib"|"zstd"|"default"|"best"]
