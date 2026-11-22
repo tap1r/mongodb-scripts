@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.16.0"
+ *  Version: "1.17.0"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -13,6 +13,7 @@
 // Overlay: fuzzer-options.jsonc (cwd, --file dir, $MDBLIB, ~/.mongodb) then var options. Missing default is silent.
 // optionsVersion must match OPTIONS_VERSION. A mismatch or an unknown key warns. The run continues.
 // planOnly true prints the HUD and returns. Nothing is dropped, created, or inserted.
+// fillToCount true makes totalDocs the count the collection should hold. The run inserts the difference.
 // output.format is table (the HUD, painted from the contract) or json (the contract, once). table is an alias of tabular.
 // Explicit path: var optionsFile = "PATH". --eval var options overlays the file.
 // JSONC parse/search lives in mdblib resolveOptions.
@@ -28,7 +29,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.16.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.17.0" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -146,7 +147,7 @@
     *  fuzzer.schemas points at the sample plug-ins genDocument realises.
     */
 
-   const OPTIONS_VERSION = 4;
+   const OPTIONS_VERSION = 5;
    const optionDefaults = {
       "optionsVersion": OPTIONS_VERSION, // a loaded file must match. A mismatch warns.
       "output": {
@@ -157,6 +158,7 @@
       "totalDocsExp": 3.5,              // totalDocs = $getRandExp(totalDocsExp) unless the overlay sets totalDocs
       "dropNamespace": false,           // drop collection prior to generating data
       "planOnly": false,                // true prints the HUD and returns before any write
+      "fillToCount": false,             // true inserts until the collection holds totalDocs
       "dropIndexes": false,             // recreate indexes to update creation options
       "compressor": 'best',             // collection block compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
       "idxCompressor": 'default',       // index prefix compressor ['none'|'snappy'|'zlib'|'zstd'|'default'|'best']
@@ -431,6 +433,7 @@
       totalDocs = hasOwn(opt, 'totalDocs') ? opt.totalDocs : $getRandExp(opt.totalDocsExp),
       dropNamespace = opt.dropNamespace,
       planOnly = opt.planOnly,
+      fillToCount = opt.fillToCount,
       dropIndexes = opt.dropIndexes,
       compressor = opt.compressor,
       idxCompressor = opt.idxCompressor,
@@ -463,6 +466,9 @@
    const runWarnings = [];
    let builtRows = [];
    let insertResult = null;
+   let fillExisting = 0;
+   let insertQuota = totalDocs;
+   let fillCounted = false;
    let runError = null;
    noteOutputFormat();
    if (cliTable())
@@ -946,7 +952,7 @@
    function scriptVersion() {
       return (typeof __fuzzerScript !== 'undefined' && __fuzzerScript && __fuzzerScript.version)
          ? __fuzzerScript.version
-         : '1.16.0';
+         : '1.17.0';
    }
 
    function namespaceContract() {
@@ -1154,9 +1160,15 @@
          "name": 'fuzzer.js',
          "version": scriptVersion(),
          "namespace": namespaceContract(),
-         "documents": isViewRun() ? null : totalDocs,
+         "documents": isViewRun() ? null : insertQuota,
          "writerConcurrency": writerConcurrency,
          "planOnly": planOnly === true,
+         "fillToCount": fillToCount === true,
+         "fill": (fillToCount === true && fillCounted) ? {
+            "existing": fillExisting,
+            "target": totalDocs,
+            "insert": insertQuota
+         } : null,
          "optionsPath": resolved.source.file || null,
          "window": windowContract(),
          "collection": collectionContract(),
@@ -1223,6 +1235,7 @@
       const rows = [
          ['namespace', paintNamespace(contract.namespace)],
          ['documents', contract.documents == null ? '[dim]skipped[/]' : `[blue]${grouped(contract.documents)}[/]`],
+         ...(contract.fill ? [['fill', `[blue]${grouped(contract.fill.existing)}[/]  [dim]of[/]  [blue]${grouped(contract.fill.target)}[/]`]] : []),
          ['writer concurrency', `[blue]${contract.writerConcurrency}[/]`],
          ['plan', contract.planOnly ? '[yellow]only[/]' : '[green]write[/]']
       ];
@@ -1518,6 +1531,24 @@
          oidWindow.forEach(reason => report(`\n[red][ERROR][/] ${reason}`));
          return publish({ "ok": 0, "errors": oidWindow.slice() });
       }
+      if (fillToCount && !isViewRun()) {
+         if (!dropNamespace) {
+            try {
+               fillExisting = namespace.exists() ? countedDocuments() : 0;
+            } catch(e) {
+               const msg = `namespace is unreadable: ${errText(e)}`;
+               report(`\n[red][ERROR][/] ${msg}`);
+               return publish({ "ok": 0, "errors": [msg] });
+            }
+            if (!Number.isFinite(fillExisting)) {
+               const msg = 'namespace is unreadable: the document count is not a number';
+               report(`\n[red][ERROR][/] ${msg}`);
+               return publish({ "ok": 0, "errors": [msg] });
+            }
+         }
+         insertQuota = Math.max(0, totalDocs - fillExisting);
+         fillCounted = true;
+      }
       if (cappedThisRun() && sharding && isSharded()) {
          runWarnings.push({
             "code": 'sharding',
@@ -1595,7 +1626,7 @@
       }
       if (!bulkOk) {
          const errors = indexFailureMessages();
-         errors.push(`Bulk insert stopped after ${progressInserted} of ${totalDocs} documents`);
+         errors.push(`Bulk insert stopped after ${progressInserted} of ${insertQuota} documents`);
          return publish({ "ok": 0, "errors": errors });
       }
 
@@ -2298,6 +2329,13 @@
 
    function namespaceIsEmpty() {
       return !namespace.find({}, { "_id": 1 }).limit(1).hasNext();
+   }
+
+   function countedDocuments() {
+      const n = namespace.countDocuments({});
+      if (n != null && typeof n.toNumber === 'function')
+         return n.toNumber();
+      return n;
    }
 
    function mayPresplitChunks() {
@@ -3186,6 +3224,10 @@
          reasons.push(concurrencyProblem);
       if (typeof planOnly !== 'boolean')
          reasons.push('planOnly must be a boolean');
+      if (typeof fillToCount !== 'boolean')
+         reasons.push('fillToCount must be a boolean');
+      else if (fillToCount && isViewRun())
+         reasons.push('fillToCount does not apply to a view');
       distributionSpec().errors.forEach(reason => reasons.push(reason));
       drawsSpec().errors.forEach(reason => reasons.push(reason));
       // Zone checks wait until a time series run has replaced the shard key.
@@ -3372,7 +3414,7 @@
    }
 
    function progressText(inserted, bytes, batchNo, final = false) {
-      const total = totalDocs;
+      const total = insertQuota;
       const frac = total > 0 ? Math.min(1, inserted / total) : 1;
       const pct = (total > 0 && inserted >= total) ? 100 : Math.floor(frac * 100);
       const batch = (!final && batchNo > 0)
@@ -3435,7 +3477,7 @@
          bytes = packHeld.size;
          packHeld = null;
       }
-      while (docs.length < countCap && packGenerated < totalDocs) {
+      while (docs.length < countCap && packGenerated < insertQuota) {
          if (bulkStop)
             return null;
          packGenerated++;
@@ -3542,13 +3584,13 @@
       insertResult = {
          "ok": !failed,
          "inserted": inserted,
-         "total": totalDocs,
+         "total": insertQuota,
          "bytes": ackedBytes,
          "skipped": packSkipped
       };
       if (failed) {
-         const shortfall = totalDocs - inserted;
-         logLine(`\n[red][ERROR][/] Bulk insert stopped after ${inserted} of ${totalDocs} documents (${shortfall} short)`);
+         const shortfall = insertQuota - inserted;
+         logLine(`\n[red][ERROR][/] Bulk insert stopped after ${inserted} of ${insertQuota} documents (${shortfall} short)`);
          return false;
       }
       if (packSkipped > 0)
