@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.15.8"
+ *  Version: "1.15.9"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -27,7 +27,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.15.8" };
+   const __script = { "name": "fuzzer.js", "version": "1.15.9" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -943,7 +943,7 @@
    function scriptVersion() {
       return (typeof __fuzzerScript !== 'undefined' && __fuzzerScript && __fuzzerScript.version)
          ? __fuzzerScript.version
-         : '1.15.8';
+         : '1.15.9';
    }
 
    function namespaceContract() {
@@ -3256,6 +3256,8 @@
       return built;
    }
 
+   // insertedIds keys, then insertedCount, then a nested result.
+   // The success path and a bulk error use this same count.
    function insertedFromWrite(value) {
       if (!value || typeof value !== 'object')
          return 0;
@@ -3422,9 +3424,7 @@
       const slots = new Set();
 
       function account(info) {
-         const bInserted = info.writeError
-            ? insertedFromWrite(info.writeError)
-            : Object.keys((info.result && info.result.insertedIds) || {}).length;
+         const bInserted = insertedFromWrite(info.writeError || info.result);
          inserted += bInserted;
          if (!(info.writeError || bInserted < info.n))
             ackedBytes += info.bytes;
