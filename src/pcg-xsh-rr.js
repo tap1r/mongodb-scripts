@@ -52,8 +52,6 @@ var pcg32 = (function() {
       const word = parseWord(value);
       if (word !== null)
          return word;
-      if (typeof value === 'bigint')
-         throw new Error('pcg32: ' + label + ' does not fit in an unsigned 64-bit integer');
       throw new Error('pcg32: ' + label + ' must be an integer from 0 through 2^53-1, or a bigint through 2^64-1');
    }
 
@@ -118,10 +116,6 @@ var pcg32 = (function() {
       }
 
       function srandom(seed, seq) {
-         if (seed === undefined)
-            throw new Error('pcg32: seed is required');
-         if (seq === undefined)
-            throw new Error('pcg32: sequence is required');
          const initstate = word64(seed, 'seed');
          const initseq = word64(seq, 'sequence');
          s = 0n;
@@ -158,8 +152,6 @@ var pcg32 = (function() {
    }
 
    function restore(state, inc) {
-      if (state === undefined || inc === undefined)
-         throw new Error('pcg32: restore requires a state and an inc');
       return create(state, inc);
    }
 
