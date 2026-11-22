@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.15.2"
+ *  Version: "1.15.3"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -27,7 +27,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.15.2" };
+   const __script = { "name": "fuzzer.js", "version": "1.15.3" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -459,6 +459,7 @@
       textIndexOptions = opt.textIndexOptions;
    const runWarnings = [];
    let builtRows = [];
+   let reshardMonitorCleared = false;
    let insertResult = null;
    let runError = null;
    noteOutputFormat();
@@ -942,7 +943,7 @@
    function scriptVersion() {
       return (typeof __fuzzerScript !== 'undefined' && __fuzzerScript && __fuzzerScript.version)
          ? __fuzzerScript.version
-         : '1.15.2';
+         : '1.15.3';
    }
 
    function namespaceContract() {
@@ -1122,6 +1123,16 @@
          "names": row.names,
          "error": row.error
       }));
+   }
+
+   // The built row keeps the server text. The run errors repeat it with the group label.
+   function indexFailureMessages() {
+      const errors = [];
+      builtRows.forEach(row => {
+         if (row && row.error)
+            errors.push(row.label ? `${row.label}: ${row.error}` : row.error);
+      });
+      return errors;
    }
 
    function jsonReplacer(_key, value) {
@@ -1572,19 +1583,30 @@
                printBuilt();
             }
       }
-      if (!bulkOk)
-         return publish({
-            "ok": 0,
-            "errors": [`Bulk insert stopped after ${progressInserted} of ${totalDocs} documents`]
-         });
+      if (!bulkOk) {
+         const errors = indexFailureMessages();
+         errors.push(`Bulk insert stopped after ${progressInserted} of ${totalDocs} documents`);
+         return publish({ "ok": 0, "errors": errors });
+      }
 
       // redistribute chunks if required
+      const failures = indexFailureMessages();
       const reshard = reshardDecision();
-      if (reshard.action === 'call')
-         await reshardNamespace(reshard.sameKey);
-      else if (reshard.action === 'warn') {
+      if (reshard.action === 'call') {
+         const reshardError = await reshardNamespace(reshard.sameKey);
+         if (reshardError)
+            failures.push(reshardError);
+      } else if (reshard.action === 'warn') {
          runWarnings.push({ "code": 'reshard', "message": plainText(reshard.message) });
          report(reshard.message);
+      }
+
+      if (failures.length) {
+         // The monitor clear drops the built table. Print the detail again then.
+         if (reshardMonitorCleared)
+            failures.forEach(reason => report(`\n[red][ERROR][/] ${reason}`));
+         report('\n [red]Fuzzing finished with errors.[/]\n');
+         return publish({ "ok": 0, "errors": failures });
       }
 
       report('\n [green]Fuzzing completed![/]\n');
@@ -2760,6 +2782,7 @@
 
    async function reshardNamespace(sameKey) {
       let reshardOk = false;
+      let reshardError = null;
       const resharding = async() => {
          const numInitialChunks = initialChunkCount();
          const cmd = () => db.adminCommand({
@@ -2777,7 +2800,7 @@
             await cmd();
             reshardOk = true;
          } catch(e) {
-            runWarnings.push({ "code": 'reshard', "message": `Resharding attempt: ${errText(e)}` });
+            reshardError = `Resharding attempt: ${errText(e)}`;
             report('Resharding attempt:', errText(e));
          }
       };
@@ -2870,6 +2893,7 @@
             monitorFailed = false;
             if (ops.length > 0 && cliTable()) {
                console.clear();
+               reshardMonitorCleared = true;
                console.log(`\nMonitoring resharding operations:\n`);
                ops.forEach(op => printjson(op));
             }
@@ -2886,11 +2910,14 @@
       try {
          await reshardPromise;
       } catch(e) {
-         runWarnings.push({ "code": 'reshard', "message": `Resharding attempt: ${errText(e)}` });
-         report('Resharding attempt:', errText(e));
+         if (!reshardError) {
+            reshardError = `Resharding attempt: ${errText(e)}`;
+            report('Resharding attempt:', errText(e));
+         }
       }
       if (reshardOk)
          report('\nResharding complete.');
+      return reshardError;
    }
 
    function shardKeyUsesHash(key) {
