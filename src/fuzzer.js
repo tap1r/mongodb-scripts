@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.15.6"
+ *  Version: "1.15.7"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -27,7 +27,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.15.6" };
+   const __script = { "name": "fuzzer.js", "version": "1.15.7" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -944,7 +944,7 @@
    function scriptVersion() {
       return (typeof __fuzzerScript !== 'undefined' && __fuzzerScript && __fuzzerScript.version)
          ? __fuzzerScript.version
-         : '1.15.6';
+         : '1.15.7';
    }
 
    function namespaceContract() {
@@ -2042,11 +2042,15 @@
       });
    }
 
-   // One stored value per group. A child is stored under the parent group.
+   // The current group only. n increases, so the previous group is dropped.
+   // A child uses the parent group id. A pool stays in drawPools.
    function groupValue(name, groupId) {
       const groups = drawGroups[name];
       if (hasOwn(groups, groupId))
          return groups[groupId];
+      const stale = Object.keys(groups);
+      for (let i = 0; i < stale.length; i++)
+         delete groups[stale[i]];
       const item = drawsSpec().specs[name];
       const list = drawPools[name];
       let value;
