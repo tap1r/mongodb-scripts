@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.15.0"
+ *  Version: "1.15.1"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -12,7 +12,7 @@
 // Usage: mongosh [connection options] [--quiet] [--eval 'var options = {...};'] [-f|--file] </path/to/>fuzzer.js
 // Overlay: fuzzer-options.jsonc (cwd, --file dir, $MDBLIB, ~/.mongodb) then var options. Missing default is silent.
 // optionsVersion must match OPTIONS_VERSION. A mismatch or an unknown key warns. The run continues.
-// output.format is table (the HUD) or json (the contract, once). table is an alias of tabular.
+// output.format is table (the HUD, painted from the contract) or json (the contract, once). table is an alias of tabular.
 // Explicit path: var optionsFile = "PATH". --eval var options overlays the file.
 // JSONC parse/search lives in mdblib resolveOptions.
 // Sample schemas: schema-a.jsonc, schema-b.jsonc, schema-c.jsonc
@@ -27,7 +27,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.15.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.15.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -591,9 +591,14 @@
       return text;
    }
 
-   function statText(n, unit) {
-      const value = `[blue]${formatStat(n)}[/]`;
-      return unit ? `${value} [dim]${unit}[/]` : value;
+   // Plain measure. printHud colours the number and dims the unit.
+   function measureText(n, unit, note) {
+      let text = formatStat(n);
+      if (unit)
+         text += ` ${unit}`;
+      if (note)
+         text += ` ${note}`;
+      return text;
    }
 
    function resolveDistribution(prefs) {
@@ -728,8 +733,8 @@
       const rows = [];
       if (windowOk) {
          rows.push(
-            ['offset', statText(lo, 'days')],
-            ['range', statText(range, 'days')]
+            ['offset', measureText(lo, 'days')],
+            ['range', measureText(range, 'days')]
          );
       }
 
@@ -744,7 +749,7 @@
             high = Math.max(hi, mean + span);
             unbounded = true;
             draw = () => $genNormalDraw(mean, width);
-            rows.push(['mu', statText(mean, 'days')], ['sigma', statText(width, 'days')]);
+            rows.push(['mu', measureText(mean, 'days')], ['sigma', measureText(width, 'days')]);
          }
       } else if (known && name === 'bimodal') {
          const mixValue = readNumber('mix');
@@ -767,11 +772,11 @@
             unbounded = true;
             draw = () => $genBimodal(mix, mean1, width1, mean2, width2);
             rows.push(
-               ['mix', statText(mix)],
-               ['mu1', statText(mean1, 'days')],
-               ['sigma1', statText(width1, 'days')],
-               ['mu2', statText(mean2, 'days')],
-               ['sigma2', statText(width2, 'days')]
+               ['mix', measureText(mix)],
+               ['mu1', measureText(mean1, 'days')],
+               ['sigma1', measureText(width1, 'days')],
+               ['mu2', measureText(mean2, 'days')],
+               ['sigma2', measureText(width2, 'days')]
             );
          }
       } else if (known && name === 'pareto') {
@@ -781,9 +786,9 @@
          if (windowOk && alpha > 0 && scale > 0) {
             draw = () => $genTruncatedLomax(alpha, scale, range, origin, lo, hi);
             rows.push(
-               ['alpha', statText(alpha)],
-               ['scale', statText(scale, 'days')],
-               ['origin', `[blue]${origin}[/]`]
+               ['alpha', measureText(alpha)],
+               ['scale', measureText(scale, 'days')],
+               ['origin', origin]
             );
          }
       } else if (known && name === 'exponential') {
@@ -792,9 +797,9 @@
          if (windowOk && lambda > 0) {
             draw = () => $genTruncatedExponential(lambda, range, origin, lo, hi);
             rows.push(
-               ['lambda', statText(lambda, 'per day')],
-               ['mean', `${statText(1 / lambda, 'days')} [dim](untruncated)[/]`],
-               ['origin', `[blue]${origin}[/]`]
+               ['lambda', measureText(lambda, 'per day')],
+               ['mean', measureText(1 / lambda, 'days', '(untruncated)')],
+               ['origin', origin]
             );
          }
       } else if (known && name === 'poisson') {
@@ -812,8 +817,8 @@
             }
             draw = () => $genPoisson(lambda, origin, lo, hi);
             rows.push(
-               ['lambda', `${statText(lambda, 'days')} [dim](mean)[/]`],
-               ['origin', `[blue]${origin}[/]`]
+               ['lambda', measureText(lambda, 'days', '(mean)')],
+               ['origin', origin]
             );
          }
       }
@@ -840,66 +845,11 @@
       return distributionResolved;
    }
 
-   function distributionText() {
-      const spec = distributionSpec();
-      const tail = spec.unbounded ? '  [dim]unbounded[/]' : '';
-      return `[green]${spec.name}[/]${tail}`;
-   }
-
-   function namespaceText() {
-      const ns = `${dbName}.${collName}`;
-      if (dropNamespace)
-         return `${ns}  [yellow]drop[/]`;
-      if (namespace.exists())
-         return `${ns}  [green]keep[/]`;
-      return `${ns}  [green]create[/]`;
-   }
-
-   function compressorText() {
-      if (isViewRun())
-         return '[dim]omitted[/]  [dim](view)[/]';
-      if (isAtlasPlatform('sharedTier'))
-         return '[yellow]omitted[/]  [dim](shared tier)[/]';
-      const [name, msg] = parseCompressor(compressor);
-      return msg ? `[green]${name}[/]  [yellow]${msg}[/]` : `[green]${name}[/]`;
-   }
-
-   function writeConcernText() {
-      const parts = [
-         `[dim]w=[/][blue]${writeConcern.w}[/]`,
-         `[dim]j=[/][blue]${writeConcern.j}[/]`
-      ];
-      if (hasOwn(writeConcern, 'wtimeout'))
-         parts.push(`[dim]wtimeout=[/][blue]${writeConcern.wtimeout}[/]`);
-      return parts.join('  ');
-   }
-
-   function timeSeriesText() {
-      if (!timeSeries)
-         return '[dim]off[/]';
-      const ttl = (typeof expireAfterSeconds === 'number' && expireAfterSeconds > 0)
-         ? `  [dim]ttl[/] [blue]${expireAfterSeconds}s[/]`
-         : '';
-      return `[green]${tsOptions.timeField}[/] [dim]/[/] [green]${tsOptions.metaField}[/] [dim]/[/] [green]${tsOptions.granularity}[/]${ttl}`;
-   }
-
-   function cappedText() {
-      if (!cappedThisRun())
-         return '[dim]off[/]';
-      return `[dim]size[/] [blue]${cappedOptions.size}[/]  [dim]max[/] [blue]${cappedOptions.max}[/]`;
-   }
-
    function indexOrderText() {
       const order = String((indexPrefs && indexPrefs.order) || '').toLowerCase();
       if (order === 'pre' || order === 'post')
          return order;
       return 'post';
-   }
-
-   function indexesText() {
-      if (!isPlainObject(indexPrefs) || !indexPrefs.build)
-         return '[dim]off[/]';
-      return `[green]${indexOrderText()}[/]  [dim]quorum[/] [blue]${indexPrefs.commitQuorum}[/]`;
    }
 
    function collationLocale(spec) {
@@ -908,51 +858,8 @@
       return String(spec.locale);
    }
 
-   // Regular indexes share indexOptions.collation. Inherited follows the collection.
-   function indexCollationNote() {
-      const word = indexCollationSpecified ? '[green]specified[/]' : '[dim]inherited[/]';
-      const spec = indexCollationSpecified && isPlainObject(indexOptions)
-         ? indexOptions.collation
-         : collation;
-      const locale = collationLocale(spec);
-      return locale ? `${word}  [blue]${locale}[/]` : word;
-   }
-
-   function languageNote(options) {
-      if (!isPlainObject(options) || options.default_language == null || options.default_language === '')
-         return '';
-      return `  [dim]lang[/] [blue]${options.default_language}[/]`;
-   }
-
    function grouped(n) {
       return Number(n).toLocaleString('en-US');
-   }
-
-   function collectionRows() {
-      const rows = [
-         ['compressor', compressorText()],
-         ['collation', String(collation && collation.locale)],
-         ['write concern', writeConcernText()],
-         ['time series', timeSeriesText()],
-         ['capped', cappedText()]
-      ];
-      createHudRows().forEach(row => rows.push(row));
-      rows.push(['sharding', shardingText()]);
-      return rows;
-   }
-
-   function shardingText() {
-      if (cappedThisRun() && sharding && isSharded())
-         return '[yellow]skipped[/]  [dim](capped)[/]';
-      if (!sharding || !isSharded())
-         return '[dim]off[/]';
-      let text = oneLine(shardedOptions.key);
-      const zones = zoneRanges();
-      if (zones)
-         text += `  [dim]zones[/] [blue]${zones.length}[/]`;
-      if (presplitHashedZonesActive())
-         text += '  [green]presplit[/]';
-      return text;
    }
 
    function schemaDetail(sample) {
@@ -1035,7 +942,7 @@
    function scriptVersion() {
       return (typeof __fuzzerScript !== 'undefined' && __fuzzerScript && __fuzzerScript.version)
          ? __fuzzerScript.version
-         : '1.15.0';
+         : '1.15.1';
    }
 
    function namespaceContract() {
@@ -1064,7 +971,7 @@
          "to": new Date(now + (spec.offset + spec.range) * DAY_SECONDS * 1000).toISOString(),
          "shape": (spec.rows || []).map(([label, value]) => ({
             label,
-            "value": plainText(value)
+            value
          }))
       };
    }
@@ -1260,57 +1167,186 @@
       return contract;
    }
 
-   function printHud() {
-      const ratios = Array.isArray(fuzzer.ratios) ? fuzzer.ratios : [1];
-      const windowSpec = distributionSpec();
-      const from = new Date(now + windowSpec.offset * DAY_SECONDS * 1000).toISOString();
-      const to = new Date(now + (windowSpec.offset + windowSpec.range) * DAY_SECONDS * 1000).toISOString();
-      const schemaRows = schemaSamples.map((sample, i) => {
-         const weight = ratioWeight(ratios[i]);
-         const detail = schemaDetail(sample);
-         const weightText = weight > 0 ? `[blue]${weight}[/]` : '[dim]0[/]';
-         const omitted = weight > 0 ? '' : '  [dim]omitted[/]';
-         const detailText = detail
-            ? (weight > 0 ? `  ${detail}` : `  [dim]${detail}[/]`)
+   // A leading number is the measure. The rest is the unit or the note.
+   function paintMeasure(text) {
+      const value = String(text);
+      const match = /^(-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([\s\S]*)$/i.exec(value);
+      if (!match)
+         return `[blue]${value}[/]`;
+      if (!match[2])
+         return `[blue]${match[1]}[/]`;
+      return `[blue]${match[1]}[/][dim]${match[2]}[/]`;
+   }
+
+   function paintNamespace(namespace) {
+      if (!namespace || namespace.action == null)
+         return (namespace && namespace.name) || '';
+      const colour = namespace.action === 'drop' ? 'yellow' : 'green';
+      return `${namespace.name}  [${colour}]${namespace.action}[/]`;
+   }
+
+   function paintDraws(draws) {
+      if (!Array.isArray(draws) || draws.length === 0)
+         return '';
+      return draws.map(draw => {
+         const parts = [];
+         if (draw.slots)
+            parts.push(`[blue]${draw.name}[/]×[blue]${grouped(draw.slots)}[/]`);
+         else
+            parts.push(`[blue]${draw.name}[/]`);
+         if (draw.point)
+            parts.push(`[dim]${draw.point}[/]`);
+         if (draw.span)
+            parts.push(`every [blue]${grouped(draw.span)}[/]`);
+         if (draw.with)
+            parts.push(`with [blue]${draw.with}[/] [blue]${draw.correlation}[/]`);
+         return parts.join(' ');
+      }).join('  ');
+   }
+
+   function paintRun(contract) {
+      const rows = [
+         ['namespace', paintNamespace(contract.namespace)],
+         ['documents', contract.documents == null ? '[dim]skipped[/]' : `[blue]${grouped(contract.documents)}[/]`],
+         ['writer concurrency', `[blue]${contract.writerConcurrency}[/]`]
+      ];
+      const draws = paintDraws(contract.draws);
+      if (draws)
+         rows.push(['draws', draws]);
+      return rows;
+   }
+
+   function paintWindow(windowSpec) {
+      const tail = windowSpec.unbounded ? '  [dim]unbounded[/]' : '';
+      const rows = [
+         ['distribution', `[green]${windowSpec.distribution}[/]${tail}`]
+      ];
+      (windowSpec.shape || []).forEach(row => {
+         rows.push([row.label, paintMeasure(row.value)]);
+      });
+      rows.push(['from', windowSpec.from], ['to', windowSpec.to]);
+      return rows;
+   }
+
+   function paintCompressor(collection) {
+      if (collection.compressorNote === 'view')
+         return '[dim]omitted[/]  [dim](view)[/]';
+      if (collection.compressorNote === 'shared tier')
+         return '[yellow]omitted[/]  [dim](shared tier)[/]';
+      if (collection.compressorNote)
+         return `[green]${collection.compressor}[/]  [yellow]${collection.compressorNote}[/]`;
+      return `[green]${collection.compressor}[/]`;
+   }
+
+   function paintWriteConcern(concern) {
+      const parts = [
+         `[dim]w=[/][blue]${concern.w}[/]`,
+         `[dim]j=[/][blue]${concern.j}[/]`
+      ];
+      if (concern && hasOwn(concern, 'wtimeout'))
+         parts.push(`[dim]wtimeout=[/][blue]${concern.wtimeout}[/]`);
+      return parts.join('  ');
+   }
+
+   function paintTimeSeries(series) {
+      if (!series)
+         return '[dim]off[/]';
+      const ttl = series.expireAfterSeconds
+         ? `  [dim]ttl[/] [blue]${series.expireAfterSeconds}s[/]`
+         : '';
+      return `[green]${series.timeField}[/] [dim]/[/] [green]${series.metaField}[/] [dim]/[/] [green]${series.granularity}[/]${ttl}`;
+   }
+
+   function paintCapped(capped) {
+      if (!capped)
+         return '[dim]off[/]';
+      return `[dim]size[/] [blue]${capped.size}[/]  [dim]max[/] [blue]${capped.max}[/]`;
+   }
+
+   function paintSharding(shard) {
+      if (shard && shard.skipped === 'capped')
+         return '[yellow]skipped[/]  [dim](capped)[/]';
+      if (!shard || !shard.enabled)
+         return '[dim]off[/]';
+      let text = oneLine(shard.key);
+      if (shard.zones)
+         text += `  [dim]zones[/] [blue]${shard.zones}[/]`;
+      if (shard.presplit)
+         text += '  [green]presplit[/]';
+      return text;
+   }
+
+   function paintCollection(collection) {
+      const rows = [
+         ['compressor', paintCompressor(collection)],
+         ['collation', collection.collation == null ? '' : String(collection.collation)],
+         ['write concern', paintWriteConcern(collection.writeConcern)],
+         ['time series', paintTimeSeries(collection.timeSeries)],
+         ['capped', paintCapped(collection.capped)]
+      ];
+      if (collection.viewOn)
+         rows.push(['view', `[green]${collection.viewOn}[/]`]);
+      if (collection.clustered)
+         rows.push(['clustered', '[green]_id[/]']);
+      if (hasOwn(collection, 'images'))
+         rows.push(['images', collection.images ? '[green]pre/post[/]' : '[dim]off[/]']);
+      if (collection.validator) {
+         rows.push(['validator', `[blue]${collection.validator.level}[/]  [dim]/[/]  [blue]${collection.validator.action}[/]`]);
+      }
+      if (collection.indexDefaults)
+         rows.push(['index defaults', '[green]set[/]']);
+      rows.push(['sharding', paintSharding(collection.sharding)]);
+      return rows;
+   }
+
+   function paintSchemas(schemas) {
+      return (schemas || []).map(sample => {
+         const weightText = sample.omitted ? '[dim]0[/]' : `[blue]${sample.weight}[/]`;
+         const omitted = sample.omitted ? '  [dim]omitted[/]' : '';
+         const detailText = sample.detail
+            ? (sample.omitted ? `  [dim]${sample.detail}[/]` : `  ${sample.detail}`)
             : '';
          return [sample.file, `${weightText}${omitted}${detailText}`];
       });
-      const indexRows = [
-         ['build', indexesText()],
-         ['existing', dropIndexes ? '[yellow]drop[/]' : '[dim]keep[/]']
+   }
+
+   function paintIndexes(indexes) {
+      const rows = [
+         ['build', indexes.build
+            ? `[green]${indexes.order}[/]  [dim]quorum[/] [blue]${indexes.commitQuorum}[/]`
+            : '[dim]off[/]'],
+         ['existing', indexes.existing === 'drop' ? '[yellow]drop[/]' : '[dim]keep[/]']
       ];
-      if (isPlainObject(indexPrefs) && indexPrefs.build) {
-         INDEX_GROUPS.forEach(group => {
-            const keys = group.keys;
-            if (!keys || !keys.length) {
-               indexRows.push([group.hudLabel, '[dim]none[/]']);
-               return;
-            }
-            if (group.hudLabel === 'index')
-               indexRows.push(['collation', indexCollationNote()]);
-            const lang = group.language ? languageNote(group.options) : '';
-            keys.forEach(spec => indexRows.push([group.hudLabel, `${oneLine(spec)}${lang}`]));
-         });
-      }
-      const runRows = [
-         ['namespace', namespaceText()],
-         ['documents', isViewRun() ? '[dim]skipped[/]' : `[blue]${grouped(totalDocs)}[/]`],
-         ['writer concurrency', `[blue]${writerConcurrency}[/]`]
-      ];
-      const drawsLine = drawsHudText();
-      if (drawsLine)
-         runRows.push(['draws', drawsLine]);
+      if (!indexes.build)
+         return rows;
+      (indexes.groups || []).forEach(group => {
+         const keys = group.keys || [];
+         if (!keys.length) {
+            rows.push([group.label, '[dim]none[/]']);
+            return;
+         }
+         if (group.label === 'index' && indexes.collation) {
+            const word = indexes.collation.source === 'specified'
+               ? '[green]specified[/]'
+               : '[dim]inherited[/]';
+            const locale = indexes.collation.locale;
+            rows.push(['collation', locale ? `${word}  [blue]${locale}[/]` : word]);
+         }
+         const lang = group.language ? `  [dim]lang[/] [blue]${group.language}[/]` : '';
+         keys.forEach(spec => rows.push([group.label, `${oneLine(spec)}${lang}`]));
+      });
+      return rows;
+   }
+
+   // Colour is applied here. The rows are the contract.
+   function printHud() {
+      const contract = outputContract();
       const sections = [
-         ['run', runRows],
-         ['window', [
-            ['distribution', distributionText()],
-            ...windowSpec.rows,
-            ['from', from],
-            ['to', to]
-         ]],
-         ['collection', collectionRows()],
-         ['schemas', schemaRows],
-         ['indexes', indexRows]
+         ['run', paintRun(contract)],
+         ['window', paintWindow(contract.window)],
+         ['collection', paintCollection(contract.collection)],
+         ['schemas', paintSchemas(contract.schemas)],
+         ['indexes', paintIndexes(contract.indexes)]
       ];
       let labelW = 0;
       let valueW = 0;
@@ -1322,7 +1358,7 @@
       });
       hudLabelW = labelW;
       hudValueW = Math.max(valueW, 24);
-      const file = resolved.source.file;
+      const file = contract.optionsPath;
       const optionLines = file ? wrapPlain(file, hudValueW) : ['defaults'];
       const base = file ? file.slice(Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\')) + 1) : '';
       optionLines.forEach((chunk, i) => {
@@ -1389,8 +1425,9 @@
       return lines.length ? lines : [''];
    }
 
-   function printBuilt(rows) {
-      if (!cliTable() || !rows || !rows.length)
+   function printBuilt() {
+      const rows = builtContract();
+      if (!cliTable() || !rows.length)
          return;
       if (progressLive) {
          batchHud.clear();
@@ -1525,14 +1562,14 @@
       switch (orderName) {
          case 'pre':
             builtRows = buildIndexes();
-            printBuilt(builtRows);
+            printBuilt();
             bulkOk = (await genBulk(firstBatch)) !== false;
             break;
          default:
             bulkOk = (await genBulk(firstBatch)) !== false;
             if (bulkOk) {
                builtRows = buildIndexes();
-               printBuilt(builtRows);
+               printBuilt();
             }
       }
       if (!bulkOk)
@@ -2056,27 +2093,6 @@
       return out;
    }
 
-   function drawsHudText() {
-      const spec = drawsSpec();
-      if (!spec.names.length)
-         return '';
-      return spec.names.map(name => {
-         const item = spec.specs[name];
-         const parts = [];
-         if (item.slots)
-            parts.push(`[blue]${name}[/]×[blue]${grouped(item.slots)}[/]`);
-         else
-            parts.push(`[blue]${name}[/]`);
-         if (item.point)
-            parts.push(`[dim]${item.point}[/]`);
-         if (!item.with && item.span > 1)
-            parts.push(`every [blue]${grouped(item.span)}[/]`);
-         if (item.with)
-            parts.push(`with [blue]${item.with}[/] [blue]${item.correlation}[/]`);
-         return parts.join(' ');
-      }).join('  ');
-   }
-
    // Key order is the expression-cache key: oid, date, ts, idioma, totalDocs, n, draws.
    function schemaScope({ oid = null, date = null, ts = null, n = 0, draws = null } = {}) {
       return { oid, date, ts, idioma, totalDocs, n, "draws": draws || {} };
@@ -2386,29 +2402,6 @@
          createOptions.validationAction = spec.validationAction;
       if (objectHasKeys(spec.indexOptionDefaults))
          createOptions.indexOptionDefaults = spec.indexOptionDefaults;
-   }
-
-   function createHudRows() {
-      const spec = createSpec();
-      const rows = [];
-      if (!spec)
-         return rows;
-      if (isViewRun())
-         rows.push(['view', `[green]${spec.viewOn}[/]`]);
-      if (hasOwn(spec, 'clusteredIndex'))
-         rows.push(['clustered', '[green]_id[/]']);
-      if (isPlainObject(spec.changeStreamPreAndPostImages)) {
-         const on = spec.changeStreamPreAndPostImages.enabled === true;
-         rows.push(['images', on ? '[green]pre/post[/]' : '[dim]off[/]']);
-      }
-      if (objectHasKeys(spec.validator) || hasOwn(spec, 'validationLevel') || hasOwn(spec, 'validationAction')) {
-         const level = (typeof spec.validationLevel === 'string') ? spec.validationLevel : 'strict';
-         const action = (typeof spec.validationAction === 'string') ? spec.validationAction : 'error';
-         rows.push(['validator', `[blue]${level}[/]  [dim]/[/]  [blue]${action}[/]`]);
-      }
-      if (objectHasKeys(spec.indexOptionDefaults))
-         rows.push(['index defaults', '[green]set[/]']);
-      return rows;
    }
 
    function zoneSlotProblems(willShard) {
