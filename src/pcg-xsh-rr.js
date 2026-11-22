@@ -96,9 +96,7 @@ var pcg32 = (function() {
       }
 
       function advance(delta) {
-         let d = parseWord(delta);
-         if (d === null)
-            throw new Error('pcg32: delta must be an integer from 0 through 2^53-1, or a bigint through 2^64-1');
+         let d = word64(delta, 'delta');
          let curMult = MULTIPLIER;
          let curPlus = i;
          let accMult = 1n;
