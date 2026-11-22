@@ -8,11 +8,15 @@
  *  legacy/mongo-shell/src/pcg-xsh-rr.js.
  *
  *  pcg32 is one generator, started from the published initializer.
- *  Every generator has random(), srandom(seed, seq), clone(), and
- *  bigint state and inc. Those two words are readable and writable.
- *  random() returns the next uint32. srandom(seed, seq) reseeds this
- *  generator. Both arguments are required: an integer from 0 through
- *  2^53-1, or a bigint from 0 through 2^64-1. inc must be odd.
+ *  Every generator has random(), boundedrand(bound), advance(delta),
+ *  srandom(seed, seq), clone(), and bigint state and inc. Those two
+ *  words are readable and writable. random() returns the next uint32.
+ *  boundedrand(bound) returns an unbiased integer in 0 .. bound-1.
+ *  bound is an integer from 1 through 2^32-1. advance(delta) moves
+ *  the state forward delta steps. delta follows the same integer
+ *  rules as a seed. srandom(seed, seq) reseeds this generator. A seed
+ *  or sequence is an integer from 0 through 2^53-1, or a bigint from
+ *  0 through 2^64-1. inc must be odd.
  *  pcg32.spawn(seed, seq) returns a new generator already seeded.
  *  It does not change pcg32.
  *  pcg32.restore(state, inc) returns a new generator with those raw
@@ -67,6 +71,42 @@ var pcg32 = (function() {
          return ((xorshifted >>> rot) | (xorshifted << ((-rot) & 31))) >>> 0;
       }
 
+      function boundedrand(bound) {
+         if (bound === undefined)
+            throw new Error('pcg32: bound is required');
+         const limit = word64(bound, 'bound');
+         if (limit < 1n || limit > MASK32)
+            throw new Error('pcg32: bound must be an integer from 1 through 2^32-1');
+         const b = Number(limit);
+         // (-bound) mod 2^32, then mod bound. Samples below that threshold are rejected.
+         const threshold = ((-b) >>> 0) % b;
+         for (;;) {
+            const r = random();
+            if (r >= threshold)
+               return r % b;
+         }
+      }
+
+      function advance(delta) {
+         if (delta === undefined)
+            throw new Error('pcg32: delta is required');
+         let d = word64(delta, 'delta');
+         let curMult = MULTIPLIER;
+         let curPlus = i;
+         let accMult = 1n;
+         let accPlus = 0n;
+         while (d > 0n) {
+            if ((d & 1n) === 1n) {
+               accMult = (accMult * curMult) & MASK64;
+               accPlus = (accPlus * curMult + curPlus) & MASK64;
+            }
+            curPlus = ((curMult + 1n) * curPlus) & MASK64;
+            curMult = (curMult * curMult) & MASK64;
+            d >>= 1n;
+         }
+         s = (accMult * s + accPlus) & MASK64;
+      }
+
       function srandom(seed, seq) {
          if (seed === undefined)
             throw new Error('pcg32: seed is required');
@@ -89,6 +129,8 @@ var pcg32 = (function() {
       const gen = {};
       Object.defineProperties(gen, {
          'random': { 'value': random },
+         'boundedrand': { 'value': boundedrand },
+         'advance': { 'value': advance },
          'srandom': { 'value': srandom },
          'clone': { 'value': clone },
          'state': {
