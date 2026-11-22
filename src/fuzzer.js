@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.15.3"
+ *  Version: "1.15.4"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -27,7 +27,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.15.3" };
+   const __script = { "name": "fuzzer.js", "version": "1.15.4" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -943,7 +943,7 @@
    function scriptVersion() {
       return (typeof __fuzzerScript !== 'undefined' && __fuzzerScript && __fuzzerScript.version)
          ? __fuzzerScript.version
-         : '1.15.3';
+         : '1.15.4';
    }
 
    function namespaceContract() {
@@ -1557,14 +1557,13 @@
          packError = err;
          return null;
       });
-      await Promise.all([creating, packing]);
+      const [created, firstBatch] = await Promise.all([creating, packing]);
       if (createFailed)
          throw createFailed;
       if (packError)
          throw packError;
-      if (!(await creating))
+      if (!created)
          return publish({ "ok": 0, "errors": [runError || 'Namespace creation failed'] });
-      const firstBatch = await packing;
 
       dropExistingIndexes();
 
