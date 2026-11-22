@@ -36,17 +36,24 @@ var pcg32 = (function() {
    const INITIAL_INC = 0xda3e39cb94b95bdbn;
    const TWO32 = 4294967296;
 
-   function word64(value, label) {
-      if (typeof value === 'bigint') {
-         if (value < 0n || value > MASK64)
-            throw new Error('pcg32: ' + label + ' does not fit in an unsigned 64-bit integer');
-         return value;
-      }
+   // A uint64 word, or null when the value is not one.
+   function parseWord(value) {
+      if (typeof value === 'bigint')
+         return (value >= 0n && value <= MASK64) ? value : null;
       if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
          const hi = Math.floor(value / TWO32);
          const lo = value % TWO32;
          return (BigInt(hi) << 32n) | BigInt(lo);
       }
+      return null;
+   }
+
+   function word64(value, label) {
+      const word = parseWord(value);
+      if (word !== null)
+         return word;
+      if (typeof value === 'bigint')
+         throw new Error('pcg32: ' + label + ' does not fit in an unsigned 64-bit integer');
       throw new Error('pcg32: ' + label + ' must be an integer from 0 through 2^53-1, or a bigint through 2^64-1');
    }
 
@@ -72,12 +79,15 @@ var pcg32 = (function() {
       }
 
       function boundedrand(bound) {
-         if (bound === undefined)
-            throw new Error('pcg32: bound is required');
-         const limit = word64(bound, 'bound');
-         if (limit < 1n || limit > MASK32)
+         let b;
+         if (typeof bound === 'bigint') {
+            if (bound >= 1n && bound <= MASK32)
+               b = Number(bound);
+         } else if (typeof bound === 'number' && Number.isInteger(bound) && bound >= 1 && bound <= 0xffffffff) {
+            b = bound;
+         }
+         if (b === undefined)
             throw new Error('pcg32: bound must be an integer from 1 through 2^32-1');
-         const b = Number(limit);
          // (-bound) mod 2^32, then mod bound. Samples below that threshold are rejected.
          const threshold = ((-b) >>> 0) % b;
          for (;;) {
@@ -88,9 +98,9 @@ var pcg32 = (function() {
       }
 
       function advance(delta) {
-         if (delta === undefined)
-            throw new Error('pcg32: delta is required');
-         let d = word64(delta, 'delta');
+         let d = parseWord(delta);
+         if (d === null)
+            throw new Error('pcg32: delta must be an integer from 0 through 2^53-1, or a bigint through 2^64-1');
          let curMult = MULTIPLIER;
          let curPlus = i;
          let accMult = 1n;
