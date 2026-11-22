@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.15.9"
+ *  Version: "1.15.10"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -27,7 +27,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.15.9" };
+   const __script = { "name": "fuzzer.js", "version": "1.15.10" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -943,7 +943,7 @@
    function scriptVersion() {
       return (typeof __fuzzerScript !== 'undefined' && __fuzzerScript && __fuzzerScript.version)
          ? __fuzzerScript.version
-         : '1.15.9';
+         : '1.15.10';
    }
 
    function namespaceContract() {
@@ -2549,8 +2549,7 @@
       return reasons;
    }
 
-   // checkShard is false while a time series run may still replace the shard key.
-   function createAndShardSlotProblems(willShard, checkShard = true) {
+   function viewSlotProblems(willShard) {
       const reasons = [];
       if (hasOwn(opt, 'create') && !isPlainObject(opt.create))
          reasons.push('create must be a document');
@@ -2589,36 +2588,57 @@
          if (objectHasKeys(spec.indexOptionDefaults))
             reasons.push('a view cannot set indexOptionDefaults');
       }
-      if (spec && hasOwn(spec, 'clusteredIndex') && !view) {
-         const clustered = spec.clusteredIndex;
-         if (!fCV(5.3))
-            reasons.push('clusteredIndex requires fCV 5.3 or newer');
-         if (!clusteredKeyOk(clustered))
-            reasons.push('clusteredIndex key must be { _id: 1 }');
-         else if (hasOwn(clustered, 'unique') && clustered.unique !== true)
-            reasons.push('clusteredIndex unique must be true');
-         if (isPlainObject(clustered) && hasOwn(clustered, 'name') && (typeof clustered.name !== 'string' || clustered.name === ''))
-            reasons.push('clusteredIndex name must be a non-empty string');
-         if (cappedThisRun())
-            reasons.push('a clustered collection cannot be capped');
-         if (timeSeries)
-            reasons.push('a time series collection cannot set clusteredIndex');
-         if (willShard && !clusteredKeyOk({ "key": shardedOptions.key }))
-            reasons.push('a clustered collection shards only on { _id: 1 }');
-      }
-      if (spec && hasOwn(spec, 'changeStreamPreAndPostImages') && !view) {
-         const images = spec.changeStreamPreAndPostImages;
-         const keys = isPlainObject(images) ? Object.keys(images) : [];
-         if (!fCV(6.0))
-            reasons.push('changeStreamPreAndPostImages requires fCV 6.0 or newer');
-         if (keys.length !== 1 || keys[0] !== 'enabled' || typeof images.enabled !== 'boolean')
-            reasons.push('changeStreamPreAndPostImages must be { enabled: <boolean> }');
-         if (timeSeries)
-            reasons.push('a time series collection cannot set changeStreamPreAndPostImages');
-      }
-      if (spec && hasOwn(spec, 'validator') && !isPlainObject(spec.validator))
+      return reasons;
+   }
+
+   function clusteredSlotProblems(willShard) {
+      const reasons = [];
+      const spec = createSpec();
+      if (!(spec && hasOwn(spec, 'clusteredIndex') && !isViewRun()))
+         return reasons;
+      const clustered = spec.clusteredIndex;
+      if (!fCV(5.3))
+         reasons.push('clusteredIndex requires fCV 5.3 or newer');
+      if (!clusteredKeyOk(clustered))
+         reasons.push('clusteredIndex key must be { _id: 1 }');
+      else if (hasOwn(clustered, 'unique') && clustered.unique !== true)
+         reasons.push('clusteredIndex unique must be true');
+      if (isPlainObject(clustered) && hasOwn(clustered, 'name') && (typeof clustered.name !== 'string' || clustered.name === ''))
+         reasons.push('clusteredIndex name must be a non-empty string');
+      if (cappedThisRun())
+         reasons.push('a clustered collection cannot be capped');
+      if (timeSeries)
+         reasons.push('a time series collection cannot set clusteredIndex');
+      if (willShard && !clusteredKeyOk({ "key": shardedOptions.key }))
+         reasons.push('a clustered collection shards only on { _id: 1 }');
+      return reasons;
+   }
+
+   function imagesSlotProblems() {
+      const reasons = [];
+      const spec = createSpec();
+      if (!(spec && hasOwn(spec, 'changeStreamPreAndPostImages') && !isViewRun()))
+         return reasons;
+      const images = spec.changeStreamPreAndPostImages;
+      const keys = isPlainObject(images) ? Object.keys(images) : [];
+      if (!fCV(6.0))
+         reasons.push('changeStreamPreAndPostImages requires fCV 6.0 or newer');
+      if (keys.length !== 1 || keys[0] !== 'enabled' || typeof images.enabled !== 'boolean')
+         reasons.push('changeStreamPreAndPostImages must be { enabled: <boolean> }');
+      if (timeSeries)
+         reasons.push('a time series collection cannot set changeStreamPreAndPostImages');
+      return reasons;
+   }
+
+   function validatorSlotProblems() {
+      const reasons = [];
+      const spec = createSpec();
+      if (!spec)
+         return reasons;
+      const view = isViewRun();
+      if (hasOwn(spec, 'validator') && !isPlainObject(spec.validator))
          reasons.push('create.validator must be a document');
-      if (spec && hasOwn(spec, 'validationLevel') && !view) {
+      if (hasOwn(spec, 'validationLevel') && !view) {
          const level = spec.validationLevel;
          const known = level === 'off' || level === 'strict' || level === 'moderate' || level === 'constraint';
          if (typeof level !== 'string' || !known)
@@ -2626,7 +2646,7 @@
          else if (level === 'constraint' && !fCV(8.0))
             reasons.push('validationLevel constraint requires fCV 8.0 or newer');
       }
-      if (spec && hasOwn(spec, 'validationAction') && !view) {
+      if (hasOwn(spec, 'validationAction') && !view) {
          const action = spec.validationAction;
          const known = action === 'error' || action === 'warn' || action === 'errorAndLog';
          if (typeof action !== 'string' || !known)
@@ -2634,15 +2654,34 @@
          else if (action === 'errorAndLog' && !fCV(8.0))
             reasons.push('validationAction errorAndLog requires fCV 8.0 or newer');
       }
-      if (spec && spec.validationLevel === 'constraint' && !view) {
+      if (spec.validationLevel === 'constraint' && !view) {
          const action = hasOwn(spec, 'validationAction') ? spec.validationAction : 'error';
          if (action !== 'error' && action !== 'errorAndLog')
             reasons.push('validationLevel constraint requires validationAction error or errorAndLog');
       }
+      return reasons;
+   }
+
+   function indexDefaultsProblems() {
+      const reasons = [];
+      const spec = createSpec();
       if (spec && hasOwn(spec, 'indexOptionDefaults') && !isPlainObject(spec.indexOptionDefaults))
          reasons.push('create.indexOptionDefaults must be a document');
+      return reasons;
+   }
+
+   // checkShard is false while a time series run may still replace the shard key.
+   // The order is the 1.9.0 slot order.
+   function createAndShardSlotProblems(willShard, checkShard = true) {
+      const reasons = [];
+      const add = list => list.forEach(reason => reasons.push(reason));
+      add(viewSlotProblems(willShard));
+      add(clusteredSlotProblems(willShard));
+      add(imagesSlotProblems());
+      add(validatorSlotProblems());
+      add(indexDefaultsProblems());
       if (checkShard)
-         shardSlotProblems(willShard).forEach(reason => reasons.push(reason));
+         add(shardSlotProblems(willShard));
       return reasons;
    }
 
