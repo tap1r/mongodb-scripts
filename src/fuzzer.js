@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.15.4"
+ *  Version: "1.15.5"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -27,7 +27,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.15.4" };
+   const __script = { "name": "fuzzer.js", "version": "1.15.5" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -943,7 +943,7 @@
    function scriptVersion() {
       return (typeof __fuzzerScript !== 'undefined' && __fuzzerScript && __fuzzerScript.version)
          ? __fuzzerScript.version
-         : '1.15.4';
+         : '1.15.5';
    }
 
    function namespaceContract() {
@@ -3149,9 +3149,11 @@
          return shardPreservedNamespace();
       }
       const createOptions = {
-         "collation": collation,
          "writeConcern": writeConcern
       };
+      // A time series stores the default binary collation as no collation document.
+      if (!(timeSeries && collation && collation.locale === 'simple'))
+         createOptions.collation = collation;
       if (!isViewRun()) {
          let [blockCompressor] = parseCompressor(compressor);
          createOptions.storageEngine = (isAtlasPlatform('sharedTier'))
