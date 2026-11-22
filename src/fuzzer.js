@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.15.7"
+ *  Version: "1.15.8"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -27,7 +27,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.15.7" };
+   const __script = { "name": "fuzzer.js", "version": "1.15.8" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -459,7 +459,6 @@
       textIndexOptions = opt.textIndexOptions;
    const runWarnings = [];
    let builtRows = [];
-   let reshardMonitorCleared = false;
    let insertResult = null;
    let runError = null;
    noteOutputFormat();
@@ -944,7 +943,7 @@
    function scriptVersion() {
       return (typeof __fuzzerScript !== 'undefined' && __fuzzerScript && __fuzzerScript.version)
          ? __fuzzerScript.version
-         : '1.15.7';
+         : '1.15.8';
    }
 
    function namespaceContract() {
@@ -1602,9 +1601,6 @@
       }
 
       if (failures.length) {
-         // The monitor clear drops the built table. Print the detail again then.
-         if (reshardMonitorCleared)
-            failures.forEach(reason => report(`\n[red][ERROR][/] ${reason}`));
          report('\n [red]Fuzzing finished with errors.[/]\n');
          return publish({ "ok": 0, "errors": failures });
       }
@@ -2894,17 +2890,47 @@
       ]);
       await pause(3 * pollIntervalMS); // allow $currentOp to publish the initial donor/recipient ops
       let monitorFailed = false;
+      let monitorRows = 0;
+      let monitorText = '';
+      const monitorColumns = () => (process.stdout && process.stdout.columns > 0) ? process.stdout.columns : 80;
+      const monitorRowsOf = text => {
+         const cols = monitorColumns();
+         let rows = 0;
+         const lines = String(text).split('\n');
+         for (let i = 0; i < lines.length; i++)
+            rows += Math.max(1, Math.ceil(lines[i].length / cols));
+         return rows;
+      };
+      const monitorFrame = ops => {
+         const parts = ['', 'Monitoring resharding operations:', ''];
+         for (let i = 0; i < ops.length; i++)
+            parts.push(String(tojson(ops[i])).replace(/\s+$/, ''));
+         return parts.join('\n');
+      };
+      // Repaint this block only. The HUD above it stays.
+      const paintMonitor = frame => {
+         const tty = !!(process.stdout && process.stdout.isTTY);
+         if (tty && monitorRows > 0)
+            process.stdout.write(`\x1b[${monitorRows}A\r\x1b[J`);
+         if (tty)
+            process.stdout.write(frame + '\n');
+         else
+            console.log(frame);
+         monitorRows = tty ? monitorRowsOf(frame) : 0;
+      };
       while (!done) {
          try {
             const ops = rebalancingOps();
             monitorFailed = false;
             if (ops.length > 0 && cliTable()) {
-               console.clear();
-               reshardMonitorCleared = true;
-               console.log(`\nMonitoring resharding operations:\n`);
-               ops.forEach(op => printjson(op));
+               const frame = monitorFrame(ops);
+               if (frame !== monitorText) {
+                  paintMonitor(frame);
+                  monitorText = frame;
+               }
             }
          } catch(e) {
+            monitorRows = 0;
             if (!monitorFailed) {
                runWarnings.push({ "code": 'reshard', "message": `Resharding monitor: ${errText(e)}` });
                report('Resharding monitor:', errText(e));
