@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.15.1"
+ *  Version: "1.15.2"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -27,7 +27,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.15.1" };
+   const __script = { "name": "fuzzer.js", "version": "1.15.2" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -942,7 +942,7 @@
    function scriptVersion() {
       return (typeof __fuzzerScript !== 'undefined' && __fuzzerScript && __fuzzerScript.version)
          ? __fuzzerScript.version
-         : '1.15.1';
+         : '1.15.2';
    }
 
    function namespaceContract() {
@@ -1533,8 +1533,8 @@
          return publish({ "ok": 1 });
       }
 
-      // Drop finishes before create. createNS is async so the rewriter can
-      // yield on createCollection while the first batch is packed.
+      // Drop finishes before create. createNS awaits createCollection, so the
+      // first batch packs while that call is in flight.
       dropNS();
       let createFailed = null;
       const creating = createNS().catch(err => {
@@ -3147,7 +3147,8 @@
       applyCreateSlots(createOptions);
 
       try {
-         database.createCollection(collName, createOptions);
+         // This await is the yield. takePackedBatch runs before shardNewNamespace.
+         await database.createCollection(collName, createOptions);
       } catch(e) {
          runError = `Namespace creation failed: ${errText(e)}`;
          report('\n[red][ERROR] Namespace creation failed:[/]', errText(e));
