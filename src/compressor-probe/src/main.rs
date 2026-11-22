@@ -638,6 +638,8 @@ fn round_n(value: f64, digits: i32) -> f64 {
     (value * scale).round() / scale
 }
 
+const PHRASE: &[u8] = b"the cat sat on the mat ";
+
 fn fill_payload(buf: &mut [u8], start: usize, len: usize, pattern: u8, rand: &mut impl FnMut() -> u32, crypto: &[u8]) {
     let end = start + len;
     match pattern {
@@ -646,14 +648,10 @@ fn fill_payload(buf: &mut [u8], start: usize, len: usize, pattern: u8, rand: &mu
         3 => { for i in start..end { buf[i] = ((i - start) & 0xff) as u8; } }
         4 => { for i in start..end { buf[i] = (((i - start) * 17) & 0xff) as u8; } }
         5 => { for i in start..end { buf[i] = ((i - start) & 0x0f) as u8; } }
-        6 => {
-            let phrase = b"the cat sat on the mat ";
-            for i in start..end { buf[i] = phrase[(i - start) % phrase.len()]; }
-        }
+        6 => { for i in start..end { buf[i] = PHRASE[(i - start) % PHRASE.len()]; } }
         7 => {
-            let phrase = b"the cat sat on the mat ";
             let half = start + (len >> 1);
-            for i in start..half { buf[i] = phrase[(i - start) % phrase.len()]; }
+            for i in start..half { buf[i] = PHRASE[(i - start) % PHRASE.len()]; }
             for i in half..end { buf[i] = (rand() & 0xff) as u8; }
         }
         8 => { for i in start..end { buf[i] = (rand() % 36) as u8; } }
