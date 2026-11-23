@@ -128,6 +128,29 @@ var pcg32 = (function() {
       'const carry=((lo^-2147483648)<(plo^-2147483648))|0;' +
       'hi=(phi+cross+ihi+carry)|0;';
 
+   // Reseed only. The high half at this step is 0, 1, or 2, so the high
+   // columns of STATE are the one product. random() keeps STATE.
+   const SEED =
+      'const olo=lo;' +
+      'const a0=olo&0xffff;' +
+      'const a1=olo>>>16;' +
+      'const c0=(a0*0x7f2d)|0;' +
+      'const c1=(a0*0x4c95)|0;' +
+      'const c2=(a1*0x7f2d)|0;' +
+      'const mid=(c0>>>16)+(c1&0xffff)+(c2&0xffff);' +
+      'const plo=(c0&0xffff)|((mid&0xffff)<<16);' +
+      'const phi=((a1*0x4c95)+(c1>>>16)+(c2>>>16)+(mid>>>16))|0;' +
+      'const d0=(a0*0xf42d)|0;' +
+      'const d1=(a0*0x5851)|0;' +
+      'const d2=(a1*0xf42d)|0;' +
+      'const dmid=(d0>>>16)+(d1&0xffff)+(d2&0xffff);' +
+      'let cross=(d0&0xffff)|((dmid&0xffff)<<16);' +
+      'cross=(cross+(hi*0x4c957f2d))|0;' +
+      'const sum=plo+ilo;' +
+      'lo=sum|0;' +
+      'const carry=((lo^-2147483648)<(plo^-2147483648))|0;' +
+      'hi=(phi+cross+ihi+carry)|0;';
+
    const OUTPUT =
       'const xorLo=((olo>>>18)|((ohi&0x3ffff)<<14))^olo;' +
       'const xorHi=(ohi>>>18)^ohi;' +
@@ -149,7 +172,7 @@ var pcg32 = (function() {
    const buildStep = new Function('box',
       '"use strict";return function step(){' +
          'let hi=box.hi, lo=box.lo, ihi=box.ihi, ilo=box.ilo;' +
-         STATE +
+         SEED +
          'box.hi=hi; box.lo=lo;' +
       '};'
    );
@@ -226,7 +249,8 @@ var pcg32 = (function() {
 
       // A uint32 seed and sequence stay on numbers. The step from state 0
       // stores the increment, so the seed is added to that word and one
-      // step finishes the reseed. Any other argument uses the bigint mix.
+      // step finishes the reseed. That step's high half is 0, 1, or 2.
+      // Any other argument uses the bigint mix.
       function slowSrandom(seed, seq) {
          const initstate = word64(seed, 'seed');
          const initseq = word64(seq, 'sequence');
