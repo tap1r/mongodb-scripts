@@ -180,6 +180,7 @@ Also called out in that doc: non-async generator functions, `.sort()` callbacks 
 mongosh does **not** run `--file` / `--eval` as a plain Node script. [`@mongosh/async-rewriter2`](https://www.npmjs.com/package/@mongosh/async-rewriter2) wraps the source in an IIFE and inserts implicit `await` around **shell-API** promises (so `db.collection.find().toArray()` can look synchronous). Consequences:
 
 - `node --check script.js` can pass while `mongosh --file script.js` throws `SyntaxError`. Always parse-check with mongosh (`mongosh --nodb --file script.js`).
+- A function called once per iteration of a tight loop pays the wrapper on every call. See [A tight loop pays for each function call](#a-tight-loop-pays-for-each-function-call).
 - Real top-level `await` is **not** available in `--file`, `--eval`, or a piped REPL snippet (verified mongosh 2.10). `await main()` at the true top of a file fails with `'await' is only allowed within async functions…`.
 - **Do not** write `await (async () => { … })();` as the entrypoint. The rewriter turns `await (callee)()` into a maybe-awaited call and the result is:
 
@@ -206,6 +207,22 @@ Many shell helpers such as `db.adminCommand()` are **synchronous** in mongosh. W
 ```javascript
 inflight = Promise.resolve().then(() => db.adminCommand({ serverStatus: 1, /* … */ }));
 ```
+
+### A tight loop pays for each function call
+
+Every user function in `--file`, `--eval`, a piped snippet, and `load()` is rewritten, not only the shell-API calls. The wrapper starts an async function and returns the value when that function finishes before its first `await`. Inside it, a call and a `for` loop's `i++` become `(_ex = expr, _isp(_ex) ? await _ex : _ex)`. A top-level `function` also rebuilds the rewriter helpers on every call (`Symbol.for`, and the functions that mark and test synthetic promises). A function nested inside another function reuses those helpers and only pays the async call.
+
+**Do** keep a hot numeric step in the loop when the mongosh timing matters. **Do not** move it into its own function and quote a Node timing of that call. The Node number is the arithmetic. The mongosh number of the same call includes the wrapper.
+
+Measured on mongosh 2.14.3, five samples, one million evaluations of `(x * 1664525 + 1013904223) | 0`, result consumed. Node v26.13.1 was about 4.1 ms for every call shape.
+
+- Arithmetic in the loop, `i++` included: 4.4 ms.
+- Nested function, called as a method: 76 ms.
+- Nested function, passed as a parameter: 40 ms.
+- Top-level function, called directly: 172 ms.
+- Top-level function, passed as a parameter: 140 ms.
+
+The inline loop matches Node. The rewritten `i++` is still in that loop, and V8 drops the check when the value is a number. The cost is entering the rewritten function once per iteration. Passing the function as a parameter was the faster call in both pairs. `boundedrand` in `pcg-xsh-rr.js` copies the first multiply for this reason: calling `random()` for that sample was about 122 ms per million, and the copy was about 92 ms (mongosh 2.14.3).
 
 ### Read the field after the call resolves
 
@@ -501,6 +518,7 @@ child.close();
 | Wrap sync `adminCommand` when you need a Promise | Assume `await adminCommand` is inherently async |
 | Drive `--file` with `(async () => { await main(); })();` | `await (async () => { … })();` or top-level `await main()` (rewriter `SyntaxError`) |
 | Parse-check with `mongosh --nodb --file` | Trust `node --check` alone |
+| Keep a hot numeric step in the loop | Call a rewritten function once per iteration and quote the Node timing |
 | `await` a `setTimeout` Promise when other work must overlap | `sleep()` during concurrent promises (it blocks the thread) |
 | `--eval 'var options = {…}'` and probe `typeof` in the file | Declare the same binding in the `--file` script |
 | Follow [script considerations](https://www.mongodb.com/docs/mongodb-shell/write-scripts/considerations/) for classes/generators | Put DB calls in sync constructors |
