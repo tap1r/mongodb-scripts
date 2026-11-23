@@ -98,6 +98,8 @@ var pcg32 = (function() {
    // every function it loads, and these two calls are what a tight loop pays for.
    // Each call keeps the halves on the generator's box, so a hot boundedrand()
    // leaves random() on its own code.
+   // A variable r % bound is the slow part of boundedrand. The literal form
+   // of that remainder is the fast part. The wrapper keeps two compiled bodies.
    const STEP =
       'const ohi=hi;' +
       'const olo=lo;' +
@@ -139,19 +141,39 @@ var pcg32 = (function() {
       '};'
    );
 
-   const buildBound = new Function('box', 'checkBound',
+   // The bound is spliced in as a decimal after checkBound has accepted it.
+   function compileBound(box, bound, threshold) {
+      const b = bound >>> 0;
+      const t = threshold >>> 0;
+      const mod = t === 0 ? ('r&' + (b - 1)) : ('r%' + b);
+      const accept = 'box.hi=hi;box.lo=lo;return ' + mod + ';';
+      const body = t === 0
+         ? STEP + accept
+         : STEP + 'if(r>=' + t + '){' + accept + '}for(;;){' + STEP + 'if(r>=' + t + '){' + accept + '}}';
+      return new Function('box',
+         '"use strict";return function(){' +
+            'let hi=box.hi,lo=box.lo,ihi=box.ihi,ilo=box.ilo;' +
+            body +
+         '};'
+      )(box);
+   }
+
+   const buildBound = new Function('box', 'checkBound', 'compileBound',
       '"use strict";' +
-      'let cachedBound=-1, cachedThresh=0;' +
+      'let s0=0,f0=null,s1=0,f1=null;' +
       'return function boundedrand(bound){' +
-         'let threshold;' +
-         'if(bound===cachedBound){threshold=cachedThresh;}' +
-         'else{' +
-            'if(typeof bound!=="number"||(bound>>>0)!==bound||bound===0)bound=checkBound(bound);' +
-            'threshold=((-bound)>>>0)%bound;' +
-            'cachedBound=bound; cachedThresh=threshold;' +
+         'if(f0!==null&&bound===s0)return f0();' +
+         'if(f1!==null&&bound===s1){' +
+            'const f=f0,s=s0;f0=f1;s0=s1;f1=f;s1=s;return f0();' +
          '}' +
-         'let hi=box.hi, lo=box.lo, ihi=box.ihi, ilo=box.ilo;' +
-         'for(;;){' + STEP + 'if(r>=threshold){box.hi=hi; box.lo=lo; return r%bound;}}' +
+         'if(typeof bound!=="number"||(bound>>>0)!==bound||bound===0)bound=checkBound(bound);' +
+         'if(f0!==null&&bound===s0)return f0();' +
+         'if(f1!==null&&bound===s1){' +
+            'const f=f0,s=s0;f0=f1;s0=s1;f1=f;s1=s;return f0();' +
+         '}' +
+         'const threshold=((-bound)>>>0)%bound;' +
+         'f1=f0;s1=s0;s0=bound;f0=compileBound(box,bound,threshold);' +
+         'return f0();' +
       '};'
    );
 
@@ -165,7 +187,7 @@ var pcg32 = (function() {
          'ilo': lo32(incWord) | 0
       };
       const random = buildRandom(box);
-      const boundedrand = buildBound(box, checkBound);
+      const boundedrand = buildBound(box, checkBound, compileBound);
 
       function advance(delta) {
          let d = word64(delta, 'delta');

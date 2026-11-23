@@ -28,13 +28,13 @@ A number seed on that file is split with `Math.floor(n / 0xffffffff)` and `n >> 
 
 A seed, sequence, state, or delta is an integer from 0 through 2^53−1, or a bigint through 2^64−1. The hot step stores the words as two int32 halves. `join` puts the high bit back with `>>> 0` when a caller reads `state` or `inc`. `advance` and the seed add in `srandom` still use bigint, then split the result back into the halves.
 
-`boundedrand` keeps the threshold for the last bound. The threshold for a power of two is 0, so the first sample is kept. The multiply sits in the same function as the remainder. A call to `random()` for that first sample costs more, under mongosh, than repeating the multiply.
+`boundedrand` compiles a body for a bound and keeps the last two. A power-of-two bound has threshold 0, so that body masks with `bound - 1` and keeps the first sample. Any other bound writes the remainder as a literal. The multiply sits in the compiled body. A call to `random()` for that sample costs more, under mongosh, than repeating the multiply. A third bound compiles again and drops the older body.
 
 ## What mongosh changes
 
 mongosh 2.14.3 embeds Node v24.22.2. A script passed to `--file`, `--eval`, or `load()` is rewritten by `@mongosh/async-rewriter2`. Each user function starts an async function and returns the value when that function finishes before its first `await`. A call inside the function pays that wrapper on every iteration. The [scripting guide](mongosh-scripting-guide.md#a-tight-loop-pays-for-each-function-call) has the small-loop numbers. Node timings of the same call leave the wrapper out.
 
-`random()` and `boundedrand()` are built with `new Function`. That string is compiled when the file runs, after the rewriter has finished with the file. Each generator keeps its four halves on one object, and each call has its own function. A direct `eval` in the same scope as the halves matched the stream and slowed later `random()` from about 32 ms to about 58 ms per million, and alternating bounds from about 80 ms to about 273 ms. One `boundedrand` serves every bound. A function compiled for a single literal remainder was fast on its own and was left out for that reason.
+`random()` and `boundedrand()` are built with `new Function`. That string is compiled when the file runs, after the rewriter has finished with the file. Each generator keeps its four halves on one object. `random()` is its own function, so a hot `boundedrand()` leaves it alone. A direct `eval` in the same scope as the halves matched the stream and slowed later `random()` from about 32 ms to about 58 ms per million, and alternating bounds from about 80 ms to about 273 ms. Inside an inlined step, `r % bound` with a variable bound measured about 34 ms per million, step included, and the same loop with a literal `% 10` measured about 7 ms. The `boundedrand` wrapper keeps a compiled body for each of the last two bounds.
 
 The halves are int32 (`| 0`) because a `>>> 0` result at or above 2^31 is a heap number in this engine. The value handed back to the caller is still `>>> 0`. `Math.imul` of the same 16-bit column products was about 700 ms per million in this shell. A `Uint32Array` of the four halves was about 9 ms per million `random()` calls on Node 26 and about 87 ms in mongosh 2.14.3, against about 42 ms for closed-over halves at that point in the work. The live file keeps the object.
 
@@ -44,18 +44,20 @@ mongosh 2.14.3, `mongosh --nodb --quiet` on a file that `load()`s the generator.
 
 `random()` on the limb copy calls `pcg32.srandom(42, 54)` and then `pcg32.random()`. The live `random()`, `boundedrand(10)`, and alternating columns call `pcg32.spawn(42, 54)` inside the timed function, then the draw. Those results are consumed with `(s + draw) >>> 0`. The limb copy has no `boundedrand`.
 
-The `srandom()` column is a later sitting on the same shell. Each sample is one million calls of `srandom(i, 1)` on one generator. The live row calls `pcg32.spawn(0, 1)` before the timer, then `gen.srandom(i, 1)`. The limb row calls `pcg32.srandom(i, 1)`. The counted result is the number of calls. `srandom` on the live file is a function in the loaded script, so the rewriter wraps it, and the seed add still uses bigint. Each call discards two outputs and writes a new seed. That column is the cost of setting the stream.
+The live `random()`, `boundedrand(10)`, and alternating columns are one sitting of the current file. The limb columns, the `srandom()` column, and `$rand` are earlier sittings on the same shell.
 
-`$rand` is that same later sitting. The function is the pool in `mdblib.js`: 4096 uint32 values, refilled by `crypto.webcrypto.getRandomValues`, each draw `word / 2^32` in [0, 1). The harness copies those lines and does not `load()` `mdblib.js`. The function is top-level in the timed file, so the rewriter wraps it. The sum of the draws is consumed.
+The `srandom()` column is one million calls of `srandom(i, 1)` on one generator. The live row calls `pcg32.spawn(0, 1)` before the timer, then `gen.srandom(i, 1)`. The limb row calls `pcg32.srandom(i, 1)`. The counted result is the number of calls. `srandom` on the live file is a function in the loaded script, so the rewriter wraps it, and the seed add still uses bigint. Each call discards two outputs and writes a new seed. That column is the cost of setting the stream.
+
+`$rand` is that same earlier sitting as `srandom()`. The function is the pool in `mdblib.js`: 4096 uint32 values, refilled by `crypto.webcrypto.getRandomValues`, each draw `word / 2^32` in [0, 1). The harness copies those lines and does not `load()` `mdblib.js`. The function is top-level in the timed file, so the rewriter wraps it. The sum of the draws is consumed.
 
 | Generator | `random()` | `srandom()` | `$rand` | `boundedrand(10)` | alternating 10 and 1000 |
 | --- | --- | --- | --- | --- | --- |
 | Limb copy | 3948.1, 3860.0, 3861.4, 3865.0, 3863.7 | 7473.5, 7402.2, 7424.6, 7414.5, 7503.7 |  |  |  |
-| Live `src/pcg-xsh-rr.js` | 22.9, 22.6, 22.5, 22.5, 22.6 | 1644.7, 1643.0, 1643.5, 1643.1, 1644.3 |  | 73.1, 72.8, 74.1, 72.8, 73.0 | 82.3, 82.4, 81.8, 80.9, 80.9 |
+| Live `src/pcg-xsh-rr.js` | 21.7, 21.4, 21.5, 21.3, 21.4 | 1644.7, 1643.0, 1643.5, 1643.1, 1644.3 |  | 40.7, 42.9, 43.1, 42.8, 42.7 | 44.5, 44.2, 44.0, 44.5, 45.9 |
 | `$rand` |  |  | 594.5, 596.6, 594.3, 593.8, 593.1 |  |  |
 
 Seed. The limb copy and the live file take a seed. The value of that argument is the pair the caller keeps: the same seed and sequence rebuild the `random()` series, which is what makes a recorded run replayable. The `srandom()` column is one million reseeds. `$rand` has no seed argument, so the caller has no pair to pass back and the next run is a new series.
 
-The middle samples are 3863.7 ms and 22.6 ms for `random()`, 7424.6 ms and 1643.5 ms for `srandom()`, 594.3 ms for `$rand`, 73.0 ms for `boundedrand(10)`, and 81.8 ms for the alternating pair.
+The middle samples are 3863.7 ms and 21.4 ms for `random()`, 7424.6 ms and 1643.5 ms for `srandom()`, 594.3 ms for `$rand`, 42.8 ms for `boundedrand(10)`, and 44.5 ms for the alternating pair.
 
 The same harness on the int32 file before `new Function` (commit `302d6cd`) was 31.2 ms, 91.7 ms, and 100.6 ms for those three calls. An earlier run of the bigint step, before the halves, was about 256 ms and 392 ms for `random()` and `boundedrand(10)`.
