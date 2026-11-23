@@ -2,7 +2,20 @@
 
 [`src/pcg-xsh-rr.js`](src/pcg-xsh-rr.js) is an optimised JavaScript `pcg32` for mongosh. It follows Melissa O'Neill's basic-library generator, `pcg32_setseq_xsh_rr`: a 64-bit linear congruential generator, with an xorshift and a rotate that turn the state into a 32-bit result. The short C form is [`pcg_basic.h`](https://github.com/imneme/pcg-c-basic/blob/master/pcg_basic.h) and [`pcg_basic.c`](https://github.com/imneme/pcg-c-basic/blob/master/pcg_basic.c) (Apache-2.0). The family is described in [PCG: A Family of Simple Fast Space-Efficient Statistically Good Algorithms for Random Number Generation](https://www.pcg-random.org/pdf/hmc-cs-2014-0905.pdf) and at [pcg-random.org](https://www.pcg-random.org/).
 
-This page also times two other draws available from the same machine: `crypto.webcrypto.getRandomValues()`, and Node's `Math.random()`.
+The rows below put that generator next to `crypto.webcrypto.getRandomValues()` and Node's `Math.random()`, both available on the same machine. Each figure is the average of five samples of one million calls. The `pcg32` rows and `crypto.webcrypto.getRandomValues()` each ran in their own mongosh 2.14.3 process. `Math.random()` ran in Node v26.13.1. The last column bins the high byte of a uint32, 256 ways, and reports χ² divided by 255. `boundedrand(10)` uses ten bins and divides by 9, so those histograms share one scale. A fair split of independent draws scatters around 1. Below 1 is flatter than that, and above 1 is more uneven.
+
+| Call | One million calls | χ² / df |
+| --- | ---: | ---: |
+| Reference implementation `random()` | 3845.8 ms | 0.99 |
+| Reference implementation `srandom()` | 7537.6 ms | 0.28 |
+| Optimised `random()` | 22.6 ms | 0.99 |
+| Optimised `srandom()` | 5.5 ms | 0.28 |
+| Optimised `boundedrand(10)` | 17.4 ms | 1.11 |
+| Optimised `boundedrand`, alternating 10 and 1000 | 17.8 ms |  |
+| `crypto.webcrypto.getRandomValues()` | 460.1 ms | 0.93 |
+| Node `Math.random()` | 3.3 ms | 0.99 |
+
+The alternating row mixes two bounds, so that cell is empty.
 
 ## Which one to reach for
 
@@ -12,9 +25,9 @@ This page also times two other draws available from the same machine: `crypto.we
 
 **Hide the next value.** `crypto.webcrypto.getRandomValues()` fills a typed array from the operating system's generator. Earlier outputs leave the next ones unpredictable. That is the call for key material, a session token, a nonce, or an IV. It takes no seed, so the next run is a new series.
 
-**Take the engine's own float.** `Math.random()` returns a number in `[0, 1)`. On this machine it is V8's xorshift128+, inside Node. It is the fastest row here. The engine seeds it, and a script has no way to read that state, set it, or jump it. Use it for a throwaway shuffle or a sample where the series never has to come back and the number is not a secret. V8's own note on this generator says it stays the wrong tool for hashing, signatures, and encryption.
+**Take the engine's own float.** `Math.random()` returns a number in `[0, 1)`. On this machine it is V8's xorshift128+, inside Node. It is the fastest row in the table. The engine seeds it, and a script has no way to read that state, set it, or jump it. Use it for a throwaway shuffle or a sample where the series never has to come back and the number is not a secret. V8's own note on this generator says it stays the wrong tool for hashing, signatures, and encryption.
 
-The uniformity column later on this page only asks whether one byte of each output is spread evenly. `Math.random()` and `getRandomValues()` agree on that check. The choice between them is whether the next value has to stay hidden.
+The uniformity column above only asks whether one byte of each output is spread evenly. `Math.random()` and `getRandomValues()` agree on that check. The choice between them is whether the next value has to stay hidden.
 
 ## How a `pcg32` draw works
 
@@ -44,28 +57,13 @@ When both `srandom` arguments are numbers in the uint32 range, the reseed stays 
 
 `random()`, `boundedrand()`, and the numeric `srandom()` are built with `new Function`. That string is compiled after mongosh has finished rewriting the file, so a tight loop pays for ordinary JavaScript. The [scripting guide](mongosh-scripting-guide.md#a-tight-loop-pays-for-each-function-call) shows what the wrapper costs on a smaller loop.
 
-## Timings
+## How the rows were measured
 
-Each time is the average of five samples, and a sample is one million calls. The `pcg32` rows and `crypto.webcrypto.getRandomValues()` each ran in their own mongosh 2.14.3 process, with `mongosh --nodb --quiet` on one file. `Math.random()` ran in Node v26.13.1. That Node is separate from the Node v24.22.2 embedded in mongosh 2.14.3.
-
-The other column is one histogram of one million outputs, reported as χ² divided by its degrees of freedom. A uint32 goes in bin `value >>> 24`, one of 256, so the divisor is 255. `boundedrand(10)` uses ten bins, `0` through `9`, so the divisor is 9. Dividing by the degrees of freedom puts those two histograms on one scale. A fair split of independent draws scatters around 1. Below 1 is flatter than that, and above 1 is more uneven.
-
-| Call | One million calls | χ² / df |
-| --- | ---: | ---: |
-| Reference implementation `random()` | 3845.8 ms | 0.99 |
-| Reference implementation `srandom()` | 7537.6 ms | 0.28 |
-| Optimised `random()` | 22.6 ms | 0.99 |
-| Optimised `srandom()` | 5.5 ms | 0.28 |
-| Optimised `boundedrand(10)` | 17.4 ms | 1.11 |
-| Optimised `boundedrand`, alternating 10 and 1000 | 17.8 ms |  |
-| `crypto.webcrypto.getRandomValues()` | 460.1 ms | 0.93 |
-| Node `Math.random()` | 3.3 ms | 0.99 |
+The figures above are those five-sample averages. Each `pcg32` row and `crypto.webcrypto.getRandomValues()` ran in its own process, with `mongosh --nodb --quiet` on one file. `Math.random()` ran in Node v26.13.1. That Node is separate from the Node v24.22.2 embedded in mongosh 2.14.3.
 
 `random()` on the reference implementation seeds with `pcg32.srandom(42, 54)` and then calls `pcg32.random()`. The Optimised `random()` and `boundedrand` rows call `pcg32.spawn(42, 54)` inside the timed function, then draw. Each draw is folded into a running uint32, `(s + draw) >>> 0`, so the result has to be produced. `boundedrand(10)` uses one compiled body. The alternating row uses both cached bodies, bounds 10 and 1000. The two `random()` histograms are the same series, so their ratios match.
 
 The `srandom()` rows are one million reseeds, `srandom(i, 1)`, on one generator. The reference row calls `pcg32.srandom`. The Optimised row creates the generator with `pcg32.spawn(0, 1)` once, inside the function that runs the loop, before the timer starts, then calls `gen.srandom(i, 1)`. The value kept from the timed loop is the number of calls. That row is the cost of setting the stream. A generator created at the top of the file is a different cost, because mongosh turns that binding into a global and every call pays for the lookup. The histogram counts the first `random()` after each of those reseeds. The two copies produce the same counts. Across seeds `0` through `999999` with sequence `1`, that high byte is flatter than one long stream, which is the ratio 0.28.
-
-The alternating row mixes two bounds, so it has no single histogram and that cell is empty.
 
 `crypto.webcrypto.getRandomValues()` is measured as one million calls. Each call fills a `Uint32Array` of one word, created once inside the timed function, and the word is folded in with `(s + buf[0]) >>> 0`. The loop sits in a nested function, the same shape as the Optimised `random()` row. The histogram uses the high byte of that word. The figure is one sitting. A later run is a new series.
 
