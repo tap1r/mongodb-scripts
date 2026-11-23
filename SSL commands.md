@@ -37,93 +37,51 @@
 
 ## **Generating common use certificates**
 
-* **Self-signed certificate with FIPS compliance (PKCS#8 format)**
+OpenSSL 3. On macOS that is the Homebrew `openssl`, not `/usr/bin/openssl`. These keys are unencrypted (`-noenc`) so the mlaunch line above can read `server.pk8`. The encrypted form (`-aes256`), the CA rules, and `certificateKeyFilePassword` are in [FIPS cert generation](FIPS%20cert%20generation.md). `-sha256` is explicit. The private key comes first in the bundle, then the certificate.
 
-  ```bash
-  openssl req \
-   -x509 \
-   -newkey rsa:2048 \
-   -nodes \
-   -days 397 \
-   -keyout private.key \
-   -out server.crt \
-   -subj "/C=US/ST=New York/L=New York/O=MongoDB, Inc./OU=Technical Services/CN=*.mongodb.com"
-
-  cat server.crt private.key > server.pk8
-  openssl x509 -in server.pk8 -noout -subject
-  ```
-
-* **Self-signed certificate with FIPS compliance (PKCS#8 format) with SAN and EKU attributes**
+* **Self-signed RSA certificate (PKCS#8, SAN, EKU)**
 
   ```bash
   openssl req \
     -newkey rsa:2048 \
-    -days 397 \
-    -nodes \
     -x509 \
+    -sha256 \
+    -days 397 \
+    -noenc \
     -subj "/C=US/ST=New York/L=New York/O=MongoDB, Inc./OU=Technical Services/CN=*.mongodb.com" \
-    -extensions my_ext \
-    -config <(printf "\
-      [req]\n\
-      distinguished_name=req_dn\n\
-      [req_dn]\n\
-      [my_ext]\n\
-      subjectAltName=DNS.1:*.mongodb.com,DNS.2:*.mongodb.net,IP.1:127.0.0.1,IP.2:::1,IP.3:192.0.2.1\n\
-      extendedKeyUsage=serverAuth,clientAuth") \
+    -addext "subjectAltName=DNS:*.mongodb.com,DNS:*.mongodb.net,IP:127.0.0.1,IP:::1,IP:192.0.2.1" \
+    -addext "extendedKeyUsage=serverAuth,clientAuth" \
     -keyout private.key \
     -out server.crt
 
-  cat server.crt private.key > server.pk8
+  cat private.key server.crt > server.pk8
 
   openssl x509 -in server.pk8 -noout -text | grep "Subject:\|X509v3\ Subject\ Alternative\ Name:\|DNS:\|IP\ Address:\|X509v3\ Extended\ Key\ Usage:\|TLS\ Web\ Server\ Authentication\|TLS\ Web\ Client\ Authentication"
   ```
 
-* **Elliptic curve ciphers (ECC) with FIPS compliance (PKCS#8 format)**
+* **Self-signed P-384 certificate (PKCS#8, SAN, EKU)**
 
   ```bash
   openssl req \
-   -x509 \
-   -newkey ec:<(openssl ecparam -name secp521r1) \
-   -nodes \
-   -days 397 \
-   -keyout private.key \
-   -out server.crt \
-   -subj "/C=US/ST=New York/L=New York/O=MongoDB, Inc./OU=Technical Services/CN=*.mongodb.com"
-
-  cat server.crt private.key > server.pk8
-  openssl x509 -in server.pk8 -noout -subject
-  ```
-
-* **Elliptic curve ciphers (ECC) with FIPS compliance (PKCS#8 format) with SAN and EKU attributes**
-
-  ```bash
-  openssl req \
-   -x509 \
-   -newkey ec:<(openssl ecparam -name secp521r1) \
-   -nodes \
-   -days 397 \
-   -keyout private.key \
-   -out server.crt \
-   -subj "/C=US/ST=New York/L=New York/O=MongoDB, Inc./OU=Technical Services/CN=*.mongodb.com" \
-    -extensions my_ext \
-    -config <(printf "\
-      [req]\n\
-      distinguished_name=req_dn\n\
-      [req_dn]\n\
-      [my_ext]\n\
-      subjectAltName=DNS.1:*.mongodb.com,DNS.2:*.mongodb.net,IP.1:127.0.0.1,IP.2:::1,IP.3:192.0.2.1\n\
-      extendedKeyUsage=serverAuth,clientAuth") \
+    -x509 \
+    -newkey ec:<(openssl ecparam -name secp384r1) \
+    -sha256 \
+    -days 397 \
+    -noenc \
+    -subj "/C=US/ST=New York/L=New York/O=MongoDB, Inc./OU=Technical Services/CN=*.mongodb.com" \
+    -addext "subjectAltName=DNS:*.mongodb.com,DNS:*.mongodb.net,IP:127.0.0.1,IP:::1,IP:192.0.2.1" \
+    -addext "extendedKeyUsage=serverAuth,clientAuth" \
     -keyout private.key \
     -out server.crt
 
-  cat server.crt private.key > server.pk8
+  cat private.key server.crt > server.pk8
 
   openssl x509 -in server.pk8 -noout -text | grep "Subject:\|X509v3\ Subject\ Alternative\ Name:\|DNS:\|IP\ Address:\|X509v3\ Extended\ Key\ Usage:\|TLS\ Web\ Server\ Authentication\|TLS\ Web\ Client\ Authentication"
   ```
 
 ## **Certificate format conversion**
 
-* **PEM (_`PKCS#1`_) to PFX/P12 (_`PKCS#12`_) format** (suitable for Microsoft Windows)
+* **PEM to PFX/P12 (_`PKCS#12`_)** (suitable for Microsoft Windows)
 
   ```bash
   openssl pkcs12 -export -in cert.pem -out cert.p12 -name "My Certificate"
@@ -135,36 +93,34 @@
   openssl pkcs12 -export -in cert.pem -out cert.p12 -name "My Certificate bundle" -certfile ca.pem
   ```
 
-* **DER (_`PKCS#1`_) to PEM (_`PKCS#1`_) format**
+* **DER to PEM**
 
   ```bash
   openssl x509 -inform der -in cert.der -out cert.pem
   ```
 
-* **PEM (_`PKCS#1`_) to DER (_`PKCS#1`_) format**
+* **PEM to DER**
 
   ```bash
   openssl x509 -in cert.pem -outform der -out cert.der
   ```
 
-* **PEM (_`PKCS#1`_) to PK8 (_`PKCS#8`_) format**
+* **PKCS#1 key to encrypted PKCS#8**
 
-  1. Re-hash the existing CA bundle _`cert.pem`_ to create a new key file _`cert.key`_
-
-     ```bash
-     openssl pkcs8 -nocrypt -topk8 -v2 aes-256-cbc -in cert.pem -out cert.key
-     ```
-
-  2. Recombine the existing certificate _`cert.crt`_ with the new key _`cert.key`_ to create a new _`pk8`_ bundle
-
-     ```bash
-     cat cert.key cert.crt > cert.pk8
-     ```
-
-* **PFX/P12 (_`PKCS#12`_) to PEM (_`PKCS#1`_)**
+  `openssl pkcs8` reads a key, not a certificate bundle. Do not pass `-nocrypt` together with `-v2`. `-nocrypt` wins, and the output key is not encrypted. The wrap leaves the certificate signature as it is.
 
   ```bash
-  openssl pkcs12 -in cert.p12 -nocerts -nodes -out cert.pem
+  openssl pkcs8 -topk8 -v2 aes-256-cbc -in cert.key -out cert.pk8.key
+
+  cat cert.pk8.key cert.crt > cert.pk8
+  ```
+
+* **PFX/P12 (_`PKCS#12`_) to a PKCS#8 key**
+
+  OpenSSL 3 writes this key as PKCS#8. `-noenc` is the current spelling of `-nodes`.
+
+  ```bash
+  openssl pkcs12 -in cert.p12 -nocerts -noenc -out cert.pem
   ```
 
 ## Atlas CA (Let's Encrypt and Google Trust Services)
