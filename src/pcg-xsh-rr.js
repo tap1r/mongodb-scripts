@@ -100,7 +100,7 @@ var pcg32 = (function() {
    // leaves random() on its own code.
    // A variable r % bound is the slow part of boundedrand. The literal form
    // of that remainder is the fast part. The wrapper keeps two compiled bodies.
-   const STEP =
+   const STATE =
       'const ohi=hi;' +
       'const olo=lo;' +
       'const a0=olo&0xffff;' +
@@ -126,18 +126,31 @@ var pcg32 = (function() {
       'const sum=plo+ilo;' +
       'lo=sum|0;' +
       'const carry=((lo^-2147483648)<(plo^-2147483648))|0;' +
-      'hi=(phi+cross+ihi+carry)|0;' +
+      'hi=(phi+cross+ihi+carry)|0;';
+
+   const OUTPUT =
       'const xorLo=((olo>>>18)|((ohi&0x3ffff)<<14))^olo;' +
       'const xorHi=(ohi>>>18)^ohi;' +
       'const xorshifted=(xorLo>>>27)|(xorHi<<5);' +
       'const rot=ohi>>>27;' +
       'const r=((xorshifted>>>rot)|(xorshifted<<((-rot)&31)))>>>0;';
 
+   const STEP = STATE + OUTPUT;
+
    const buildRandom = new Function('box',
       '"use strict";return function random(){' +
          'let hi=box.hi, lo=box.lo, ihi=box.ihi, ilo=box.ilo;' +
          STEP +
          'box.hi=hi; box.lo=lo; return r;' +
+      '};'
+   );
+
+   // The reseed discards this step's output, so the xorshift is left out.
+   const buildStep = new Function('box',
+      '"use strict";return function step(){' +
+         'let hi=box.hi, lo=box.lo, ihi=box.ihi, ilo=box.ilo;' +
+         STATE +
+         'box.hi=hi; box.lo=lo;' +
       '};'
    );
 
@@ -187,6 +200,7 @@ var pcg32 = (function() {
          'ilo': lo32(incWord) | 0
       };
       const random = buildRandom(box);
+      const step = buildStep(box);
       const boundedrand = buildBound(box, checkBound, compileBound);
 
       function advance(delta) {
@@ -210,7 +224,9 @@ var pcg32 = (function() {
          box.lo = lo32(s) | 0;
       }
 
-      // A uint32 seed and sequence stay on numbers. Any other argument goes through the bigint path.
+      // A uint32 seed and sequence stay on numbers. The step from state 0
+      // stores the increment, so the seed is added to that word and one
+      // step finishes the reseed. Any other argument uses the bigint mix.
       function slowSrandom(seed, seq) {
          const initstate = word64(seed, 'seed');
          const initseq = word64(seq, 'sequence');
@@ -227,22 +243,19 @@ var pcg32 = (function() {
          random();
       }
 
-      const srandom = new Function('box', 'random', 'slow',
+      const srandom = new Function('box', 'step', 'slow',
          '"use strict";return function srandom(seed,seq){' +
-            'if(typeof seed==="number"&&typeof seq==="number"&&(seed>>>0)===seed&&(seq>>>0)===seq){' +
-               'box.hi=0;box.lo=0;' +
-               'box.ihi=seq>>>31;' +
-               'box.ilo=(((seq*2)>>>0)|1)|0;' +
-               'random();' +
-               'const lo=(box.lo>>>0)+seed;' +
-               'box.lo=lo|0;' +
-               'box.hi=(box.hi+(lo>=4294967296?1:0))|0;' +
-               'random();' +
-               'return;' +
-            '}' +
-            'slow(seed,seq);' +
+            'if(typeof seed!=="number"||typeof seq!=="number"||(seed>>>0)!==seed||(seq>>>0)!==seq)return slow(seed,seq);' +
+            'box.ihi=seq>>>31;' +
+            'box.ilo=(((seq*2)>>>0)|1)|0;' +
+            'box.hi=box.ihi;' +
+            'box.lo=box.ilo;' +
+            'const lo=(box.lo>>>0)+seed;' +
+            'box.lo=lo|0;' +
+            'box.hi=(box.hi+(lo>=4294967296?1:0))|0;' +
+            'step();' +
          '};'
-      )(box, random, slowSrandom);
+      )(box, step, slowSrandom);
 
       function clone() {
          return create(join(box.hi, box.lo), join(box.ihi, box.ilo));
