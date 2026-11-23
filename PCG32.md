@@ -28,24 +28,13 @@ The first `random()` on a fresh generator is `0x152ca78d`. The first `random()` 
 
 ## Reference implementation
 
-Each shift, multiply, and add on the frozen file builds a new `UINT64`. `random()` then makes a hex string and passes it to `parseInt`. The global is `pcg32`, and its methods are `random`, `srandom`, `random_r`, and `srandom_r`. The file is left as it was.
+Each shift, multiply, and add on the frozen file builds a new `UINT64`. `random()` then makes a hex string and passes it to `parseInt`. That is the slow row.
 
 A number seed there is split with `Math.floor(n / 0xffffffff)` and `n >> 32`. For 42 and 54 the high half is still zero, so the first draw matches Optimised. Optimised splits on 2^32, so a number from 2^32 through 2^53−1 lands in the right half.
 
 ## Optimised
 
-`pcg32` starts from the published initializer. The call list is in the [roadmap](ROADMAP.md). The file has no version number.
-
-- `random()` returns the next uint32.
-- `boundedrand(bound)` is the rejection loop above.
-- `advance(delta)` moves the state forward `delta` steps and leaves `inc` alone.
-- `srandom(seed, seq)` reseeds this generator.
-- `spawn(seed, seq)` returns a new generator and leaves `pcg32` where it was.
-- `restore(state, inc)` returns a new generator holding those two words.
-- `clone()` copies the current words.
-- `state` and `inc` are enumerable bigint properties. Writing an even `inc` throws, and the previous word stays.
-
-A seed, sequence, state, or delta is an integer from 0 through 2^53−1, or a bigint through 2^64−1.
+Same generator as the reference row, with the step kept on ordinary numbers so a tight loop in mongosh stays fast.
 
 mongosh makes a 64-bit integer a heap allocation, and it wraps every function in a loaded script so the function can be awaited. The hot step keeps each word as two int32 halves, so a draw does not allocate a bigint. Reading `state` or `inc` puts the high bit back with `>>> 0`. `advance` still uses bigint, because a jump is rare next to a draw.
 
