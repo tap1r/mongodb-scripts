@@ -210,7 +210,8 @@ var pcg32 = (function() {
          box.lo = lo32(s) | 0;
       }
 
-      function srandom(seed, seq) {
+      // A uint32 seed and sequence stay on numbers. Any other argument goes through the bigint path.
+      function slowSrandom(seed, seq) {
          const initstate = word64(seed, 'seed');
          const initseq = word64(seq, 'sequence');
          box.hi = 0;
@@ -225,6 +226,23 @@ var pcg32 = (function() {
          box.lo = lo32(mixed) | 0;
          random();
       }
+
+      const srandom = new Function('box', 'random', 'slow',
+         '"use strict";return function srandom(seed,seq){' +
+            'if(typeof seed==="number"&&typeof seq==="number"&&(seed>>>0)===seed&&(seq>>>0)===seq){' +
+               'box.hi=0;box.lo=0;' +
+               'box.ihi=seq>>>31;' +
+               'box.ilo=(((seq*2)>>>0)|1)|0;' +
+               'random();' +
+               'const lo=(box.lo>>>0)+seed;' +
+               'box.lo=lo|0;' +
+               'box.hi=(box.hi+(lo>=4294967296?1:0))|0;' +
+               'random();' +
+               'return;' +
+            '}' +
+            'slow(seed,seq);' +
+         '};'
+      )(box, random, slowSrandom);
 
       function clone() {
          return create(join(box.hi, box.lo), join(box.ihi, box.ilo));
