@@ -10,7 +10,7 @@ This repo has two copies of that generator. The reference implementation is froz
 
 The sequence picks the stream. The generator stores `(seq << 1) | 1`, one of 2^63 odd increments, and that stream has period 2^64. `spawn` returns the new generator and leaves the global `pcg32` on the stream it already held.
 
-`$rand` in `mdblib.js` takes no seed. When its pool runs dry it reads fresh bytes from `crypto.webcrypto.getRandomValues`, so the next run is a new series. A fuzzer option that would record a seed, pass it to `spawn`, and keep that one stream for the run is planned, and the fuzzer still draws with `$rand`.
+`$rand` in `mdblib.js` takes no seed. When its pool runs dry it reads fresh bytes from `crypto.webcrypto.getRandomValues()`, so the next run is a new series. A fuzzer option that would record a seed, pass it to `spawn`, and keep that one stream for the run is planned, and the fuzzer still draws with `$rand`.
 
 `Math.random()` is the engine's own generator. The engine seeds it, and a script has no way to read, set, or jump that state.
 
@@ -57,7 +57,7 @@ When both `srandom` arguments are numbers in the uint32 range, the reseed stays 
 
 ## Timings
 
-Each number is the average of five samples. A sample is one million calls. The reference implementation, the live calls, and `getRandomValues` were each timed in their own mongosh 2.14.3 process, with `mongosh --nodb --quiet` on one file. `Math.random()` was timed in Node v26.13.1. That Node is separate from the Node v24.22.2 embedded in mongosh 2.14.3.
+Each number is the average of five samples. A sample is one million calls. The reference implementation, the live calls, and `crypto.webcrypto.getRandomValues()` were each timed in their own mongosh 2.14.3 process, with `mongosh --nodb --quiet` on one file. `Math.random()` was timed in Node v26.13.1. That Node is separate from the Node v24.22.2 embedded in mongosh 2.14.3.
 
 | Call | One million calls |
 | --- | ---: |
@@ -67,15 +67,15 @@ Each number is the average of five samples. A sample is one million calls. The r
 | Live `srandom()` | 5.5 ms |
 | Live `boundedrand(10)` | 17.4 ms |
 | Live `boundedrand`, alternating 10 and 1000 | 17.8 ms |
-| `crypto.webcrypto.getRandomValues` | 460.1 ms |
+| `crypto.webcrypto.getRandomValues()` | 460.1 ms |
 | Node `Math.random()` | 3.3 ms |
 
 `random()` on the reference implementation seeds with `pcg32.srandom(42, 54)` and then calls `pcg32.random()`. The live `random()` and `boundedrand` rows call `pcg32.spawn(42, 54)` inside the timed function, then draw. Each draw is folded into a running uint32, `(s + draw) >>> 0`, so the result has to be produced. `boundedrand(10)` uses one compiled body. The alternating row uses both cached bodies, bounds 10 and 1000.
 
 The `srandom()` rows are one million reseeds, `srandom(i, 1)`, on one generator. The reference row calls `pcg32.srandom`. The live row creates the generator with `pcg32.spawn(0, 1)` once, inside the function that runs the loop, before the timer starts, then calls `gen.srandom(i, 1)`. The value kept from the loop is the number of calls. That row is the cost of setting the stream. A generator created at the top of the file is a different cost, because mongosh turns that binding into a global and every call pays for the lookup.
 
-`crypto.webcrypto.getRandomValues` is the runtime call underneath `$rand`. The row is one million of those calls. Each call fills a `Uint32Array` of one word, created once inside the timed function, and the word is folded in with `(s + buf[0]) >>> 0`. The loop sits in a nested function, the same shape as the live `random()` row. `$rand` in `mdblib.js` is the fuzzer's helper on top of this call: it keeps 4096 words and hands them out one at a time.
+`crypto.webcrypto.getRandomValues()` is the runtime call underneath `$rand`. The row is one million of those calls. Each call fills a `Uint32Array` of one word, created once inside the timed function, and the word is folded in with `(s + buf[0]) >>> 0`. The loop sits in a nested function, the same shape as the live `random()` row. `$rand` in `mdblib.js` is the fuzzer's helper on top of this call: it keeps 4096 words and hands them out one at a time.
 
 Node `Math.random()` is one million calls in a file run by Node v26.13.1. Each call returns a float in [0, 1), and the sum is kept. That figure is the engine's generator, timed as ordinary JavaScript.
 
-The reference implementation and the live file both take a seed. The pair you keep is what makes the series replayable. `getRandomValues` and `Math.random()` take no seed, so the next run is a new series.
+The reference implementation and the live file both take a seed. The pair you keep is what makes the series replayable. `crypto.webcrypto.getRandomValues()` and `Math.random()` take no seed, so the next run is a new series.
