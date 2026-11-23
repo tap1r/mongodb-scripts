@@ -33,7 +33,7 @@
 
 * **FIPS compliance**
 
-  Restart the _`mongod`_ and check the _`mongod.log`_ for adherence to the new FIPS parameters. The error "_`digital envelope routines:EVP_DigestInit_ex:disabled for fips`_" may be found in the _`mongod.log`_ startup messages when a non-FIPS certificate is used with FIPS mode enabled.
+  Restart the _`mongod`_ and look for _`FIPS 140-2 mode activated`_ in _`mongod.log`_. The line _`digital envelope routines:EVP_DigestInit_ex:disabled for fips`_ means the module refused a digest. A SHA-1 or MD5 signature is one cause. The certificate procedure is in [FIPS cert generation](FIPS%20cert%20generation.md).
 
 ## **Generating common use certificates**
 
