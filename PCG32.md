@@ -2,7 +2,7 @@
 
 [`src/pcg-xsh-rr.js`](src/pcg-xsh-rr.js) is an optimised JavaScript `pcg32` for mongosh. It follows Melissa O'Neill's basic-library generator, `pcg32_setseq_xsh_rr`: a 64-bit linear congruential generator, with an xorshift and a rotate that turn the state into a 32-bit result. The short C form is [`pcg_basic.h`](https://github.com/imneme/pcg-c-basic/blob/master/pcg_basic.h) and [`pcg_basic.c`](https://github.com/imneme/pcg-c-basic/blob/master/pcg_basic.c) (Apache-2.0). The family is described in [PCG: A Family of Simple Fast Space-Efficient Statistically Good Algorithms for Random Number Generation](https://www.pcg-random.org/pdf/hmc-cs-2014-0905.pdf) and at [pcg-random.org](https://www.pcg-random.org/).
 
-This page also times two other draws available from the same machine: `crypto.webcrypto.getRandomValues()`, and Node's `Math.random()`. `$rand` in [`mdblib.js`](src/mdblib.js) is the fuzzer's helper on top of `getRandomValues()`.
+This page also times two other draws available from the same machine: `crypto.webcrypto.getRandomValues()`, and Node's `Math.random()`.
 
 ## Which one to reach for
 
@@ -10,7 +10,7 @@ This page also times two other draws available from the same machine: `crypto.we
 
 **See the straightforward copy.** The reference implementation is frozen at [`legacy/mongo-shell/src/pcg-xsh-rr.js`](legacy/mongo-shell/src/pcg-xsh-rr.js). It is the same generator, written as methods on 16-bit limbs, and it is the slow row in the table. Use it to check that Optimised still returns the same stream. A loop that draws wants Optimised.
 
-**Hide the next value.** `crypto.webcrypto.getRandomValues()` fills a typed array from the operating system's generator. Earlier outputs leave the next ones unpredictable. That is the call for key material, a session token, a nonce, or an IV. It takes no seed, so the next run is a new series. `$rand` keeps a pool of 4096 of those words and returns each one as `word / 2^32`, a float in `[0, 1)`. Reach for `$rand` when a mongosh script, the fuzzer included, wants many such floats and can live with a fresh series every time. A fuzzer option that would record a `pcg32` seed instead is planned, and the fuzzer still draws with `$rand`.
+**Hide the next value.** `crypto.webcrypto.getRandomValues()` fills a typed array from the operating system's generator. Earlier outputs leave the next ones unpredictable. That is the call for key material, a session token, a nonce, or an IV. It takes no seed, so the next run is a new series.
 
 **Take the engine's own float.** `Math.random()` returns a number in `[0, 1)`. On this machine it is V8's xorshift128+, inside Node. It is the fastest row here. The engine seeds it, and a script has no way to read that state, set it, or jump it. Use it for a throwaway shuffle or a sample where the series never has to come back and the number is not a secret. V8's own note on this generator says it stays the wrong tool for hashing, signatures, and encryption.
 
@@ -78,6 +78,6 @@ The `srandom()` rows are one million reseeds, `srandom(i, 1)`, on one generator.
 
 The alternating row mixes two bounds, so it has no single histogram and that cell is empty.
 
-`crypto.webcrypto.getRandomValues()` is measured as one million calls. Each call fills a `Uint32Array` of one word, created once inside the timed function, and the word is folded in with `(s + buf[0]) >>> 0`. The loop sits in a nested function, the same shape as the Optimised `random()` row. The histogram uses the high byte of that word. This is the runtime call, one word at a time. `$rand` is the pooled helper described above, and it is not this row. The figure is one sitting. A later run is a new series.
+`crypto.webcrypto.getRandomValues()` is measured as one million calls. Each call fills a `Uint32Array` of one word, created once inside the timed function, and the word is folded in with `(s + buf[0]) >>> 0`. The loop sits in a nested function, the same shape as the Optimised `random()` row. The histogram uses the high byte of that word. The figure is one sitting. A later run is a new series.
 
 Node `Math.random()` is one million calls in a file run by Node v26.13.1. Each call returns a float in `[0, 1)`, and the sum is kept. The histogram bins `Math.floor(x * 256)`. This row is one sitting as well. A later run is a new series.
