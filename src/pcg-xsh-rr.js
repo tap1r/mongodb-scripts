@@ -4,7 +4,7 @@
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
  *
- *  Mongosh 1.10 / 2.10+. The frozen limb copy is
+ *  Mongosh 1.10 / 2.10+. The reference implementation in this repo is
  *  legacy/mongo-shell/src/pcg-xsh-rr.js.
  *
  *  pcg32 is one generator, started from the published initializer.
@@ -37,7 +37,8 @@ var pcg32 = (function() {
    const INITIAL_INC = 0xda3e39cb94b95bdbn;
    const TWO32 = 4294967296;
 
-   // A uint64 word, or null when the value is not one.
+   // A uint64 word, or null when the value is not one. A bigint may
+   // run through 2^64-1. A number stops at 2^53-1 and is split on 2^32.
    function parseWord(value) {
       if (typeof value === 'bigint')
          return (value >= 0n && value <= MASK64) ? value : null;
@@ -49,6 +50,7 @@ var pcg32 = (function() {
       return null;
    }
 
+   // The word, or a throw that names the argument.
    function word64(value, label) {
       const word = parseWord(value);
       if (word !== null)
@@ -56,7 +58,7 @@ var pcg32 = (function() {
       throw new Error('pcg32: ' + label + ' must be an integer from 0 through 2^53-1, or a bigint through 2^64-1');
    }
 
-   // The LCG modulus is 2^64, so a full period needs an odd increment.
+   // The period is 2^64 only when inc is odd.
    function oddInc(value) {
       const word = word64(value, 'inc');
       if ((word & 1n) === 0n)
@@ -64,19 +66,24 @@ var pcg32 = (function() {
       return word;
    }
 
+   // One half of a bigint word, as a number. The store uses `| 0`, so a
+   // half with the high bit set stays an int32. A uint32 store would be
+   // a heap number on every such step.
    function hi32(word) {
       return Number(word >> 32n);
    }
 
+   // The low half. Same storage rule as hi32.
    function lo32(word) {
       return Number(word & 0xffffffffn);
    }
 
+   // A bigint from the int32 halves. >>> 0 puts the high bit back.
    function join(hi, lo) {
-      // The halves are int32. >>> 0 puts the high bit back.
       return (BigInt(hi >>> 0) << 32n) | BigInt(lo >>> 0);
    }
 
+   // An integer from 1 through 2^32-1. A bigint in range becomes that number.
    function checkBound(bound) {
       let b;
       if (typeof bound === 'bigint') {
@@ -90,16 +97,12 @@ var pcg32 = (function() {
       return b;
    }
 
-   // Multiplier 0x5851f42d4c957f2d, one 16-bit column at a time.
-   // | 0 keeps each column in int32. The halves are stored the same way,
-   // and >>> 0 puts the high bit back on the way out. Carry is the
-   // unsigned compare of the wrapped low half with the product.
-   // Built with new Function, one function per call. This shell rewrites
-   // every function it loads, and these two calls are what a tight loop pays for.
-   // Each call keeps the halves on the generator's box, so a hot boundedrand()
-   // leaves random() on its own code.
-   // A variable r % bound is the slow part of boundedrand. The literal form
-   // of that remainder is the fast part. The wrapper keeps two compiled bodies.
+   // One LCG step. The saved state stays in ohi/olo and the new state
+   // lands in hi/lo. Sixteen-bit columns, because a 32-bit chunk times
+   // a 16-bit limb does not fit in 32 bits and >>> drops a carry past
+   // 2^32. `| 0` keeps each product an int32 multiply. Carry is the
+   // unsigned compare of the wrapped low half with the product, by
+   // flipping the sign bit. random() and boundedrand() use this string.
    const STATE =
       'const ohi=hi;' +
       'const olo=lo;' +
@@ -128,8 +131,9 @@ var pcg32 = (function() {
       'const carry=((lo^-2147483648)<(plo^-2147483648))|0;' +
       'hi=(phi+cross+ihi+carry)|0;';
 
-   // Reseed only. The high half at this step is 0, 1, or 2, so the high
-   // columns of STATE are the one product. random() keeps STATE.
+   // The reseed's second step. Its high half is 0, 1, or 2, so the
+   // high-half columns of STATE collapse to hi * 0x4c957f2d. This string
+   // is for that step only.
    const SEED =
       'const olo=lo;' +
       'const a0=olo&0xffff;' +
@@ -151,6 +155,8 @@ var pcg32 = (function() {
       'const carry=((lo^-2147483648)<(plo^-2147483648))|0;' +
       'hi=(phi+cross+ihi+carry)|0;';
 
+   // XSH-RR of the saved state: ((old >> 18) ^ old) >> 27, rotated right
+   // by old >> 59. The final >>> 0 is the uint32 result.
    const OUTPUT =
       'const xorLo=((olo>>>18)|((ohi&0x3ffff)<<14))^olo;' +
       'const xorHi=(ohi>>>18)^ohi;' +
@@ -160,6 +166,9 @@ var pcg32 = (function() {
 
    const STEP = STATE + OUTPUT;
 
+   // One random() per generator. new Function compiles after mongosh has
+   // rewritten the file, so a tight loop does not pay that wrapper.
+   // This call stays separate from boundedrand(), so each keeps its own shape.
    const buildRandom = new Function('box',
       '"use strict";return function random(){' +
          'let hi=box.hi, lo=box.lo, ihi=box.ihi, ilo=box.ilo;' +
@@ -168,7 +177,8 @@ var pcg32 = (function() {
       '};'
    );
 
-   // The reseed discards this step's output, so the xorshift is left out.
+   // Multiply-add only. The reseed throws this step's output away, so
+   // OUTPUT stays out. Its own function keeps srandom a small call.
    const buildStep = new Function('box',
       '"use strict";return function step(){' +
          'let hi=box.hi, lo=box.lo, ihi=box.ihi, ilo=box.ilo;' +
@@ -177,7 +187,10 @@ var pcg32 = (function() {
       '};'
    );
 
-   // The bound is spliced in as a decimal after checkBound has accepted it.
+   // The bound is a decimal in the body. checkBound has accepted it.
+   // A power of two masks with bound - 1 and keeps the first sample.
+   // Any other bound uses a literal remainder, and a sample below the
+   // threshold is drawn again.
    function compileBound(box, bound, threshold) {
       const b = bound >>> 0;
       const t = threshold >>> 0;
@@ -194,6 +207,10 @@ var pcg32 = (function() {
       )(box);
    }
 
+   // The last two bounds, most recent first. srandom does not clear them.
+   // An empty slot is f0 === null, and s0 starts at 0, so a bound of -1
+   // must not call an empty slot. The lookup runs again after checkBound,
+   // because a bigint bound becomes the number a slot may already hold.
    const buildBound = new Function('box', 'checkBound', 'compileBound',
       '"use strict";' +
       'let s0=0,f0=null,s1=0,f1=null;' +
@@ -213,6 +230,8 @@ var pcg32 = (function() {
       '};'
    );
 
+   // One box of four int32 halves. random, the reseed step, and
+   // boundedrand close over that box.
    function create(state, inc) {
       const stateWord = word64(state, 'state');
       const incWord = oddInc(inc);
@@ -226,6 +245,8 @@ var pcg32 = (function() {
       const step = buildStep(box);
       const boundedrand = buildBound(box, checkBound, compileBound);
 
+      // Jump the state by delta steps. inc stays. The jump is bigint,
+      // which a draw does not use.
       function advance(delta) {
          let d = word64(delta, 'delta');
          let curMult = MULTIPLIER;
@@ -247,10 +268,8 @@ var pcg32 = (function() {
          box.lo = lo32(s) | 0;
       }
 
-      // A uint32 seed and sequence stay on numbers. The step from state 0
-      // stores the increment, so the seed is added to that word and one
-      // step finishes the reseed. That step's high half is 0, 1, or 2.
-      // Any other argument uses the bigint mix.
+      // Bigint arguments, and numbers above 2^32-1. Two draws discard
+      // the two seed outputs. A uint32 pair uses the fast path below.
       function slowSrandom(seed, seq) {
          const initstate = word64(seed, 'seed');
          const initseq = word64(seq, 'sequence');
@@ -267,6 +286,11 @@ var pcg32 = (function() {
          random();
       }
 
+      // Both arguments are uint32 numbers, and -0 counts as 0. The
+      // increment is (seq * 2) >>> 0 | 1, because a shift of the whole
+      // word would drop a high bit. The first step from state 0 is that
+      // increment, so the seed is added to it and one step() finishes
+      // the reseed. Anything else goes to slowSrandom.
       const srandom = new Function('box', 'step', 'slow',
          '"use strict";return function srandom(seed,seq){' +
             'if(typeof seed!=="number"||typeof seq!=="number"||(seed>>>0)!==seed||(seq>>>0)!==seq)return slow(seed,seq);' +
@@ -281,10 +305,13 @@ var pcg32 = (function() {
          '};'
       )(box, step, slowSrandom);
 
+      // A new generator with these words.
       function clone() {
          return create(join(box.hi, box.lo), join(box.ihi, box.ilo));
       }
 
+      // state and inc are the enumerable bigint view of the halves.
+      // Writing an even inc throws, and the previous word stays.
       const gen = {};
       Object.defineProperties(gen, {
          'random': { 'value': random },
@@ -314,10 +341,12 @@ var pcg32 = (function() {
       return gen;
    }
 
+   // A new generator holding these raw words. Both are required.
    function restore(state, inc) {
       return create(state, inc);
    }
 
+   // A new seeded generator. The global pcg32 keeps its stream.
    function spawn(initstate, initseq) {
       const gen = create(0n, 1n);
       gen.srandom(initstate, initseq);
