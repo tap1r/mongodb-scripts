@@ -28,6 +28,7 @@ var pcg32 = (function() {
    'use strict';
 
    // PCG-XSH-RR: 64-bit LCG, 32-bit xorshift-high / rotate output.
+   // A draw keeps the words as uint32 halves. state and inc stay bigints.
    const MULTIPLIER = 0x5851f42d4c957f2dn;
    const MASK64 = 0xffffffffffffffffn;
    const MASK32 = 0xffffffffn;
@@ -63,44 +64,146 @@ var pcg32 = (function() {
       return word;
    }
 
+   function hi32(word) {
+      return Number(word >> 32n);
+   }
+
+   function lo32(word) {
+      return Number(word & 0xffffffffn);
+   }
+
+   function join(hi, lo) {
+      return (BigInt(hi) << 32n) | BigInt(lo);
+   }
+
+   function checkBound(bound) {
+      let b;
+      if (typeof bound === 'bigint') {
+         if (bound >= 1n && bound <= MASK32)
+            b = Number(bound);
+      } else if (typeof bound === 'number' && Number.isInteger(bound) && bound >= 1 && bound <= 0xffffffff) {
+         b = bound;
+      }
+      if (b === undefined)
+         throw new Error('pcg32: bound must be an integer from 1 through 2^32-1');
+      return b;
+   }
+
    function create(state, inc) {
-      let s = word64(state, 'state');
-      let i = oddInc(inc);
+      const stateWord = word64(state, 'state');
+      const incWord = oddInc(inc);
+      let hi = hi32(stateWord);
+      let lo = lo32(stateWord);
+      let ihi = hi32(incWord);
+      let ilo = lo32(incWord);
 
       function random() {
-         const old = s;
-         s = (old * MULTIPLIER + i) & MASK64;
-         // JS shifts are 32-bit, so the xorshift result is masked first.
-         const xorshifted = Number((((old >> 18n) ^ old) >> 27n) & MASK32);
-         const rot = Number(old >> 59n);
+         const ohi = hi;
+         const olo = lo;
+         // Multiplier 0x5851f42d4c957f2d, one 16-bit column at a time.
+         // A >>> 16 on a sum past 2^32 drops a carry, and the next high
+         // word is then one short. Each column sum here stays under 2^32.
+         // The trailing >>> 0 undoes the signed << 16.
+         const a0 = olo & 0xffff;
+         const a1 = olo >>> 16;
+         const c0 = a0 * 0x7f2d;
+         const c1 = a0 * 0x4c95;
+         const c2 = a1 * 0x7f2d;
+         const c3 = a1 * 0x4c95;
+         const mid = (c0 >>> 16) + (c1 & 0xffff) + (c2 & 0xffff);
+         const plo = ((c0 & 0xffff) | ((mid & 0xffff) << 16)) >>> 0;
+         const phi = (c3 + (c1 >>> 16) + (c2 >>> 16) + (mid >>> 16)) >>> 0;
+         const d0 = a0 * 0xf42d;
+         const d1 = a0 * 0x5851;
+         const d2 = a1 * 0xf42d;
+         const dmid = (d0 >>> 16) + (d1 & 0xffff) + (d2 & 0xffff);
+         const crossA = ((d0 & 0xffff) | ((dmid & 0xffff) << 16)) >>> 0;
+         const h0 = ohi & 0xffff;
+         const h1 = ohi >>> 16;
+         const e0 = h0 * 0x7f2d;
+         const e1 = h0 * 0x4c95;
+         const e2 = h1 * 0x7f2d;
+         const emid = (e0 >>> 16) + (e1 & 0xffff) + (e2 & 0xffff);
+         const crossB = ((e0 & 0xffff) | ((emid & 0xffff) << 16)) >>> 0;
+         const cross = crossA + crossB;
+         const crossLo = cross >= TWO32 ? cross - TWO32 : cross;
+         const sumLo = plo + ilo;
+         const loCarry = sumLo >= TWO32 ? 1 : 0;
+         lo = loCarry ? sumLo - TWO32 : sumLo;
+         hi = (phi + crossLo + ihi + loCarry) >>> 0;
+         const shiftedLo = ((olo >>> 18) | ((ohi & 0x3ffff) << 14)) >>> 0;
+         const xorLo = (shiftedLo ^ olo) >>> 0;
+         const xorHi = ((ohi >>> 18) ^ ohi) >>> 0;
+         const xorshifted = ((xorLo >>> 27) | (xorHi << 5)) >>> 0;
+         const rot = ohi >>> 27;
          return ((xorshifted >>> rot) | (xorshifted << ((-rot) & 31))) >>> 0;
       }
 
-      function boundedrand(bound) {
-         let b;
-         if (typeof bound === 'bigint') {
-            if (bound >= 1n && bound <= MASK32)
-               b = Number(bound);
-         } else if (typeof bound === 'number' && Number.isInteger(bound) && bound >= 1 && bound <= 0xffffffff) {
-            b = bound;
-         }
-         if (b === undefined)
-            throw new Error('pcg32: bound must be an integer from 1 through 2^32-1');
-         // (-bound) mod 2^32, then mod bound. Samples below that threshold are rejected.
-         const threshold = ((-b) >>> 0) % b;
+      // A rejected sample is rare for small bounds, so it can pay for a call.
+      function reject(b, threshold) {
          for (;;) {
-            const r = random();
-            if (r >= threshold)
-               return r % b;
+            const n = random();
+            if (n >= threshold)
+               return n % b;
          }
+      }
+
+      function boundedrand(bound) {
+         // A uint32 number skips checkBound. The >>> test throws on a bigint,
+         // so the typeof test has to come first.
+         if (typeof bound !== 'number' || (bound >>> 0) !== bound || bound === 0)
+            bound = checkBound(bound);
+         // (-bound) mod 2^32, then mod bound. Samples below that threshold are rejected.
+         // This is the same multiply as random(). A call costs more than the
+         // copy in mongosh. A rejected sample uses random().
+         const threshold = ((-bound) >>> 0) % bound;
+         const ohi = hi;
+         const olo = lo;
+         const a0 = olo & 0xffff;
+         const a1 = olo >>> 16;
+         const c0 = a0 * 0x7f2d;
+         const c1 = a0 * 0x4c95;
+         const c2 = a1 * 0x7f2d;
+         const c3 = a1 * 0x4c95;
+         const mid = (c0 >>> 16) + (c1 & 0xffff) + (c2 & 0xffff);
+         const plo = ((c0 & 0xffff) | ((mid & 0xffff) << 16)) >>> 0;
+         const phi = (c3 + (c1 >>> 16) + (c2 >>> 16) + (mid >>> 16)) >>> 0;
+         const d0 = a0 * 0xf42d;
+         const d1 = a0 * 0x5851;
+         const d2 = a1 * 0xf42d;
+         const dmid = (d0 >>> 16) + (d1 & 0xffff) + (d2 & 0xffff);
+         const crossA = ((d0 & 0xffff) | ((dmid & 0xffff) << 16)) >>> 0;
+         const h0 = ohi & 0xffff;
+         const h1 = ohi >>> 16;
+         const e0 = h0 * 0x7f2d;
+         const e1 = h0 * 0x4c95;
+         const e2 = h1 * 0x7f2d;
+         const emid = (e0 >>> 16) + (e1 & 0xffff) + (e2 & 0xffff);
+         const crossB = ((e0 & 0xffff) | ((emid & 0xffff) << 16)) >>> 0;
+         const cross = crossA + crossB;
+         const crossLo = cross >= TWO32 ? cross - TWO32 : cross;
+         const sumLo = plo + ilo;
+         const loCarry = sumLo >= TWO32 ? 1 : 0;
+         lo = loCarry ? sumLo - TWO32 : sumLo;
+         hi = (phi + crossLo + ihi + loCarry) >>> 0;
+         const shiftedLo = ((olo >>> 18) | ((ohi & 0x3ffff) << 14)) >>> 0;
+         const xorLo = (shiftedLo ^ olo) >>> 0;
+         const xorHi = ((ohi >>> 18) ^ ohi) >>> 0;
+         const xorshifted = ((xorLo >>> 27) | (xorHi << 5)) >>> 0;
+         const rot = ohi >>> 27;
+         const r = ((xorshifted >>> rot) | (xorshifted << ((-rot) & 31))) >>> 0;
+         if (r >= threshold)
+            return r % bound;
+         return reject(bound, threshold);
       }
 
       function advance(delta) {
          let d = word64(delta, 'delta');
          let curMult = MULTIPLIER;
-         let curPlus = i;
+         let curPlus = join(ihi, ilo);
          let accMult = 1n;
          let accPlus = 0n;
+         let s = join(hi, lo);
          while (d > 0n) {
             if ((d & 1n) === 1n) {
                accMult = (accMult * curMult) & MASK64;
@@ -111,21 +214,28 @@ var pcg32 = (function() {
             d >>= 1n;
          }
          s = (accMult * s + accPlus) & MASK64;
+         hi = hi32(s);
+         lo = lo32(s);
       }
 
       function srandom(seed, seq) {
          const initstate = word64(seed, 'seed');
          const initseq = word64(seq, 'sequence');
-         s = 0n;
+         hi = 0;
+         lo = 0;
          // (seq << 1) | 1 is odd, including after the 64-bit mask.
-         i = ((initseq << 1n) | 1n) & MASK64;
+         const incWord = ((initseq << 1n) | 1n) & MASK64;
+         ihi = hi32(incWord);
+         ilo = lo32(incWord);
          random();
-         s = (s + initstate) & MASK64;
+         const mixed = (join(hi, lo) + initstate) & MASK64;
+         hi = hi32(mixed);
+         lo = lo32(mixed);
          random();
       }
 
       function clone() {
-         return create(s, i);
+         return create(join(hi, lo), join(ihi, ilo));
       }
 
       const gen = {};
@@ -137,13 +247,21 @@ var pcg32 = (function() {
          'clone': { 'value': clone },
          'state': {
             'enumerable': true,
-            'get': function() { return s; },
-            'set': function(value) { s = word64(value, 'state'); }
+            'get': function() { return join(hi, lo); },
+            'set': function(value) {
+               const word = word64(value, 'state');
+               hi = hi32(word);
+               lo = lo32(word);
+            }
          },
          'inc': {
             'enumerable': true,
-            'get': function() { return i; },
-            'set': function(value) { i = oddInc(value); }
+            'get': function() { return join(ihi, ilo); },
+            'set': function(value) {
+               const word = oddInc(value);
+               ihi = hi32(word);
+               ilo = lo32(word);
+            }
          }
       });
       return gen;
