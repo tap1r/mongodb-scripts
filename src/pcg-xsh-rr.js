@@ -28,7 +28,7 @@ var pcg32 = (function() {
    'use strict';
 
    // PCG-XSH-RR: 64-bit LCG, 32-bit xorshift-high / rotate output.
-   // A draw keeps the words as uint32 halves. state and inc stay bigints.
+   // A draw keeps the words as int32 halves. state and inc stay bigints.
    const MULTIPLIER = 0x5851f42d4c957f2dn;
    const MASK64 = 0xffffffffffffffffn;
    const MASK32 = 0xffffffffn;
@@ -73,7 +73,8 @@ var pcg32 = (function() {
    }
 
    function join(hi, lo) {
-      return (BigInt(hi) << 32n) | BigInt(lo);
+      // The halves are int32. >>> 0 puts the high bit back.
+      return (BigInt(hi >>> 0) << 32n) | BigInt(lo >>> 0);
    }
 
    function checkBound(bound) {
@@ -92,46 +93,45 @@ var pcg32 = (function() {
    function create(state, inc) {
       const stateWord = word64(state, 'state');
       const incWord = oddInc(inc);
-      let hi = hi32(stateWord);
-      let lo = lo32(stateWord);
-      let ihi = hi32(incWord);
-      let ilo = lo32(incWord);
+      let hi = hi32(stateWord) | 0;
+      let lo = lo32(stateWord) | 0;
+      let ihi = hi32(incWord) | 0;
+      let ilo = lo32(incWord) | 0;
 
       function random() {
          const ohi = hi;
          const olo = lo;
          // Multiplier 0x5851f42d4c957f2d, one 16-bit column at a time.
-         // A >>> 16 on a sum past 2^32 drops a carry, and the next high
-         // word is then one short. Each column sum here stays under 2^32.
-         // The >>> 0 after << 16 undoes that signed shift. sumLo >>> 0
-         // is the new low half, and cross >>> 0 drops the bit at 2^64.
+         // | 0 keeps each column in int32. The halves are stored the same
+         // way, and >>> 0 puts the high bit back on the way out. Carry is
+         // the unsigned compare of the wrapped low half with the product.
          const a0 = olo & 0xffff;
          const a1 = olo >>> 16;
-         const c0 = a0 * 0x7f2d;
-         const c1 = a0 * 0x4c95;
-         const c2 = a1 * 0x7f2d;
+         const c0 = (a0 * 0x7f2d) | 0;
+         const c1 = (a0 * 0x4c95) | 0;
+         const c2 = (a1 * 0x7f2d) | 0;
          const mid = (c0 >>> 16) + (c1 & 0xffff) + (c2 & 0xffff);
-         const plo = ((c0 & 0xffff) | ((mid & 0xffff) << 16)) >>> 0;
-         const phi = (a1 * 0x4c95 + (c1 >>> 16) + (c2 >>> 16) + (mid >>> 16)) >>> 0;
-         const d0 = a0 * 0xf42d;
-         const d1 = a0 * 0x5851;
-         const d2 = a1 * 0xf42d;
+         const plo = (c0 & 0xffff) | ((mid & 0xffff) << 16);
+         const phi = ((a1 * 0x4c95) + (c1 >>> 16) + (c2 >>> 16) + (mid >>> 16)) | 0;
+         const d0 = (a0 * 0xf42d) | 0;
+         const d1 = (a0 * 0x5851) | 0;
+         const d2 = (a1 * 0xf42d) | 0;
          const dmid = (d0 >>> 16) + (d1 & 0xffff) + (d2 & 0xffff);
-         let cross = ((d0 & 0xffff) | ((dmid & 0xffff) << 16)) >>> 0;
+         let cross = (d0 & 0xffff) | ((dmid & 0xffff) << 16);
          const h0 = ohi & 0xffff;
          const h1 = ohi >>> 16;
-         const e0 = h0 * 0x7f2d;
-         const e1 = h0 * 0x4c95;
-         const e2 = h1 * 0x7f2d;
+         const e0 = (h0 * 0x7f2d) | 0;
+         const e1 = (h0 * 0x4c95) | 0;
+         const e2 = (h1 * 0x7f2d) | 0;
          const emid = (e0 >>> 16) + (e1 & 0xffff) + (e2 & 0xffff);
-         cross += ((e0 & 0xffff) | ((emid & 0xffff) << 16)) >>> 0;
-         const sumLo = plo + ilo;
-         lo = sumLo >>> 0;
-         hi = (phi + (cross >>> 0) + ihi + (sumLo >= 4294967296 ? 1 : 0)) >>> 0;
-         const shiftedLo = ((olo >>> 18) | ((ohi & 0x3ffff) << 14)) >>> 0;
-         const xorLo = (shiftedLo ^ olo) >>> 0;
-         const xorHi = ((ohi >>> 18) ^ ohi) >>> 0;
-         const xorshifted = ((xorLo >>> 27) | (xorHi << 5)) >>> 0;
+         cross = (cross + ((e0 & 0xffff) | ((emid & 0xffff) << 16))) | 0;
+         const sum = plo + ilo;
+         lo = sum | 0;
+         const carry = ((lo ^ -2147483648) < (plo ^ -2147483648)) | 0;
+         hi = (phi + cross + ihi + carry) | 0;
+         const xorLo = ((olo >>> 18) | ((ohi & 0x3ffff) << 14)) ^ olo;
+         const xorHi = (ohi >>> 18) ^ ohi;
+         const xorshifted = (xorLo >>> 27) | (xorHi << 5);
          const rot = ohi >>> 27;
          return ((xorshifted >>> rot) | (xorshifted << ((-rot) & 31))) >>> 0;
       }
@@ -145,44 +145,53 @@ var pcg32 = (function() {
          }
       }
 
+      // -1 is not a valid bound, so the first call always misses.
+      let cachedBound = -1;
+      let cachedThresh = 0;
       function boundedrand(bound) {
-         // A uint32 number skips checkBound. The >>> test throws on a bigint,
-         // so the typeof test has to come first.
-         if (typeof bound !== 'number' || (bound >>> 0) !== bound || bound === 0)
-            bound = checkBound(bound);
-         // (-bound) mod 2^32, then mod bound. Samples below that threshold are rejected.
+         // A repeated bound skips the range test and the threshold division.
+         // The >>> test throws on a bigint, so the typeof test has to come first.
          // This is the same multiply as random(). A call costs more than the
          // copy in mongosh. A rejected sample uses random().
-         const threshold = ((-bound) >>> 0) % bound;
+         let threshold;
+         if (bound === cachedBound) {
+            threshold = cachedThresh;
+         } else {
+            if (typeof bound !== 'number' || (bound >>> 0) !== bound || bound === 0)
+               bound = checkBound(bound);
+            threshold = ((-bound) >>> 0) % bound;
+            cachedBound = bound;
+            cachedThresh = threshold;
+         }
          const ohi = hi;
          const olo = lo;
          const a0 = olo & 0xffff;
          const a1 = olo >>> 16;
-         const c0 = a0 * 0x7f2d;
-         const c1 = a0 * 0x4c95;
-         const c2 = a1 * 0x7f2d;
+         const c0 = (a0 * 0x7f2d) | 0;
+         const c1 = (a0 * 0x4c95) | 0;
+         const c2 = (a1 * 0x7f2d) | 0;
          const mid = (c0 >>> 16) + (c1 & 0xffff) + (c2 & 0xffff);
-         const plo = ((c0 & 0xffff) | ((mid & 0xffff) << 16)) >>> 0;
-         const phi = (a1 * 0x4c95 + (c1 >>> 16) + (c2 >>> 16) + (mid >>> 16)) >>> 0;
-         const d0 = a0 * 0xf42d;
-         const d1 = a0 * 0x5851;
-         const d2 = a1 * 0xf42d;
+         const plo = (c0 & 0xffff) | ((mid & 0xffff) << 16);
+         const phi = ((a1 * 0x4c95) + (c1 >>> 16) + (c2 >>> 16) + (mid >>> 16)) | 0;
+         const d0 = (a0 * 0xf42d) | 0;
+         const d1 = (a0 * 0x5851) | 0;
+         const d2 = (a1 * 0xf42d) | 0;
          const dmid = (d0 >>> 16) + (d1 & 0xffff) + (d2 & 0xffff);
-         let cross = ((d0 & 0xffff) | ((dmid & 0xffff) << 16)) >>> 0;
+         let cross = (d0 & 0xffff) | ((dmid & 0xffff) << 16);
          const h0 = ohi & 0xffff;
          const h1 = ohi >>> 16;
-         const e0 = h0 * 0x7f2d;
-         const e1 = h0 * 0x4c95;
-         const e2 = h1 * 0x7f2d;
+         const e0 = (h0 * 0x7f2d) | 0;
+         const e1 = (h0 * 0x4c95) | 0;
+         const e2 = (h1 * 0x7f2d) | 0;
          const emid = (e0 >>> 16) + (e1 & 0xffff) + (e2 & 0xffff);
-         cross += ((e0 & 0xffff) | ((emid & 0xffff) << 16)) >>> 0;
-         const sumLo = plo + ilo;
-         lo = sumLo >>> 0;
-         hi = (phi + (cross >>> 0) + ihi + (sumLo >= 4294967296 ? 1 : 0)) >>> 0;
-         const shiftedLo = ((olo >>> 18) | ((ohi & 0x3ffff) << 14)) >>> 0;
-         const xorLo = (shiftedLo ^ olo) >>> 0;
-         const xorHi = ((ohi >>> 18) ^ ohi) >>> 0;
-         const xorshifted = ((xorLo >>> 27) | (xorHi << 5)) >>> 0;
+         cross = (cross + ((e0 & 0xffff) | ((emid & 0xffff) << 16))) | 0;
+         const sum = plo + ilo;
+         lo = sum | 0;
+         const carry = ((lo ^ -2147483648) < (plo ^ -2147483648)) | 0;
+         hi = (phi + cross + ihi + carry) | 0;
+         const xorLo = ((olo >>> 18) | ((ohi & 0x3ffff) << 14)) ^ olo;
+         const xorHi = (ohi >>> 18) ^ ohi;
+         const xorshifted = (xorLo >>> 27) | (xorHi << 5);
          const rot = ohi >>> 27;
          const r = ((xorshifted >>> rot) | (xorshifted << ((-rot) & 31))) >>> 0;
          if (r >= threshold)
@@ -207,8 +216,8 @@ var pcg32 = (function() {
             d >>= 1n;
          }
          s = (accMult * s + accPlus) & MASK64;
-         hi = hi32(s);
-         lo = lo32(s);
+         hi = hi32(s) | 0;
+         lo = lo32(s) | 0;
       }
 
       function srandom(seed, seq) {
@@ -218,12 +227,12 @@ var pcg32 = (function() {
          lo = 0;
          // (seq << 1) | 1 is odd, including after the 64-bit mask.
          const incWord = ((initseq << 1n) | 1n) & MASK64;
-         ihi = hi32(incWord);
-         ilo = lo32(incWord);
+         ihi = hi32(incWord) | 0;
+         ilo = lo32(incWord) | 0;
          random();
          const mixed = (join(hi, lo) + initstate) & MASK64;
-         hi = hi32(mixed);
-         lo = lo32(mixed);
+         hi = hi32(mixed) | 0;
+         lo = lo32(mixed) | 0;
          random();
       }
 
@@ -243,8 +252,8 @@ var pcg32 = (function() {
             'get': function() { return join(hi, lo); },
             'set': function(value) {
                const word = word64(value, 'state');
-               hi = hi32(word);
-               lo = lo32(word);
+               hi = hi32(word) | 0;
+               lo = lo32(word) | 0;
             }
          },
          'inc': {
@@ -252,8 +261,8 @@ var pcg32 = (function() {
             'get': function() { return join(ihi, ilo); },
             'set': function(value) {
                const word = oddInc(value);
-               ihi = hi32(word);
-               ilo = lo32(word);
+               ihi = hi32(word) | 0;
+               ilo = lo32(word) | 0;
             }
          }
       });
