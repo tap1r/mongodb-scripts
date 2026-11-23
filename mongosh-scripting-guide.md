@@ -222,7 +222,7 @@ Measured on mongosh 2.14.3, five samples, one million evaluations of `(x * 16645
 - Top-level function, called directly: 172 ms.
 - Top-level function, passed as a parameter: 140 ms.
 
-The inline loop matches Node. The rewritten `i++` is still in that loop, and V8 drops the check when the value is a number. The cost is entering the rewritten function once per iteration. Passing the function as a parameter was the faster call in both pairs. `src/pcg-xsh-rr.js` builds `random()` and `boundedrand()` with `new Function` for this reason. The timings, including the frozen limb copy, are in [PCG32](PCG32.md).
+The inline loop matches Node. The rewritten `i++` is still in that loop, and V8 drops the check when the value is a number. The cost is entering the rewritten function once per iteration. Passing the function as a parameter was the faster call in both pairs. `src/pcg-xsh-rr.js` builds `random()` and `boundedrand()` with `new Function` for this reason. The timings, including the reference implementation, are in [PCG32](PCG32.md).
 
 ### Read the field after the call resolves
 
