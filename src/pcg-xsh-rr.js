@@ -90,122 +90,90 @@ var pcg32 = (function() {
       return b;
    }
 
+   // Multiplier 0x5851f42d4c957f2d, one 16-bit column at a time.
+   // | 0 keeps each column in int32. The halves are stored the same way,
+   // and >>> 0 puts the high bit back on the way out. Carry is the
+   // unsigned compare of the wrapped low half with the product.
+   // Built with new Function, one function per call. This shell rewrites
+   // every function it loads, and these two calls are what a tight loop pays for.
+   // Each call keeps the halves on the generator's box, so a hot boundedrand()
+   // leaves random() on its own code.
+   const STEP =
+      'const ohi=hi;' +
+      'const olo=lo;' +
+      'const a0=olo&0xffff;' +
+      'const a1=olo>>>16;' +
+      'const c0=(a0*0x7f2d)|0;' +
+      'const c1=(a0*0x4c95)|0;' +
+      'const c2=(a1*0x7f2d)|0;' +
+      'const mid=(c0>>>16)+(c1&0xffff)+(c2&0xffff);' +
+      'const plo=(c0&0xffff)|((mid&0xffff)<<16);' +
+      'const phi=((a1*0x4c95)+(c1>>>16)+(c2>>>16)+(mid>>>16))|0;' +
+      'const d0=(a0*0xf42d)|0;' +
+      'const d1=(a0*0x5851)|0;' +
+      'const d2=(a1*0xf42d)|0;' +
+      'const dmid=(d0>>>16)+(d1&0xffff)+(d2&0xffff);' +
+      'let cross=(d0&0xffff)|((dmid&0xffff)<<16);' +
+      'const h0=ohi&0xffff;' +
+      'const h1=ohi>>>16;' +
+      'const e0=(h0*0x7f2d)|0;' +
+      'const e1=(h0*0x4c95)|0;' +
+      'const e2=(h1*0x7f2d)|0;' +
+      'const emid=(e0>>>16)+(e1&0xffff)+(e2&0xffff);' +
+      'cross=(cross+((e0&0xffff)|((emid&0xffff)<<16)))|0;' +
+      'const sum=plo+ilo;' +
+      'lo=sum|0;' +
+      'const carry=((lo^-2147483648)<(plo^-2147483648))|0;' +
+      'hi=(phi+cross+ihi+carry)|0;' +
+      'const xorLo=((olo>>>18)|((ohi&0x3ffff)<<14))^olo;' +
+      'const xorHi=(ohi>>>18)^ohi;' +
+      'const xorshifted=(xorLo>>>27)|(xorHi<<5);' +
+      'const rot=ohi>>>27;' +
+      'const r=((xorshifted>>>rot)|(xorshifted<<((-rot)&31)))>>>0;';
+
+   const buildRandom = new Function('box',
+      '"use strict";return function random(){' +
+         'let hi=box.hi, lo=box.lo, ihi=box.ihi, ilo=box.ilo;' +
+         STEP +
+         'box.hi=hi; box.lo=lo; return r;' +
+      '};'
+   );
+
+   const buildBound = new Function('box', 'checkBound',
+      '"use strict";' +
+      'let cachedBound=-1, cachedThresh=0;' +
+      'return function boundedrand(bound){' +
+         'let threshold;' +
+         'if(bound===cachedBound){threshold=cachedThresh;}' +
+         'else{' +
+            'if(typeof bound!=="number"||(bound>>>0)!==bound||bound===0)bound=checkBound(bound);' +
+            'threshold=((-bound)>>>0)%bound;' +
+            'cachedBound=bound; cachedThresh=threshold;' +
+         '}' +
+         'let hi=box.hi, lo=box.lo, ihi=box.ihi, ilo=box.ilo;' +
+         'for(;;){' + STEP + 'if(r>=threshold){box.hi=hi; box.lo=lo; return r%bound;}}' +
+      '};'
+   );
+
    function create(state, inc) {
       const stateWord = word64(state, 'state');
       const incWord = oddInc(inc);
-      let hi = hi32(stateWord) | 0;
-      let lo = lo32(stateWord) | 0;
-      let ihi = hi32(incWord) | 0;
-      let ilo = lo32(incWord) | 0;
-
-      function random() {
-         const ohi = hi;
-         const olo = lo;
-         // Multiplier 0x5851f42d4c957f2d, one 16-bit column at a time.
-         // | 0 keeps each column in int32. The halves are stored the same
-         // way, and >>> 0 puts the high bit back on the way out. Carry is
-         // the unsigned compare of the wrapped low half with the product.
-         const a0 = olo & 0xffff;
-         const a1 = olo >>> 16;
-         const c0 = (a0 * 0x7f2d) | 0;
-         const c1 = (a0 * 0x4c95) | 0;
-         const c2 = (a1 * 0x7f2d) | 0;
-         const mid = (c0 >>> 16) + (c1 & 0xffff) + (c2 & 0xffff);
-         const plo = (c0 & 0xffff) | ((mid & 0xffff) << 16);
-         const phi = ((a1 * 0x4c95) + (c1 >>> 16) + (c2 >>> 16) + (mid >>> 16)) | 0;
-         const d0 = (a0 * 0xf42d) | 0;
-         const d1 = (a0 * 0x5851) | 0;
-         const d2 = (a1 * 0xf42d) | 0;
-         const dmid = (d0 >>> 16) + (d1 & 0xffff) + (d2 & 0xffff);
-         let cross = (d0 & 0xffff) | ((dmid & 0xffff) << 16);
-         const h0 = ohi & 0xffff;
-         const h1 = ohi >>> 16;
-         const e0 = (h0 * 0x7f2d) | 0;
-         const e1 = (h0 * 0x4c95) | 0;
-         const e2 = (h1 * 0x7f2d) | 0;
-         const emid = (e0 >>> 16) + (e1 & 0xffff) + (e2 & 0xffff);
-         cross = (cross + ((e0 & 0xffff) | ((emid & 0xffff) << 16))) | 0;
-         const sum = plo + ilo;
-         lo = sum | 0;
-         const carry = ((lo ^ -2147483648) < (plo ^ -2147483648)) | 0;
-         hi = (phi + cross + ihi + carry) | 0;
-         const xorLo = ((olo >>> 18) | ((ohi & 0x3ffff) << 14)) ^ olo;
-         const xorHi = (ohi >>> 18) ^ ohi;
-         const xorshifted = (xorLo >>> 27) | (xorHi << 5);
-         const rot = ohi >>> 27;
-         return ((xorshifted >>> rot) | (xorshifted << ((-rot) & 31))) >>> 0;
-      }
-
-      // A rejected sample is rare for small bounds, so it can pay for a call.
-      function reject(b, threshold) {
-         for (;;) {
-            const n = random();
-            if (n >= threshold)
-               return n % b;
-         }
-      }
-
-      // -1 is not a valid bound, so the first call always misses.
-      let cachedBound = -1;
-      let cachedThresh = 0;
-      function boundedrand(bound) {
-         // A repeated bound skips the range test and the threshold division.
-         // The >>> test throws on a bigint, so the typeof test has to come first.
-         // This is the same multiply as random(). A call costs more than the
-         // copy in mongosh. A rejected sample uses random().
-         let threshold;
-         if (bound === cachedBound) {
-            threshold = cachedThresh;
-         } else {
-            if (typeof bound !== 'number' || (bound >>> 0) !== bound || bound === 0)
-               bound = checkBound(bound);
-            threshold = ((-bound) >>> 0) % bound;
-            cachedBound = bound;
-            cachedThresh = threshold;
-         }
-         const ohi = hi;
-         const olo = lo;
-         const a0 = olo & 0xffff;
-         const a1 = olo >>> 16;
-         const c0 = (a0 * 0x7f2d) | 0;
-         const c1 = (a0 * 0x4c95) | 0;
-         const c2 = (a1 * 0x7f2d) | 0;
-         const mid = (c0 >>> 16) + (c1 & 0xffff) + (c2 & 0xffff);
-         const plo = (c0 & 0xffff) | ((mid & 0xffff) << 16);
-         const phi = ((a1 * 0x4c95) + (c1 >>> 16) + (c2 >>> 16) + (mid >>> 16)) | 0;
-         const d0 = (a0 * 0xf42d) | 0;
-         const d1 = (a0 * 0x5851) | 0;
-         const d2 = (a1 * 0xf42d) | 0;
-         const dmid = (d0 >>> 16) + (d1 & 0xffff) + (d2 & 0xffff);
-         let cross = (d0 & 0xffff) | ((dmid & 0xffff) << 16);
-         const h0 = ohi & 0xffff;
-         const h1 = ohi >>> 16;
-         const e0 = (h0 * 0x7f2d) | 0;
-         const e1 = (h0 * 0x4c95) | 0;
-         const e2 = (h1 * 0x7f2d) | 0;
-         const emid = (e0 >>> 16) + (e1 & 0xffff) + (e2 & 0xffff);
-         cross = (cross + ((e0 & 0xffff) | ((emid & 0xffff) << 16))) | 0;
-         const sum = plo + ilo;
-         lo = sum | 0;
-         const carry = ((lo ^ -2147483648) < (plo ^ -2147483648)) | 0;
-         hi = (phi + cross + ihi + carry) | 0;
-         const xorLo = ((olo >>> 18) | ((ohi & 0x3ffff) << 14)) ^ olo;
-         const xorHi = (ohi >>> 18) ^ ohi;
-         const xorshifted = (xorLo >>> 27) | (xorHi << 5);
-         const rot = ohi >>> 27;
-         const r = ((xorshifted >>> rot) | (xorshifted << ((-rot) & 31))) >>> 0;
-         if (r >= threshold)
-            return r % bound;
-         return reject(bound, threshold);
-      }
+      const box = {
+         'hi': hi32(stateWord) | 0,
+         'lo': lo32(stateWord) | 0,
+         'ihi': hi32(incWord) | 0,
+         'ilo': lo32(incWord) | 0
+      };
+      const random = buildRandom(box);
+      const boundedrand = buildBound(box, checkBound);
 
       function advance(delta) {
          let d = word64(delta, 'delta');
          let curMult = MULTIPLIER;
-         let curPlus = join(ihi, ilo);
+         let curPlus = join(box.ihi, box.ilo);
          let accMult = 1n;
          let accPlus = 0n;
-         let s = join(hi, lo);
+         let s = join(box.hi, box.lo);
          while (d > 0n) {
             if ((d & 1n) === 1n) {
                accMult = (accMult * curMult) & MASK64;
@@ -216,28 +184,28 @@ var pcg32 = (function() {
             d >>= 1n;
          }
          s = (accMult * s + accPlus) & MASK64;
-         hi = hi32(s) | 0;
-         lo = lo32(s) | 0;
+         box.hi = hi32(s) | 0;
+         box.lo = lo32(s) | 0;
       }
 
       function srandom(seed, seq) {
          const initstate = word64(seed, 'seed');
          const initseq = word64(seq, 'sequence');
-         hi = 0;
-         lo = 0;
+         box.hi = 0;
+         box.lo = 0;
          // (seq << 1) | 1 is odd, including after the 64-bit mask.
-         const incWord = ((initseq << 1n) | 1n) & MASK64;
-         ihi = hi32(incWord) | 0;
-         ilo = lo32(incWord) | 0;
+         const nextInc = ((initseq << 1n) | 1n) & MASK64;
+         box.ihi = hi32(nextInc) | 0;
+         box.ilo = lo32(nextInc) | 0;
          random();
-         const mixed = (join(hi, lo) + initstate) & MASK64;
-         hi = hi32(mixed) | 0;
-         lo = lo32(mixed) | 0;
+         const mixed = (join(box.hi, box.lo) + initstate) & MASK64;
+         box.hi = hi32(mixed) | 0;
+         box.lo = lo32(mixed) | 0;
          random();
       }
 
       function clone() {
-         return create(join(hi, lo), join(ihi, ilo));
+         return create(join(box.hi, box.lo), join(box.ihi, box.ilo));
       }
 
       const gen = {};
@@ -249,20 +217,20 @@ var pcg32 = (function() {
          'clone': { 'value': clone },
          'state': {
             'enumerable': true,
-            'get': function() { return join(hi, lo); },
+            'get': function() { return join(box.hi, box.lo); },
             'set': function(value) {
                const word = word64(value, 'state');
-               hi = hi32(word) | 0;
-               lo = lo32(word) | 0;
+               box.hi = hi32(word) | 0;
+               box.lo = lo32(word) | 0;
             }
          },
          'inc': {
             'enumerable': true,
-            'get': function() { return join(ihi, ilo); },
+            'get': function() { return join(box.ihi, box.ilo); },
             'set': function(value) {
                const word = oddInc(value);
-               ihi = hi32(word) | 0;
-               ilo = lo32(word) | 0;
+               box.ihi = hi32(word) | 0;
+               box.ilo = lo32(word) | 0;
             }
          }
       });
