@@ -103,34 +103,31 @@ var pcg32 = (function() {
          // Multiplier 0x5851f42d4c957f2d, one 16-bit column at a time.
          // A >>> 16 on a sum past 2^32 drops a carry, and the next high
          // word is then one short. Each column sum here stays under 2^32.
-         // The trailing >>> 0 undoes the signed << 16.
+         // The >>> 0 after << 16 undoes that signed shift. sumLo >>> 0
+         // is the new low half, and cross >>> 0 drops the bit at 2^64.
          const a0 = olo & 0xffff;
          const a1 = olo >>> 16;
          const c0 = a0 * 0x7f2d;
          const c1 = a0 * 0x4c95;
          const c2 = a1 * 0x7f2d;
-         const c3 = a1 * 0x4c95;
          const mid = (c0 >>> 16) + (c1 & 0xffff) + (c2 & 0xffff);
          const plo = ((c0 & 0xffff) | ((mid & 0xffff) << 16)) >>> 0;
-         const phi = (c3 + (c1 >>> 16) + (c2 >>> 16) + (mid >>> 16)) >>> 0;
+         const phi = (a1 * 0x4c95 + (c1 >>> 16) + (c2 >>> 16) + (mid >>> 16)) >>> 0;
          const d0 = a0 * 0xf42d;
          const d1 = a0 * 0x5851;
          const d2 = a1 * 0xf42d;
          const dmid = (d0 >>> 16) + (d1 & 0xffff) + (d2 & 0xffff);
-         const crossA = ((d0 & 0xffff) | ((dmid & 0xffff) << 16)) >>> 0;
+         let cross = ((d0 & 0xffff) | ((dmid & 0xffff) << 16)) >>> 0;
          const h0 = ohi & 0xffff;
          const h1 = ohi >>> 16;
          const e0 = h0 * 0x7f2d;
          const e1 = h0 * 0x4c95;
          const e2 = h1 * 0x7f2d;
          const emid = (e0 >>> 16) + (e1 & 0xffff) + (e2 & 0xffff);
-         const crossB = ((e0 & 0xffff) | ((emid & 0xffff) << 16)) >>> 0;
-         const cross = crossA + crossB;
-         const crossLo = cross >= TWO32 ? cross - TWO32 : cross;
+         cross += ((e0 & 0xffff) | ((emid & 0xffff) << 16)) >>> 0;
          const sumLo = plo + ilo;
-         const loCarry = sumLo >= TWO32 ? 1 : 0;
-         lo = loCarry ? sumLo - TWO32 : sumLo;
-         hi = (phi + crossLo + ihi + loCarry) >>> 0;
+         lo = sumLo >>> 0;
+         hi = (phi + (cross >>> 0) + ihi + (sumLo >= 4294967296 ? 1 : 0)) >>> 0;
          const shiftedLo = ((olo >>> 18) | ((ohi & 0x3ffff) << 14)) >>> 0;
          const xorLo = (shiftedLo ^ olo) >>> 0;
          const xorHi = ((ohi >>> 18) ^ ohi) >>> 0;
@@ -164,28 +161,24 @@ var pcg32 = (function() {
          const c0 = a0 * 0x7f2d;
          const c1 = a0 * 0x4c95;
          const c2 = a1 * 0x7f2d;
-         const c3 = a1 * 0x4c95;
          const mid = (c0 >>> 16) + (c1 & 0xffff) + (c2 & 0xffff);
          const plo = ((c0 & 0xffff) | ((mid & 0xffff) << 16)) >>> 0;
-         const phi = (c3 + (c1 >>> 16) + (c2 >>> 16) + (mid >>> 16)) >>> 0;
+         const phi = (a1 * 0x4c95 + (c1 >>> 16) + (c2 >>> 16) + (mid >>> 16)) >>> 0;
          const d0 = a0 * 0xf42d;
          const d1 = a0 * 0x5851;
          const d2 = a1 * 0xf42d;
          const dmid = (d0 >>> 16) + (d1 & 0xffff) + (d2 & 0xffff);
-         const crossA = ((d0 & 0xffff) | ((dmid & 0xffff) << 16)) >>> 0;
+         let cross = ((d0 & 0xffff) | ((dmid & 0xffff) << 16)) >>> 0;
          const h0 = ohi & 0xffff;
          const h1 = ohi >>> 16;
          const e0 = h0 * 0x7f2d;
          const e1 = h0 * 0x4c95;
          const e2 = h1 * 0x7f2d;
          const emid = (e0 >>> 16) + (e1 & 0xffff) + (e2 & 0xffff);
-         const crossB = ((e0 & 0xffff) | ((emid & 0xffff) << 16)) >>> 0;
-         const cross = crossA + crossB;
-         const crossLo = cross >= TWO32 ? cross - TWO32 : cross;
+         cross += ((e0 & 0xffff) | ((emid & 0xffff) << 16)) >>> 0;
          const sumLo = plo + ilo;
-         const loCarry = sumLo >= TWO32 ? 1 : 0;
-         lo = loCarry ? sumLo - TWO32 : sumLo;
-         hi = (phi + crossLo + ihi + loCarry) >>> 0;
+         lo = sumLo >>> 0;
+         hi = (phi + (cross >>> 0) + ihi + (sumLo >= 4294967296 ? 1 : 0)) >>> 0;
          const shiftedLo = ((olo >>> 18) | ((ohi & 0x3ffff) << 14)) >>> 0;
          const xorLo = (shiftedLo ^ olo) >>> 0;
          const xorHi = ((ohi >>> 18) ^ ohi) >>> 0;
