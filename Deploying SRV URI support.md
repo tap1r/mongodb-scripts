@@ -30,7 +30,7 @@ dnf install bind-utils
 apt-get install bind9-dnsutils
 ```
 
-macOS already ships `nsupdate`, or `brew install bind`.
+macOS already ships `nsupdate` and `dig` in `/usr/bin` (BIND 9.10.6 on this Mac). That is the `dig` [srvatlas.sh](src/srvatlas.sh) reads, including the 9.10.6 result where `+short` together with `+stats` drops the query time. Homebrew's `bind` formula is the nameserver. It is not needed here, and installing it puts a different `dig` ahead of `/usr/bin/dig` on `PATH`.
 
 ## Publish address records
 
