@@ -15,7 +15,7 @@ Live scripts are in [`src/`](src/). They run under **mongosh** 1.10 / 2.10+ (`mo
 
 * [Aggregation tips](Aggregation%20tips.md) — pipelines for a rolling date window, oplog churn, and schema shape.
 * [Howto: streaming sort](Howto-streaming-sort.md) — keep an ordered walk streaming, as niceDeleteMany does when it buckets `_id` values.
-* [PCG32](PCG32.md) — `pcg32` in `src/pcg-xsh-rr.js`: the reference implementation, Optimised, and the timings.
+* [PCG32](PCG32.md) — choose among `pcg32`, `crypto.webcrypto.getRandomValues()`, and `Math.random()`.
 * [Roll your own SRV records](Deploying%20SRV%20URI%20support.md) — publish TXT and SRV records for `mongodb+srv://` in a zone you control.
 
 ## Command notes

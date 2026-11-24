@@ -15,11 +15,11 @@ The rows below put that generator next to `crypto.webcrypto.getRandomValues()` a
 | `crypto.webcrypto.getRandomValues()` | 460.1 ms | 0.93 |
 | Node `Math.random()` | 3.3 ms | 0.99 |
 
-The alternating row mixes two bounds, so that cell is empty.
+The alternating row mixes two bounds, so that cell is empty. The `srandom()` rows are one million reseeds, `srandom(i, 1)`. The ratio 0.28 is the high byte of the first `random()` after each seed from `0` through `999999`, with sequence `1`. The 3.3 ms figure is Node's `Math.random()`, set beside the mongosh timings.
 
 ## Which one to reach for
 
-**Replay a run.** Use Optimised `pcg32`, the file linked above. `spawn(seed, seq)` or `srandom(seed, seq)` starts one stream, and the same pair builds that stream again, so a recorded run can be played back. `random()` is the next uint32. `boundedrand(bound)` is an unbiased integer from 0 through `bound - 1`, which is the call for a die, an array slot, or a field that should not pile up at the low end. `advance(delta)` skips forward that many steps and leaves `inc` alone. Write the seed and the sequence down with the output. `state` and `inc` determine every later result, so a key, a token, or a nonce wants a different call.
+**Replay a run.** Use Optimised `pcg32`, the file linked above. `spawn(seed, seq)` or `srandom(seed, seq)` starts one stream, and the same pair builds that stream again, so a recorded run can be played back. `random()` is the next uint32. `boundedrand(bound)` is an unbiased integer from 0 through `bound - 1`, which is the call for a die, an array slot, or a field that should not pile up at the low end. `advance(delta)` skips forward that many steps and leaves `inc`, the stream number, alone. Write the seed and the sequence down with the output. `state` and `inc` determine every later result, so a key, a token, or a nonce wants `crypto.webcrypto.getRandomValues()`.
 
 **See the straightforward copy.** The reference implementation is frozen at [`legacy/mongo-shell/src/pcg-xsh-rr.js`](legacy/mongo-shell/src/pcg-xsh-rr.js). It is the same generator, written as methods on 16-bit limbs, and it is the slow row in the table. Use it to check that Optimised still returns the same stream. A loop that draws wants Optimised.
 
@@ -35,15 +35,15 @@ The generator is two 64-bit words, `state` and `inc`. `inc` stays odd. Seeding s
 
 A draw remembers the old state, stores `old * 0x5851f42d4c957f2d + inc` modulo 2^64, and returns an xorshift-rotate of the saved state: `((old >> 18) ^ old) >> 27`, rotated right by `old >> 59`. Each stream has period 2^64. `spawn` returns the new generator and leaves the global `pcg32` on the stream it already held.
 
-`boundedrand(bound)` keeps drawing until the sample is at least `2^32 % bound`, then returns `sample % bound`. A sample that is thrown away has already moved the state. The bound runs from 1 through 2^32−1. A plain `random() % bound` would favour the low end whenever `bound` is not a power of two. The rejection loop is what avoids that.
+A plain `random() % bound` favours the low end whenever `bound` is not a power of two. `boundedrand(bound)` avoids that. It keeps drawing until the sample is at least `2^32 % bound`, then returns `sample % bound`. A sample that is thrown away has already moved the state. The bound runs from 1 through 2^32−1.
 
-The first `random()` on a fresh generator is `0x152ca78d`. The first `random()` after `srandom(42, 54)` is `0xa15c02b7`. The reference implementation and Optimised both return that second value. The published generator is reported to pass TestU01 BigCrush. BigCrush was not run on this copy.
+The first `random()` on a fresh generator is `0x152ca78d`. The first `random()` after `srandom(42, 54)` is `0xa15c02b7`. The reference implementation and Optimised both return that second value. The published generator is reported to pass TestU01 BigCrush, a long statistical test suite. BigCrush was not run on this copy.
 
 ## Reference implementation
 
 Each shift, multiply, and add on the frozen file builds a new `UINT64`. `random()` then makes a hex string and passes it to `parseInt`. That is the slow row.
 
-A number seed there is split with `Math.floor(n / 0xffffffff)` and `n >> 32`. For 42 and 54 the high half is still zero, so the first draw matches Optimised. Optimised splits on 2^32, so a number from 2^32 through 2^53−1 lands in the right half.
+A number seed there is split with `Math.floor(n / 0xffffffff)` as the high half and `n >> 32` as the low half. In JavaScript the shift count keeps only its low five bits, so `n >> 32` is the number as a 32-bit integer and a small seed stays in the low half. For 42 and 54 the high half is still zero, so the first draw matches Optimised. Optimised splits on 2^32. The two splits diverge once the seed reaches 8589934590, which is `2 * (2^32−1)`.
 
 ## Optimised
 
@@ -51,7 +51,7 @@ Same generator as the reference row, with the step kept on ordinary numbers so a
 
 mongosh makes a 64-bit integer a heap allocation, and it wraps every function in a loaded script so the function can be awaited. The hot step keeps each word as two int32 halves, so a draw does not allocate a bigint. Reading `state` or `inc` puts the high bit back with `>>> 0`. `advance` still uses bigint, because a jump is rare next to a draw.
 
-When both `srandom` arguments are numbers in the uint32 range, the reseed stays on numbers too. It stores the odd increment, adds the seed, and takes one more step. The output of that step is discarded. A bigint, or a number above 2^32−1, still runs the bigint mix and then splits the words back into halves.
+When both `srandom` arguments are numbers in the uint32 range, the reseed stays on numbers too. It is the same two updates as the seeding above: store the odd increment and step from state 0, then add the seed and step again. The first update does not build an output, and the output of the second step is discarded. A bigint, or a number above 2^32−1, still runs the bigint mix and then splits the words back into halves.
 
 `boundedrand` compiles a small function for a bound and remembers the last two. A power-of-two bound masks with `bound - 1`. Any other bound writes the remainder as a literal in that function, which is the fast form of a remainder in this shell. A third distinct bound compiles again and drops the older one.
 
