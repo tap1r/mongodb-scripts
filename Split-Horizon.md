@@ -4,7 +4,7 @@ A simple reproduction for split-horizon testing.  We simulate a port forwarding 
 
 ## Installation
 
-Add PAT rules (taken from <https://salferrarello.com/mac-pfctl-port-forwarding/>), and enable kernel IP forwarding
+Add PAT rules (taken from <https://salferrarello.com/mac-pfctl-port-forwarding/>), and enable kernel IP forwarding. `en0` is the interface the external client arrives on. On this Mac that is Wi-Fi. `tcpdump -D` lists the names. Turn the firewall off in System Settings while the rules are loaded.
 
 ```bash
 echo "
@@ -16,7 +16,6 @@ sudo sysctl -w net.inet.ip.forwarding=1
 sudo sysctl -w net.inet6.ip6.forwarding=1
 ```
 
-OSX: Disable the firewall in system preferences
 
 ## Verification
 

@@ -1,30 +1,21 @@
 # Useful aggregation pipelines
 
-## (Pre-4.2) dynamic variables: using _current time_ to fetch the latest _n_ days (difference from the _isodate_ field)
+## Latest _n_ days from an isodate field
+
+`$$NOW` is the aggregation clock, available since 4.2. This repo's mongod floor is 4.4. `offset` is the window in milliseconds. Before 4.2 the clock was `$collStats.localTime`, read through a `$lookup`.
 
 ```javascript
 (() => {
    const dbName = 'database', collName = 'collection';
-   const offset = 1 * (24 * 3600 * 1000); // 1 day (in milliseconds)
-   const options = { "allowDiskUse": true };
+   const offset = 24 * 3600 * 1000; // 1 day, in milliseconds
    const pipeline = [
-      { "$lookup": {
-         "from": "any",
-         "pipeline": [
-            { "$collStats": {} },
-            { "$replaceRoot": { "newRoot": { "localTime": "$localTime" } } }
-         ],
-         "as": "__now"
-      } },
-      { "$addFields": { "__now": { "$arrayElemAt": ["$__now", 0] } }
-      },
       { "$match": {
          "$expr": {
-            "$gte": ["$isodate", { "$subtract": ["$__now.localTime", offset] }]
-      } } },
-      { "$project": { "__now": 0 } }
+            "$gte": ["$isodate", { "$subtract": ["$$NOW", offset] }]
+         }
+      } }
    ];
-   console.log(db.getSiblingDB(dbName).getCollection(collName).aggregate(pipeline, options));
+   console.log(db.getSiblingDB(dbName).getCollection(collName).aggregate(pipeline));
 })();
 ```
 

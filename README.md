@@ -31,8 +31,9 @@ Live scripts are in [`src/`](src/). They run under **mongosh** 1.10 / 2.10+ (`mo
 ### Topology and clients
 
 * [Split-Horizon Topology testing](Split-Horizon.md) — stand up a replica set with split horizons and check the external names.
+* [gRPC](gRPC.md) — turn on the gRPC listener. The client is the legacy `mongo` shell from a Linux SSL build.
 * [BI Connector reproductions](BI%20Connector%20reproductions.md) — mongosqld 2.13.1 startup and MySQL connection strings, with and without SSL and auth.
-* [VM ballooning detection](VM%20ballooning%20driver%20detection.md) — detect the hypervisor and whether a ballooning driver is present.
+* [VM ballooning detection](VM%20ballooning%20driver%20detection.md) — on Linux, detect the hypervisor and whether a ballooning driver is present.
 * [Client handshake metadata](Client%20handshake%20metadata.md) — driver monitoring sockets, and the `NetworkInterfaceTL-*` and `MongoDB Internal Client` labels.
 
 ### Operations

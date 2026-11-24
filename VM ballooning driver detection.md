@@ -1,5 +1,7 @@
 # Hypervisor detection
 
+These commands run on Linux. `dmidecode`, `lsmod`, and `/proc` are the sources.
+
 ```bash
 sudo dmidecode -s system-product-name
 ```
