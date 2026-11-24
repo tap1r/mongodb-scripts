@@ -2655,7 +2655,7 @@
          },
          {
             "key": "rebuild",
-            "text": "Secondary index: drop and rebuild. compact() does not reclaim non-_id_ indexes; reusable bytes above 50% and the same reclaim floor."
+            "text": "Secondary index: drop and rebuild that index when reusable bytes exceed 50% and the same reclaim floor. compact() on the collection includes every ready index."
          },
          {
             "key": "wait",
