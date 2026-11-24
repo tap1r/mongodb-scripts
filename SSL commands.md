@@ -4,24 +4,38 @@
 
 * **Update OpenSSL (OSX)**
 
+  `brew upgrade openssl` tracks the Homebrew `openssl` formula, which is OpenSSL 4.
+
   ```bash
   brew update && brew upgrade openssl
   ```
 
 * **Update OpenSSL (Linux)**
 
+  The package upgrade stays on the distribution's OpenSSL. Current RHEL and Ubuntu LTS ship OpenSSL 3. Fedora 45 and the Ubuntu development release ship OpenSSL 4.
+
   ```bash
-  sudo yum upgrade openssl
+  # Fedora / RHEL
+  sudo dnf upgrade openssl
+  # Debian / Ubuntu
+  sudo apt-get upgrade openssl
   ```
 
 * **CA trust store update (Linux)**
 
+  Debian and Ubuntu:
+
   ```bash
   sudo update-ca-certificates --fresh
-  sudo rm -f /etc/ssl/certs/ca-certificates.crt
-  sudo update-ca-trust
-  sudo /usr/local/opt/openssl/bin/c_rehash
   ```
+
+  Fedora and RHEL:
+
+  ```bash
+  sudo update-ca-trust
+  ```
+
+  OpenSSL 4 has no `c_rehash` script. `openssl rehash` hashes a certificate directory.
 
 ## **Using certificates with MongoDB**
 
@@ -37,7 +51,7 @@
 
 ## **Generating common use certificates**
 
-OpenSSL 3. On macOS that is the Homebrew `openssl`, not `/usr/bin/openssl`. These keys are unencrypted (`-noenc`) so the mlaunch line above can read `server.pk8`. The encrypted form (`-aes256`), the CA rules, and `certificateKeyFilePassword` are in [FIPS cert generation](FIPS%20cert%20generation.md). `-sha256` is explicit. The private key comes first in the bundle, then the certificate.
+These commands are OpenSSL 3 and OpenSSL 4. On macOS run the Homebrew `openssl` on `PATH`. It is OpenSSL 4. `/usr/bin/openssl` is LibreSSL and rejects `-noenc`. These keys are unencrypted (`-noenc`) so the mlaunch line above can read `server.pk8`. The encrypted form (`-aes256`), the CA rules, and `certificateKeyFilePassword` are in [FIPS cert generation](FIPS%20cert%20generation.md). `-sha256` is explicit. The private key comes first in the bundle, then the certificate.
 
 * **Self-signed RSA certificate (PKCS#8, SAN, EKU)**
 
@@ -117,7 +131,7 @@ OpenSSL 3. On macOS that is the Homebrew `openssl`, not `/usr/bin/openssl`. Thes
 
 * **PFX/P12 (_`PKCS#12`_) to a PKCS#8 key**
 
-  OpenSSL 3 writes this key as PKCS#8. `-noenc` is the current spelling of `-nodes`.
+  OpenSSL 3 and OpenSSL 4 write this key as PKCS#8. `-noenc` is the current spelling. `-nodes` is still accepted.
 
   ```bash
   openssl pkcs12 -in cert.p12 -nocerts -noenc -out cert.pem
@@ -232,13 +246,19 @@ openssl x509 -inform der -in DigiCertSHA2SecureServerCA.crt -out DigiCertSHA2Sec
 
 * **_s_client_ bash script**
 
+  OpenSSL 4 has no `-ssl2` or `-ssl3`. `-cipher` selects the TLS 1.2 list. TLS 1.3 uses `-ciphersuites`.
+
   ```bash
   #!/bin/bash
-  for v in ssl2 ssl3 tls1 tls1_1 tls1_2 tls1_3; do
+  for v in tls1 tls1_1 tls1_2; do
     for c in $(openssl ciphers 'ALL:eNULL' | tr ':' ' '); do
       openssl s_client -connect host.mongodb.net:27017 \
-        -cipher $c -$v < /dev/null > /dev/null 2>&1 && echo -e "$v:\t$c"
+        -cipher "$c" -$v < /dev/null > /dev/null 2>&1 && echo -e "$v:\t$c"
     done
+  done
+  for c in $(openssl ciphers -s -tls1_3 | tr ':' ' '); do
+    openssl s_client -connect host.mongodb.net:27017 \
+      -ciphersuites "$c" -tls1_3 < /dev/null > /dev/null 2>&1 && echo -e "tls1_3:\t$c"
   done
   ```
 
