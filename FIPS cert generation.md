@@ -2,9 +2,8 @@
 
 ## NOTE
 
-These steps are designed to augment the existing TLS certificate generation steps
-(<https://www.mongodb.com/docs/manual/tutorial/configure-ssl/>)
-and the FIPS configuration guide (<https://www.mongodb.com/docs/manual/tutorial/configure-fips/>).
+These steps are designed to augment the existing [TLS certificate generation](<https://www.mongodb.com/docs/manual/tutorial/configure-ssl/>) steps
+and the [FIPS configuration guide](<https://www.mongodb.com/docs/manual/tutorial/configure-fips/>).
 
 ## OVERVIEW
 
