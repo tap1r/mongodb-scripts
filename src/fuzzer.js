@@ -1,6 +1,6 @@
 /*
  *  Name: "fuzzer.js"
- *  Version: "1.17.0"
+ *  Version: "1.17.1"
  *  Description: "pseudorandom data generator, with some fuzzing capability"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -29,7 +29,7 @@
  */
 
 (() => {
-   const __script = { "name": "fuzzer.js", "version": "1.17.0" };
+   const __script = { "name": "fuzzer.js", "version": "1.17.1" };
    if (typeof __lib === 'undefined') {
       /*
        *  Load helper library mdblib.js
@@ -894,10 +894,10 @@
       const stamp = `─ ${title} `;
       if (stamp.length >= leftSpan) {
          const cut = Math.max(0, leftSpan - 2);
-         return `[dim]${left}─ [/][yellow]${title.slice(0, cut)}[/][dim]${mid}${rightBody}${right}[/]`;
+         return `[dim]${left}─ [/][bold][yellow]${title.slice(0, cut)}[/][dim]${mid}${rightBody}${right}[/]`;
       }
       const rest = '─'.repeat(leftSpan - stamp.length);
-      return `[dim]${left}─ [/][yellow]${title}[/][dim] ${rest}${mid}${rightBody}${right}[/]`;
+      return `[dim]${left}─ [/][bold][yellow]${title}[/][dim] ${rest}${mid}${rightBody}${right}[/]`;
    }
 
    function paintRow(label, value, labelW, valueW) {
@@ -952,7 +952,7 @@
    function scriptVersion() {
       return (typeof __fuzzerScript !== 'undefined' && __fuzzerScript && __fuzzerScript.version)
          ? __fuzzerScript.version
-         : '1.17.0';
+         : '1.17.1';
    }
 
    function namespaceContract() {
@@ -1404,12 +1404,12 @@
       const rightSpan = hudValueW + 2;
       sections.forEach(([title, rows], i) => {
          const rule = i === 0
-            ? paintRule('┌', '┬', '┐', title, leftSpan, rightSpan)
+            ? paintRule('╭', '┬', '╮', title, leftSpan, rightSpan)
             : paintRule('├', '┼', '┤', title, leftSpan, rightSpan);
          console.log((i === 0 ? '\n' : '') + rule);
          rows.forEach(([label, value]) => console.log(paintRow(label, value, hudLabelW, hudValueW)));
       });
-      console.log(paintRule('└', '┴', '┘', '', leftSpan, rightSpan));
+      console.log(paintRule('╰', '┴', '╯', '', leftSpan, rightSpan));
    }
 
    function wrapPlain(text, width) {
@@ -1464,7 +1464,7 @@
       }
       const leftSpan = hudLabelW + 2;
       const rightSpan = hudValueW + 2;
-      console.log('\n' + paintRule('┌', '┬', '┐', 'built', leftSpan, rightSpan));
+      console.log('\n' + paintRule('╭', '┬', '╮', 'built', leftSpan, rightSpan));
       rows.forEach(row => {
          const failed = !!row.error;
          const plain = failed ? row.error : row.names.join(', ');
@@ -1473,7 +1473,7 @@
             console.log(paintRow(i === 0 ? row.label : '', `[${colour}]${chunk}[/]`, hudLabelW, hudValueW));
          });
       });
-      console.log(paintRule('└', '┴', '┘', '', leftSpan, rightSpan));
+      console.log(paintRule('╰', '┴', '╯', '', leftSpan, rightSpan));
    }
 
    async function main() {
@@ -3413,6 +3413,39 @@
       return formatHudTime(remain);
    }
 
+   // Decimal thousands. One decimal, and a trailing .0 is dropped. 5,000,000 is 5M.
+   function scaledCount(n) {
+      const value = Number(n);
+      if (!Number.isFinite(value)) return '0';
+      const sign = value < 0 ? '-' : '';
+      const units = ['', 'k', 'M', 'B', 'T'];
+      let v = Math.abs(value);
+      let i = 0;
+      while (i < units.length - 1 && v >= 1000) {
+         v /= 1000;
+         i += 1;
+      }
+      if (i > 0) {
+         v = +v.toFixed(1);
+         if (v >= 1000 && i < units.length - 1) {
+            v /= 1000;
+            v = +v.toFixed(1);
+            i += 1;
+         }
+      } else
+         v = Math.round(v);
+      return sign + v + units[i];
+   }
+
+   const byteScale = new AutoFactor();
+
+   function paintBytes(bytes) {
+      const shown = byteScale.format(bytes);
+      const cut = shown.lastIndexOf(' ');
+      if (cut < 0) return `[blue]${shown}[/]`;
+      return `[blue]${shown.slice(0, cut)}[/] ${shown.slice(cut + 1)}`;
+   }
+
    function progressText(inserted, bytes, batchNo, final = false) {
       const total = insertQuota;
       const frac = total > 0 ? Math.min(1, inserted / total) : 1;
@@ -3420,8 +3453,7 @@
       const batch = (!final && batchNo > 0)
          ? `, batch [blue]${batchNo}[/], ETA [blue]${progressEta(inserted, total)}[/]`
          : '';
-      const shownBytes = grouped(bytes);
-      return `[yellow]insert[/]  [blue]${inserted}[/]/[blue]${total}[/]  ${insertBar(inserted, total)}  [blue]${pct}[/]%, [blue]${shownBytes}[/] ${plural(bytes, 'byte', 'bytes')}${batch}`;
+      return `[yellow]insert[/]  [blue]${scaledCount(inserted)}[/]/[blue]${scaledCount(total)}[/]  ${insertBar(inserted, total)}  [blue]${pct}[/]%, ${paintBytes(bytes)}${batch}`;
    }
 
    function showProgress(inserted, bytes, batchNo, final = false) {
