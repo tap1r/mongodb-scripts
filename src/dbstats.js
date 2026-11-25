@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.11"
+ *  Version: "1.2.12"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.11" };
+   const __script = { "name": "dbstats.js", "version": "1.2.12" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -1684,7 +1684,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.11',
+         "version": '1.2.12',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -2126,20 +2126,22 @@
          const compact = row.compaction;
          const compactCls = actClass(compact);
          const showLogical = (kind === 'db' || kind === 'ns');
+         const unmeasured = row.unauthorized === true || row.unavailable === true;
          let cells = '';
          if (s.dataSize) {
-            cells += showLogical ? bytesTd(row.dataSize) : emptyTd('num bytes');
+            cells += showLogical ? bytesTd(unmeasured ? null : row.dataSize) : emptyTd('num bytes');
          }
          if (s.compression) {
             cells += showLogical
-               ? td(htmlCompression(row), row.compression, 'num ratio')
+               ? td(unmeasured ? 'N/A' : htmlCompression(row), unmeasured ? '' : row.compression, 'num ratio')
                : emptyTd('num ratio');
          }
-         cells += bytesTd(row.storageSize);
-         cells += freeTd(row.freeStorageSize, row.reuse);
+         cells += bytesTd(unmeasured ? null : row.storageSize);
+         cells += freeTd(unmeasured ? null : row.freeStorageSize, unmeasured ? null : row.reuse);
          if (s.objects) {
             const show = (kind !== 'index' && kind !== 'idxRollup');
-            cells += show ? td(fmtNum(row.objects), row.objects, 'num count') : emptyTd('num count');
+            const count = unmeasured ? null : row.objects;
+            cells += show ? td(fmtNum(count), count == null ? '' : count, 'num count') : emptyTd('num count');
          }
          if (s.collections) {
             if (kind === 'index' || kind === 'idxRollup' || kind === 'ns') {
@@ -2870,6 +2872,17 @@
       const compactBit = showCompaction
          ? ` [${compactionColour(compaction)}]${String(compaction).padStart(columnWidth - 2)}[/]`
          : '';
+      if (stub && mode !== 'indexRollup' && mode !== 'totalRow') {
+         /*
+          *  Unauthorized / unavailable is not a measured empty collection.
+          *  0 B and 0 objects would read as an empty WiredTiger file.
+          */
+         const na = 'N/A'.padStart(columnWidth);
+         const naRatio = 'N/A'.padStart(columnWidth + 1);
+         if (mode === 'indexRow')
+            return `${na} ${formatFree(null)} ${''.padStart(columnWidth)}${compactBit}`;
+         return `${na} ${naRatio} ${na} ${formatFree(null)} ${na}${compactBit}`;
+      }
       if (mode === 'indexRow') {
          return `${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)}${compactBit}`;
       }
