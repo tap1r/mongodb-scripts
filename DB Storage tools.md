@@ -109,11 +109,11 @@ Filesystem volumes (1 unique): 641.85 GiB used / 926.3 GiB capacity (69.3% used)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Compaction helper recommendations
-  compact   Collection or _id_ index: run compact() when reusable bytes exceed 20% of the collection (50% for _id_) and WiredTiger's reclaim floor (1 MiB on 8.0+).
-  rebuild   Secondary index: drop and rebuild that index when reusable bytes exceed 50% and the same reclaim floor. compact() on the collection includes every ready index.
-  wait      local.oplog.rs meets the compact threshold. Leave the oplog; wait for capped reuse.
-  resync    dbPath collection storage is more than 50% reusable. Initial sync / resync is the practical reclaim at that scale.
-  ————      Below those thresholds, or not a compactable object. N/A means WiredTiger free-space is unknown.
+  compact   Collection or _id_ index: 20% (50% for _id_) and the 1 MiB floor on 8.0+. compact() includes every ready index.
+  rebuild   Secondary index: drop and rebuild above 50% and the same floor.
+  wait      local.oplog.rs meets the collection threshold. Leave it; wait for capped reuse.
+  resync    dbPath collection storage is above 50% reusable. Initial sync is the reclaim.
+  ————      Below those thresholds, or not compactable. N/A means free space is unknown.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
