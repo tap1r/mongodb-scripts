@@ -71,50 +71,80 @@ Further filter, sort, catalog, topology, and profile examples live in the [dbsta
 ### Sample output
 
 ```text
-═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-Database: database                            Data size     Compression   Size on disk    Free blocks / reuse   Object count   Compaction
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+═════════════════════════════════════════════════════════════════════════════════════════
+Database: database
+   Data size   Compression   Size on disk    Free blocks / reuse   Object count    Action
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Collections: 1
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-╰> collection                                 47.13 MiB     2.02:1 zstd      52.65 MiB      29.38 MiB / 55.8%          58616      compact
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» _id_                                                                      6.5 MiB       4.89 MiB / 75.3%                     compact
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» array_1                                                                  9.23 MiB       7.48 MiB / 81.0%                     rebuild
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ╰» object.$**_1                                                            22.11 MiB      14.07 MiB / 63.6%                     rebuild
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Namespaces subtotal: 1                        47.13 MiB          2.02:1      52.65 MiB      29.38 MiB / 55.8%          58616      compact
-Indexes subtotal: 11                                                         83.89 MiB       53.5 MiB / 63.8%                     rebuild
-═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+╰> collection
+   47.13 MiB   2.02:1 zstd      52.65 MiB      29.38 MiB / 55.8%          58616   compact
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ╰» _id_
+                                  6.5 MiB       4.89 MiB / 75.3%                  compact
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ╰» array_1
+                                 9.23 MiB       7.48 MiB / 81.0%                  rebuild
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ╰» object.$**_1
+                                22.11 MiB      14.07 MiB / 63.6%                  rebuild
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Namespaces subtotal: 1
+   47.13 MiB        2.02:1      52.65 MiB      29.38 MiB / 55.8%          58616   compact
+Indexes subtotal: 11
+                                83.89 MiB       53.5 MiB / 63.8%                  rebuild
+═════════════════════════════════════════════════════════════════════════════════════════
 
-═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-dbPath totals                                 Data size     Compression   Size on disk    Free blocks / reuse   Object count   Compaction
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-All namespaces: 21                           131.42 MiB          2.22:1      89.52 MiB      30.23 MiB / 33.8%          63274        ———— 
-All indexes: 35                                                              84.32 MiB      53.61 MiB / 63.6%                     rebuild
-Total:                                                                      173.84 MiB      83.85 MiB / 48.2%          63274        ———— 
-═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-Filesystem volume: 641.85 GiB used / 926.3 GiB capacity (69.3% used)   284.45 GiB free
-Replica set: replset   Members: 3   Version: 9.0.2
-  * localhost:27017   Role: PRIMARY     Type: mongod   dbPath: /data/rs1/db
-    localhost:27018   Role: SECONDARY   Type: mongod   dbPath: /data/rs2/db
-    localhost:27019   Role: SECONDARY   Type: mongod   dbPath: /data/rs3/db
+═════════════════════════════════════════════════════════════════════════════════════════
+dbPath totals
+   Data size   Compression   Size on disk    Free blocks / reuse   Object count    Action
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+All namespaces: 21
+  131.42 MiB        2.22:1      89.52 MiB      30.23 MiB / 33.8%          63274     ———— 
+All indexes: 35
+                                84.32 MiB      53.61 MiB / 63.6%                  rebuild
+Total:
+                               173.84 MiB      83.85 MiB / 48.2%          63274     ———— 
+═════════════════════════════════════════════════════════════════════════════════════════
+Filesystem volume:
+   641.85 GiB used / 926.3 GiB capacity (69.3% used)
+   284.45 GiB free
+Replica set: replset  Members: 3  Version: 9.0.2
+ * localhost:27017
+      Role: PRIMARY
+      Type: mongod
+      dbPath: /data/rs1/db
+   localhost:27018
+      Role: SECONDARY
+      Type: mongod
+      dbPath: /data/rs2/db
+   localhost:27019
+      Role: SECONDARY
+      Type: mongod
+      dbPath: /data/rs3/db
 
-Cluster consumption (total, 3 dbPaths):                                     536.03 MiB    262.31 MiB* / 48.9%         189822        ———— 
-[NOTE] These totals are WiredTiger collection and index storage. Logs, binaries, journals, and FTDC add further disk use.
-Filesystem volumes (1 unique): 641.85 GiB used / 926.3 GiB capacity (69.3% used)   284.45 GiB free
-[NOTE] Listed collections may omit filtered or unauthorized namespaces; database and dbPath totals are db.stats().
-═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+Cluster consumption (total, 3 dbPaths):
+                               536.03 MiB    262.31 MiB* / 48.9%         189822     ———— 
+[NOTE] These totals are WiredTiger collection and index storage. Logs, binaries,
+       journals, and FTDC add further disk use.
+Filesystem volumes (1 unique):
+   641.85 GiB used / 926.3 GiB capacity (69.3% used)
+   284.45 GiB free
+[NOTE] Listed collections may omit filtered or unauthorized namespaces; database and
+       dbPath totals are db.stats().
+═════════════════════════════════════════════════════════════════════════════════════════
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Compaction helper recommendations
-  compact   Collection or _id_ index: 20% (50% for _id_) and the 1 MiB floor on 8.0+. compact() includes every ready index.
+  compact   Collection or _id_ index: 20% (50% for _id_) and the 1 MiB floor on 8.0+.
+            compact() includes every ready index.
   rebuild   Secondary index: drop and rebuild above 50% and the same floor.
-  wait      local.oplog.rs meets the collection threshold. Leave it; wait for capped reuse.
+  wait      local.oplog.rs meets the collection threshold. Leave it; wait for capped
+            reuse.
   resync    dbPath collection storage is above 50% reusable. Initial sync is the reclaim.
   ————      Below those thresholds, or not compactable. N/A means free space is unknown.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 `*` on a connecting node marks the session that produced the summary. `*` on a free-space cell is a lower bound (collection `$collStats` rollup when db-level reusable bytes are incomplete).
