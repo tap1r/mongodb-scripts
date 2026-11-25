@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.12"
+ *  Version: "1.2.13"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.12" };
+   const __script = { "name": "dbstats.js", "version": "1.2.13" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -1684,7 +1684,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.12',
+         "version": '1.2.13',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -2662,23 +2662,23 @@
       return [
          {
             "key": "compact",
-            "text": "Collection or _id_ index: run compact() when reusable bytes exceed 20% of the collection (50% for _id_) and WiredTiger's reclaim floor (1 MiB on 8.0+)."
+            "text": "Collection or _id_ index: 20% (50% for _id_) and the 1 MiB floor on 8.0+. compact() includes every ready index."
          },
          {
             "key": "rebuild",
-            "text": "Secondary index: drop and rebuild that index when reusable bytes exceed 50% and the same reclaim floor. compact() on the collection includes every ready index."
+            "text": "Secondary index: drop and rebuild above 50% and the same floor."
          },
          {
             "key": "wait",
-            "text": "local.oplog.rs meets the compact threshold. Leave the oplog; wait for capped reuse."
+            "text": "local.oplog.rs meets the collection threshold. Leave it; wait for capped reuse."
          },
          {
             "key": "resync",
-            "text": "dbPath collection storage is more than 50% reusable. Initial sync / resync is the practical reclaim at that scale."
+            "text": "dbPath collection storage is above 50% reusable. Initial sync is the reclaim."
          },
          {
             "key": "————",
-            "text": "Below those thresholds, or not a compactable object. N/A means WiredTiger free-space is unknown."
+            "text": "Below those thresholds, or not compactable. N/A means free space is unknown."
          }
       ];
    }
@@ -2692,12 +2692,34 @@
       return 'yellow';
    }
 
+   function wrapLegendText(text, width) {
+      const words = String(text).split(/\s+/).filter(Boolean);
+      const lines = [];
+      let line = '';
+      words.forEach(word => {
+         const next = line ? `${line} ${word}` : word;
+         if (line && visibleWidth(next) > width) {
+            lines.push(line);
+            line = word;
+         } else {
+            line = next;
+         }
+      });
+      if (line) lines.push(line);
+      return lines.length ? lines : [''];
+   }
+
    function printCompactionLegend() {
+      const textWidth = Math.max(24, termWidth - 12);
       console.log('');
       printRule('light');
       console.log('[bold][green]Compaction helper recommendations[/]');
       compactionLegendItems().forEach(({ key, text }) => {
-         console.log(`  [${compactionColour(key)}]${padVisible(key, 8)}[/]  ${text}`);
+         const colour = compactionColour(key);
+         wrapLegendText(text, textWidth).forEach((line, i) => {
+            const label = i === 0 ? padVisible(key, 8) : padVisible('', 8);
+            console.log(`  [${colour}]${label}[/]  ${line}`);
+         });
       });
       printRule('light');
       console.log('');
