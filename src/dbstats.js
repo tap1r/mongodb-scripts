@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.9"
+ *  Version: "1.2.10"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.9" };
+   const __script = { "name": "dbstats.js", "version": "1.2.10" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -1684,7 +1684,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.9',
+         "version": '1.2.10',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1774,6 +1774,15 @@
       function fmtRatio(n) {
          if (n == null || !Number.isFinite(+n)) return 'N/A';
          return Number(+n).toFixed(2) + ':1';
+      }
+
+      function htmlCompression(row) {
+         const ratio = +row.compression;
+         const codec = row.compressor ? String(row.compressor) : '';
+         const noPayload = row.dataSize != null && !(+row.dataSize > 0)
+            && Number.isFinite(ratio) && ratio === 0;
+         if (noPayload && codec) return codec;
+         return codec ? fmtRatio(row.compression) + ' ' + codec : fmtRatio(row.compression);
       }
 
       function fmtNum(n) {
@@ -2123,7 +2132,7 @@
          }
          if (s.compression) {
             cells += showLogical
-               ? td(fmtRatio(row.compression) + (row.compressor ? ' ' + row.compressor : ''), row.compression, 'num ratio')
+               ? td(htmlCompression(row), row.compression, 'num ratio')
                : emptyTd('num ratio');
          }
          cells += bytesTd(row.storageSize);
@@ -2830,10 +2839,20 @@
       return `${out}~`;
    }
 
-   function formatCompressionCell(compression, compressor) {
-      if (compressor == null || compressor === '')
+   function formatCompressionCell(compression, compressor, dataSize) {
+      /*
+       *  A measured 0 ratio on an empty collection is the allocation unit,
+       *  not a compression result. The codec is the cell.
+       */
+      const abbr = (compressor == null || compressor === '')
+         ? ''
+         : ((compressor == 'snappy') ? 'snpy' : compressor);
+      const noPayload = dataSize != null && !(+dataSize > 0)
+         && Number.isFinite(+compression) && +compression === 0;
+      if (noPayload && abbr)
+         return abbr.padStart(columnWidth + 1);
+      if (!abbr)
          return formatRatio(compression).padStart(columnWidth + 1);
-      const abbr = (compressor == 'snappy') ? 'snpy' : compressor;
       return (formatRatio(compression) + abbr.padStart(abbr.length + 1)).padStart(columnWidth + 1);
    }
 
@@ -2862,7 +2881,7 @@
          return `${''.padStart(columnWidth)} ${''.padStart(columnWidth + 1)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj}${compactBit}`;
       }
       const obj = (objects == null ? '' : objects.toString()).padStart(columnWidth);
-      return `${formatUnit(dataSize).padStart(columnWidth)} ${formatCompressionCell(compression, compressor)} ${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj}${compactBit}`;
+      return `${formatUnit(dataSize).padStart(columnWidth)} ${formatCompressionCell(compression, compressor, dataSize)} ${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj}${compactBit}`;
    }
 
    function printRollupRows({
@@ -2940,7 +2959,8 @@
 
    function printView(viewName = 'unknown') {
       printRule('light');
-      console.log(` [cyan]${viewName}[/]`);
+      const name = truncateLabel(String(viewName), 45, rowHeader - 4);
+      console.log(`╰>[cyan]${padVisible(' ' + name, rowHeader - 2)}[/]`);
       return;
    }
 
