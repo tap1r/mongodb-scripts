@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.10"
+ *  Version: "1.2.11"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.10" };
+   const __script = { "name": "dbstats.js", "version": "1.2.11" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -1684,7 +1684,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.10',
+         "version": '1.2.11',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -3468,12 +3468,52 @@
       return `${host}\0${total}`;
    }
 
+   function replicaGroupKey(node = {}, topology = {}) {
+      /*
+       *  One key per replica set. A shard id (or config) groups that set.
+       *  A plain replica set has no shard id; every member shares setName.
+       */
+      const shards = Array.isArray(node.shards)
+         ? node.shards.filter(id => id != null && String(id) !== '')
+         : [];
+      if (shards.length === 1) return `shard:${shards[0]}`;
+      if (node.configsvr) return 'shard:config';
+      const setName = topology.cluster && topology.cluster.setName;
+      return setName ? `set:${setName}` : 'set:replSet';
+   }
+
+   function roundedMean(values) {
+      const nums = values.filter(n => Number.isFinite(n));
+      if (!nums.length) return 0;
+      const sum = nums.reduce((a, b) => a + b, 0);
+      return Math.round(sum / nums.length);
+   }
+
+   function clusterObjectCount(nodes, topology) {
+      /*
+       *  Members of one replica set hold the same documents. Average those
+       *  counts and round. A sharded cluster sums the shard averages. CSRS
+       *  is its own set, added once.
+       */
+      const groups = new Map();
+      nodes.forEach(node => {
+         const key = replicaGroupKey(node, topology);
+         if (!groups.has(key)) groups.set(key, []);
+         const n = Number(node.stats && node.stats.objects);
+         if (Number.isFinite(n)) groups.get(key).push(n);
+      });
+      let total = 0;
+      groups.forEach(counts => { total += roundedMean(counts); });
+      return total;
+   }
+
    function clusterConsumptionStats(topology) {
       /*
        *  Sum mongod dbPaths (shard replica copies, CSRS members). Skip mongos
        *  so the router cluster-data aggregate is not added on top.
        *  Filesystem used/capacity is unique host+fsTotalSize (shared disk
        *  counted once). Size on disk still sums every dbPath.
+       *  Object count averages each replica set, then sums the sets.
        */
       const nodes = mongodStatsNodes(topology);
       if (nodes.length < 2) return null;
@@ -3501,7 +3541,6 @@
          const stats = node.stats;
          acc.dataSize += +stats.dataSize || 0;
          acc.storageSize += +stats.storageSize || 0;
-         acc.objects += +stats.objects || 0;
          acc.ncollections += countTotal(stats.ncollections);
          acc.nviews += countTotal(stats.nviews);
          acc.namespaces += countTotal(stats.namespaces);
@@ -3524,6 +3563,7 @@
             acc.fsTotalSize += jsonNumber(stats.fsTotalSize);
          }
       });
+      acc.objects = clusterObjectCount(nodes, topology);
       acc.fsVolumeCount = seenVol.size;
       if (!freeKnown) {
          acc.freeStorageSize = null;
