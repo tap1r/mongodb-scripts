@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.19"
+ *  Version: "1.2.20"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.19" };
+   const __script = { "name": "dbstats.js", "version": "1.2.20" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -370,21 +370,24 @@
    const scaled = new AutoFactor();
 
    // formatting preferences
-   // Preview: terminal names sit on their own line. The metric line has no
-   // extra gutter. "Data size" (9) is right-aligned in 12, so the heading
-   // starts at column 3. A 10-character value starts at 2; "1023.99 GiB" (11)
-   // starts at 1. HTML is unchanged.
+   // Names sit on their own line. Metric rows indent two spaces ("Data size"
+   // starts at column 2). Free to Object count keeps a gap of 3. Data size
+   // to Compression, Compression to Size, and count to Action are one space
+   // tighter. "Free / reuse" is 12 characters in a 17-wide column, so the
+   // gap after Size on disk is 6. Width 17 holds "29.38 MiB / 55.8%".
+   // HTML already says "Free / reuse".
    typeof columnWidth === 'undefined' && (columnWidth = 14) || columnWidth;
    typeof rowHeader === 'undefined' && (rowHeader = 40) || rowHeader;
    const statsIndent = '';
-   const dataWidth = 12;
-   // One join space plus two spaces of field pad: "Data size" then three spaces then "Compression".
-   const compressionWidth = 'Compression'.length + 2;
-   // "Action" replaces "Compaction" (10). The longest value is "compact" (7),
-   // so the column is 3 narrower than the old heading required.
-   const actionWidth = (columnWidth - 2) - 3;
-   const metricsLineWidth = dataWidth + 1 + compressionWidth + 1 + columnWidth + 1
-      + (columnWidth + 8) + 1 + columnWidth + 1 + actionWidth;
+   const fieldPad = 2;
+   const dataWidth = 'Data size'.length + fieldPad;
+   const compressionWidth = 'Compression'.length + (fieldPad - 1);
+   const sizeWidth = 'Size on disk'.length + (fieldPad - 1);
+   const freeWidth = 17;
+   const objectWidth = 'Object count'.length + fieldPad;
+   const actionWidth = 'Action'.length + (fieldPad - 1);
+   const metricsLineWidth = dataWidth + 1 + compressionWidth + 1 + sizeWidth + 1
+      + freeWidth + 1 + objectWidth + 1 + actionWidth;
    typeof termWidth === 'undefined' && (termWidth = statsIndent.length + metricsLineWidth) || termWidth;
 
    // connection preferences
@@ -1370,19 +1373,18 @@
       const nodes = (topology && topology.nodes) || [];
       if (!topologyDepthExpanded()) return false;
       if (!nodes.some(n => n && n.connecting !== true && n.stats)) return false;
-      const widths = nodeIdentityWidths(nodes);
       const summarizeIndexes = printBody === printNamespaceTables && outputVerbosity() === 'summary';
       printCompactionLegend();
       nodes.forEach(node => {
          if (!node || (!node.stats && !node.error)) return;
-         printNodeBanner(node, widths);
+         printNodeBanner(node);
          if (!node.stats) return;
          printBody(node.stats, { "leadBlank": false });
          printDbPath(node.stats, { "hostLine": false, summarizeIndexes });
       });
       if (nodes.length > 1) {
          printRule('heavy');
-         printTopologyMembers(topology, widths);
+         printTopologyMembers(topology);
          printClusterConsumption(topology);
          printDirectShardNotes(dbStats);
          printRule('heavy');
@@ -1703,7 +1705,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.19',
+         "version": '1.2.20',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1792,7 +1794,12 @@
 
       function fmtRatio(n) {
          if (n == null || !Number.isFinite(+n)) return 'N/A';
-         return Number(+n).toFixed(2) + ':1';
+         const abs = Math.abs(+n);
+         let places = abs >= 100 ? 0 : abs >= 10 ? 1 : 2;
+         const rounded = Number(abs.toFixed(places));
+         if (places > 0 && rounded >= 100) places = 0;
+         else if (places > 1 && rounded >= 10) places = 1;
+         return Number(+n).toFixed(places) + ':1';
       }
 
       function htmlCompression(row) {
@@ -2823,14 +2830,14 @@
 
    function formatFree(bytes, storageSize, { lowerBound = false } = {}) {
       /*
-       *  Free blocks / reuse. Hidden WT free-space (Atlas M0/Flex) → N/A, not 0.
+       *  Free / reuse. Hidden WT free-space (Atlas M0/Flex) → N/A, not 0.
        *  lowerBound: collStats rollup may omit unauthorized/filtered NS (*).
        */
       if (!freeStorageKnown(bytes)) {
-         return ('N/A / N/A').padStart(columnWidth + 8);
+         return ('N/A / N/A').padStart(freeWidth);
       }
       const unit = formatUnit(bytes) + (lowerBound ? '*' : '');
-      return (unit + ' / ' + formatPct(bytes, storageSize)).padStart(columnWidth + 8);
+      return (unit + ' / ' + formatPct(bytes, storageSize)).padStart(freeWidth);
    }
 
    function compactionLegendItems() {
@@ -3143,10 +3150,17 @@
    function formatRatio(metric) {
       /*
        *  Pretty format compression ratio. Non-finite (÷0 from StorageMetrics.compression) → N/A.
+       *  Below 10, two decimals (2.51:1). Two digits, one decimal (25.1:1).
+       *  Three digits and above, no decimal (251:1). Trailing zeros are dropped.
        */
       const value = +metric;
       if (!Number.isFinite(value)) return 'N/A ';
-      return `${Number.parseFloat(value.toFixed(2))}:1`;
+      const abs = Math.abs(value);
+      let places = abs >= 100 ? 0 : abs >= 10 ? 1 : 2;
+      const rounded = Number(abs.toFixed(places));
+      if (places > 0 && rounded >= 100) places = 0;
+      else if (places > 1 && rounded >= 10) places = 1;
+      return `${Number.parseFloat(value.toFixed(places))}:1`;
    }
 
    function printRule(style = 'light', width = termWidth) {
@@ -3155,7 +3169,7 @@
    }
 
    function columnHeaders({ compaction = true } = {}) {
-      const head = `${'Data size'.padStart(dataWidth)} ${'Compression'.padStart(compressionWidth)} ${'Size on disk'.padStart(columnWidth)} ${'Free blocks / reuse'.padStart(columnWidth + 8)} ${'Object count'.padStart(columnWidth)}`;
+      const head = `${'Data size'.padStart(dataWidth)} ${'Compression'.padStart(compressionWidth)} ${'Size on disk'.padStart(sizeWidth)} ${'Free / reuse'.padStart(freeWidth)} ${'Object count'.padStart(objectWidth)}`;
       return compaction ? `${head}${'Action'.padStart(actionWidth + 1)}` : head;
    }
 
@@ -3264,24 +3278,25 @@
           *  0 B and 0 objects would read as an empty WiredTiger file.
           */
          const naData = 'N/A'.padStart(dataWidth);
-         const na = 'N/A'.padStart(columnWidth);
+         const naSize = 'N/A'.padStart(sizeWidth);
+         const naObj = 'N/A'.padStart(objectWidth);
          const naRatio = 'N/A'.padStart(compressionWidth);
          if (mode === 'indexRow')
-            return `${naData} ${formatFree(null)} ${''.padStart(columnWidth)}${compactBit}`;
-         return `${naData} ${naRatio} ${na} ${formatFree(null)} ${na}${compactBit}`;
+            return `${naData} ${formatFree(null)} ${''.padStart(objectWidth)}${compactBit}`;
+         return `${naData} ${naRatio} ${naSize} ${formatFree(null)} ${naObj}${compactBit}`;
       }
       if (mode === 'indexRow') {
-         return `${''.padStart(dataWidth)} ${''.padStart(compressionWidth)} ${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)}${compactBit}`;
+         return `${''.padStart(dataWidth)} ${''.padStart(compressionWidth)} ${formatStorageSize(storageSize, { stub, allocUnit }).padStart(sizeWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(objectWidth)}${compactBit}`;
       }
       if (mode === 'indexRollup') {
-         return `${''.padStart(dataWidth)} ${''.padStart(compressionWidth)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)}${compactBit}`;
+         return `${''.padStart(dataWidth)} ${''.padStart(compressionWidth)} ${formatUnit(storageSize).padStart(sizeWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(objectWidth)}${compactBit}`;
       }
       if (mode === 'totalRow') {
-         const obj = formatGroupedCount(objects).padStart(columnWidth);
-         return `${''.padStart(dataWidth)} ${''.padStart(compressionWidth)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj}${compactBit}`;
+         const obj = formatGroupedCount(objects).padStart(objectWidth);
+         return `${''.padStart(dataWidth)} ${''.padStart(compressionWidth)} ${formatUnit(storageSize).padStart(sizeWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj}${compactBit}`;
       }
-      const obj = formatGroupedCount(objects).padStart(columnWidth);
-      return `${formatUnit(dataSize).padStart(dataWidth)} ${formatCompressionCell(compression, compressor, dataSize)} ${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj}${compactBit}`;
+      const obj = formatGroupedCount(objects).padStart(objectWidth);
+      return `${formatUnit(dataSize).padStart(dataWidth)} ${formatCompressionCell(compression, compressor, dataSize)} ${formatStorageSize(storageSize, { stub, allocUnit }).padStart(sizeWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj}${compactBit}`;
    }
 
    function printRollupRows({
@@ -3819,31 +3834,16 @@
       };
    }
 
-   function nodeIdentityWidths(nodes = []) {
-      const rows = (nodes || []).map(nodeIdentityFields);
-      const maxLen = (key) => rows.reduce((n, r) => Math.max(n, visibleWidth(r[key] || '')), 0);
-      return {
-         "host": maxLen('host'),
-         "role": maxLen('role'),
-         "proc": maxLen('proc'),
-         "shard": maxLen('shard'),
-         "path": maxLen('path')
-      };
-   }
-
-   function formatNodeIdentity(node, widths = {}, { indent = '', gap = '   ', layout = 'inline' } = {}) {
+   function formatNodeIdentity(node, { indent = '', layout = 'inline' } = {}) {
       const f = nodeIdentityFields(node);
-      const hostW = widths.host || visibleWidth(f.host);
-      const roleW = widths.role || visibleWidth(f.role);
-      const procW = widths.proc || visibleWidth(f.proc);
-      const shardW = widths.shard || visibleWidth(f.shard);
-      const pathW = widths.path || visibleWidth(f.path);
-      const mark = f.connecting ? '[green]*[/] ' : '  ';
       if (layout === 'stack') {
          /*
           *  Host on its own line. Role, Type, and dbPath follow, indented
           *  six spaces. Shard is included when the node has one.
+          *  "* " on the connecting host, two spaces otherwise, so the
+          *  host names line up.
           */
+         const mark = f.connecting ? '[green]*[/] ' : '  ';
          const fieldIndent = '      ';
          const field = (label, value) => `${fieldIndent}[bold][green]${label}:[/] [cyan]${value}[/]`;
          const lines = [
@@ -3856,17 +3856,28 @@
          if (f.error) lines.push(`${fieldIndent}[red]${f.error}[/]`);
          return lines.join('\n');
       }
-      const err = f.error ? `${gap}[red]${f.error}[/]` : '';
-      const shardBit = shardW
-         ? `${gap}[bold][green]Shard:[/] [cyan]${padVisible(f.shard, shardW)}[/]`
-         : '';
-      return `${indent}${mark}[cyan]${padVisible(f.host, hostW)}[/]${gap}[bold][green]Role:[/] [cyan]${padVisible(f.role, roleW)}[/]${gap}[bold][green]Type:[/] [cyan]${padVisible(f.proc, procW)}[/]${shardBit}${gap}[bold][green]dbPath:[/] [cyan]${padVisible(f.path, pathW)}[/]${err}`;
+      /*
+       *  Node banner. Comma between fields, no column pad. The
+       *  connecting host keeps the star. An empty field is left out.
+       */
+      const parts = [];
+      if (f.host) parts.push(`[cyan]${f.host}[/]`);
+      const field = (label, value) => {
+         if (value) parts.push(`[bold][green]${label}:[/] [cyan]${value}[/]`);
+      };
+      field('Role', f.role);
+      field('Type', f.proc);
+      field('Shard', f.shard);
+      field('dbPath', f.path);
+      if (f.error) parts.push(`[red]${f.error}[/]`);
+      const star = f.connecting ? '[green]*[/] ' : '';
+      return `${indent}${star}${parts.join(', ')}`;
    }
 
-   function printNodeBanner(node = {}, widths) {
+   function printNodeBanner(node = {}) {
       console.log('');
       printRule('heavy');
-      console.log(`[bold][green]Node:[/] ${formatNodeIdentity(node, widths)}`);
+      console.log(`[bold][green]Node:[/] ${formatNodeIdentity(node)}`);
    }
 
    function isMongosNode(node = {}) {
@@ -4076,10 +4087,9 @@
       return true;
    }
 
-   function printTopologyMembers(topology, widths) {
+   function printTopologyMembers(topology) {
       const nodes = (topology && Array.isArray(topology.nodes)) ? topology.nodes : [];
       if (!nodes.length) return false;
-      const cols = widths || nodeIdentityWidths(nodes);
       const cluster = topology.cluster || {};
       const kind = cluster.kind || '';
       const setName = cluster.setName;
@@ -4100,7 +4110,7 @@
       }
       const repl = kind === 'replSet';
       nodes.forEach(node => {
-         console.log(formatNodeIdentity(node, cols, {
+         console.log(formatNodeIdentity(node, {
             "layout": 'stack',
             "indent": repl ? ' ' : '  '
          }));
