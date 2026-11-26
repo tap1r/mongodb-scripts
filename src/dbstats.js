@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.17"
+ *  Version: "1.2.18"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.17" };
+   const __script = { "name": "dbstats.js", "version": "1.2.18" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -1293,7 +1293,7 @@
             printViewHeader(views.length);
             views.forEach(({ name }) => printView(name));
          }
-         printDb(database);
+         printDb(database, { "header": true });
       });
    }
 
@@ -1703,7 +1703,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.17',
+         "version": '1.2.18',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -3386,13 +3386,19 @@
       return;
    }
 
-   function printDb(database = {}) {
+   function printDb(database = {}, { header = false } = {}) {
       const {
          shards, dataSize, compression, storageSize, freeStorageSize, objects, namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
          freeStorageComplete, totalIndexBytesReusableComplete
       } = database;
       const advice = databaseAdvice(database, outputVerbosity() === 'summary');
       printRule('light');
+      /*
+       *  Summary prints this header on the database banner, then the rollup.
+       *  Full listings put collections between that banner and the subtotals,
+       *  so the header is repeated here.
+       */
+      if (header) printColumnHeader({ "compaction": dbTableCompactionColumns() });
       printRollupRows({
          shards, dataSize, compression, storageSize, freeStorageSize, objects,
          namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
@@ -4008,12 +4014,13 @@
       return acc;
    }
 
-   function printTotalConsumption(stats = {}, label = 'Total', compaction) {
+   function printTotalConsumption(stats = {}, label = 'Total', compaction, { header = false } = {}) {
       const storageSize = combinedStorageSize(stats);
       const freeStorageSize = combinedFreeStorageSize(stats);
       const incomplete = stats.freeStorageComplete === false
          || stats.totalIndexBytesReusableComplete === false;
       console.log(`[bold][green]${label}:[/]`);
+      if (header) printColumnHeader();
       printStatsLine(metricsCols({
          storageSize,
          freeStorageSize,
@@ -4049,7 +4056,7 @@
       if (!stats) return false;
       const n = mongodStatsNodes(topology).length;
       console.log('');
-      printTotalConsumption(stats, `Cluster consumption (total, ${n} dbPaths)`, clusterConsumptionAdvice(topology));
+      printTotalConsumption(stats, `Cluster consumption (total, ${n} dbPaths)`, clusterConsumptionAdvice(topology), { "header": true });
       printFoot('NOTE', clusterStorageScopeNote());
       const vols = stats.fsVolumeCount;
       const fsLabel = (vols > 0 && vols !== n)
