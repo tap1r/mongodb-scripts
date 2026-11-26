@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.18"
+ *  Version: "1.2.19"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.18" };
+   const __script = { "name": "dbstats.js", "version": "1.2.19" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -1703,7 +1703,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.18',
+         "version": '1.2.19',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -2386,7 +2386,7 @@
             const sub = [node.role, node.proc, node.dbPath].filter(Boolean).join(' · ');
             html += '<h2>' + esc(block.title || '')
                + (sub ? '<span class="sub">' + esc(sub) + '</span>' : '') + '</h2>';
-            if (node.error) html += '<p class="warn">' + esc(node.error) + '</p>';
+            if (node.error) html += '<p class="alert">' + esc(node.error) + '</p>';
          }
          let dbs = (block.databases || []).filter(dbVisible);
          if (v === 'summary') {
@@ -2494,7 +2494,7 @@
             );
          }
          (topo.errors || []).forEach(err => {
-            html += '<p class="warn">' + esc((err && (err.message || err.step)) || err) + '</p>';
+            html += '<p class="alert">' + esc((err && (err.message || err.step)) || err) + '</p>';
          });
          return html;
       }
@@ -2503,7 +2503,16 @@
          const totals = data.totals || {};
          let html = '';
          (data.warnings || []).forEach(w => {
-            html += '<p class="warn">[' + esc(w.code || 'NOTE') + '] ' + esc(w.message || '') + '</p>';
+            const notes = {
+               "freeStorageIncomplete": true,
+               "freeStorageCollStatsRollup": true,
+               "filteredNamespaceRollup": true,
+               "catalogIncomplete": true,
+               "catalogFallback": true,
+               "directShardOperationsAssumed": true
+            };
+            const cls = notes[w && w.code] ? 'note' : 'alert';
+            html += '<p class="' + cls + '">[' + esc(w.code || 'NOTE') + '] ' + esc(w.message || '') + '</p>';
          });
          const topoHtml = renderTopology();
          if (topoHtml) html += '<section class="panel">' + topoHtml + '</section>';
@@ -2595,7 +2604,8 @@
          '.panel h2{font-size:1.05rem;margin:0 0 .7rem;color:var(--fg);font-weight:600}',
          '.panel h2 .sub{color:var(--muted);font-weight:400;font-size:.82em;margin-left:.7rem}',
          'td.mark-cell{color:var(--acc);font-weight:700;width:1.25rem;text-align:center}',
-         '.warn{color:var(--warn);background:rgba(224,195,106,.08);border:1px solid rgba(224,195,106,.28);border-radius:6px;padding:.5rem .7rem;margin:0 0 .75rem}',
+         '.note{color:var(--warn);background:rgba(224,195,106,.08);border:1px solid rgba(224,195,106,.28);border-radius:6px;padding:.5rem .7rem;margin:0 0 .75rem}',
+         '.alert{color:var(--err);background:rgba(224,112,112,.08);border:1px solid rgba(224,112,112,.35);border-radius:6px;padding:.5rem .7rem;margin:0 0 .75rem}',
          '.table-wrap{overflow-x:auto;margin:0 0 1rem;-webkit-overflow-scrolling:touch}',
          'table{border-collapse:collapse;width:max-content;max-width:none;margin:0;table-layout:auto;font:14px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}',
          'caption{text-align:left;color:var(--acc);font:600 .92rem/1.3 system-ui,-apple-system,"Segoe UI",sans-serif;padding:.15rem 0 .45rem}',
@@ -2858,7 +2868,7 @@
       const colourOf = (name) => {
          if (name === 'compact') return 'green';
          if (name === 'rebuild') return 'yellow';
-         if (name === 'wait') return 'cyan';
+         if (name === 'wait') return 'bright black';
          if (name === 'resync') return 'red';
          return '';
       };
@@ -2866,7 +2876,7 @@
       if (kinds.length > 1) return 'white';
       if (key === 'compact') return 'green';
       if (key === 'rebuild') return 'yellow';
-      if (key === 'wait') return 'cyan';
+      if (key === 'wait') return 'bright black';
       if (key === 'resync') return 'red';
       if (key === 'N/A' || key === '————') return 'white';
       return 'yellow';
@@ -3141,7 +3151,7 @@
 
    function printRule(style = 'light', width = termWidth) {
       const ch = (style === 'heavy') ? '═' : '━';
-      console.log(`[yellow]${ch.repeat(width)}[/]`);
+      console.log(`[bright black]${ch.repeat(width)}[/]`);
    }
 
    function columnHeaders({ compaction = true } = {}) {
@@ -3372,8 +3382,8 @@
       const { name, storageSize, freeStorageSize } = index;
       const incomplete = index.freeStorageComplete === false;
       const compaction = indexAction(index);
-      console.log(`  [yellow]${'━'.repeat(Math.max(0, termWidth - 2))}[/]`);
-      console.log(`  ╰» [red]${name}[/]`);
+      console.log(`  [bright black]${'━'.repeat(Math.max(0, termWidth - 2))}[/]`);
+      console.log(`  ╰» ${name}`);
       printStatsLine(metricsCols({ storageSize, freeStorageSize, compaction, "mode": 'indexRow', "lowerBound": incomplete, "showCompaction": leafCompactionColumns() }));
       return;
    }
