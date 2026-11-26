@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.16"
+ *  Version: "1.2.17"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.16" };
+   const __script = { "name": "dbstats.js", "version": "1.2.17" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -1267,7 +1267,7 @@
       if (printExpandedNodes(dbStats, printNamespaceTables)) return;
       printCompactionLegend();
       printNamespaceTables(dbStats);
-      printDbPath(dbStats);
+      printDbPath(dbStats, { "summarizeIndexes": outputVerbosity() === 'summary' });
    }
 
    function printDatabaseTables(dbStats = {}, { leadBlank = true } = {}) {
@@ -1355,9 +1355,11 @@
    }
 
    function collectionHasCompactable(collection = {}) {
-      if (jsonCompaction('collection', collection.storageSize, collection.freeStorageSize, collectionCompactionExtra(collection)) != null)
-         return true;
-      return (collection.indexes || []).some(indexIsCompactable);
+      /*
+       *  compactOnly keeps a collection when its own action is compact or
+       *  wait, or an index rebuild/_id_ compact promotes it to compact.
+       */
+      return jsonAction(collectionAction(collection)) != null;
    }
 
    function printExpandedNodes(dbStats, printBody) {
@@ -1369,13 +1371,14 @@
       if (!topologyDepthExpanded()) return false;
       if (!nodes.some(n => n && n.connecting !== true && n.stats)) return false;
       const widths = nodeIdentityWidths(nodes);
+      const summarizeIndexes = printBody === printNamespaceTables && outputVerbosity() === 'summary';
       printCompactionLegend();
       nodes.forEach(node => {
          if (!node || (!node.stats && !node.error)) return;
          printNodeBanner(node, widths);
          if (!node.stats) return;
          printBody(node.stats, { "leadBlank": false });
-         printDbPath(node.stats, { "hostLine": false });
+         printDbPath(node.stats, { "hostLine": false, summarizeIndexes });
       });
       if (nodes.length > 1) {
          printRule('heavy');
@@ -1435,10 +1438,7 @@
          "freeStorageSize": freeStorageSize,
          "reuse": jsonReuse(freeStorageSize, storageSize),
          "freeStorageComplete": index.freeStorageComplete !== false,
-         "compaction": jsonCompaction('index', storageSize, freeStorageSize, {
-            "idIndex": name === '_id_',
-            "incomplete": index.freeStorageComplete === false
-         })
+         "compaction": jsonAction(indexAction(index))
       };
    }
 
@@ -1470,10 +1470,7 @@
          "freeStorageComplete": collection.freeStorageComplete !== false,
          "totalIndexBytesReusableComplete": collection.totalIndexBytesReusableComplete !== false,
          "statsIncomplete": collection.statsIncomplete === true,
-         "compaction": jsonCompaction('collection', storageSize, freeStorageSize, {
-            "oplog": ns === 'local.oplog.rs',
-            "incomplete": collection.freeStorageComplete === false
-         }),
+         "compaction": jsonAction(collectionAction(collection)),
          indexes
       };
    }
@@ -1512,8 +1509,8 @@
          "totalIndexBytesReusableSource": database.totalIndexBytesReusableSource || 'unknown',
          "totalIndexBytesReusableComplete": database.totalIndexBytesReusableComplete === true,
          "catalogCoverageComplete": database.catalogCoverageComplete !== false,
-         "compaction": jsonCompaction('collection', storageSize, freeStorageSize, { "incomplete": freeIncomplete }),
-         "idxCompaction": jsonCompaction('index', totalIndexSize, totalIndexBytesReusable, { "incomplete": idxIncomplete }),
+         "compaction": null,
+         "idxCompaction": null,
          collections,
          views
       };
@@ -1550,7 +1547,16 @@
          }),
          "errors": Array.isArray(topology.errors) ? topology.errors : []
       };
-      if (consumption) out.consumption = jsonTotals(consumption);
+      if (consumption) {
+         /*
+          *  Cluster bytes are a sum across dbPaths. That sum is not a resync
+          *  target. Per-member stats.compaction still carries that dbPath.
+          */
+         const totals = jsonTotals(consumption);
+         totals.compaction = null;
+         totals.idxCompaction = null;
+         out.consumption = totals;
+      }
       return out;
    }
 
@@ -1594,7 +1600,7 @@
          "totalIndexBytesReusableComplete": dbStats.totalIndexBytesReusableComplete === true,
          "catalogCoverageComplete": dbStats.catalogCoverageComplete !== false,
          "compaction": jsonCompaction('dbPath', storageSize, freeStorageSize, { "incomplete": freeIncomplete }),
-         "idxCompaction": jsonCompaction('index', totalIndexSize, totalIndexBytesReusable, { "incomplete": idxIncomplete })
+         "idxCompaction": null
       };
       if (dbStats.fsVolumeCount != null && Number.isFinite(+dbStats.fsVolumeCount)) {
          out.fsVolumeCount = Math.floor(+dbStats.fsVolumeCount);
@@ -1697,7 +1703,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.16',
+         "version": '1.2.17',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -1809,16 +1815,138 @@
          return n.map((v, i) => (shards[i] != null ? shards[i] : i) + ': ' + (v == null ? 'N/A' : v)).join(', ');
       }
 
+      function htmlKey(label) {
+         return String(label || '').trim();
+      }
+
+      function htmlIsWork(label) {
+         const key = htmlKey(label);
+         return key === 'rebuild' || key === 'compact' || key === 'wait' || key === 'resync';
+      }
+
+      function htmlTally(labels) {
+         const order = ['rebuild', 'compact', 'wait', 'resync'];
+         const counts = {};
+         (labels || []).forEach(label => {
+            const key = htmlKey(label);
+            if (order.indexOf(key) < 0) return;
+            counts[key] = (counts[key] || 0) + 1;
+         });
+         return order.filter(key => counts[key]).map(key => key + ' ×' + counts[key]).join(' ');
+      }
+
+      function htmlRollup(labels, own, summarize) {
+         /*
+          *  Same rule as the terminal. Resync only when this row's own
+          *  label is resync. Summary lists targeted counts. Blank when the
+          *  narrower rows are on the page. null renders as an em dash.
+          */
+         if (htmlIsWork(own)) return htmlKey(own);
+         const works = (labels || []).map(htmlKey).filter(htmlIsWork);
+         if (!works.length) {
+            const keys = (labels || []).map(htmlKey).filter(Boolean);
+            if (htmlKey(own) === 'N/A' && keys.every(key => key === 'N/A')) return 'N/A';
+            if (keys.length && keys.every(key => key === 'N/A')) return 'N/A';
+            return null;
+         }
+         return summarize ? htmlTally(works) : '';
+      }
+
+      function dbAdvice(db) {
+         const cols = (db && db.collections) || [];
+         const summarize = verb() === 'summary';
+         const idxLabels = cols.flatMap(c => ((c && c.indexes) || []).map(idx => idx && idx.compaction));
+         return {
+            "compaction": htmlRollup(cols.map(c => c && c.compaction), '', summarize),
+            "idxCompaction": htmlRollup(idxLabels, '', summarize)
+         };
+      }
+
+      function payloadActionLabels() {
+         const cols = [];
+         const idxs = [];
+         (data.databases || []).forEach(db => {
+            (db.collections || []).forEach(c => {
+               cols.push(c && c.compaction);
+               (c.indexes || []).forEach(idx => idxs.push(idx && idx.compaction));
+            });
+         });
+         return { cols, idxs };
+      }
+
+      function clusterAdviceLabel() {
+         const topo = data.topology || {};
+         const nodes = topo.nodes || [];
+         let work = false;
+         const labels = [];
+         nodes.forEach(node => {
+            const stats = (node && node.stats) || {};
+            if (htmlIsWork(stats.compaction)) work = true;
+            if (stats.compaction) labels.push(stats.compaction);
+            (node.databases || []).forEach(db => {
+               (db.collections || []).forEach(c => {
+                  if (htmlIsWork(c.compaction)) work = true;
+                  if (c.compaction) labels.push(c.compaction);
+                  (c.indexes || []).forEach(idx => {
+                     if (htmlIsWork(idx && idx.compaction)) work = true;
+                     if (idx && idx.compaction) labels.push(idx.compaction);
+                  });
+               });
+            });
+         });
+         if (!ui.topologyExpanded) {
+            (data.databases || []).forEach(db => {
+               (db.collections || []).forEach(c => {
+                  if (htmlIsWork(c.compaction)) work = true;
+                  (c.indexes || []).forEach(idx => {
+                     if (htmlIsWork(idx && idx.compaction)) work = true;
+                  });
+               });
+            });
+         }
+         if (work) return '';
+         return htmlRollup(labels, '', false);
+      }
+
       function fmtCompaction(label) {
-         return label ? String(label) : '—';
+         if (label == null) return '—';
+         const text = String(label).trim();
+         return text ? text : '';
       }
 
       function compactionRank(label) {
-         if (label === 'resync') return 4;
-         if (label === 'rebuild') return 3;
-         if (label === 'compact') return 2;
-         if (label === 'wait') return 1;
-         return '';
+         const parts = String(label || '').trim().split(/\s+/);
+         let rank = 0;
+         let any = false;
+         parts.forEach(part => {
+            let r = 0;
+            if (part === 'resync') r = 4;
+            else if (part === 'rebuild') r = 3;
+            else if (part === 'compact') r = 2;
+            else if (part === 'wait') r = 1;
+            else return;
+            any = true;
+            if (r > rank) rank = r;
+         });
+         return any ? rank : '';
+      }
+
+      function adviceRank(o, kind) {
+         if (kind === 'db' && o && Array.isArray(o.collections) && o.collections.length) {
+            let max = 0;
+            let any = false;
+            o.collections.forEach(c => {
+               const labels = [c && c.compaction].concat(((c && c.indexes) || []).map(idx => idx && idx.compaction));
+               labels.forEach(label => {
+                  const rank = compactionRank(label);
+                  if (rank === '' || rank == null) return;
+                  any = true;
+                  if (rank > max) max = rank;
+               });
+            });
+            return any ? max : '';
+         }
+         return compactionRank(o && o.compaction);
       }
 
       function verb() {
@@ -1897,7 +2025,7 @@
             const aOk = Number.isFinite(av), bOk = Number.isFinite(bv);
             if (aOk && bOk && av !== bv) return bv - av;
             if (aOk !== bOk) return aOk ? -1 : 1;
-            return (compactionRank(b && b.compaction) || 0) - (compactionRank(a && a.compaction) || 0);
+            return (adviceRank(b, kind) || 0) - (adviceRank(a, kind) || 0);
          };
       }
 
@@ -1914,7 +2042,7 @@
             const get = (o) => {
                if (!o) return null;
                if (key === 'compaction') {
-                  const rank = compactionRank(o.compaction);
+                  const rank = adviceRank(o, kind);
                   return (rank === '' || rank == null) ? null : rank;
                }
                if (key === 'ns' || key === 'namespace') return o.ns || o.namespace || o.name || '';
@@ -2129,8 +2257,10 @@
       }
 
       function actClass(label) {
-         const s = String(label || '');
-         if (s === 'compact' || s === 'rebuild' || s === 'resync' || s === 'wait') return 'act ' + s;
+         const parts = String(label || '').trim().split(/\s+/).filter(part =>
+            part === 'compact' || part === 'rebuild' || part === 'resync' || part === 'wait'
+         );
+         if (parts.length === 1) return 'act ' + parts[0];
          return 'act';
       }
 
@@ -2175,7 +2305,7 @@
             cells += td(fmtCompaction(compact), compactionRank(compact), compactCls);
          }
          if (s.idxCompaction) {
-            const idxLabel = (kind === 'index' || kind === 'idxRollup' || kind === 'total')
+            const idxLabel = (kind === 'index' || kind === 'idxRollup')
                ? null
                : row.idxCompaction;
             cells += td(fmtCompaction(idxLabel), compactionRank(idxLabel), actClass(idxLabel));
@@ -2199,7 +2329,8 @@
 
       function dbRow(db, spec) {
          const name = db.name || '';
-         return '<tr>' + identCells(name, '', name, spec) + metricsCells(db, 'db', spec) + '</tr>';
+         const row = Object.assign({}, db, dbAdvice(db));
+         return '<tr>' + identCells(name, '', name, spec) + metricsCells(row, 'db', spec) + '</tr>';
       }
 
       function nsRow(c, spec) {
@@ -2327,6 +2458,7 @@
          }).join('');
          const consumption = topo.consumption;
          if (consumption && consumption.totalSize != null) {
+            const clusterLabel = clusterAdviceLabel();
             rows += '<tr class="total-row">'
                + td('', '', 'name mark-cell')
                + td('Cluster consumption (total)', 'Cluster consumption (total)', 'name ident')
@@ -2336,8 +2468,8 @@
                + td('', '', 'name path')
                + bytesTd(consumption.totalSize)
                + freeTd(consumption.totalFreeStorageSize, consumption.totalReuse)
-               + td(fmtCompaction(null), '', 'act')
-               + td(fmtCompaction(null), '', 'act')
+               + td(fmtCompaction(clusterLabel), compactionRank(clusterLabel), actClass(clusterLabel))
+               + td(fmtCompaction(clusterLabel), compactionRank(clusterLabel), actClass(clusterLabel))
                + td('', '', 'name')
                + '</tr>';
          }
@@ -2375,21 +2507,34 @@
          });
          const topoHtml = renderTopology();
          if (topoHtml) html += '<section class="panel">' + topoHtml + '</section>';
+         const labels = payloadActionLabels();
+         const nsAction = htmlRollup(labels.cols, totals.compaction, false);
+         const idxAction = htmlRollup(labels.idxs, '', false);
+         const totalWork = htmlIsWork(totals.compaction)
+            || labels.cols.some(htmlIsWork)
+            || labels.idxs.some(htmlIsWork)
+            || nsAction === ''
+            || idxAction === '';
+         const totalAction = totalWork ? '' : htmlRollup(labels.cols.concat(labels.idxs), '', false);
          const totalRow = Object.assign({}, totals, {
             "storageSize": totals.totalSize,
             "freeStorageSize": totals.totalFreeStorageSize,
             "reuse": totals.totalReuse,
-            "compaction": null
+            "compaction": totalAction,
+            "idxCompaction": totalAction
          });
          html += '<section class="panel">';
          const rollupCols = { "compaction": true, "idxCompaction": true };
          html += tableHtml('dbPath totals', catalogHeaders('Rollup', rollupCols),
-            totalsRow(totals, 'All namespaces', 'db', '', rollupCols)
+            totalsRow(Object.assign({}, totals, {
+               "compaction": nsAction,
+               "idxCompaction": idxAction
+            }), 'All namespaces', 'db', '', rollupCols)
             + totalsRow({
                "storageSize": totals.totalIndexSize,
                "freeStorageSize": totals.totalIndexBytesReusable,
                "reuse": totals.idxReuse,
-               "compaction": totals.idxCompaction
+               "compaction": idxAction
             }, 'All indexes', 'idxRollup', '', rollupCols)
             + totalsRow(totalRow, 'Total', 'total', 'total-row', rollupCols));
          if (totals.fsTotalSize != null && Number.isFinite(+totals.fsTotalSize) && +totals.fsTotalSize > 0) {
@@ -2709,6 +2854,16 @@
 
    function compactionColour(label) {
       const key = String(label || '').trim();
+      const kinds = key.split(/\s+/).filter(part => part === 'rebuild' || part === 'compact' || part === 'wait' || part === 'resync');
+      const colourOf = (name) => {
+         if (name === 'compact') return 'green';
+         if (name === 'rebuild') return 'yellow';
+         if (name === 'wait') return 'cyan';
+         if (name === 'resync') return 'red';
+         return '';
+      };
+      if (kinds.length === 1) return colourOf(kinds[0]);
+      if (kinds.length > 1) return 'white';
       if (key === 'compact') return 'green';
       if (key === 'rebuild') return 'yellow';
       if (key === 'wait') return 'cyan';
@@ -2781,20 +2936,187 @@
       return incomplete ? 'N/A ' : '———— ';
    }
 
+   function actionKey(label) {
+      return String(label || '').trim();
+   }
+
+   function isWorkAction(label) {
+      const key = actionKey(label);
+      return key === 'rebuild' || key === 'compact' || key === 'wait' || key === 'resync';
+   }
+
+   function indexAction(index = {}) {
+      return formatCompaction('index', index.storageSize, index.freeStorageSize, indexCompactionExtra(index));
+   }
+
+   function collectionAction(collection = {}) {
+      /*
+       *  compact() is the collection operation. It also rebuilds ready indexes,
+       *  so an index rebuild or _id_ compact promotes the collection to compact.
+       *  wait on the oplog stays wait.
+       */
+      const own = formatCompaction('collection', collection.storageSize, collection.freeStorageSize, collectionCompactionExtra(collection));
+      if (actionKey(own) === 'wait' || actionKey(own) === 'compact') return own;
+      const promoted = (collection.indexes || []).some(index => {
+         const label = actionKey(indexAction(index));
+         return label === 'rebuild' || label === 'compact';
+      });
+      return promoted ? 'compact' : own;
+   }
+
+   function tallyActions(labels) {
+      const order = ['rebuild', 'compact', 'wait', 'resync'];
+      const counts = new Map();
+      (labels || []).forEach(label => {
+         const key = actionKey(label);
+         if (!order.includes(key)) return;
+         counts.set(key, (counts.get(key) || 0) + 1);
+      });
+      return order.filter(key => counts.has(key)).map(key => `${key} ×${counts.get(key)}`).join(' ');
+   }
+
+   function rollupAdvice(labels, { own = '', summarize = false } = {}) {
+      /*
+       *  An action on a rollup is only that row's own operation (dbPath resync).
+       *  Narrower work stays on the child rows. Summary, which hides those rows,
+       *  lists the targeted counts. Blank when the children are on the page.
+       *  ———— when every child is below its threshold.
+       */
+      if (isWorkAction(own)) return actionKey(own);
+      const works = (labels || []).map(actionKey).filter(isWorkAction);
+      if (!works.length) {
+         const keys = (labels || []).map(actionKey).filter(Boolean);
+         const ownKey = actionKey(own);
+         if (ownKey === 'N/A' && keys.every(key => key === 'N/A')) return 'N/A ';
+         if (keys.length && keys.every(key => key === 'N/A')) return 'N/A ';
+         return '———— ';
+      }
+      return summarize ? tallyActions(works) : '';
+   }
+
+   function summedQuiet(label) {
+      /*
+       *  topology.depth summary has db.stats() and no collection rows.
+       *  A summed compact or rebuild would widen the job. Leave the cell
+       *  blank. Quiet and unknown stay ———— or N/A.
+       */
+      return isWorkAction(label) ? '' : label;
+   }
+
+   function databaseAdvice(database = {}, summarize = false) {
+      const collections = database.collections || [];
+      const unmeasured = !collections.length && countTotal(database.ncollections) > 0;
+      if (unmeasured) {
+         return {
+            "nsAction": summedQuiet(formatCompaction('collection', database.storageSize, database.freeStorageSize, {
+               "incomplete": database.freeStorageComplete === false
+            })),
+            "idxAction": summedQuiet(formatCompaction('index', database.totalIndexSize, database.totalIndexBytesReusable, {
+               "incomplete": database.totalIndexBytesReusableComplete === false
+            }))
+         };
+      }
+      const collectionLabels = collections.map(collectionAction);
+      const indexLabels = collections.flatMap(collection => (collection.indexes || []).map(indexAction));
+      return {
+         "nsAction": rollupAdvice(collectionLabels, { summarize }),
+         "idxAction": rollupAdvice(indexLabels, { summarize })
+      };
+   }
+
+   function dbPathAdvice(dbStats = {}, { summarizeIndexes = false } = {}) {
+      const databases = dbStats.databases || [];
+      const own = formatCompaction('dbPath', dbStats.storageSize, dbStats.freeStorageSize, {
+         "incomplete": dbStats.freeStorageComplete === false
+      });
+      const unmeasured = databases.length > 0 && databases.every(database =>
+         !(database.collections || []).length && countTotal(database.ncollections) > 0
+      );
+      if (unmeasured) {
+         return {
+            "nsAction": rollupAdvice([], { own }),
+            "idxAction": summedQuiet(formatCompaction('index', dbStats.totalIndexSize, dbStats.totalIndexBytesReusable, {
+               "incomplete": dbStats.totalIndexBytesReusableComplete === false
+            }))
+         };
+      }
+      const collectionLabels = [];
+      const indexLabels = [];
+      databases.forEach(database => {
+         (database.collections || []).forEach(collection => {
+            collectionLabels.push(collectionAction(collection));
+            (collection.indexes || []).forEach(index => indexLabels.push(indexAction(index)));
+         });
+      });
+      return {
+         "nsAction": rollupAdvice(collectionLabels, { own, "summarize": false }),
+         "idxAction": rollupAdvice(indexLabels, { "summarize": summarizeIndexes })
+      };
+   }
+
+   function consumptionAdvice(stats = {}) {
+      /*
+       *  Total is not a resync target. Blank when this scope has targeted
+       *  work, including a dbPath resync already printed on All namespaces.
+       */
+      const path = dbPathAdvice(stats);
+      if (isWorkAction(path.nsAction) || isWorkAction(path.idxAction)) return '';
+      if (actionKey(path.nsAction) === '' || actionKey(path.idxAction) === '') return '';
+      const databases = stats.databases || [];
+      for (let i = 0; i < databases.length; i++) {
+         const row = databaseAdvice(databases[i], false);
+         if (isWorkAction(row.nsAction) || isWorkAction(row.idxAction)) return '';
+         if (actionKey(row.nsAction) === '' || actionKey(row.idxAction) === '') return '';
+      }
+      const labels = [];
+      databases.forEach(database => {
+         (database.collections || []).forEach(collection => {
+            labels.push(collectionAction(collection));
+            (collection.indexes || []).forEach(index => labels.push(indexAction(index)));
+         });
+      });
+      return rollupAdvice(labels, { "own": path.nsAction });
+   }
+
+   function clusterConsumptionAdvice(topology) {
+      const advice = mongodStatsNodes(topology).map(node => consumptionAdvice(node.stats || {}));
+      if (advice.some(label => actionKey(label) === '')) return '';
+      return rollupAdvice(advice);
+   }
+
+   function jsonAction(label) {
+      const key = actionKey(label);
+      return isWorkAction(key) ? key : null;
+   }
+
    function rankCompactionLabel(label) {
       /*
        *  Higher = stronger recommendation. N/A and unknown sort last.
+       *  Rank is for sort only. The printed rollup does not use it.
        */
-      if (label === 'resync') return 4;
-      if (label === 'rebuild') return 3;
-      if (label === 'compact') return 2;
-      if (label === 'wait') return 1;
-      if (label === '———— ') return 0;
+      const key = actionKey(label);
+      if (key === 'resync') return 4;
+      if (key === 'rebuild') return 3;
+      if (key === 'compact') return 2;
+      if (key === 'wait') return 1;
+      if (key === '————') return 0;
       return null;
    }
 
    function compactionSortKey(o = {}, type = 'collection') {
       if (type === 'db') {
+         const collections = o.collections || [];
+         const unmeasured = !collections.length && countTotal(o.ncollections) > 0;
+         if (!unmeasured) {
+            const ranks = [];
+            collections.forEach(collection => {
+               ranks.push(rankCompactionLabel(collectionAction(collection)));
+               (collection.indexes || []).forEach(index => ranks.push(rankCompactionLabel(indexAction(index))));
+            });
+            const known = ranks.filter(rank => rank != null);
+            if (!known.length) return null;
+            return Math.max.apply(null, known);
+         }
          const ns = rankCompactionLabel(formatCompaction('collection', o.storageSize, o.freeStorageSize, {
             "incomplete": o.freeStorageComplete === false
          }));
@@ -2804,16 +3126,8 @@
          if (ns == null && idx == null) return null;
          return Math.max(ns == null ? 0 : ns, idx == null ? 0 : idx);
       }
-      if (type === 'index') {
-         return rankCompactionLabel(formatCompaction('index', o.storageSize, o.freeStorageSize, {
-            "idIndex": o.name == '_id_',
-            "incomplete": o.freeStorageComplete === false
-         }));
-      }
-      return rankCompactionLabel(formatCompaction('collection', o.storageSize, o.freeStorageSize, {
-         "oplog": o.name == 'oplog.rs' || o.namespace == 'local.oplog.rs',
-         "incomplete": o.freeStorageComplete === false
-      }));
+      if (type === 'index') return rankCompactionLabel(indexAction(o));
+      return rankCompactionLabel(collectionAction(o));
    }
 
    function formatRatio(metric) {
@@ -2928,9 +3242,12 @@
        *  Compaction is a rollup column; collection/index/namespace rows omit it
        *  unless compactOnly.
        */
-      const compactBit = showCompaction
-         ? ` [${compactionColour(compaction)}]${String(compaction).padStart(actionWidth)}[/]`
-         : '';
+      const actionText = String(compaction || '');
+      const compactBit = !showCompaction
+         ? ''
+         : (actionText.trim()
+            ? ` [${compactionColour(actionText)}]${actionText.padStart(actionWidth)}[/]`
+            : ''.padStart(actionWidth + 1));
       if (stub && mode !== 'indexRollup' && mode !== 'totalRow') {
          /*
           *  Unauthorized / unavailable is not a measured empty collection.
@@ -2960,22 +3277,22 @@
    function printRollupRows({
       shards = [], dataSize, compression, storageSize, freeStorageSize, objects,
       namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
-      nsLabel, idxLabel, nsCompactionKind = 'collection',
+      nsLabel, idxLabel, nsAction = '', idxAction = '',
       freeIncomplete = false, idxIncomplete = false, showCompaction = true
    } = {}) {
       /*
-       *  Shared DB / dbPath namespace + index subtotal rows (sharded or not)
+       *  Shared DB / dbPath namespace + index subtotal rows (sharded or not).
+       *  nsAction / idxAction are the targeted rollup words. A blank action
+       *  means the work is on a narrower row.
        */
-      const nsCompaction = formatCompaction(nsCompactionKind, storageSize, freeStorageSize, { "incomplete": freeIncomplete });
-      const idxCompaction = formatCompaction('index', totalIndexSize, totalIndexBytesReusable, { "incomplete": idxIncomplete });
       const nsMetrics = metricsCols({
-         dataSize, compression, storageSize, freeStorageSize, objects, "compaction": nsCompaction,
+         dataSize, compression, storageSize, freeStorageSize, objects, "compaction": nsAction,
          "lowerBound": freeIncomplete, showCompaction
       });
       const idxMetrics = metricsCols({
          "storageSize": totalIndexSize,
          "freeStorageSize": totalIndexBytesReusable,
-         "compaction": idxCompaction,
+         "compaction": idxAction,
          "mode": 'indexRollup',
          "lowerBound": idxIncomplete,
          showCompaction
@@ -3017,22 +3334,24 @@
       return;
    }
 
-   function printCollection({ name, dataSize, compression, compressor, storageSize, freeStorageSize, objects, allocUnit, internalPageSize, freeStorageComplete } = {}) {
+   function printCollection(collection = {}) {
+      const { name, dataSize, compression, compressor, storageSize, freeStorageSize, objects, allocUnit, internalPageSize } = collection;
       const stub = isUnauthorizedCollection({ name }) || isUnavailableCollection({ name });
-      const incomplete = freeStorageComplete === false;
-      const compaction = formatCompaction('collection', storageSize, freeStorageSize, { "oplog": name == 'oplog.rs', incomplete });
+      const incomplete = collection.freeStorageComplete === false;
+      const compaction = collectionAction(collection);
       printRule('light');
       console.log(`╰>[cyan] ${name}[/]`);
       printStatsLine(metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize, "lowerBound": incomplete, "showCompaction": leafCompactionColumns() }));
       return;
    }
 
-   function printNamespace({ namespace, name, dataSize, compression, compressor, storageSize, freeStorageSize, objects, allocUnit, internalPageSize, freeStorageComplete } = {}) {
-      const stub = isUnauthorizedCollection({ "name": name || namespace }) || isUnavailableCollection({ "name": name || namespace });
-      const incomplete = freeStorageComplete === false;
-      const compaction = formatCompaction('collection', storageSize, freeStorageSize, { "oplog": namespace == 'local.oplog.rs', incomplete });
+   function printNamespace(namespace = {}) {
+      const { namespace: ns, name, dataSize, compression, compressor, storageSize, freeStorageSize, objects, allocUnit, internalPageSize } = namespace;
+      const stub = isUnauthorizedCollection({ "name": name || ns }) || isUnavailableCollection({ "name": name || ns });
+      const incomplete = namespace.freeStorageComplete === false;
+      const compaction = collectionAction(namespace);
       printRule('light');
-      console.log(`╰>[cyan] ${namespace}[/]`);
+      console.log(`╰>[cyan] ${ns}[/]`);
       printStatsLine(metricsCols({ dataSize, compression, compressor, storageSize, freeStorageSize, objects, compaction, stub, "allocUnit": allocUnit || internalPageSize, "lowerBound": incomplete, "showCompaction": leafCompactionColumns() }));
       return;
    }
@@ -3049,9 +3368,10 @@
       return;
    }
 
-   function printIndex({ name, storageSize, freeStorageSize, freeStorageComplete } = {}) {
-      const incomplete = freeStorageComplete === false;
-      const compaction = formatCompaction('index', storageSize, freeStorageSize, { "idIndex": name == '_id_', incomplete });
+   function printIndex(index = {}) {
+      const { name, storageSize, freeStorageSize } = index;
+      const incomplete = index.freeStorageComplete === false;
+      const compaction = indexAction(index);
       console.log(`  [yellow]${'━'.repeat(Math.max(0, termWidth - 2))}[/]`);
       console.log(`  ╰» [red]${name}[/]`);
       printStatsLine(metricsCols({ storageSize, freeStorageSize, compaction, "mode": 'indexRow', "lowerBound": incomplete, "showCompaction": leafCompactionColumns() }));
@@ -3066,17 +3386,20 @@
       return;
    }
 
-   function printDb({
-      shards, dataSize, compression, storageSize, freeStorageSize, objects, namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
-      freeStorageComplete, totalIndexBytesReusableComplete
-   } = {}) {
+   function printDb(database = {}) {
+      const {
+         shards, dataSize, compression, storageSize, freeStorageSize, objects, namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
+         freeStorageComplete, totalIndexBytesReusableComplete
+      } = database;
+      const advice = databaseAdvice(database, outputVerbosity() === 'summary');
       printRule('light');
       printRollupRows({
          shards, dataSize, compression, storageSize, freeStorageSize, objects,
          namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
          "nsLabel": 'Namespaces subtotal',
          "idxLabel": 'Indexes subtotal',
-         "nsCompactionKind": 'collection',
+         "nsAction": advice.nsAction,
+         "idxAction": advice.idxAction,
          "freeIncomplete": freeStorageComplete === false,
          "idxIncomplete": totalIndexBytesReusableComplete === false,
          "showCompaction": dbTableCompactionColumns()
@@ -3685,7 +4008,7 @@
       return acc;
    }
 
-   function printTotalConsumption(stats = {}, label = 'Total') {
+   function printTotalConsumption(stats = {}, label = 'Total', compaction) {
       const storageSize = combinedStorageSize(stats);
       const freeStorageSize = combinedFreeStorageSize(stats);
       const incomplete = stats.freeStorageComplete === false
@@ -3695,7 +4018,7 @@
          storageSize,
          freeStorageSize,
          "objects": stats.objects,
-         "compaction": '———— ',
+         "compaction": compaction == null ? consumptionAdvice(stats) : compaction,
          "mode": 'totalRow',
          "lowerBound": incomplete
       }));
@@ -3726,7 +4049,7 @@
       if (!stats) return false;
       const n = mongodStatsNodes(topology).length;
       console.log('');
-      printTotalConsumption(stats, `Cluster consumption (total, ${n} dbPaths)`);
+      printTotalConsumption(stats, `Cluster consumption (total, ${n} dbPaths)`, clusterConsumptionAdvice(topology));
       printFoot('NOTE', clusterStorageScopeNote());
       const vols = stats.fsVolumeCount;
       const fsLabel = (vols > 0 && vols !== n)
@@ -3768,11 +4091,12 @@
       return true;
    }
 
-   function printDbPath(dbStats = {}, { hostLine = true } = {}) {
+   function printDbPath(dbStats = {}, { hostLine = true, summarizeIndexes = false } = {}) {
       const {
          dbPath, shards = [], proc, hostname, compression, dataSize, storageSize, freeStorageSize, objects, namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
          freeStorageComplete, totalIndexBytesReusableComplete
       } = dbStats;
+      const advice = dbPathAdvice(dbStats, { summarizeIndexes });
       console.log('');
       printRule('heavy');
       console.log('[bold][green]dbPath totals[/]');
@@ -3783,7 +4107,8 @@
          namespaces, nindexes, totalIndexSize, totalIndexBytesReusable,
          "nsLabel": 'All namespaces',
          "idxLabel": 'All indexes',
-         "nsCompactionKind": 'dbPath',
+         "nsAction": advice.nsAction,
+         "idxAction": advice.idxAction,
          "freeIncomplete": freeStorageComplete === false,
          "idxIncomplete": totalIndexBytesReusableComplete === false
       });
