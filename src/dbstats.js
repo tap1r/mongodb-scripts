@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.14"
+ *  Version: "1.2.15"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.14" };
+   const __script = { "name": "dbstats.js", "version": "1.2.15" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -1697,7 +1697,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.14',
+         "version": '1.2.15',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -2622,6 +2622,17 @@
       return scaled.format(metric);
    }
 
+   function formatGroupedCount(n) {
+      /*
+       *  Object counts group by thousands. JSON keeps the number.
+       */
+      if (n == null || n === '') return '';
+      if (typeof n === 'object' && typeof n.toNumber === 'function') n = n.toNumber();
+      const value = Number(n);
+      if (!Number.isFinite(value)) return String(n);
+      return value.toLocaleString('en-US');
+   }
+
    function formatStorageSize(bytes, { stub = false, allocUnit } = {}) {
       /*
        *  On-disk size. Stubs stay 0. Measured empty WT tables display the allocation
@@ -2940,10 +2951,10 @@
          return `${''.padStart(dataWidth)} ${''.padStart(compressionWidth)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${''.padStart(columnWidth)}${compactBit}`;
       }
       if (mode === 'totalRow') {
-         const obj = (objects == null ? '' : objects.toString()).padStart(columnWidth);
+         const obj = formatGroupedCount(objects).padStart(columnWidth);
          return `${''.padStart(dataWidth)} ${''.padStart(compressionWidth)} ${formatUnit(storageSize).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj}${compactBit}`;
       }
-      const obj = (objects == null ? '' : objects.toString()).padStart(columnWidth);
+      const obj = formatGroupedCount(objects).padStart(columnWidth);
       return `${formatUnit(dataSize).padStart(dataWidth)} ${formatCompressionCell(compression, compressor, dataSize)} ${formatStorageSize(storageSize, { stub, allocUnit }).padStart(columnWidth)} ${formatFree(freeStorageSize, storageSize, { lowerBound })} ${obj}${compactBit}`;
    }
 
