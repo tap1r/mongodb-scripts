@@ -71,6 +71,17 @@ Further filter, sort, catalog, topology, and profile examples live in the [dbsta
 ### Sample output
 
 ```text
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Compaction helper recommendations
+  compact   Collection or _id_ index: 20% (50% for _id_) and the 1 MiB floor on 8.0+.
+            compact() includes every ready index.
+  rebuild   Secondary index: drop and rebuild above 50% and the same floor.
+  wait      local.oplog.rs meets the collection threshold. Leave it; wait for capped
+            reuse.
+  resync    dbPath collection storage is above 50% reusable. Initial sync is the reclaim.
+  ————      Below those thresholds, or not compactable. N/A means free space is unknown.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 ═════════════════════════════════════════════════════════════════════════════════════════
 Database: database
    Data size   Compression   Size on disk    Free blocks / reuse   Object count    Action
@@ -133,18 +144,6 @@ Filesystem volumes (1 unique):
 [NOTE] Listed collections may omit filtered or unauthorized namespaces; database and
        dbPath totals are db.stats().
 ═════════════════════════════════════════════════════════════════════════════════════════
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Compaction helper recommendations
-  compact   Collection or _id_ index: 20% (50% for _id_) and the 1 MiB floor on 8.0+.
-            compact() includes every ready index.
-  rebuild   Secondary index: drop and rebuild above 50% and the same floor.
-  wait      local.oplog.rs meets the collection threshold. Leave it; wait for capped
-            reuse.
-  resync    dbPath collection storage is above 50% reusable. Initial sync is the reclaim.
-  ————      Below those thresholds, or not compactable. N/A means free space is unknown.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 `*` on a connecting node marks the session that produced the summary. `*` on a free-space cell is a lower bound (collection `$collStats` rollup when db-level reusable bytes are incomplete).
