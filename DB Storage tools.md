@@ -100,6 +100,7 @@ Collections: 1
   ╰» object.$**_1
                                 22.11 MiB      14.07 MiB / 63.6%                  rebuild
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Data size   Compression   Size on disk    Free blocks / reuse   Object count    Action
 Namespaces subtotal: 1
    47.13 MiB        2.02:1      52.65 MiB      29.38 MiB / 55.8%         58,616          
 Indexes subtotal: 11
@@ -135,6 +136,7 @@ Replica set: replset  Members: 3  Version: 9.0.2
       dbPath: /data/rs3/db
 
 Cluster consumption (total, 3 dbPaths):
+   Data size   Compression   Size on disk    Free blocks / reuse   Object count    Action
                                536.03 MiB    262.31 MiB* / 48.9%        189,822          
 [NOTE] These totals are WiredTiger collection and index storage. Logs, binaries,
        journals, and FTDC add further disk use.
