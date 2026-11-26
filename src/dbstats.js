@@ -1,6 +1,6 @@
 /*
  *  Name: "dbstats.js"
- *  Version: "1.2.15"
+ *  Version: "1.2.16"
  *  Description: "DB storage stats uber script"
  *  Disclaimer: "https://raw.githubusercontent.com/tap1r/mongodb-scripts/master/DISCLAIMER.md"
  *  Authors: ["tap1r <luke.prochazka@gmail.com>"]
@@ -152,7 +152,7 @@
  */
 
 (() => {
-   const __script = { "name": "dbstats.js", "version": "1.2.15" };
+   const __script = { "name": "dbstats.js", "version": "1.2.16" };
    __dbstatsScriptStarted = Date.now();
    if (typeof __lib === 'undefined') {
       /*
@@ -1255,9 +1255,9 @@
        *  Print plain tabular report
        */
       if (printExpandedNodes(dbStats, printDatabaseTables)) return;
+      printCompactionLegend();
       printDatabaseTables(dbStats);
       printDbPath(dbStats);
-      printCompactionLegend();
    }
 
    function nsTableOut(dbStats = {}) {
@@ -1265,9 +1265,9 @@
        *  Print aggregated namespaces tabular report.
        */
       if (printExpandedNodes(dbStats, printNamespaceTables)) return;
+      printCompactionLegend();
       printNamespaceTables(dbStats);
       printDbPath(dbStats);
-      printCompactionLegend();
    }
 
    function printDatabaseTables(dbStats = {}, { leadBlank = true } = {}) {
@@ -1369,6 +1369,7 @@
       if (!topologyDepthExpanded()) return false;
       if (!nodes.some(n => n && n.connecting !== true && n.stats)) return false;
       const widths = nodeIdentityWidths(nodes);
+      printCompactionLegend();
       nodes.forEach(node => {
          if (!node || (!node.stats && !node.error)) return;
          printNodeBanner(node, widths);
@@ -1383,7 +1384,6 @@
          printDirectShardNotes(dbStats);
          printRule('heavy');
       }
-      printCompactionLegend();
       return true;
    }
 
@@ -1697,7 +1697,7 @@
       const payload = {
          "ok": 1,
          "name": 'dbstats.js',
-         "version": '1.2.15',
+         "version": '1.2.16',
          "generatedAt": new Date(),
          "hostname": dbStats.hostname || null,
          "proc": dbStats.proc || null,
@@ -2508,8 +2508,7 @@
          + '<option value="summaryidx">summaryIdx</option>'
          + '<option value="compactonly">compactOnly</option>'
          + '</select></label></div></header>'
-         + '<main id="report"></main>'
-         + '<footer><section class="legend"><h2>Compaction helper recommendations</h2><dl>'
+         + '<main><section class="legend"><h2>Compaction helper recommendations</h2><dl>'
          + compactionLegendItems().map(item => {
             const cls = (item.key === 'compact' || item.key === 'rebuild'
                || item.key === 'resync' || item.key === 'wait')
@@ -2517,8 +2516,8 @@
             return '<div class="row"><dt' + cls + '>' + htmlEsc(item.key) + '</dt><dd>'
                + htmlEsc(item.text) + '</dd></div>';
          }).join('')
-         + '</dl></section>'
-         + '<p class="hint">Click a column header to sort. Verbosity filters this page.</p></footer>'
+         + '</dl></section><div id="report"></div></main>'
+         + '<footer><p class="hint">Click a column header to sort. Verbosity filters this page.</p></footer>'
          + '<script>window.__DBSTATS=' + jsonForScript({ "payload": payload, "ui": ui }) + ';</script>'
          + '<script>(' + boot + ')();</script>'
          + '</body></html>';
@@ -2681,7 +2680,8 @@
 
    function compactionLegendItems() {
       /*
-       *  Footer copy for tabular and HTML. Matches formatCompaction.
+       *  Legend copy for tabular and HTML. Matches formatCompaction.
+       *  Printed once, before the first table.
        */
       return [
          {
@@ -2760,7 +2760,6 @@
          });
       });
       printRule('light');
-      console.log('');
    }
 
    function formatCompaction(kind, storageSize, freeStorageSize, { oplog = false, idIndex = false, incomplete = false } = {}) {
