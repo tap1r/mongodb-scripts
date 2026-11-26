@@ -66,7 +66,7 @@ Further filter, sort, catalog, topology, and profile examples live in the [dbsta
 * **verbosity** (tabular / nsTable / HTML initial view): `full` (collections + indexes + views), `summary` (database rollup), `summaryIdx` (collections + indexes), `compactOnly` (rows with a compact/rebuild/wait/resync action). JSON stays the full payload.
 * **topology.depth** default `expanded` (catalog + `$collStats` per member, one table per node). `summary` is `$stats` on remotes plus the connecting catalog and a member footer. `topology.discover` default true; shared-tier / serverless stay one node.
 * **Sharded:** CSRS members are listed. When they are, the mongos row is `cluster data (no local/metadata)` (no `config` / `local` from the router). **Cluster consumption (total)** sums mongod dbPaths (WiredTiger collection and index files). Logs, binaries, journals, and FTDC add further disk use.
-* **Compaction** appears on collection, index, and namespace rows and on Database / dbPath rollups. Cluster consumption total blanks those action cells. `compactOnly` still filters which rows print.
+* **Action** (the HTML heading stays **Compaction**) is the most targeted operation. A collection is `compact` when the collection qualifies, or when a ready index is `rebuild` or `_id_` `compact`. `wait` on `local.oplog.rs` stays `wait`. Index rows stay index actions. A database or dbPath rollup prints an action only for that whole row (`resync` when that dbPath’s collection storage is above 50%). The cell is blank when a narrower row has the work, and `————` when every child is quiet. Summary, which hides those rows, prints counts such as `rebuild ×7`. `nsTable` summary has no per-database index subtotal, so **All indexes** carries that count. Cluster consumption is blank when any member has work. `compactOnly` still filters which rows print.
 
 ### Sample output
 
@@ -101,9 +101,9 @@ Collections: 1
                                 22.11 MiB      14.07 MiB / 63.6%                  rebuild
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Namespaces subtotal: 1
-   47.13 MiB        2.02:1      52.65 MiB      29.38 MiB / 55.8%         58,616   compact
+   47.13 MiB        2.02:1      52.65 MiB      29.38 MiB / 55.8%         58,616          
 Indexes subtotal: 11
-                                83.89 MiB       53.5 MiB / 63.8%                  rebuild
+                                83.89 MiB       53.5 MiB / 63.8%                         
 ═════════════════════════════════════════════════════════════════════════════════════════
 
 ═════════════════════════════════════════════════════════════════════════════════════════
@@ -111,11 +111,11 @@ dbPath totals
    Data size   Compression   Size on disk    Free blocks / reuse   Object count    Action
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 All namespaces: 21
-  131.42 MiB        2.22:1      89.52 MiB      30.23 MiB / 33.8%         63,274     ———— 
+  131.42 MiB        2.22:1      89.52 MiB      30.23 MiB / 33.8%         63,274          
 All indexes: 35
-                                84.32 MiB      53.61 MiB / 63.6%                  rebuild
+                                84.32 MiB      53.61 MiB / 63.6%                         
 Total:
-                               173.84 MiB      83.85 MiB / 48.2%         63,274     ———— 
+                               173.84 MiB      83.85 MiB / 48.2%         63,274          
 ═════════════════════════════════════════════════════════════════════════════════════════
 Filesystem volume:
    641.85 GiB used / 926.3 GiB capacity (69.3% used)
@@ -135,7 +135,7 @@ Replica set: replset  Members: 3  Version: 9.0.2
       dbPath: /data/rs3/db
 
 Cluster consumption (total, 3 dbPaths):
-                               536.03 MiB    262.31 MiB* / 48.9%        189,822     ———— 
+                               536.03 MiB    262.31 MiB* / 48.9%        189,822          
 [NOTE] These totals are WiredTiger collection and index storage. Logs, binaries,
        journals, and FTDC add further disk use.
 Filesystem volumes (1 unique):
